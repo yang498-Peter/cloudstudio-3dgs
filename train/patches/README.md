@@ -14,6 +14,9 @@
   2. `examples/simple_trainer.py`:环境变量 `S1_KEEP_FISHEYE=1` 时启用上述开关,
      并把每个相机的 k1–k4 以 ncore 同款鸭子类型表(`self.ncore_camera_data`)喂给
      UT 光栅化路径(`camera_model="fisheye"` + `radial_coeffs`),渲染代码零改动。
+  3. `gsplat/cuda/csrc/RasterizeToPixelsFromWorld3DGSParallelBatchBwd.cu`:
+     Windows 编译修复 —— 主机函数 `ceil_log2_u64` 用了 GCC 独有的
+     `__builtin_clzll`,MSVC 下改用 `_BitScanReverse64`(值得给上游提 PR)。
 
 重放:
 
