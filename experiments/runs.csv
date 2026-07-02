@@ -1,0 +1,1 @@
+date,scene,config,init_points,depth_loss_w,psnr_test,ssim_test,lpips_test,psnr_train,depth_absrel,depth_rmse_cm,pct_lt_2cm,pct_lt_5cm,train_time_min,num_gaussians,notes

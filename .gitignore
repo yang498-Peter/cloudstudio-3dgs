@@ -1,0 +1,16 @@
+__pycache__/
+*.pyc
+.venv/
+venv/
+experiments/*
+!experiments/runs.csv
+*.las
+*.laz
+*.ply
+*.pcd
+*.mcap
+*.jpg
+*.png
+outputs/
+data/
+.DS_Store

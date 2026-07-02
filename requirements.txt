@@ -1,0 +1,5 @@
+# Data-side tooling (no GPU needed). Training env (CUDA + torch + gsplat) is set up
+# separately per docs/RESEARCH_PLAN.md Phase 0 and intentionally NOT pinned here.
+numpy>=1.26
+laspy>=2.5
+Pillow>=10.0
