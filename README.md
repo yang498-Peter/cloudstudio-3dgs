@@ -1,5 +1,8 @@
 # CloudStudio 3DGS — MVP S1 扫描数据的 3D Gaussian Splatting 处理管线
 
+> **换机接力?先读 [HANDOFF.md](HANDOFF.md)**(2026-07-02 打包:数据链路全验证,
+> 训练环境待在新机器上编译,一键脚本 + 踩坑清单 + 下一步路线都在里面)。
+
 独立于 CloudStudio 本体的 3DGS 处理软件工程。目标:用开源可商用组件(gsplat/Apache-2.0 路线)
 处理 MVP S1 扫描仪输出(双鱼眼图像 + 逐帧位姿 + 高精度 SLAM 点云),替代第三方收费 3DGS 软件(mipmap),
 并在动态剔除/几何精度上超越它。

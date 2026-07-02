@@ -28,6 +28,12 @@ pip install -e . --no-build-isolation
 2. **`DISTUTILS_USE_SDK`**:VC 环境激活后 torch 要求 `set DISTUTILS_USE_SDK=1`,否则直接 raise。
 3. **glm 缺失**(`fatal error C1083: glm/glm.hpp`):gsplat 用 submodule 带 glm,
    `--depth 1` 克隆不含;只需拉 glm 这一个 submodule(googletest 不用,网络慢时省时间)。
+4. **MSVC 不认 `__builtin_clzll`**(`error C3861`,ParallelBatchBwd.cu 主机函数):
+   源码修复见 train/patches(`_BitScanReverse64` 分支)。
+5. **编译 >60 分钟的主因:默认编全架构**。`set TORCH_CUDA_ARCH_LIST=12.0`
+   (RTX 5070 桌面/笔记本都是 Blackwell sm_120)+ `set MAX_JOBS=%NUMBER_OF_PROCESSORS%`
+   后预计 ~10 分钟。已写进 `setup_new_machine.cmd`。
+   (在旧机器上从未编译成功过——编到一半为换机主动中止,新机器是首次完整编译。)
 
 ## examples 依赖 —— 不要整包装 requirements.txt!
 
