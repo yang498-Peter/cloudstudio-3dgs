@@ -29,6 +29,8 @@ from pathlib import Path
 
 import numpy as np
 
+from s1_common import subsample_las, write_ply
+
 FLIP = np.diag([1.0, -1.0, -1.0, 1.0])
 
 
@@ -42,39 +44,6 @@ def to_nerfstudio_c2w(mat: np.ndarray, convention: str) -> np.ndarray:
     if convention.endswith("_cv"):
         m = m @ FLIP
     return m
-
-
-def write_ply(path: Path, xyz: np.ndarray, rgb: np.ndarray) -> None:
-    header = (
-        "ply\nformat binary_little_endian 1.0\n"
-        f"element vertex {len(xyz)}\n"
-        "property float x\nproperty float y\nproperty float z\n"
-        "property uchar red\nproperty uchar green\nproperty uchar blue\n"
-        "end_header\n"
-    )
-    rec = np.zeros(len(xyz), dtype=[("xyz", "<f4", 3), ("rgb", "u1", 3)])
-    rec["xyz"], rec["rgb"] = xyz.astype(np.float32), rgb.astype(np.uint8)
-    with open(path, "wb") as fh:
-        fh.write(header.encode("ascii"))
-        rec.tofile(fh)
-
-
-def subsample_las(run_dir: Path, n_target: int) -> tuple[np.ndarray, np.ndarray]:
-    import laspy
-
-    las_path = next(p for name in ("colorized.las", "colorized.laz", "uncolorized.las")
-                    if (p := run_dir / name).exists())
-    xyzs, rgbs = [], []
-    with laspy.open(las_path) as reader:
-        stride = max(1, reader.header.point_count // n_target)
-        for chunk in reader.chunk_iterator(2_000_000):
-            xyzs.append(np.column_stack([chunk.x, chunk.y, chunk.z])[::stride])
-            if all(dim in chunk.point_format.dimension_names for dim in ("red", "green", "blue")):
-                # LAS RGB is 16-bit
-                rgbs.append((np.column_stack([chunk.red, chunk.green, chunk.blue])[::stride] >> 8))
-            else:
-                rgbs.append(np.full((len(xyzs[-1]), 3), 180, dtype=np.uint16))
-    return np.concatenate(xyzs), np.concatenate(rgbs)
 
 
 def main() -> int:

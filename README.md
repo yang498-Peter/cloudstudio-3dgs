@@ -25,7 +25,9 @@ cloudstudio-3dgs/
 │   ├── inspect_recording.py   # 体检一条 S1 记录(标定/图像/位姿/点云是否齐全)
 │   └── reproject_check.py     # Phase 1 硬门槛:点云投影到鱼眼图叠加显示,验证标定+位姿+坐标约定
 ├── converter/     # S1 数据 → gsplat/nerfstudio 可读格式的转换器
-│   └── s1_to_nerfstudio.py
+│   ├── s1_common.py           # 共享:LAS 降采样、位姿换算(c2w_gl→w2c_cv)、PLY/四元数
+│   ├── s1_to_colmap.py        # → COLMAP 格式(gsplat simple_trainer 输入,已实测)
+│   └── s1_to_nerfstudio.py    # → nerfstudio transforms.json 格式
 ├── experiments/   # 实验记录(runs.csv 指标矩阵)
 └── NOTICE.md
 ```
@@ -42,6 +44,26 @@ python tools/reproject_check.py `
   --run-dir  G:\S1\2026-06-17_12-40-48gs2\process\2026-06-17_12-40-48gs2_3 `
   --raw-dir  G:\S1\2026-06-17_12-40-48gs2 `
   --out-dir  experiments\reproject_gs2
+
+# 导出 gsplat 训练数据集(COLMAP 格式;首个数据集已出在 G:\3dgs-datasets\gs2_keyframes)
+python converter/s1_to_colmap.py `
+  --run-dir  G:\S1\2026-06-17_12-40-48gs2\process\2026-06-17_12-40-48gs2_3 `
+  --raw-dir  G:\S1\2026-06-17_12-40-48gs2 `
+  --out-dir  G:\3dgs-datasets\gs2_keyframes
+```
+
+## 训练环境(Phase 0 待完成)
+
+前提已具备:nvcc 12.8 + PyTorch 2.11.0+cu128(sm_120/Blackwell OK)+ VS2022 BuildTools。
+待执行(需要联网拉外部仓库,一次性):
+
+```powershell
+git clone --depth 1 https://github.com/nerfstudio-project/gsplat.git external\gsplat
+cd external\gsplat; pip install -e . --no-build-isolation; pip install -r examples\requirements.txt
+# 冒烟(8GB 显存 → 先降采样 4 倍 + MCMC 限高斯数):
+# python examples\simple_trainer.py mcmc --with_ut --with_eval3d `
+#   --data_dir G:\3dgs-datasets\gs2_keyframes --data_factor 4 `
+#   --strategy.cap-max 1000000 --result_dir G:\3dgs-results\gs2_smoke
 ```
 
 ## 关键事实(已用真实数据核验,详见 S1_DATA_FORMAT.md)
@@ -65,7 +87,9 @@ python tools/reproject_check.py `
 - [ ] Phase 0(剩余):gsplat CUDA 环境搭建 + MipNeRF360 冒烟
 - [x] Phase 1(前置):重投影验证初步通过(gs2 场景目视贴合,约定=c2w_gl),
       正式 Gate 需再覆盖 2–3 场景 + 逐点误差统计
-- [ ] Phase 1(剩余):s1_to_nerfstudio 转换器实测 → 裸跑 3DGUT+MCMC → 对比 mipmap
+- [x] Phase 1(前置):COLMAP 数据集导出实测通过(gs2_keyframes:174 图/2 相机/101 万点,
+      w2c 位姿往返校验与基线一致)
+- [ ] Phase 1(剩余):gsplat 安装(待批准外部仓库)→ 裸跑 3DGUT+MCMC → 对比 mipmap
 - [ ] Phase 2:LiDAR 深度监督 + 正则
 - [ ] Phase 3:动态物剔除(SAM2 mask + 点云-照片交叉验证)
 - [ ] Phase 4:产品化(CLI/API、Web 查看器、SPZ/SOG)
