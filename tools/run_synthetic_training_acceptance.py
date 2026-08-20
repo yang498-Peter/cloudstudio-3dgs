@@ -24,7 +24,7 @@ from cloudstudio_3dgs.evaluation.splits import SplitConfig, build_split_manifest
 from cloudstudio_3dgs.geometry.lidar_projection import SparseDepthMap
 from cloudstudio_3dgs.training.backend import GsplatBackend
 from cloudstudio_3dgs.training.dataset import TrainingSample
-from cloudstudio_3dgs.training.trainer import TrainerConfig, train
+from cloudstudio_3dgs.training.trainer import TrainerConfig, load_initialization_ply, train
 
 
 def _sha256(path: Path) -> str:
@@ -254,15 +254,32 @@ def main() -> int:
         default=ROOT / "upstream" / "cloudstudio_trainer.lock.json",
     )
     parser.add_argument("--steps", type=int, default=80)
+    parser.add_argument(
+        "--full-mcmc",
+        action="store_true",
+        help=(
+            "keep upstream MCMC noise injection enabled (never stop) and size the "
+            "refine window to the short run so relocation/densification actually execute; "
+            "requires a gsplat build with the 3DGS and RELOC kernel groups"
+        ),
+    )
     args = parser.parse_args()
     if args.output.exists() and any(args.output.iterdir()):
         raise FileExistsError(f"synthetic acceptance output is not empty: {args.output}")
     args.output.mkdir(parents=True, exist_ok=True)
+    if args.full_mcmc:
+        mcmc_config = {
+            "refine_start_iter": max(10, args.steps // 4),
+            "refine_stop_iter": args.steps,
+            "refine_every": max(10, args.steps // 8),
+        }
+    else:
+        mcmc_config = {"noise_injection_stop_iter": 0}
     backend = GsplatBackend(
         device="cuda:0",
         cap_max=64,
         lock_path=args.gsplat_lock,
-        mcmc_config={"noise_injection_stop_iter": 0},
+        mcmc_config=mcmc_config,
     )
     (
         _,
@@ -274,6 +291,21 @@ def main() -> int:
         depth_manifest_path,
         depth_root,
     ) = build_fixture(args.output / "fixture", backend)
+    init_count = 8
+    if args.full_mcmc:
+        # MCMC growth is n_target = int(1.05 * N): with the 8-point fixture the
+        # increment truncates to zero and densification can never run. Build a
+        # deterministic jittered 24-point init (targets unchanged) so 5% growth
+        # is at least one Gaussian per refine step.
+        base_xyz, base_rgb = load_initialization_ply(init_path)
+        rng = np.random.default_rng(42)
+        dense_xyz = np.concatenate(
+            [base_xyz + rng.normal(0.0, 0.02, size=base_xyz.shape).astype(np.float32) for _ in range(3)]
+        )
+        dense_rgb = np.concatenate([base_rgb] * 3)
+        init_path = args.output / "fixture" / "initialization_full_mcmc.ply"
+        write_binary_ply(init_path, dense_xyz.astype(np.float32), dense_rgb)
+        init_count = len(dense_xyz)
     run_dir = args.output / "run"
     manifest = train(
         TrainerConfig(
@@ -297,9 +329,20 @@ def main() -> int:
             rgb_l1_weight=1.0,
             rgb_ssim_weight=0.0,
             lidar_range_weight=0.01,
-            mcmc_noise_injection_stop_iter=0,
+            **(
+                {
+                    "mcmc_refine_start_iter": mcmc_config["refine_start_iter"],
+                    "mcmc_refine_stop_iter": mcmc_config["refine_stop_iter"],
+                    "mcmc_refine_every": mcmc_config["refine_every"],
+                }
+                if args.full_mcmc
+                else {"mcmc_noise_injection_stop_iter": 0}
+            ),
             learning_rates={
-                "means": 1e-8,
+                # Full-MCMC mode needs a realistic means LR: noise amplitude is
+                # scaler = lr * noise_lr (upstream pairs 1.6e-4 with 5e5), and a
+                # frozen-geometry LR of 1e-8 silently reduces noise to nothing.
+                "means": 1.6e-4 if args.full_mcmc else 1e-8,
                 "scales": 1e-8,
                 "quats": 1e-8,
                 "opacities": 1e-3,
@@ -312,14 +355,24 @@ def main() -> int:
     acceptance = {
         "schema_version": 1,
         "run_manifest_sha256": manifest["run_manifest_sha256"],
+        "mcmc_mode": "full_noise_and_refine" if args.full_mcmc else "noise_disabled",
         "initial_loss": training["initial_loss"],
         "final_loss": training["last_metrics"]["loss"],
         "best_loss": training["best_loss"],
         "loss_improvement_fraction": improvement,
         "peak_vram_bytes": training["peak_vram_bytes"],
         "final_lidar_range_l1_m": training["last_metrics"]["lidar_range_l1_m"],
+        "gaussian_count": training["gaussian_count"],
         "converged": improvement >= 0.20,
     }
+    if args.full_mcmc:
+        # Full MCMC must actually run: with the densified init and cap_max=64
+        # the add-new-GS branch must grow the model, otherwise refine never fired.
+        acceptance["initial_gaussian_count"] = init_count
+        acceptance["mcmc_densification_ran"] = int(training["gaussian_count"]) > init_count
+        acceptance["converged"] = bool(
+            acceptance["converged"] and acceptance["mcmc_densification_ran"]
+        )
     acceptance_path = args.output / "synthetic_acceptance.json"
     acceptance_path.write_text(
         json.dumps(acceptance, indent=2, sort_keys=True) + "\n", encoding="utf-8"
