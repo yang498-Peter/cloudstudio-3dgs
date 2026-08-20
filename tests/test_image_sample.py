@@ -68,7 +68,10 @@ class ImageSampleTests(unittest.TestCase):
         self.assertEqual(baseline["output"]["image_count"], 1_238)
         self.assertTrue(baseline["output"]["per_image_paths_unique"])
         self.assertEqual(baseline["acceptance"]["real_dynamic_region_replay"], "not_run")
-        self.assertEqual(baseline["acceptance"]["trainer_consumption"], "not_run")
+        self.assertEqual(
+            baseline["acceptance"]["trainer_consumption"],
+            "contract_pass_real_cuda_not_run",
+        )
 
     def test_same_camera_images_load_their_own_static_masks(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

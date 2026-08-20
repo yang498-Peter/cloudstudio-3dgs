@@ -62,7 +62,7 @@ class DepthCacheTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "safe local coordinate frame"):
                 load_xyz_point_cloud(path)
 
-    def test_checked_in_depth_baseline_keeps_full_cache_gates_open(self) -> None:
+    def test_checked_in_depth_baseline_records_full_cache_and_keeps_training_gate_open(self) -> None:
         root = Path(__file__).resolve().parents[1]
         baseline = json.loads(
             (root / "baselines" / "gs2_depth_cache.baseline.json").read_text(
@@ -70,9 +70,16 @@ class DepthCacheTests(unittest.TestCase):
             )
         )
 
-        self.assertFalse(baseline["output"]["complete_dataset"])
-        self.assertEqual(baseline["output"]["image_count"], 12)
-        self.assertEqual(baseline["acceptance"]["full_1238_image_cache"], "not_run")
+        self.assertTrue(baseline["output"]["complete_dataset"])
+        self.assertEqual(baseline["output"]["image_count"], 1238)
+        self.assertTrue(baseline["acceptance"]["full_1238_image_cache"])
+        self.assertTrue(
+            baseline["acceptance"]["full_cache_workers_2_4_artifacts_byte_identical"]
+        )
+        self.assertEqual(
+            baseline["acceptance"]["trainer_contract_train_val_load"],
+            "1114_train_124_val_pass",
+        )
         self.assertEqual(baseline["acceptance"]["trainer_depth_loss"], "not_run")
 
     def test_las_input_limit_is_deterministic(self) -> None:

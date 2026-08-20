@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
-  "baseline_id": "gs2-per-image-masks-pr05",
-  "dataset_manifest_sha256": "0e4d65b37fb682df97fb2957d4c1ac08b3e8bcaf3c680f68a74989967f56b822",
+  "baseline_id": "gs2-per-image-masks-pr11-integration",
+  "dataset_manifest_sha256": "54c01abedb8be28d839d4ee9685de63c88059efc129eceacd501fa9943563ee3",
   "configuration": {
     "theta_max_deg": 95.0,
     "mask_composition": "fisheye_valid & static_mask & optional_depth_valid"
@@ -10,8 +10,8 @@
     "image_count": 1238,
     "camera_count": 2,
     "per_image_paths_unique": true,
-    "mask_manifest_sha256": "ad6a814005cb4bd457563fc6093d08281707fee0ea88f1ab594cc71f64eb633b",
-    "mask_manifest_file_sha256": "eb4fa2c9691634d30402a694964fb5c0f205388106ff4c795d503af5636ed2c4",
+    "mask_manifest_sha256": "86ae782aaa7ece7d55e5b0494caff8f0414eebc98b7382e25b41bbf9043717f0",
+    "mask_manifest_file_sha256": "a89cd171768319f27d12c4f9e0d6aca52b2f9ab3f115ad73781b345907f2427f",
     "mask_file_count": 1238,
     "mask_files_size_bytes": 22305046,
     "left_valid_fraction": 0.701814229297488,
@@ -22,6 +22,6 @@
     "factor_1_2_4_real_image_shapes_verified": true,
     "distinct_static_masks_same_camera": "synthetic_pass",
     "real_dynamic_region_replay": "not_run",
-    "trainer_consumption": "not_run"
+    "trainer_consumption": "contract_pass_real_cuda_not_run"
   }
 }

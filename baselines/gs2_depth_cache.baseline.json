@@ -1,9 +1,9 @@
 {
   "schema_version": 1,
-  "baseline_id": "gs2-lidar-depth-pr07-partial",
+  "baseline_id": "gs2-lidar-depth-pr11-integration-full",
   "inputs": {
-    "dataset_manifest_sha256": "0e4d65b37fb682df97fb2957d4c1ac08b3e8bcaf3c680f68a74989967f56b822",
-    "mask_manifest_sha256": "ad6a814005cb4bd457563fc6093d08281707fee0ea88f1ab594cc71f64eb633b",
+    "dataset_manifest_sha256": "54c01abedb8be28d839d4ee9685de63c88059efc129eceacd501fa9943563ee3",
+    "mask_manifest_sha256": "86ae782aaa7ece7d55e5b0494caff8f0414eebc98b7382e25b41bbf9043717f0",
     "point_cloud_sha256": "66fbe6205f5fb8ebde104ef13a3735a9a0d091607ffa9a67936c7586eafc42df",
     "point_cloud_points": 376906
   },
@@ -14,21 +14,21 @@
     "max_theta_deg": 95.0,
     "confidence_support_points": 3,
     "confidence_subpixel_sigma_px": 0.75,
-    "max_images": 12
+    "max_images": null
   },
   "output": {
-    "complete_dataset": false,
+    "complete_dataset": true,
     "total_dataset_images": 1238,
-    "image_count": 12,
-    "cache_key": "aa6262d8382edf0c88ef3333237afacc81eae1a4af835ec2818d0d6d128122b6",
-    "depth_manifest_sha256": "849527e32661fb7c386b2d2e8fe45593a0936ce3bb3c23174ea49ccbbea49686",
-    "depth_manifest_file_sha256": "f6fa9565f46812d863b43fb95b449737bcb2e92692e42d85c75d46320a64dd34",
-    "depth_files_size_bytes": 22829361,
+    "image_count": 1238,
+    "cache_key": "d3bbed761be391989ab00b90a65cedce87551f3d0ca2669ccde09c5383ec930a",
+    "depth_manifest_sha256": "3c114dfdbfbe1601b9329e9eb16b4fd6a8ad519e452be23e679fd37b0b68fa67",
+    "depth_manifest_file_sha256": "747a68a9cf30b5035aef8676520abaf78a6b286bceb7c153942e1d5742bfc16a",
+    "depth_files_size_bytes": 2112535370,
     "valid_pixels": {
-      "min": 66384,
-      "p50": 170916.5,
-      "p95": 225255.8,
-      "max": 226248
+      "min": 19817,
+      "p50": 158693.5,
+      "p95": 224370.45,
+      "max": 256660
     }
   },
   "acceptance": {
@@ -37,7 +37,9 @@
     "masked_region_has_no_supervision": true,
     "factor_1_2_4_and_crop": true,
     "workers_2_4_byte_identical": true,
-    "full_1238_image_cache": "not_run",
+    "full_1238_image_cache": true,
+    "full_cache_workers_2_4_artifacts_byte_identical": true,
+    "trainer_contract_train_val_load": "1114_train_124_val_pass",
     "full_resolution_las_cache": "not_run",
     "trainer_depth_loss": "not_run"
   }

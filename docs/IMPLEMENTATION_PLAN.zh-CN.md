@@ -445,4 +445,21 @@ PR-05 只建立逐图数据结构和几何 valid 基线；真实人物/车辆/�
 
 #### 验证方式与当前状态
 
-修复前两个测试均按预期失败，证明旧实现确实会静默接受；修复后 PR-11 定向测试 `11/11`、完整测试集 `91/91` 通过，Python 源码编译与本次修改文件乱码检查通过。该修复没有启动 GPU 训练，也不会把当前 `12/1238` partial depth 基线升级为完成；真实训练恢复前仍必须生成全量 1238 图缓存。
+修复前两个测试均按预期失败，证明旧实现确实会静默接受；修复后 PR-11 定向测试 `11/11`、完整测试集 `91/91` 通过，Python 源码编译与本次修改文件乱码检查通过。该代码修复本身没有启动 GPU 训练；随后按下一节单独完成全量 1238 图缓存，仍不据此升级真实训练结论。
+
+### 真实集成门 A：当前 Manifest 的全量 LiDAR Depth Cache
+
+#### 问题现象
+
+PR-05/PR-07 的历史 mask 与 12 图 partial depth 绑定早期 dataset Manifest `0e4d65b3...`，而 PR-08 split、PR-09 pose candidate 和 PR-10 match graph 绑定加入正式 Rig/诊断字段后的当前 Manifest `54c01abe...`。虽然两版均包含 1238 个相同图像 ID，但签名身份不同，不能把旧 mask/depth 与当前 split/pose/BA 直接混合作为训练输入。
+
+#### 修改文件与处理内容
+
+- 由当前 Manifest 重新生成 1238 个逐图 mask，签名 `86ae782a...`。
+- 使用 376,906 点 voxel PLY `66fbe620...`、当前 Manifest 和新 mask，不带 `--max-images` 生成完整 `1238/1238` Euclidean ray-range cache。
+- 分别以 4 worker 和 2 worker 独立重放；两次 signed Manifest SHA、1238 条记录和实际 1238 个 `.npz` 文件逐个 SHA 均完全一致。
+- `baselines/gs2_depth_cache.baseline.json` 从 partial 证据升级为 full 集成基线；`tests/test_depth_cache.py` 继续把真实 Trainer depth loss 保持为 `NOT_RUN`。
+
+#### 验证方式与当前状态
+
+完整缓存 `complete_dataset=true`，cache key 为 `d3bbed76...`，signed Manifest SHA 为 `3c114dfd...`，Manifest 文件 SHA 为 `747a68a9...`；1238 个 depth artifact 共 `2,112,535,370` bytes。有效像素数 min/p50/p95/max 为 `19,817 / 158,693.5 / 224,370.45 / 256,660`。Trainer 数据契约已无 GPU 地加载 `1114 train + 124 val`，共享同一 depth 身份。该阶段只证明真实全量深度输入完整、可重复、可装载；真实 CUDA depth loss、画质改善和 MCMC 仍未运行。
