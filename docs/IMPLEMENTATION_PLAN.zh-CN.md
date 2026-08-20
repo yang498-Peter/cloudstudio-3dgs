@@ -343,3 +343,47 @@ PR-05 只建立逐图数据结构和几何 valid 基线；真实人物/车辆/�
 真实 gs2 的 transforms SHA256 为 `7ca0d7d6e6b28a55d90b615682869b2fd59690a5f69e4a848e39f4f7d986b869`。174 张关键帧全部同名匹配，形成 87 个完整关键 Rig；左右修正最大分歧为 0.03045 mm / 0.000318°。鲁棒过滤拒绝 2 个平移异常和 1 个旋转异常，保留 84 个 anchor，传播得到 619 Rig / 1,238 张修正位姿。修正平移 p50/p95/max 为 0.0302 / 0.1572 / 0.2374 m，旋转为 0.1556 / 0.3895 / 0.7456°；Rig 基线平移/旋转最大漂移仅 `2.26e-14 m` / `2.29e-14°`。两次运行的 JSON/SVG/HTML 均逐字节一致，Manifest 文件 SHA256 为 `4777af5c6bfc3cf9ac2c17432fd5d623da6d28786a80bde86fc635a008d0aaa0`。
 
 当前最大逐帧修正步长为 0.053812 m，超过默认 0.05 m 无突跳阈值，曲线 Gate 为 `FAIL`；新位姿的 LiDAR-edge、低分辨率 LPIPS、建筑双边对比均为 `NOT_RUN`。因此默认位姿明确保持 `imgpose`，本阶段只声明“候选位姿生成、传播、诊断和自动回退闭环”，不声明修正位姿优于原位姿。
+
+## 12. 当前阶段记录：PR-10
+
+### 问题现象
+
+现有 S1 管线有 POS 初值和固定双鱼眼标定，但没有只使用训练集的特征匹配图、许可与版本锁定、已知位姿三角化、固定 Rig BA 或可审计的候选发布门。若直接逐图 BA，左右物理基线可能漂移；若把 validation 图用于特征或约束，又会污染 PR-08 的正式评估。普通“优化成功”也不能证明重投影、尺度和内参变化在允许范围内。
+
+### 修改文件
+
+- `cloudstudio_3dgs/ba/match_graph.py`
+- `cloudstudio_3dgs/ba/runtime_lock.py`
+- `cloudstudio_3dgs/ba/pycolmap_adapter.py`
+- `cloudstudio_3dgs/ba/report.py`
+- `tools/build_ba_match_graph.py`
+- `tools/run_hloc_aliked_lightglue.py`
+- `tools/run_hloc_triangulation.py`
+- `tools/run_rig_ba.py`
+- `upstream/rig_ba.lock.json`
+- `tests/test_ba_match_graph.py`
+- `tests/test_ba_runtime_lock.py`
+- `tests/test_pycolmap_ba.py`
+- `tests/test_ba_report.py`
+- `baselines/gs2_rig_ba.baseline.json`
+- `README.md`、`NOTICE.md`
+
+### 修改内容
+
+- 由 PR-08 split 建立确定性、仅训练集的匹配图，包含同 Rig 左右双目、同侧时序邻居和有最小帧间隔的空间回环；validation 图片进入任一 pair 都立即失败。
+- 锁定 HLoc、LightGlue、ALIKED 的精确上游提交和许可证，以及已测试 PyCOLMAP 版本。默认要求 VCS 安装能证明提交；普通 wheel 只有显式 `--allow-unverified-vcs` 才可运行，且证据保留为 `UNVERIFIED`。
+- 特征入口固定使用 HLoc 官方 `aliked-n16` 与 `aliked+lightglue` 配置；三角化入口禁止跳过几何验证，并使用参考 POS 位姿做 epipolar 验证。
+- 三角化前按 pairs 自动构建 train-only 已知位姿参考模型，避免 HLoc 因 validation 缺特征失败，也避免正式评估泄漏。
+- 把两台物理相机安装为一个 PyCOLMAP Rig；所有 Rig frame 用 Manifest POS 初始化，并对每个训练图中心施加 Cartesian 位置先验。左相机为参考 sensor，右到左外参来自记录标定。
+- BA 分三阶段：Stage 1 只优化 Rig frame 位姿；Stage 2 才允许 `fx/fy`；Stage 3 才允许尝试畸变优化。PyCOLMAP 对鱼眼额外参数只提供整体开关，因此发布门只接受 `k1/k2` 的有限变化，任何 `k3/k4` 变化都拒绝候选。sensor-from-rig 始终固定，首个 Rig frame 作为额外 gauge anchor，点云参与优化。
+- PyCOLMAP 4.1.1 的 pose-prior 构造过程会先做 Sim(3) 对齐并可能触碰 Rig translation；运行器在构造前缓存标定外参，在构造后和求解后重新断言原始外参，最终 before/after 快照再独立核验基线与尺度。
+- 候选发布要求 solver 可用、重投影 p50 改善至少 30%、Rig 平移/旋转漂移不超阈值、场景尺度漂移不超 0.5%、内参改动符合当前 stage。任一 Gate 失败，报告明确选择 `before`，不会把 candidate 当成发布模型。
+- 原子写出带 SHA256 的运行 Manifest 与 JSON/HTML before/after 报告；特征 Manifest 绑定 pairs/features/matches 和运行时，三角化 Manifest 再绑定 train-only 模型，BA 最后核对模型目录哈希与匹配图生成的 pairs 哈希，避免跨运行串用产物。
+
+### 验证方式与当前状态
+
+合成 PyCOLMAP 测试实际调用 Ceres，并使用非共线双相机轨迹、位置先验和固定外参。Stage 1 的重投影 p50 从 7.668242 px 降到 0.010774 px，改善 99.8595%；Rig 外参最大平移/旋转漂移为 `1.11e-16 m` / `9.94e-17°`，场景尺度漂移为 `6.32e-04`，候选通过全部 Gate。另有测试覆盖 train-only 参考模型、匹配图确定性、validation 排除、未知 stage、尺度漂移、越权内参变化、报告签名和逐字节确定性。
+
+真实 gs2 绑定 Manifest `54c01ab...3563ee3` 与 PR-08 split 后，得到 557 个训练 Rig / 1,114 张训练图，validation 使用数为 0。共生成 6,787 对：双目 557、左右时序各 2,218、左右空间回环各 897；签名图内同时固化完整 train/validation ID 集并由 verifier 复查。两次 JSON 和 HLoc pairs 输出均逐字节一致，文件 SHA256 分别为 `8e57cac4...f5e938`、`fba14a66...6a892`，内部匹配图 SHA256 为 `367e1d20...54ef6a`。
+
+当前机器只有 PyCOLMAP 4.1.1，尚未安装锁定的 HLoc/LightGlue 可选运行时，因此真实 ALIKED 特征、LightGlue 匹配、HLoc 三角化和真实 BA 均为 `NOT_RUN`。真实重投影 p50 改善至少 30% 的验收门没有证据，不能声明 PR-10 真实候选已接受；本阶段当前完成的是源码契约、真实训练匹配图和合成求解闭环。

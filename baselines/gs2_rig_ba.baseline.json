@@ -1,0 +1,47 @@
+{
+  "schema_version": 1,
+  "baseline_id": "gs2-fixed-rig-ba-pr10-contract",
+  "inputs": {
+    "dataset_manifest_sha256": "54c01abedb8be28d839d4ee9685de63c88059efc129eceacd501fa9943563ee3",
+    "split_manifest_file_sha256": "b9886ad4c0bb4d3dfc1503e93722d75ec6a93c7772a32f8b0e85860851d3f99e",
+    "runtime_lock_sha256": "cb456ad2f220c863a34ad6563bcb15f814df4a754e104e553afa27681dec85a9"
+  },
+  "real_match_graph": {
+    "match_graph_sha256": "367e1d20ced6ccf0b511dbdf1d43e0544fc12b459c9b08d7740972c88b54ef6a",
+    "match_graph_file_sha256": "8e57cac45d2c9661231020486ab7d17b1fa759864f42ec9b76cc33e6f8f5e938",
+    "hloc_pairs_file_sha256": "fba14a66d541f2dfacf86850995e0612fe8ff6348609c7f5d3c83eee1d86a892",
+    "training_rig_frames": 557,
+    "training_images": 1114,
+    "validation_images_used": 0,
+    "pair_count": 6787,
+    "pair_reasons": {
+      "stereo": 557,
+      "temporal_left": 2218,
+      "temporal_right": 2218,
+      "spatial_loop_left": 897,
+      "spatial_loop_right": 897
+    },
+    "repeat_outputs_byte_identical": true
+  },
+  "synthetic_pycolmap_stage_1": {
+    "solver_usable": true,
+    "candidate_accepted": true,
+    "reprojection_p50_before_px": 7.668241506162602,
+    "reprojection_p50_after_px": 0.010774093790611384,
+    "reprojection_p50_improvement_fraction": 0.9985949720308166,
+    "maximum_rig_translation_drift_m": 1.1123914955315597e-16,
+    "maximum_rig_rotation_drift_deg": 9.938904361903706e-17,
+    "scene_scale_drift_fraction": 0.0006323495379547683
+  },
+  "acceptance": {
+    "runtime_sources_and_licenses_locked": true,
+    "training_only_match_graph": true,
+    "known_pose_triangulation_contract": true,
+    "pos_initialization_and_position_prior_contract": true,
+    "fixed_stereo_rig_synthetic_ba": true,
+    "real_aliked_lightglue": "not_run",
+    "real_hloc_triangulation": "not_run",
+    "real_reprojection_p50_improvement_at_least_30_percent": "not_run",
+    "real_candidate_accepted": false
+  }
+}

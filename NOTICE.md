@@ -15,6 +15,10 @@
 | numpy / Pillow | 数值/图像 | BSD / MIT-CMU | 使用中 |
 | SciPy | QA 距离变换、近邻查询与可选点云局部 PCA | BSD-3-Clause | 使用中 |
 | LPIPS (richzhang/PerceptualSimilarity) | masked 感知质量评估 | BSD-2-Clause | 可选，不锁入 CPU 环境 |
+| HLoc (cvg/Hierarchical-Localization) | 已知位姿特征导入、几何验证与三角化 | Apache-2.0 | PR-10 可选运行时，精确提交已锁定 |
+| LightGlue (cvg/LightGlue) | ALIKED 局部特征匹配 | Apache-2.0 | PR-10 可选运行时，精确提交已锁定 |
+| ALIKED (Shiaoming/ALIKED) | 许可友好的局部特征 | BSD-3-Clause | PR-10 通过 HLoc/LightGlue 调用，精确提交已锁定 |
+| PyCOLMAP / COLMAP | 固定双相机 Rig、三角化与分阶段 BA | BSD-3-Clause | PR-10 使用 PyCOLMAP 4.1.1 |
 | SpotLessSplats | 瞬态剔除思路 | 无完整官方开源 → 自实现思路,不抄代码 | — |
 
 CloudStudio 本体为 BSD-2-Clause(自家),本工程只读取其产生的数据文件,不链接其代码。

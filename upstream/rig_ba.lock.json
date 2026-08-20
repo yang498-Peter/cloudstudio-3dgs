@@ -1,0 +1,36 @@
+{
+  "schema_version": 1,
+  "verified_date": "2026-08-20",
+  "components": {
+    "hloc": {
+      "repo": "https://github.com/cvg/Hierarchical-Localization.git",
+      "commit": "c13273bd0ecc2917a35910fd843712a1c6243193",
+      "license": "Apache-2.0",
+      "distribution": "hloc"
+    },
+    "lightglue": {
+      "repo": "https://github.com/cvg/LightGlue.git",
+      "commit": "eb42fee2d71449efb0aa5c10549752b5d75384d8",
+      "license": "Apache-2.0",
+      "distribution": "lightglue"
+    },
+    "aliked": {
+      "repo": "https://github.com/Shiaoming/ALIKED.git",
+      "commit": "683d7c65197395c0b3f01ebe76e1084a27e73a65",
+      "license": "BSD-3-Clause",
+      "distribution": null
+    },
+    "pycolmap": {
+      "repo": "https://github.com/colmap/colmap.git",
+      "version": "4.1.1",
+      "license": "BSD-3-Clause",
+      "distribution": "pycolmap"
+    }
+  },
+  "runtime_policy": {
+    "feature_configuration": "aliked-n16",
+    "matcher_configuration": "aliked+lightglue",
+    "geometric_verification": "known_pose_epipolar",
+    "skip_geometric_verification": false
+  }
+}
