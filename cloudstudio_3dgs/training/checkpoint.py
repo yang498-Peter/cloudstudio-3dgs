@@ -2,10 +2,131 @@
 
 from __future__ import annotations
 
+import math
 import os
 import tempfile
 from pathlib import Path
 from typing import Any
+
+
+def compare_checkpoint_payloads(
+    reference_path: Path,
+    resumed_path: Path,
+    *,
+    atol: float = 1e-7,
+    rtol: float = 1e-6,
+    max_reported_mismatches: int = 64,
+) -> dict[str, Any]:
+    """Compare every state required for deterministic interrupted resume."""
+    import torch
+
+    if atol < 0.0 or rtol < 0.0:
+        raise ValueError("checkpoint comparison tolerances must be non-negative")
+    reference = torch.load(
+        Path(reference_path), map_location="cpu", weights_only=False
+    )
+    resumed = torch.load(Path(resumed_path), map_location="cpu", weights_only=False)
+    mismatches: list[str] = []
+    mismatch_count = 0
+    max_abs_error = 0.0
+
+    def record(message: str) -> None:
+        nonlocal mismatch_count
+        mismatch_count += 1
+        if len(mismatches) < max_reported_mismatches:
+            mismatches.append(message)
+
+    def compare(left: Any, right: Any, path: str) -> None:
+        nonlocal max_abs_error
+        if isinstance(left, torch.Tensor) or isinstance(right, torch.Tensor):
+            if not isinstance(left, torch.Tensor) or not isinstance(right, torch.Tensor):
+                record(f"{path}: tensor/type mismatch")
+                return
+            if left.shape != right.shape:
+                record(f"{path}: shape {tuple(left.shape)} != {tuple(right.shape)}")
+                return
+            if left.dtype != right.dtype:
+                record(f"{path}: dtype {left.dtype} != {right.dtype}")
+                return
+            if left.is_floating_point() or left.is_complex():
+                error = 0.0
+                if left.numel():
+                    error = float((left - right).abs().max().item())
+                    max_abs_error = max(max_abs_error, error)
+                if not torch.allclose(left, right, atol=atol, rtol=rtol):
+                    record(f"{path}: floating tensor differs (max_abs={error:.9g})")
+            elif not torch.equal(left, right):
+                record(f"{path}: tensor differs")
+            return
+        if isinstance(left, dict) or isinstance(right, dict):
+            if not isinstance(left, dict) or not isinstance(right, dict):
+                record(f"{path}: dict/type mismatch")
+                return
+            left_keys = set(left)
+            right_keys = set(right)
+            for key in sorted(left_keys - right_keys, key=repr):
+                record(f"{path}.{key}: missing from resumed checkpoint")
+            for key in sorted(right_keys - left_keys, key=repr):
+                record(f"{path}.{key}: unexpected in resumed checkpoint")
+            for key in sorted(left_keys & right_keys, key=repr):
+                compare(left[key], right[key], f"{path}.{key}")
+            return
+        if isinstance(left, (list, tuple)) or isinstance(right, (list, tuple)):
+            if not isinstance(left, (list, tuple)) or not isinstance(
+                right, (list, tuple)
+            ):
+                record(f"{path}: sequence/type mismatch")
+                return
+            if len(left) != len(right):
+                record(f"{path}: length {len(left)} != {len(right)}")
+                return
+            for index, (left_item, right_item) in enumerate(zip(left, right)):
+                compare(left_item, right_item, f"{path}[{index}]")
+            return
+        if isinstance(left, float) or isinstance(right, float):
+            try:
+                left_float = float(left)
+                right_float = float(right)
+            except (TypeError, ValueError):
+                record(f"{path}: float/type mismatch")
+                return
+            error = abs(left_float - right_float)
+            max_abs_error = max(max_abs_error, error)
+            if not math.isclose(left_float, right_float, abs_tol=atol, rel_tol=rtol):
+                record(f"{path}: {left_float} != {right_float}")
+            return
+        if left != right:
+            record(f"{path}: {left!r} != {right!r}")
+
+    compare(reference, resumed, "checkpoint")
+    reference_params = reference.get("params", {})
+    resumed_params = resumed.get("params", {})
+    return {
+        "schema_version": 1,
+        "status": "PASS" if mismatch_count == 0 else "FAIL",
+        "atol": float(atol),
+        "rtol": float(rtol),
+        "reference_step": reference.get("step"),
+        "resumed_step": resumed.get("step"),
+        "reference_gaussian_count": None
+        if "means" not in reference_params
+        else int(len(reference_params["means"])),
+        "resumed_gaussian_count": None
+        if "means" not in resumed_params
+        else int(len(resumed_params["means"])),
+        "max_abs_error": max_abs_error,
+        "mismatch_count": mismatch_count,
+        "mismatches": mismatches,
+        "compared_state": [
+            "parameters_and_gaussian_order",
+            "optimizer_state",
+            "MCMC_strategy_state",
+            "sampler_state",
+            "training_telemetry",
+            "auxiliary_state",
+            "CPU_and_CUDA_RNG_state",
+        ],
+    }
 
 
 def save_checkpoint(

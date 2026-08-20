@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -22,6 +23,10 @@ from cloudstudio_3dgs.training.runtime_evidence import (
     snapshot_gaussians,
 )
 from cloudstudio_3dgs.data.manifest import canonical_json_bytes
+from cloudstudio_3dgs.training.checkpoint import (
+    compare_checkpoint_payloads,
+    save_checkpoint,
+)
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -143,6 +148,46 @@ class MCMCTelemetryTests(unittest.TestCase):
         snapshot = snapshot_gaussians(params, min_opacity=0.005)
         self.assertFalse(snapshot["finite"])
         self.assertIsNone(snapshot["scale_m"])
+
+    def test_checkpoint_equivalence_compares_full_resumable_state(self) -> None:
+        params = torch.nn.ParameterDict(
+            {"means": torch.nn.Parameter(torch.tensor([[1.0, 2.0, 3.0]]))}
+        )
+        optimizers = {"means": torch.optim.Adam([params["means"]], lr=0.1)}
+        generator = torch.Generator().manual_seed(17)
+        state = {
+            "last_metrics": {"loss": 0.5},
+            "initial_loss": 1.0,
+            "best_loss": 0.5,
+            "mcmc_telemetry": {"total_added": 2},
+        }
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            reference = root / "reference.pt"
+            resumed = root / "resumed.pt"
+            changed = root / "changed.pt"
+            common = {
+                "step": 20,
+                "identity": {"dataset": "a"},
+                "params": params,
+                "optimizers": optimizers,
+                "strategy_state": {"counter": torch.tensor([3])},
+                "sampler_state": generator.get_state(),
+                "training_state": state,
+            }
+            save_checkpoint(reference, **common)
+            save_checkpoint(resumed, **common)
+            passing = compare_checkpoint_payloads(reference, resumed)
+            params["means"].data[0, 0] += 0.1
+            save_checkpoint(changed, **common)
+            failing = compare_checkpoint_payloads(reference, changed)
+
+        self.assertEqual(passing["status"], "PASS")
+        self.assertEqual(passing["mismatch_count"], 0)
+        self.assertEqual(failing["status"], "FAIL")
+        self.assertTrue(
+            any("params.means" in item for item in failing["mismatches"])
+        )
 
 
 if __name__ == "__main__":

@@ -213,7 +213,16 @@ python tools/run_synthetic_training_acceptance.py `
 # Gate 1：先审计完整 MCMC 注册与锁定源码身份；FAIL/NOT_RUN 不得升级为通过
 python tools/audit_mcmc_runtime.py `
   --output G:\3dgs-runs\full_mcmc_runtime.json `
-  --gsplat-lock upstream\cloudstudio_trainer.lock.json
+  --gsplat-lock upstream\cloudstudio_trainer.lock.json `
+  --execute-kernels
+
+# Gate 1C：短合成 full-MCMC + 受控中断恢复全状态等价性
+python tools/run_synthetic_training_acceptance.py `
+  --output G:\3dgs-runs\full_mcmc_resume `
+  --gsplat-lock upstream\cloudstudio_trainer.lock.json `
+  --steps 80 `
+  --full-mcmc `
+  --resume-equivalence
 
 # 重投影验证(全项目最高优先级检查点):
 # 把解算点云投影回原始鱼眼图,输出多种坐标约定的叠加图供目视比对
@@ -286,7 +295,7 @@ PR-11 新 Trainer 使用独立的 `upstream/cloudstudio_trainer.lock.json`：只
 - [x] 路线 PR-10:训练集匹配图、锁定 ALIKED/LightGlue/HLoc、固定 Rig + POS 先验分阶段 BA 与回退报告；真实 1114 图/6787 对已三角化为 765,590 点，Stage 2 BA 通过并选用，Stage 3 因越权改变 k3/k4 被 fail-closed 拒绝
 - [x] 路线 PR-11(源码/合成 CUDA):自有 raw-fisheye Dataset/Trainer、3DGUT、逐图 mask/crop、LiDAR ray-range、显式 split、checkpoint、坐标 Manifest、masked evaluation 和 peak VRAM；真实 gs2 同配置回归、完整 MCMC Windows 算子和中断式 GPU resume 仍为 `NOT_RUN`
 - [x] 路线 PR-12(源码/CPU 合成):每个训练 Rig Frame 一个共享 6DoF 增量、Rig 中心枢轴、平移/旋转先验、checkpoint 恢复、固定基线与无改善/越界自动回退；真实 gs2 训练消融仍为 `NOT_RUN`（训练暂缓）
-- [ ] Gate 1 完整 MCMC：已加入 clean-lock/build-feature/native-op fail-closed 审计、refine/relocate/add/opacity/scale 遥测和 NaN/Inf 守卫；当前 RTX 5070 实测仍为 `FAIL`（`3dgs=false`，缺 covariance 与 fused perturb 算子），非零噪声、真实 relocate/add、forward/backward 和中断恢复均保持 `NOT_RUN`
+- [ ] Gate 1 完整 MCMC：已加入 clean-lock/build-feature/native-op fail-closed 审计、refine/relocate/add/opacity/scale 遥测、NaN/Inf 守卫及连续/恢复 checkpoint 全状态比较。澳洲 RTX 5070 Ti 已报告非零噪声和 `24→29` add，但尚未按统一契约提交 fused perturb、强制 relocation 和 resume 等价证据；本机旧扩展仍为 `FAIL`，总门保持未关闭
 - [x] Phase 1(前置):重投影验证初步通过(gs2 场景目视贴合,约定=c2w_gl),
       正式 Gate 需再覆盖 2–3 场景 + 逐点误差统计
 - [x] Phase 1(前置):COLMAP 数据集导出实测通过(gs2_keyframes:174 图/2 相机/101 万点,

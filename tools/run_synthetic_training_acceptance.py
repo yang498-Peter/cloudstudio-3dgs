@@ -23,8 +23,17 @@ from cloudstudio_3dgs.data.depth_cache import sparse_depth_npz_bytes
 from cloudstudio_3dgs.evaluation.splits import SplitConfig, build_split_manifest, write_split_manifest
 from cloudstudio_3dgs.geometry.lidar_projection import SparseDepthMap
 from cloudstudio_3dgs.training.backend import GsplatBackend
+from cloudstudio_3dgs.training.checkpoint import compare_checkpoint_payloads
 from cloudstudio_3dgs.training.dataset import TrainingSample
-from cloudstudio_3dgs.training.trainer import TrainerConfig, load_initialization_ply, train
+from cloudstudio_3dgs.training.runtime_evidence import (
+    execute_mcmc_native_kernel_smoke,
+)
+from cloudstudio_3dgs.training.trainer import (
+    ControlledTrainingInterruption,
+    TrainerConfig,
+    load_initialization_ply,
+    train,
+)
 
 
 def _sha256(path: Path) -> str:
@@ -44,6 +53,17 @@ def _camera(side: str) -> dict:
             "params": {"k1": 0.02, "k2": -0.003, "k3": 0.0002, "k4": 0.0},
         },
     }
+
+
+class FullMCMCAcceptanceBackend(GsplatBackend):
+    """Force one known dead Gaussian so relocation is an observed gate."""
+
+    def initialize(self, *args, **kwargs):
+        params, optimizers, state = super().initialize(*args, **kwargs)
+        params["opacities"].data[0] = self.torch.tensor(
+            0.001, device=self.device
+        ).logit()
+        return params, optimizers, state
 
 
 def _pose(x: float, y: float) -> np.ndarray:
@@ -263,7 +283,20 @@ def main() -> int:
             "requires a gsplat build with the 3DGS and RELOC kernel groups"
         ),
     )
+    parser.add_argument(
+        "--resume-equivalence",
+        action="store_true",
+        help=(
+            "run an uninterrupted full-MCMC reference plus a controlled half-run/"
+            "resume and compare all checkpointed optimizer, strategy, sampler, RNG, "
+            "Gaussian and telemetry state"
+        ),
+    )
     args = parser.parse_args()
+    if args.resume_equivalence and not args.full_mcmc:
+        parser.error("--resume-equivalence requires --full-mcmc")
+    if args.full_mcmc and args.steps < 40:
+        parser.error("--full-mcmc requires at least 40 steps to enter a refine window")
     if args.output.exists() and any(args.output.iterdir()):
         raise FileExistsError(f"synthetic acceptance output is not empty: {args.output}")
     args.output.mkdir(parents=True, exist_ok=True)
@@ -280,6 +313,9 @@ def main() -> int:
         cap_max=64,
         lock_path=args.gsplat_lock,
         mcmc_config=mcmc_config,
+    )
+    native_kernel_smoke = (
+        execute_mcmc_native_kernel_smoke() if args.full_mcmc else None
     )
     (
         _,
@@ -306,9 +342,10 @@ def main() -> int:
         init_path = args.output / "fixture" / "initialization_full_mcmc.ply"
         write_binary_ply(init_path, dense_xyz.astype(np.float32), dense_rgb)
         init_count = len(dense_xyz)
-    run_dir = args.output / "run"
-    manifest = train(
-        TrainerConfig(
+    backend_factory = FullMCMCAcceptanceBackend if args.full_mcmc else GsplatBackend
+
+    def make_config(run_dir: Path, resume_checkpoint: Path | None = None) -> TrainerConfig:
+        return TrainerConfig(
             run_id="synthetic-fisheye-convergence",
             dataset_manifest=dataset_path,
             recording_root=recording,
@@ -318,6 +355,7 @@ def main() -> int:
             initialization_ply=init_path,
             output_dir=run_dir,
             gsplat_lock=args.gsplat_lock,
+            resume_checkpoint=resume_checkpoint,
             depth_manifest=depth_manifest_path,
             depth_root=depth_root,
             require_person_masks=False,
@@ -349,7 +387,47 @@ def main() -> int:
                 "colors": 5e-2,
             },
         )
-    )
+
+    resume_report = None
+    if args.resume_equivalence:
+        continuous_dir = args.output / "run_continuous"
+        manifest = train(
+            make_config(continuous_dir), backend_factory=backend_factory
+        )
+        resumed_dir = args.output / "run_resumed"
+        stop_step = args.steps // 2
+        try:
+            train(
+                make_config(resumed_dir),
+                backend_factory=backend_factory,
+                controlled_stop_after_steps=stop_step,
+            )
+        except ControlledTrainingInterruption as interruption:
+            if interruption.completed_steps != stop_step:
+                raise RuntimeError("controlled interruption stopped at the wrong step")
+            resume_checkpoint = interruption.checkpoint_path
+        else:
+            raise RuntimeError("controlled interruption did not occur")
+        resumed_manifest = train(
+            make_config(resumed_dir, resume_checkpoint),
+            backend_factory=backend_factory,
+        )
+        resume_report = compare_checkpoint_payloads(
+            continuous_dir / "checkpoints" / "latest.pt",
+            resumed_dir / "checkpoints" / "latest.pt",
+        )
+        resume_report["controlled_stop_step"] = stop_step
+        resume_report["continuous_run_manifest_sha256"] = manifest[
+            "run_manifest_sha256"
+        ]
+        resume_report["resumed_run_manifest_sha256"] = resumed_manifest[
+            "run_manifest_sha256"
+        ]
+        manifest = resumed_manifest
+    else:
+        manifest = train(
+            make_config(args.output / "run"), backend_factory=backend_factory
+        )
     training = manifest["training"]
     improvement = float(training["loss_improvement_fraction"])
     acceptance = {
@@ -366,12 +444,39 @@ def main() -> int:
         "converged": improvement >= 0.20,
     }
     if args.full_mcmc:
-        # Full MCMC must actually run: with the densified init and cap_max=64
-        # the add-new-GS branch must grow the model, otherwise refine never fired.
+        telemetry = training["mcmc_telemetry"]
+        operator_report = training["mcmc_operator_report"]
         acceptance["initial_gaussian_count"] = init_count
-        acceptance["mcmc_densification_ran"] = int(training["gaussian_count"]) > init_count
+        acceptance["native_kernel_smoke"] = native_kernel_smoke
+        acceptance["mcmc_operator_registration"] = operator_report["status"]
+        acceptance["mcmc_noise_step_count"] = telemetry[
+            "noise_injection_step_count"
+        ]
+        acceptance["mcmc_refine_event_count"] = telemetry["refine_event_count"]
+        acceptance["mcmc_relocated_count"] = telemetry["total_relocated"]
+        acceptance["mcmc_added_count"] = telemetry["total_added"]
+        acceptance["mcmc_final_state_finite"] = telemetry["last_snapshot"][
+            "finite"
+        ]
+        acceptance["mcmc_densification_ran"] = (
+            int(training["gaussian_count"]) > init_count
+            and int(telemetry["total_added"]) > 0
+        )
         acceptance["converged"] = bool(
-            acceptance["converged"] and acceptance["mcmc_densification_ran"]
+            acceptance["converged"]
+            and native_kernel_smoke is not None
+            and native_kernel_smoke["status"] == "PASS"
+            and acceptance["mcmc_operator_registration"] == "PASS_REGISTERED"
+            and acceptance["mcmc_noise_step_count"] == args.steps
+            and acceptance["mcmc_refine_event_count"] > 0
+            and acceptance["mcmc_relocated_count"] > 0
+            and acceptance["mcmc_densification_ran"]
+            and acceptance["mcmc_final_state_finite"]
+        )
+    if resume_report is not None:
+        acceptance["resume_equivalence"] = resume_report
+        acceptance["converged"] = bool(
+            acceptance["converged"] and resume_report["status"] == "PASS"
         )
     acceptance_path = args.output / "synthetic_acceptance.json"
     acceptance_path.write_text(
