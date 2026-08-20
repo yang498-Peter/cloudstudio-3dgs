@@ -75,3 +75,6 @@ git -C external\gsplat apply --reverse --check train\patches\gsplat-s1-fisheye-k
 ```
 
 CPU 与静态门槛可在当前机器闭环；新建空环境 bootstrap、完整 CUDA 编译和 GPU 训练 smoke 必须分别记录真实结果。在这些外部门槛运行前，PR-00 只能声明“源码基线已锁定”，不能声明训练环境或画质验收通过。
+
+远端首次 CPU CI 暴露了 Windows checkout 将补丁转为 CRLF、导致 SHA256 与本地 LF 文件不同的问题。
+修复方式是在 `.gitattributes` 中强制 `*.patch` 使用 LF，并在单元测试中同时守卫 UTF-8、无 BOM、LF 和 SHA256；补丁适用性作业本身已通过。

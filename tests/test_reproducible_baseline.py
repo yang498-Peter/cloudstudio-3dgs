@@ -18,6 +18,7 @@ class ReproducibleBaselineTests(unittest.TestCase):
         patch_bytes = (ROOT / lock["patch"]).read_bytes()
 
         self.assertFalse(patch_bytes.startswith((b"\xff\xfe", b"\xfe\xff", b"\xef\xbb\xbf")))
+        self.assertNotIn(b"\r\n", patch_bytes)
         self.assertTrue(patch_bytes.decode("utf-8").startswith("diff --git "))
         self.assertEqual(hashlib.sha256(patch_bytes).hexdigest(), lock["patch_sha256"])
         self.assertRegex(lock["commit"], r"^[0-9a-f]{40}$")
