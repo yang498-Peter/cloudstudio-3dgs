@@ -1,7 +1,7 @@
 # CloudStudio 3DGS — MVP S1 扫描数据的 3D Gaussian Splatting 处理管线
 
-> **换机接力?先读 [HANDOFF.md](HANDOFF.md)**(2026-07-02 打包:数据链路全验证,
-> 训练环境待在新机器上编译,一键脚本 + 踩坑清单 + 下一步路线都在里面)。
+> **换机接力先读 [HANDOFF.md](HANDOFF.md)**。该文档是 2026-07-02 的历史现场记录；
+> 当前实施顺序和验收边界以 [持续优化实施计划](docs/IMPLEMENTATION_PLAN.zh-CN.md) 为准。
 
 独立于 CloudStudio 本体的 3DGS 处理软件工程。目标:用开源可商用组件(gsplat/Apache-2.0 路线)
 处理 MVP S1 扫描仪输出(双鱼眼图像 + 逐帧位姿 + 高精度 SLAM 点云),替代第三方收费 3DGS 软件(mipmap),
@@ -17,6 +17,7 @@
 | [docs/RESEARCH_PLAN.md](docs/RESEARCH_PLAN.md) | 调研报告与分阶段开发计划(plan of record) |
 | [docs/S1_DATA_FORMAT.md](docs/S1_DATA_FORMAT.md) | **MVP S1 真实数据格式规格**(Phase 0 交付物,基于真实数据核验) |
 | [docs/DATASETS.md](docs/DATASETS.md) | 本机可用的真实数据清单(原始记录 / 解算成品 / mipmap 对标输出) |
+| [docs/IMPLEMENTATION_PLAN.zh-CN.md](docs/IMPLEMENTATION_PLAN.zh-CN.md) | 深度审查后的逐阶段实施、验证、提交和真实数据验收计划 |
 | [NOTICE.md](NOTICE.md) | 第三方组件 license 台账(红线:禁止 INRIA 原版 3DGS 代码) |
 
 ## 目录结构
@@ -55,19 +56,22 @@ python converter/s1_to_colmap.py `
   --out-dir  G:\3dgs-datasets\gs2_keyframes
 ```
 
-## 训练环境(Phase 0 待完成)
+## 可复现环境基线
 
-前提已具备:nvcc 12.8 + PyTorch 2.11.0+cu128(sm_120/Blackwell OK)+ VS2022 BuildTools。
-待执行(需要联网拉外部仓库,一次性):
+CPU 数据工具依赖由 `pyproject.toml` 和 `uv.lock` 锁定：
 
 ```powershell
-git clone --depth 1 https://github.com/nerfstudio-project/gsplat.git external\gsplat
-cd external\gsplat; pip install -e . --no-build-isolation; pip install -r examples\requirements.txt
-# 冒烟(8GB 显存 → 先降采样 4 倍 + MCMC 限高斯数):
-# python examples\simple_trainer.py mcmc --with_ut --with_eval3d `
-#   --data_dir G:\3dgs-datasets\gs2_keyframes --data_factor 4 `
-#   --strategy.cap-max 1000000 --result_dir G:\3dgs-results\gs2_smoke
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\bootstrap.ps1
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\doctor.ps1
 ```
+
+CUDA 训练环境另需 NVIDIA 驱动、CUDA Toolkit 12.8、VS2022 BuildTools、
+Python 3.12 和 PyTorch 2.11.0+cu128。执行 `scripts\bootstrap.ps1 -Training` 时，
+脚本会按 `upstream/gsplat.lock.json` 检出精确上游提交、校验补丁 SHA256、检查补丁可应用性，
+再调用 Windows 构建脚本。不要直接安装 gsplat 的 `examples\requirements.txt`，它可能替换已选定的 CUDA PyTorch。
+
+当前历史数据集包含约 1,019,218 个初始化点，超过旧 smoke 的 1,000,000 个 Gaussian 上限。
+因此 `baselines/gs2_smoke.baseline.json` 明确标记为阻塞；在 PR-04 重新生成点云前，不能把该配置作为有效画质基线。
 
 ## 关键事实(已用真实数据核验,详见 S1_DATA_FORMAT.md)
 
@@ -87,7 +91,8 @@ cd external\gsplat; pip install -e . --no-build-isolation; pip install -r exampl
 ## 阶段状态
 
 - [x] Phase 0(部分):数据格式核验 → `docs/S1_DATA_FORMAT.md`;mipmap 数据契约 → `docs/references/`
-- [ ] Phase 0(剩余):gsplat CUDA 环境搭建 + MipNeRF360 冒烟
+- [x] Phase 0(基线):CPU 依赖锁、gsplat 上游/补丁锁、bootstrap/doctor、CPU CI
+- [ ] Phase 0(外部验收):空白新机器安装 + gsplat CUDA 编译 + GPU 冒烟
 - [x] Phase 1(前置):重投影验证初步通过(gs2 场景目视贴合,约定=c2w_gl),
       正式 Gate 需再覆盖 2–3 场景 + 逐点误差统计
 - [x] Phase 1(前置):COLMAP 数据集导出实测通过(gs2_keyframes:174 图/2 相机/101 万点,

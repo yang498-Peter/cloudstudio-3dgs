@@ -3,6 +3,9 @@
 `external/gsplat` 不入本仓库(见 .gitignore);对它的所有修改以补丁文件形式固化在这里,
 重新克隆后用 `git apply` 重放。
 
+补丁文件必须保持 UTF-8 编码；历史副本曾为 UTF-16 LE，`git apply` 会将其判定为无效补丁。
+CI 会同时验证补丁 SHA256 和针对锁定上游提交的 `git apply --check`。
+
 ## gsplat-s1-fisheye-keep-distortion.patch
 
 - 基线 commit:`f2d14131483644e9977451b6403f6f0b73e6637f`(gsplat main, v1.5.3, 2026-07-02 克隆)

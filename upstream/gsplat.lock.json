@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "repo": "https://github.com/nerfstudio-project/gsplat.git",
+  "commit": "f2d14131483644e9977451b6403f6f0b73e6637f",
+  "version": "1.5.3",
+  "patch": "train/patches/gsplat-s1-fisheye-keep-distortion.patch",
+  "patch_sha256": "0db9c75cc18d163646992013992d77045900623de7669b684e9c374354757c65",
+  "python": "3.12",
+  "torch": "2.11.0+cu128",
+  "cuda": "12.8",
+  "cuda_arch_list": "12.0",
+  "notes": "Training dependencies are intentionally separate from the CPU-only uv.lock."
+}

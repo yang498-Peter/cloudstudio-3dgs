@@ -1,0 +1,21 @@
+name = "gs2-smoke-8gb"
+data_factor = 4
+max_steps = 10000
+eval_steps = [5000, 10000]
+save_steps = [10000]
+save_ply = true
+ply_steps = [10000]
+with_ut = true
+with_eval3d = true
+strategy = "mcmc"
+cap_max = 1000000
+normalize_world_space = false
+keep_fisheye_distortion = true
+
+[input]
+dataset = "data/gs2_keyframes"
+coordinate_frame = "s1_local"
+
+[hardware]
+gpu_class = "RTX 5070 Laptop 8GB"
+cuda_arch_list = "12.0"
