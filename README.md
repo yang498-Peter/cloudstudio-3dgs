@@ -274,7 +274,7 @@ PR-11 新 Trainer 使用独立的 `upstream/cloudstudio_trainer.lock.json`：只
 - [x] 路线 PR-03:定量数据 QA、JSON/HTML/叠加图、可配置 fail-closed 门槛
 - [x] 路线 PR-04:确定性 voxel LiDAR 初始化、RGB 位深识别、点数预算和 stride 覆盖率对照
 - [x] 路线 PR-05:逐图片 valid/static/depth-valid mask 契约、统一 crop/factor 和 masked PSNR
-- [ ] 路线 PR-06(进行中):独立人影动态 mask、官方权重身份锁、50 图抽检、Stage 2 高残差重叠审计，以及 RGB/SSIM/LiDAR loss 的统一动态排除；真实审计完成前不重跑 BA、不启动位姿 A/B
+- [x] 路线 PR-06(源码/真实 mask/BA 审计):独立人影动态 mask、官方权重身份锁、RGB/SSIM/LiDAR loss 统一排除和生产训练 fail-closed 已完成；真实 `1238/1238` 图检出 2057 个人像实例，Codex 视觉抽检左右各 25 图通过。Stage 2 的 3,083,156 个可投影观测中仅 44/2,921 个高残差落在人影内（1.5063%，低于 30% 重跑门），因此保留现有 Stage 2、不重跑 BA；外部人工复核与原始 POS/Stage 2 POS 3DGS A/B 仍为 `NOT_RUN`
 - [x] 路线 PR-07:KB4 LiDAR ray-range、前表面 z-buffer、confidence、mask 和确定性稀疏缓存；当前 Rig Manifest 的真实 `1238/1238` 全量缓存已完成并以 2/4 worker 逐文件 SHA 重放一致，Trainer 真实 CUDA depth loss 仍为 `NOT_RUN`
 - [x] 路线 PR-08:Rig Frame 切分、泄漏告警、masked PSNR/SSIM/LPIPS、深度指标和 HTML 报告
 - [x] 路线 PR-09:关键帧 SE(3) 修正、鲁棒过滤、Rig 时间插值、基线保持和默认位姿回退门

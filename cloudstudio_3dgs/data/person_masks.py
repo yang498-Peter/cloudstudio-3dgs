@@ -7,6 +7,7 @@ import io
 import json
 import os
 import tempfile
+from copy import deepcopy
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import Any, Callable, Protocol
@@ -177,6 +178,20 @@ def _review_ids(
                 0, len(camera_records) - 1, min(uniform_count, len(camera_records)), dtype=np.int64
             )
             selected.update(str(camera_records[int(index)]["image_id"]) for index in indexes)
+        target = min(frames_per_camera, len(camera_records))
+        selected_for_camera = {
+            str(record["image_id"])
+            for record in camera_records
+            if str(record["image_id"]) in selected
+        }
+        if len(selected_for_camera) < target:
+            for record in camera_records:
+                image_id = str(record["image_id"])
+                if image_id not in selected:
+                    selected.add(image_id)
+                    selected_for_camera.add(image_id)
+                if len(selected_for_camera) == target:
+                    break
     return sorted(selected)
 
 
@@ -322,6 +337,72 @@ def build_person_mask_review(
         canonical_json_bytes(report)
     ).hexdigest()
     return report
+
+
+def repair_person_review_selection(
+    person_manifest: dict[str, Any],
+    recording_root: Path,
+    person_mask_root: Path,
+) -> dict[str, Any]:
+    """Fill review-sample overlap gaps without rerunning segmentation."""
+    verify_person_mask_manifest(person_manifest)
+    output = deepcopy(person_manifest)
+    frames_per_camera = int(output["config"]["review_frames_per_camera"])
+    review_ids = _review_ids(output["images"], frames_per_camera)
+    existing_by_id = {
+        str(record["image_id"]): record
+        for record in output.get("review_samples", [])
+    }
+    existing_ids = set(existing_by_id)
+    if set(review_ids) == existing_ids:
+        raise ValueError("person review selection already has complete unique coverage")
+    records_by_id = {
+        str(record["image_id"]): record for record in output["images"]
+    }
+    root = Path(person_mask_root)
+    review: list[dict[str, Any]] = []
+    for image_id in review_ids:
+        if image_id in existing_by_id:
+            existing = existing_by_id[image_id]
+            overlay = _safe_source(root, str(existing["overlay_path"]))
+            if _sha256_file(overlay) != str(existing["overlay_sha256"]):
+                raise ValueError(f"person review overlay SHA256 mismatch for {image_id}")
+            review.append(existing)
+            continue
+        record = records_by_id[image_id]
+        source = _safe_source(Path(recording_root), str(record["source_image_path"]))
+        if _sha256_file(source) != str(record["source_image_sha256"]):
+            raise ValueError(f"source image SHA256 mismatch for review {image_id}")
+        mask_path = _safe_source(root, str(record["person_mask_path"]))
+        if _sha256_file(mask_path) != str(record["person_mask_sha256"]):
+            raise ValueError(f"person mask SHA256 mismatch for review {image_id}")
+        with Image.open(source) as opened:
+            pixels = np.asarray(opened.convert("RGB"), dtype=np.uint8)
+        with Image.open(mask_path) as opened:
+            person = np.asarray(opened, dtype=np.uint8) > 0
+        payload = _overlay_bytes(pixels, person)
+        relative = f"review/{image_id}.png"
+        _write_atomic(root / relative, payload)
+        review.append(
+            {
+                "image_id": image_id,
+                "overlay_path": relative,
+                "overlay_sha256": hashlib.sha256(payload).hexdigest(),
+                "review_status": "PENDING_MANUAL_REVIEW",
+            }
+        )
+    output["review_samples"] = review
+    output.pop("person_mask_manifest_sha256", None)
+    output["person_mask_manifest_sha256"] = hashlib.sha256(
+        canonical_json_bytes(output)
+    ).hexdigest()
+    _write_atomic(
+        root / PERSON_MASK_MANIFEST_NAME,
+        (json.dumps(output, ensure_ascii=False, indent=2, sort_keys=True) + "\n").encode(
+            "utf-8"
+        ),
+    )
+    return output
 
 
 def build_person_masks(

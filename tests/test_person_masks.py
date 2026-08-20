@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -17,6 +18,7 @@ from cloudstudio_3dgs.data.manifest import canonical_json_bytes
 from cloudstudio_3dgs.data.mask_manifest import build_per_image_masks
 from cloudstudio_3dgs.data.person_masks import (
     PersonMaskConfig,
+    _review_ids,
     build_person_mask_review,
     build_person_masks,
     verify_person_mask_manifest,
@@ -77,6 +79,42 @@ def _fixture(recording_root: Path) -> dict:
 
 
 class PersonMaskTests(unittest.TestCase):
+    def test_review_selection_fills_top_uniform_overlap_to_exact_target(self) -> None:
+        records = [
+            {
+                "image_id": f"img_{index:03d}",
+                "camera_id": "left",
+                "source_image_path": f"camera/left/{index:03d}.png",
+                "person_fraction": 1.0 if index in {0, 4, 8} else 0.0,
+            }
+            for index in range(9)
+        ]
+        selected = _review_ids(records, frames_per_camera=6)
+        self.assertEqual(len(selected), 6)
+        self.assertEqual(len(set(selected)), 6)
+
+    def test_checked_in_real_baseline_records_complete_masks_and_retains_stage_2(self) -> None:
+        baseline = json.loads(
+            (
+                Path(__file__).resolve().parents[1]
+                / "baselines"
+                / "gs2_person_masks.baseline.json"
+            ).read_text(encoding="utf-8")
+        )
+        self.assertEqual(baseline["real_person_masks"]["image_count"], 1238)
+        self.assertEqual(baseline["real_person_masks"]["mask_file_count"], 1238)
+        self.assertEqual(baseline["visual_review"]["reviewed"], 50)
+        audit = baseline["stage_2_person_residual_audit"]
+        self.assertEqual(audit["decision"], "RETAIN_CURRENT_BA")
+        self.assertLess(
+            audit["high_residual_person_overlap_fraction"],
+            baseline["configuration"]["rerun_overlap_fraction"],
+        )
+        self.assertEqual(
+            baseline["acceptance"]["original_vs_stage_2_pose_3dgs_ab"],
+            "not_run_training_paused",
+        )
+
     def test_checked_in_torchvision_lock_is_exact_and_does_not_redistribute_weights(self) -> None:
         lock = load_person_model_lock(
             Path(__file__).resolve().parents[1] / "upstream" / "person_mask.lock.json"

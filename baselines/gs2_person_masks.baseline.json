@@ -1,0 +1,87 @@
+{
+  "schema_version": 1,
+  "baseline_id": "gs2-person-dynamic-mask-pr06-real",
+  "inputs": {
+    "dataset_manifest_sha256": "54c01abedb8be28d839d4ee9685de63c88059efc129eceacd501fa9943563ee3",
+    "base_mask_manifest_sha256": "86ae782aaa7ece7d55e5b0494caff8f0414eebc98b7382e25b41bbf9043717f0",
+    "person_model_lock_file_sha256": "c8f618140a2a9d1ff1260a66c59fb597fe053e741ee10723659cc0fb1f010bdf",
+    "weights_sha256": "73cbd0190fcbe3ba339921fbce2c3a0b6bb9126c9a133c85e43a2a8e060a109e",
+    "weights_size_bytes": 185828065,
+    "stage_2_model_sha256": "64282ec6095e45116fba434b08f3a2abef24c48f170e66ebef129234bf5e1c04"
+  },
+  "configuration": {
+    "architecture": "maskrcnn_resnet50_fpn_v2",
+    "weights": "MaskRCNN_ResNet50_FPN_V2_Weights.COCO_V1",
+    "inference_max_dimension": 800,
+    "score_threshold": 0.65,
+    "mask_threshold": 0.5,
+    "dilation_pixels": 12,
+    "review_frames_per_camera": 25,
+    "high_residual_threshold_px": 5.0,
+    "rerun_overlap_fraction": 0.3
+  },
+  "real_person_masks": {
+    "person_mask_manifest_sha256": "1eb2284f3b9ea25936a8eacfbbc311332c19c1e8af33e98729280e963a9ec7c8",
+    "person_mask_manifest_file_sha256": "5ec81d995f82528b6f8fe7aca13ea72cfffd6002e74640e20c9e153656585642",
+    "image_count": 1238,
+    "mask_file_count": 1238,
+    "mask_files_size_bytes": 12134080,
+    "images_with_person": 954,
+    "person_instances": 2057,
+    "images_with_person_by_camera": {
+      "left": 468,
+      "right": 486
+    },
+    "instances_by_camera": {
+      "left": 1080,
+      "right": 977
+    },
+    "person_fraction": {
+      "min": 0.0,
+      "p50": 0.0026572736158072697,
+      "p95": 0.05295413399272431,
+      "max": 0.11341285774664896
+    }
+  },
+  "visual_review": {
+    "person_mask_review_sha256": "de421b44e6723efa02c071fc3cc440905a1e4d1992e72a57e83c8db82730e685",
+    "person_mask_review_file_sha256": "3c4c19f39df97a3930ddf0cda87aa0809e4bc286704ebc15e5866ef8c5f6cb11",
+    "reviewer_type": "codex_visual",
+    "status": "PASS",
+    "reviewed": 50,
+    "failed": 0,
+    "reviewed_by_camera": {
+      "left": 25,
+      "right": 25
+    },
+    "external_human_review": "not_run"
+  },
+  "stage_2_person_residual_audit": {
+    "person_residual_audit_sha256": "a35f9aa644921d70fc62fcc6675e845a5c6704cfa7598ba66f93099c6738ee92",
+    "person_residual_audit_file_sha256": "70b9a3ecb443f76a384c4bfa7bd30530b983ed7eaab7004c31abde7ec5e53e30",
+    "observations": 3083156,
+    "observations_on_person": 13995,
+    "high_residual_observations": 2921,
+    "high_residual_on_person": 44,
+    "high_residual_person_overlap_fraction": 0.015063334474495036,
+    "reprojection_error_px": {
+      "p50": 1.0788681299206564,
+      "p95": 2.833359901947117,
+      "max": 14.790177107082656
+    },
+    "decision": "RETAIN_CURRENT_BA",
+    "masked_ba_rerun": "not_run_not_recommended"
+  },
+  "acceptance": {
+    "official_model_identity_and_license_boundary_locked": true,
+    "complete_per_image_mask_manifest": true,
+    "person_layer_is_independent_from_base_and_depth_masks": true,
+    "rgb_ssim_and_depth_supervision_share_person_exclusion": true,
+    "production_training_fails_without_person_manifest": true,
+    "codex_visual_review_passed": true,
+    "external_human_review": "not_run",
+    "stage_2_residuals_do_not_concentrate_on_people": true,
+    "stage_2_retained_without_rerun": true,
+    "original_vs_stage_2_pose_3dgs_ab": "not_run_training_paused"
+  }
+}

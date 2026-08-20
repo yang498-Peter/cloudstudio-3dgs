@@ -551,6 +551,9 @@ PR-11 Trainer 固定使用 Manifest 位姿，无法在图像监督下对残余 R
 - `cloudstudio_3dgs/ba/person_residual_audit.py`
 - `tools/build_person_masks.py`
 - `tools/audit_ba_person_residuals.py`
+- `tools/finalize_person_mask_review.py`
+- `tools/build_person_review_contact_sheets.py`
+- `tools/repair_person_review_selection.py`
 - `upstream/person_mask.lock.json`
 - `tests/test_person_masks.py`、`tests/test_training.py`
 - `baselines/gs2_person_masks.baseline.json`
@@ -567,4 +570,10 @@ PR-11 Trainer 固定使用 Manifest 位姿，无法在图像监督下对残余 R
 
 ### 验证方式与当前状态
 
-先加入缺模块红测试；当前定向单元测试覆盖独立/确定性签名、模型 lock、RGB/depth 同步排除、crop/factor、partial/tampered Manifest、训练身份和 BA 决策阈值。真实 1,238 图 mask、左右各 25 图人工抽检及 Stage 2 的 3,083,168 个观测审计正在执行；在签名、抽检和重叠结论完成前，BA 是否重跑保持 `PENDING`，3DGS A/B 与正式训练保持 `NOT_RUN`。
+先加入缺模块红测试；完整回归覆盖独立/确定性签名、模型 lock、RGB/depth 同步排除、crop/factor、partial/tampered Manifest、训练身份和 BA 决策阈值。真实生成完成 `1238/1238` 个唯一 mask，签名 `1eb2284f...c7c8`，共 12,134,080 bytes；954 张图检测到人物，左/右分别 468/486 张，共 2,057 个实例。单图人影比例 min/p50/p95/max 为 `0 / 0.002657 / 0.052954 / 0.113413`。
+
+初始抽检选择因“高占比”和“均匀”样本重合得到 49 张，未把它冒充 50；修复选择器去重补位后只新增 1 张 overlay，不重跑 segmentation，最终左右各 25 张。两页 25 宫格由 Codex 逐图视觉检查：人物主体和近/远边缘均被覆盖，少量把镜头底部操作员衣物、手套或遮挡布一起屏蔽，属于安全过剔除；未见大面积墙面、地面或建筑误删。签名 review 为 `de421b44...0e685`、状态 `PASS`，reviewer 明确为 `codex_visual`；外部人工复核仍诚实保持 `NOT_RUN`。
+
+Stage 2 模型 SHA `64282ec6...1c04` 的全部 1,114 张训练图完成流式审计。3,083,156 个可投影 observation 中，13,995 个位于人影内；`>=5 px` 的高残差共 2,921 个，只有 44 个位于人影内，重叠率 `1.506333%`，远低于 `30%` 重跑门。24 张最高残差叠加图中，紫色人影外残差主要分散在鹅卵石/砖缝、建筑高对比边缘和植被，没有形成随人物聚集的证据。签名审计 `a35f9aa6...ee92` 给出 `RETAIN_CURRENT_BA`，所以不为了 mask 重跑已通过的 Stage 2；masked BA 状态是 `NOT_RUN_NOT_RECOMMENDED`，不是跳过失败门。
+
+本阶段仍未启动 3DGS 训练。下一步原始 POS / Stage 2 POS A/B 必须共同引用 person Manifest SHA `1eb2284f...c7c8`；masked PSNR/SSIM/LPIPS、LiDAR range、清晰度和接缝结论保持 `NOT_RUN`，不能由 mask/BA 审计推导画质提升。
