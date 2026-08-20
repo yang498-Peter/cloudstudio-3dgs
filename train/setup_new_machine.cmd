@@ -28,6 +28,9 @@ rem --- the three Windows build fixes discovered on the first machine ---
 set VSLANG=1033
 set DISTUTILS_USE_SDK=1
 set MSSdk=1
+rem Some localized MSVC installs ignore VSLANG. Make torch's compiler probe
+rem decode non-ASCII banners lossily while preserving the ASCII version number.
+set PYTHONPATH=%ROOT%\train\build_compat;%PYTHONPATH%
 rem Compile only for this GPU arch (RTX 5070 = Blackwell sm_120). This is the
 rem difference between a ~10 min build and a >60 min all-arch build.
 set TORCH_CUDA_ARCH_LIST=12.0
