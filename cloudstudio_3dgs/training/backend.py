@@ -8,6 +8,13 @@ import subprocess
 from pathlib import Path
 from typing import Any
 
+from cloudstudio_3dgs.training.runtime_evidence import (
+    audit_loaded_mcmc_runtime,
+    build_mcmc_step_event,
+    require_full_mcmc_runtime,
+    snapshot_gaussians,
+)
+
 
 def verify_gsplat_runtime(lock_path: Path) -> dict[str, Any]:
     """Require the locked version and, for VCS installs, the exact clean commit."""
@@ -86,17 +93,13 @@ class GsplatBackend:
             verbose=False,
             **({} if mcmc_config is None else mcmc_config),
         )
+        operator_report = audit_loaded_mcmc_runtime(self.runtime)
+        self.runtime["mcmc_operator_report"] = operator_report
         noise_stop = -1 if mcmc_config is None else int(
             mcmc_config.get("noise_injection_stop_iter", -1)
         )
         if noise_stop != 0:
-            from gsplat.cuda._backend import _C  # noqa: F401
-
-            if not hasattr(torch.ops.gsplat, "quat_scale_to_covar_preci_fwd"):
-                raise RuntimeError(
-                    "locked gsplat CUDA runtime has no quat_scale_to_covar_preci_fwd; "
-                    "full MCMC noise/densification cannot start"
-                )
+            require_full_mcmc_runtime(operator_report)
 
     def initialize(
         self,
@@ -185,7 +188,17 @@ class GsplatBackend:
         *,
         step: int,
         info: dict[str, Any],
-    ) -> None:
+    ) -> dict[str, Any]:
+        refine = (
+            step < self.strategy.refine_stop_iter
+            and step > self.strategy.refine_start_iter
+            and step % self.strategy.refine_every == 0
+        )
+        before = (
+            snapshot_gaussians(params, min_opacity=self.strategy.min_opacity)
+            if refine
+            else None
+        )
         self.strategy.step_post_backward(
             params=params,
             optimizers=optimizers,
@@ -193,4 +206,18 @@ class GsplatBackend:
             step=step,
             info=info,
             lr=optimizers["means"].param_groups[0]["lr"],
+        )
+        after = (
+            snapshot_gaussians(params, min_opacity=self.strategy.min_opacity)
+            if refine
+            else None
+        )
+        return build_mcmc_step_event(
+            step=step,
+            before=before,
+            after=after,
+            refine_start_iter=self.strategy.refine_start_iter,
+            refine_stop_iter=self.strategy.refine_stop_iter,
+            refine_every=self.strategy.refine_every,
+            noise_injection_stop_iter=self.strategy.noise_injection_stop_iter,
         )

@@ -577,3 +577,32 @@ PR-11 Trainer 固定使用 Manifest 位姿，无法在图像监督下对残余 R
 Stage 2 模型 SHA `64282ec6...1c04` 的全部 1,114 张训练图完成流式审计。3,083,156 个可投影 observation 中，13,995 个位于人影内；`>=5 px` 的高残差共 2,921 个，只有 44 个位于人影内，重叠率 `1.506333%`，远低于 `30%` 重跑门。24 张最高残差叠加图中，紫色人影外残差主要分散在鹅卵石/砖缝、建筑高对比边缘和植被，没有形成随人物聚集的证据。签名审计 `a35f9aa6...ee92` 给出 `RETAIN_CURRENT_BA`，所以不为了 mask 重跑已通过的 Stage 2；masked BA 状态是 `NOT_RUN_NOT_RECOMMENDED`，不是跳过失败门。
 
 本阶段仍未启动 3DGS 训练。下一步原始 POS / Stage 2 POS A/B 必须共同引用 person Manifest SHA `1eb2284f...c7c8`；masked PSNR/SSIM/LPIPS、LiDAR range、清晰度和接缝结论保持 `NOT_RUN`，不能由 mask/BA 审计推导画质提升。
+
+## 16. 当前阶段记录：行业级 Gate 计划与 Gate 1A MCMC 运行证据
+
+### 问题现象
+
+2026-08-21 的《CloudStudio 3DGS 行业级算法深度调研、现状复盘与 Codex 实施计划》把后续路线从“按功能数量推进”调整为“按证据 Gate 逐项关闭”。当前最先要关闭的是完整 MCMC Windows CUDA runtime；历史 80 步合成运行明确关闭了位置噪声，只证明 3DGUT 前向/反向和最小 Trainer 可运行。机器安装脚本声称完成 full kernel build 也不能证明 covariance、noise、relocation、sample add、rasterization backward 与 checkpoint resume 在锁定运行时中全部成立。
+
+### 修改文件
+
+- `cloudstudio_3dgs/training/runtime_evidence.py`
+- `cloudstudio_3dgs/training/backend.py`
+- `cloudstudio_3dgs/training/trainer.py`
+- `tools/audit_mcmc_runtime.py`
+- `tests/test_mcmc_runtime.py`
+- `baselines/full_mcmc_runtime.baseline.json`
+- `README.md`
+
+### 修改内容
+
+- 新增完整 MCMC 注册门，必须同时满足干净锁定 gsplat commit、CUDA 可用、`3dgs/3dgut/reloc` build feature、`sample_add` Python API，以及 covariance forward/backward、UT projection、world-space 3DGUT rasterization、relocation 和 fused MCMC perturb 六项 native op。注册通过只允许写成 `PASS_REGISTERED`，不能替代 kernel execution 或画质结论。
+- MCMC Strategy 每次 refine 边界记录调用前后的 Gaussian 数量、dead 数量、opacity 与实际 scale 的 min/p50/p95/max，并累计 relocate/add、refine 次数和 noise 调用步数；非 refine 步只累计紧凑计数，避免在数十万 Gaussian 上逐步做昂贵 quantile。
+- Trainer 每步检查 loss，并在 checkpoint/refine 边界检查 gradient、参数以及指数化后的实际 scale；异常时在覆盖最新良好 checkpoint 前失败。MCMC telemetry 写入 checkpoint training state 和签名 run Manifest，full-MCMC resume 若缺 telemetry 会 fail-closed。
+- 新增机器可执行的 `audit_mcmc_runtime.py`，输出不含本机绝对路径的确定性 SHA256 证据，并把尚未真正执行的 covariance、noise、relocation、add、rasterization backward、resume 和真实训练逐项保持 `NOT_RUN`。
+
+### 验证方式与当前状态
+
+先加入缺模块红测试，旧代码因 `runtime_evidence` 不存在按预期失败。实现后 `tests.test_mcmc_runtime + tests.test_training + tests.test_rig_pose_refinement` 共 `25/25` 通过，完整测试集 `117/117` 通过。
+
+本机 RTX 5070 Laptop、Torch `2.11.0+cu128`、CUDA `12.8` 的实际注册审计结果为 `FAIL`：当前加载扩展只有 `3dgs=false, 3dgut=true, reloc=true`，缺少 `quat_scale_to_covar_preci_fwd`、`quat_scale_to_covar_preci_bwd` 和 `mcmc_perturb_positions`；同时外部 gsplat checkout 正包含另一台机器尚未提交的构建修订，源码身份门也因 dirty worktree 失败。证据 SHA256 为 `73415f98...4d38d`。因此 Gate 1 尚未关闭，非零噪声、真实 relocate/add、forward/backward 执行和中断恢复全部仍为 `NOT_RUN`；本阶段没有启动真实数据训练，也不声明画质提升。

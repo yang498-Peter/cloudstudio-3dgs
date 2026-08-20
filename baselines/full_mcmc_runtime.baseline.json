@@ -1,0 +1,77 @@
+{
+  "environment": {
+    "cuda_available": true,
+    "gpu": "NVIDIA GeForce RTX 5070 Laptop GPU",
+    "platform": "Windows-11-10.0.26200-SP0",
+    "python": "3.12.9",
+    "torch": "2.11.0+cu128",
+    "torch_cuda": "12.8"
+  },
+  "evidence_type": "cloudstudio_full_mcmc_runtime_registration",
+  "execution_gates": {
+    "covariance_forward_backward": "NOT_RUN",
+    "interrupted_resume_equivalence": "NOT_RUN",
+    "mcmc_noise_nonzero": "NOT_RUN",
+    "rasterization_forward_backward": "NOT_RUN",
+    "real_gpu_training": "NOT_RUN",
+    "relocation_occurred": "NOT_RUN",
+    "sample_add_occurred": "NOT_RUN"
+  },
+  "gate_status": "FAIL",
+  "lock": {
+    "commit": "f2d14131483644e9977451b6403f6f0b73e6637f",
+    "cuda": "12.8",
+    "cuda_arch_list": "12.0",
+    "package": "gsplat",
+    "patch": null,
+    "python": "3.12",
+    "source_policy": "clean_vcs_commit",
+    "torch": "2.11.0+cu128",
+    "version": "1.5.3"
+  },
+  "operator_registration": {
+    "build_features": {
+      "3dgs": false,
+      "3dgut": true,
+      "reloc": true
+    },
+    "clean_locked_source": false,
+    "cuda_available": true,
+    "cuda_device_name": "NVIDIA GeForce RTX 5070 Laptop GPU",
+    "evidence_scope": "operator_registration_only",
+    "limitations": [
+      "registration does not prove forward or backward kernel execution",
+      "registration does not prove relocation, sampling, or noise occurred",
+      "registration does not prove interrupted-resume equivalence"
+    ],
+    "missing_build_features": [
+      "3dgs"
+    ],
+    "missing_native_ops": [
+      "mcmc_perturb_positions",
+      "quat_scale_to_covar_preci_bwd",
+      "quat_scale_to_covar_preci_fwd"
+    ],
+    "native_ops": {
+      "mcmc_perturb_positions": false,
+      "projection_ut_3dgs_fused": true,
+      "quat_scale_to_covar_preci_bwd": false,
+      "quat_scale_to_covar_preci_fwd": false,
+      "rasterize_to_pixels_from_world_3dgs": true,
+      "relocation": true
+    },
+    "sample_add_python_api": true,
+    "schema_version": 1,
+    "status": "FAIL_INCOMPLETE_RUNTIME"
+  },
+  "provenance_error": "RuntimeError: gsplat checkout has local modifications",
+  "runtime": {
+    "clean": false,
+    "commit": null,
+    "locked_commit": "f2d14131483644e9977451b6403f6f0b73e6637f",
+    "package": "gsplat",
+    "version": null
+  },
+  "runtime_evidence_sha256": "73415f987e0b6924f6a3007bd44929d8d6e829d68b58eb64eb23ade867c4d38d",
+  "schema_version": 1
+}

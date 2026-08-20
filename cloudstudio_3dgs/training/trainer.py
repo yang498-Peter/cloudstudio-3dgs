@@ -33,6 +33,12 @@ from cloudstudio_3dgs.training.rig_pose import (
     build_pose_refinement_report,
     disabled_pose_refinement_report,
 )
+from cloudstudio_3dgs.training.runtime_evidence import (
+    append_mcmc_telemetry,
+    initialize_mcmc_telemetry,
+    require_finite_training_tensors,
+    snapshot_gaussians,
+)
 
 
 @dataclass(frozen=True)
@@ -562,6 +568,7 @@ def train(config: TrainerConfig, *, backend_factory: Any = GsplatBackend) -> dic
     last_metrics: dict[str, Any] = {}
     initial_loss: float | None = None
     best_loss = float("inf")
+    mcmc_telemetry: dict[str, Any] | None = None
     if config.resume_checkpoint is not None:
         completed_steps, strategy_state, sampler_state, training_state = load_checkpoint(
             config.resume_checkpoint,
@@ -576,8 +583,18 @@ def train(config: TrainerConfig, *, backend_factory: Any = GsplatBackend) -> dic
         last_metrics = dict(training_state["last_metrics"])
         initial_loss = float(training_state["initial_loss"])
         best_loss = float(training_state["best_loss"])
+        restored_telemetry = training_state.get("mcmc_telemetry")
+        if restored_telemetry is None and config.mcmc_noise_injection_stop_iter != 0:
+            raise ValueError("full-MCMC checkpoint has no MCMC telemetry state")
+        if restored_telemetry is not None:
+            mcmc_telemetry = dict(restored_telemetry)
         if completed_steps >= config.max_steps:
             raise ValueError("checkpoint already reached or exceeded max_steps")
+
+    if mcmc_telemetry is None:
+        mcmc_telemetry = initialize_mcmc_telemetry(
+            snapshot_gaussians(params, min_opacity=backend.strategy.min_opacity)
+        )
 
     torch.cuda.reset_peak_memory_stats(config.device)
     started = time.perf_counter()
@@ -603,20 +620,51 @@ def train(config: TrainerConfig, *, backend_factory: Any = GsplatBackend) -> dic
         if pose_refiner is not None:
             pose_prior = pose_refiner.prior_loss()
             loss = loss + pose_prior
+        require_finite_training_tensors(
+            params=params,
+            loss=loss,
+            stage=f"step_{step}_loss",
+            check_gradients=False,
+            check_parameters=False,
+        )
         loss.backward()
+        refine_boundary = (
+            step < config.mcmc_refine_stop_iter
+            and step > config.mcmc_refine_start_iter
+            and step % config.mcmc_refine_every == 0
+        )
+        checkpoint_boundary = (
+            (step + 1) % config.checkpoint_every == 0
+            or step + 1 == config.max_steps
+        )
+        if refine_boundary or checkpoint_boundary:
+            require_finite_training_tensors(
+                params=params,
+                loss=loss,
+                stage=f"step_{step}_backward",
+                check_gradients=True,
+            )
         for optimizer in optimizers.values():
             optimizer.step()
             optimizer.zero_grad(set_to_none=True)
         if pose_optimizer is not None:
             pose_optimizer.step()
             pose_optimizer.zero_grad(set_to_none=True)
-        backend.strategy_post_step(
+        mcmc_event = backend.strategy_post_step(
             params,
             optimizers,
             strategy_state,
             step=step,
             info=info,
         )
+        append_mcmc_telemetry(mcmc_telemetry, mcmc_event)
+        if mcmc_event["refine_triggered"]:
+            require_finite_training_tensors(
+                params=params,
+                loss=loss,
+                stage=f"step_{step}_mcmc_refine",
+                check_gradients=False,
+            )
         last_metrics = {
             "loss": float(loss.detach().cpu()),
             "rgb_l1": float(l1.detach().cpu()),
@@ -633,6 +681,15 @@ def train(config: TrainerConfig, *, backend_factory: Any = GsplatBackend) -> dic
         best_loss = min(best_loss, last_metrics["loss"])
         completed = step + 1
         if completed % config.checkpoint_every == 0 or completed == config.max_steps:
+            mcmc_telemetry["last_snapshot"] = snapshot_gaussians(
+                params, min_opacity=backend.strategy.min_opacity
+            )
+            require_finite_training_tensors(
+                params=params,
+                loss=loss,
+                stage=f"step_{step}_checkpoint",
+                check_gradients=False,
+            )
             save_checkpoint(
                 checkpoint_path,
                 step=completed,
@@ -645,6 +702,7 @@ def train(config: TrainerConfig, *, backend_factory: Any = GsplatBackend) -> dic
                     "last_metrics": last_metrics,
                     "initial_loss": initial_loss,
                     "best_loss": best_loss,
+                    "mcmc_telemetry": mcmc_telemetry,
                 },
                 auxiliary_params=auxiliary_params,
                 auxiliary_optimizers=auxiliary_optimizers,
@@ -653,6 +711,9 @@ def train(config: TrainerConfig, *, backend_factory: Any = GsplatBackend) -> dic
     torch.cuda.synchronize(config.device)
     duration_seconds = time.perf_counter() - started
     peak_vram_bytes = int(torch.cuda.max_memory_allocated(config.device))
+    mcmc_telemetry["last_snapshot"] = snapshot_gaussians(
+        params, min_opacity=backend.strategy.min_opacity
+    )
     pose_report = disabled_pose_refinement_report(config.rig_pose_refinement)
     if pose_refiner is not None:
         loss_before, loss_after, evaluated_images = _compare_pose_candidate(
@@ -684,6 +745,7 @@ def train(config: TrainerConfig, *, backend_factory: Any = GsplatBackend) -> dic
                 "last_metrics": last_metrics,
                 "initial_loss": initial_loss,
                 "best_loss": best_loss,
+                "mcmc_telemetry": mcmc_telemetry,
                 "rig_pose_refinement": pose_report,
             },
             auxiliary_params=auxiliary_params,
@@ -724,6 +786,10 @@ def train(config: TrainerConfig, *, backend_factory: Any = GsplatBackend) -> dic
                 "loss_improvement_fraction": None
                 if initial_loss in (None, 0.0)
                 else (initial_loss - last_metrics["loss"]) / initial_loss,
+                "mcmc_operator_report": backend.runtime.get(
+                    "mcmc_operator_report"
+                ),
+                "mcmc_telemetry": mcmc_telemetry,
             },
         }
     )
