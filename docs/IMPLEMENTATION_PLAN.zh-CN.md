@@ -311,3 +311,35 @@ PR-05 只建立逐图数据结构和几何 valid 基线；真实人物/车辆/�
 真实 gs2 当前完整 Manifest SHA256 为 `54c01abedb8be28d839d4ee9685de63c88059efc129eceacd501fa9943563ee3`，包含 619 个 Rig Frame / 1,238 张有位姿图片。默认 temporal block 切分两次生成的文件 SHA256 均为 `b9886ad4c0bb4d3dfc1503e93722d75ec6a93c7772a32f8b0e85860851d3f99e`：train 为 557 Rig / 1,114 图，validation 为 62 Rig / 124 图，固定 8 个 golden Rig。最近训练位姿距离 min/p50/p95 为 0.0973 / 0.3516 / 0.9434 m，0.25 m 阈值下有 3 个显式泄漏告警。
 
 现有 3,000 步 GPU 结果来自另一份 666 图数据集和旧单图切分，不能与本次 split Manifest 绑定。按新 split 重训、124 张 validation 的 masked LPIPS、全量 LiDAR depth、训练峰值显存和正式 `quality_report.html` 均为 `NOT_RUN`；因此 PR-08 只声明“正式评估契约、真实 Rig 切分和合成报告闭环”，不声明 GPU 画质验收通过。
+
+## 11. 当前阶段记录：PR-09
+
+### 问题现象
+
+`ImgPose.txt` 覆盖全时间轴，但 `transforms.json` 只包含 solver 选择并优化过的关键帧。旧流程二选一：只用 transforms 会丢掉大量图片，只用 ImgPose 又会丢掉关键帧修正；普通逐相机插值还可能破坏固定双鱼眼基线。仓库没有同名匹配、OpenGL/OpenCV 轴向对齐、SE(3) 修正、鲁棒异常过滤、Rig 级时间插值、非破坏性 pose set、曲线可视化或“画质未改善则继续使用 ImgPose”的默认位姿门。
+
+### 修改文件
+
+- `cloudstudio_3dgs/poses/__init__.py`
+- `cloudstudio_3dgs/poses/keyframe_correction.py`
+- `tools/build_corrected_pose_set.py`
+- `tests/test_keyframe_correction.py`
+- `baselines/gs2_pose_correction.baseline.json`
+- `README.md`
+
+### 修改内容
+
+- 将 transforms 的 c2w/OpenGL 关键帧转成 c2w/OpenCV，与 Manifest 中同名 ImgPose 严格匹配；未知、重复、未配对或只含单眼的关键帧失败。
+- 对同一关键 Rig 的左右两眼分别计算 `target_c2w @ inverse(imgpose_c2w)`，检查两份修正的一致性后进行确定性 quaternion/translation 融合。
+- 用相邻关键帧 SE(3) 插值残差、MAD 和绝对下限过滤异常 anchor；通过的 Rig 修正沿完整时间轴执行 translation 线性插值和 rotation SLERP，首尾采用常量外推。
+- 同一个左乘 SE(3) 修正同时应用于一个 Rig Frame 的左右图片，因此逐帧 left/right 相对外参保持不变。输出独立、签名的 `pose_set_manifest.json`，不会覆写数据 Manifest、ImgPose 或 transforms。
+- 同时输出 `pose_correction_curve.svg` 和 `pose_correction_report.html`，报告平移/旋转修正 p50/p95/max、逐帧步长、异常 anchor、Rig 基线漂移和默认位姿 Gate。
+- 默认位姿只有在 LiDAR-edge 误差严格下降、低分辨率 LPIPS 严格下降、建筑双边指标不恶化、修正曲线无突跳四项全部 PASS 时才切到 `keyframe_corrected`；任一 `FAIL` 或 `NOT_RUN` 都自动保留 `imgpose`。
+
+### 验证方式与当前状态
+
+合成测试覆盖线性平移+旋转轨迹精确恢复、SLERP、中间异常 anchor 剔除、左右固定基线、缺单眼关键帧失败、签名篡改失败、报告逐字节确定性，以及四项门槛全部改善/单项退化时的默认位姿选择。
+
+真实 gs2 的 transforms SHA256 为 `7ca0d7d6e6b28a55d90b615682869b2fd59690a5f69e4a848e39f4f7d986b869`。174 张关键帧全部同名匹配，形成 87 个完整关键 Rig；左右修正最大分歧为 0.03045 mm / 0.000318°。鲁棒过滤拒绝 2 个平移异常和 1 个旋转异常，保留 84 个 anchor，传播得到 619 Rig / 1,238 张修正位姿。修正平移 p50/p95/max 为 0.0302 / 0.1572 / 0.2374 m，旋转为 0.1556 / 0.3895 / 0.7456°；Rig 基线平移/旋转最大漂移仅 `2.26e-14 m` / `2.29e-14°`。两次运行的 JSON/SVG/HTML 均逐字节一致，Manifest 文件 SHA256 为 `4777af5c6bfc3cf9ac2c17432fd5d623da6d28786a80bde86fc635a008d0aaa0`。
+
+当前最大逐帧修正步长为 0.053812 m，超过默认 0.05 m 无突跳阈值，曲线 Gate 为 `FAIL`；新位姿的 LiDAR-edge、低分辨率 LPIPS、建筑双边对比均为 `NOT_RUN`。因此默认位姿明确保持 `imgpose`，本阶段只声明“候选位姿生成、传播、诊断和自动回退闭环”，不声明修正位姿优于原位姿。

@@ -32,7 +32,8 @@ cloudstudio-3dgs/
 │   ├── build_per_image_masks.py # 逐图 valid/static/depth-valid mask Manifest
 │   ├── build_depth_cache.py   # KB4 ray-range、z-buffer、confidence 稀疏缓存
 │   ├── build_split_manifest.py # Rig Frame 级 temporal/spatial/manual 正式切分
-│   └── evaluate_run.py        # masked 图像/深度指标与 HTML 质量报告
+│   ├── evaluate_run.py        # masked 图像/深度指标与 HTML 质量报告
+│   └── build_corrected_pose_set.py # 关键帧 SE(3) 修正的 Rig 时间传播
 ├── converter/     # S1 数据 → gsplat/nerfstudio 可读格式的转换器
 │   ├── s1_common.py           # 共享:确定性 voxel 初始化、位姿换算(c2w_gl→w2c_cv)、PLY/四元数
 │   ├── s1_to_colmap.py        # → COLMAP 格式(gsplat simple_trainer 输入,已实测)
@@ -97,6 +98,12 @@ python tools/evaluate_run.py `
   --split-manifest G:\3dgs-datasets\gs2_evaluation\split_manifest.json `
   --output G:\3dgs-runs\quality
 
+# 将 transforms 关键帧相对 ImgPose 的修正传播到完整 Rig 时间轴；原始位姿永不覆盖
+python tools/build_corrected_pose_set.py `
+  --manifest G:\3dgs-datasets\gs2_manifest\dataset_manifest.json `
+  --transforms G:\S1\2026-06-17_12-40-48gs2\process\2026-06-17_12-40-48gs2_3\transforms.json `
+  --output G:\3dgs-datasets\gs2_poses
+
 # 重投影验证(全项目最高优先级检查点):
 # 把解算点云投影回原始鱼眼图,输出多种坐标约定的叠加图供目视比对
 python tools/reproject_check.py `
@@ -158,6 +165,7 @@ Python 3.12 和 PyTorch 2.11.0+cu128。执行 `scripts\bootstrap.ps1 -Training` 
 - [x] 路线 PR-05:逐图片 valid/static/depth-valid mask 契约、统一 crop/factor 和 masked PSNR
 - [x] 路线 PR-07:KB4 LiDAR ray-range、前表面 z-buffer、confidence、mask 和确定性稀疏缓存
 - [x] 路线 PR-08:Rig Frame 切分、泄漏告警、masked PSNR/SSIM/LPIPS、深度指标和 HTML 报告
+- [x] 路线 PR-09:关键帧 SE(3) 修正、鲁棒过滤、Rig 时间插值、基线保持和默认位姿回退门
 - [x] Phase 1(前置):重投影验证初步通过(gs2 场景目视贴合,约定=c2w_gl),
       正式 Gate 需再覆盖 2–3 场景 + 逐点误差统计
 - [x] Phase 1(前置):COLMAP 数据集导出实测通过(gs2_keyframes:174 图/2 相机/101 万点,

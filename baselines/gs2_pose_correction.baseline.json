@@ -1,0 +1,48 @@
+{
+  "schema_version": 1,
+  "baseline_id": "gs2-keyframe-pose-correction-pr09-candidate",
+  "inputs": {
+    "dataset_manifest_sha256": "54c01abedb8be28d839d4ee9685de63c88059efc129eceacd501fa9943563ee3",
+    "transforms_sha256": "7ca0d7d6e6b28a55d90b615682869b2fd59690a5f69e4a848e39f4f7d986b869",
+    "matched_keyframe_images": 174,
+    "candidate_anchor_rig_frames": 87
+  },
+  "output": {
+    "pose_set_manifest_sha256": "73bb920d7be36d5388d34e7f7059251cabbac7dff0656f105c8ec6aae85ef528",
+    "pose_set_manifest_file_sha256": "4777af5c6bfc3cf9ac2c17432fd5d623da6d28786a80bde86fc635a008d0aaa0",
+    "curve_svg_file_sha256": "6583f09b44c4f42ad21fa4441e6b854663b093aa2ce128a6a6d660c7476473da",
+    "report_html_file_sha256": "6e726e921302cbf99f88896a12325f53e4386e009fb5f405ebe5a62b1c2f6476",
+    "accepted_anchor_rig_frames": 84,
+    "rejected_anchor_rig_frames": 3,
+    "rig_frame_count": 619,
+    "image_count": 1238,
+    "pair_maximum_translation_disagreement_m": 0.00003044601824654847,
+    "pair_maximum_rotation_disagreement_deg": 0.00031751672868916614,
+    "correction_translation_m": {
+      "p50": 0.030191882173216774,
+      "p95": 0.1571512031032451,
+      "max": 0.2373771941521566
+    },
+    "correction_rotation_deg": {
+      "p50": 0.15562532470538756,
+      "p95": 0.3895489634053442,
+      "max": 0.7456436910238293
+    },
+    "maximum_step_translation_m": 0.05381200164984859,
+    "maximum_step_rotation_deg": 0.17199768284589545,
+    "maximum_rig_baseline_translation_drift_m": 2.2530612957495587e-14,
+    "maximum_rig_baseline_rotation_drift_deg": 2.2870307260049013e-14,
+    "default_pose_set": "imgpose"
+  },
+  "acceptance": {
+    "synthetic_trajectory_recovery": true,
+    "outlier_filtering": true,
+    "rig_baseline_preserved": true,
+    "repeat_outputs_byte_identical": true,
+    "correction_curve_no_jump": false,
+    "real_lidar_edge_improvement": "not_run",
+    "real_low_resolution_lpips_improvement": "not_run",
+    "real_building_double_edge_not_worse": "not_run",
+    "candidate_accepted_as_default": false
+  }
+}
