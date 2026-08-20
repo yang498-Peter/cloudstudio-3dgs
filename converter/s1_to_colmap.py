@@ -26,6 +26,7 @@ ImgPose.txt instead of only the solver-selected transforms.json keyframes.
 from __future__ import annotations
 
 import argparse
+import json
 import shutil
 import struct
 from pathlib import Path
@@ -51,12 +52,51 @@ def quat_xyzw_to_rotmat(q: list[float]) -> np.ndarray:
     ])
 
 
-def load_imgpose_frames(run_dir: Path, transforms: dict) -> list[dict]:
-    """Load all c2w/OpenCV poses and attach side-specific fisheye intrinsics."""
+def load_calibration_intrinsics(recording_dir: Path) -> dict[str, dict]:
+    """Load the two physical camera models from this recording's calibration."""
+    path = recording_dir / "info" / "calibration.json"
+    payload = json.loads(path.read_text(encoding="utf-8"))
     templates: dict[str, dict] = {}
-    for frame in transforms["frames"]:
+    for camera in payload.get("cameras", []):
+        side = str(camera.get("name", ""))
+        if side not in {"left", "right"} or side in templates:
+            raise ValueError(f"invalid or duplicate camera side in {path}: {side!r}")
+        distortion = camera.get("distortion", {})
+        if distortion.get("camera_model") != "OPENCV_FISHEYE":
+            raise ValueError(f"camera {side} is not OPENCV_FISHEYE")
+        intrinsic = camera.get("intrinsic", {})
+        params = distortion.get("params", {})
+        templates[side] = {
+            "w": int(camera["width"]),
+            "h": int(camera["height"]),
+            **{key: float(intrinsic[key]) for key in ("fl_x", "fl_y", "cx", "cy")},
+            **{key: float(params[key]) for key in ("k1", "k2", "k3", "k4")},
+        }
+    if set(templates) != {"left", "right"}:
+        raise ValueError(f"{path} must contain exactly left and right cameras")
+    return templates
+
+
+def compare_transform_intrinsics(
+    calibration: dict[str, dict], transforms: dict
+) -> dict[str, dict[str, float]]:
+    transform_templates: dict[str, dict] = {}
+    for frame in transforms.get("frames", []):
         rel = str(frame["file_path"]).replace("\\", "/")
-        templates.setdefault(rel.split("/", 1)[0], frame)
+        transform_templates.setdefault(rel.split("/", 1)[0], frame)
+    report: dict[str, dict[str, float]] = {}
+    for side in ("left", "right"):
+        if side not in transform_templates:
+            raise ValueError(f"transforms.json has no {side} camera frame for comparison")
+        report[side] = {
+            key: float(transform_templates[side][key]) - float(calibration[side][key])
+            for key in INTRINSIC_KEYS
+        }
+    return report
+
+
+def load_imgpose_frames(run_dir: Path, templates: dict[str, dict]) -> list[dict]:
+    """Load all c2w/OpenCV poses with authoritative physical-camera intrinsics."""
 
     frames = []
     lines = (run_dir / "ImgPose.txt").read_text(encoding="utf-8").splitlines()
@@ -110,9 +150,19 @@ def main() -> int:
                     help="use every posed raw frame from ImgPose.txt (requires camera/ images)")
     args = ap.parse_args()
 
-    tf = load_transforms(args.run_dir)
-    frames = load_imgpose_frames(args.run_dir, tf) if args.use_imgpose else tf["frames"]
     raw_dir = args.raw_dir or args.run_dir
+    tf = load_transforms(args.run_dir)
+    if args.use_imgpose:
+        calibration = load_calibration_intrinsics(raw_dir)
+        differences = compare_transform_intrinsics(calibration, tf)
+        max_difference = max(abs(value) for side in differences.values() for value in side.values())
+        print(
+            "calibration vs transforms intrinsic max abs difference: "
+            f"{max_difference:.12g} ({json.dumps(differences, sort_keys=True)})"
+        )
+        frames = load_imgpose_frames(args.run_dir, calibration)
+    else:
+        frames = tf["frames"]
 
     raw_root = raw_dir / "camera"
     undistort_root = args.run_dir / "undistort"

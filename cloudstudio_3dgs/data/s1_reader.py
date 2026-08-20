@@ -93,6 +93,36 @@ def load_cameras(calibration_path: Path) -> list[CameraRecord]:
     return sorted(cameras, key=lambda camera: camera.side)
 
 
+def compare_calibration_to_transforms(
+    cameras: list[CameraRecord], transforms_path: Path
+) -> dict[str, object]:
+    payload = json.loads(transforms_path.read_text(encoding="utf-8"))
+    templates: dict[str, dict] = {}
+    for frame in payload.get("frames", []):
+        relative = str(frame.get("file_path", "")).replace("\\", "/")
+        side = relative.split("/", 1)[0]
+        if side in {"left", "right"}:
+            templates.setdefault(side, frame)
+    if set(templates) != {"left", "right"}:
+        raise ValueError("transforms.json must contain left and right frames for calibration comparison")
+    by_side = {camera.side: camera for camera in cameras}
+    report: dict[str, dict[str, float]] = {}
+    for side in ("left", "right"):
+        camera = by_side[side]
+        expected = {
+            "w": float(camera.width),
+            "h": float(camera.height),
+            **camera.intrinsic,
+            **camera.distortion["params"],
+        }
+        report[side] = {
+            key: float(templates[side][key]) - float(expected[key])
+            for key in ("w", "h", "fl_x", "fl_y", "cx", "cy", "k1", "k2", "k3", "k4")
+        }
+    maximum = max(abs(value) for side in report.values() for value in side.values())
+    return {"signed_difference": report, "max_abs_difference": maximum}
+
+
 def load_imgpose_images(
     imgpose_path: Path,
     recording_dir: Path,

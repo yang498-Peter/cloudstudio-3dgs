@@ -13,9 +13,11 @@ from .s1_reader import (
     list_camera_images,
     load_cameras,
     load_imgpose_images,
+    compare_calibration_to_transforms,
     sha256_file,
 )
 from .schema import DatasetManifest
+from cloudstudio_3dgs.geometry.rig import build_stereo_rig
 
 
 MANIFEST_NAME = "dataset_manifest.json"
@@ -41,6 +43,7 @@ def build_manifest(
     run_dir = run_dir.resolve()
     calibration_path = recording_dir / "info" / "calibration.json"
     imgpose_path = run_dir / "ImgPose.txt"
+    transforms_path = run_dir / "transforms.json"
     for required in (calibration_path, imgpose_path):
         if not required.is_file():
             raise FileNotFoundError(f"required S1 input is missing: {required}")
@@ -52,6 +55,7 @@ def build_manifest(
         recording_dir,
         hash_images=hash_images,
     )
+    images, rig_frames, rig, rig_diagnostics = build_stereo_rig(cameras, images)
     raw_image_paths = list_camera_images(recording_dir)
     posed_by_relative = {
         image.path.removeprefix("camera/"): image for image in images
@@ -78,13 +82,25 @@ def build_manifest(
         f"run:{point_cloud_relative}": point_cloud_hash,
         "recording:camera-image-set": image_set_digest.hexdigest(),
     }
-    warnings = ["rig_pairing_pending_pr02"]
+    if transforms_path.is_file():
+        source_hashes["run:transforms.json"] = sha256_file(transforms_path)
+    warnings: list[str] = []
     if not hash_images:
         warnings.append("image_content_hashes_not_computed")
     if not hash_point_cloud:
         warnings.append("point_cloud_content_hash_not_computed")
     if unposed_images:
         warnings.append(f"unposed_camera_images:{len(unposed_images)}")
+    if rig_diagnostics["unpaired_left"]:
+        warnings.append(f"unpaired_left_images:{len(rig_diagnostics['unpaired_left'])}")
+    if rig_diagnostics["unpaired_right"]:
+        warnings.append(f"unpaired_right_images:{len(rig_diagnostics['unpaired_right'])}")
+    if transforms_path.is_file():
+        rig_diagnostics["calibration_vs_transforms"] = compare_calibration_to_transforms(
+            cameras, transforms_path
+        )
+    else:
+        warnings.append("transforms_intrinsic_comparison_not_available")
     manifest = DatasetManifest(
         recording_id=recording_dir.name,
         source_hashes=source_hashes,
@@ -97,7 +113,10 @@ def build_manifest(
             "sha256": point_cloud_hash,
             "coordinate_frame": "s1_local",
         },
+        rig=rig,
+        rig_diagnostics=rig_diagnostics,
         unposed_images=[f"camera/{path}" for path in unposed_images],
+        rig_frames=rig_frames,
         warnings=warnings,
     ).to_dict()
     manifest["manifest_sha256"] = hashlib.sha256(canonical_json_bytes(manifest)).hexdigest()

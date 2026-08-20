@@ -43,7 +43,10 @@ class ImageRecord:
 class RigFrameRecord:
     rig_frame_id: str
     timestamp_ns: int
+    left_image_id: str
+    right_image_id: str
     image_ids: list[str]
+    timestamp_delta_ns: int
 
 
 @dataclass
@@ -53,6 +56,8 @@ class DatasetManifest:
     cameras: list[CameraRecord]
     images: list[ImageRecord]
     point_cloud: dict[str, Any]
+    rig: dict[str, Any]
+    rig_diagnostics: dict[str, Any]
     unposed_images: list[str] = field(default_factory=list)
     rig_frames: list[RigFrameRecord] = field(default_factory=list)
     splits: dict[str, list[str]] = field(default_factory=dict)

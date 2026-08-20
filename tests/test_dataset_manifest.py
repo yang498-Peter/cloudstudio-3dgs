@@ -55,8 +55,31 @@ class DatasetManifestTests(unittest.TestCase):
         (run / "ImgPose.txt").write_text(
             "index x y z roll pitch yaw qx qy qz qw timestamp\n"
             f"left/{left_name} 1 2 3 0 0 0 0 0 0 1 1.0\n"
-            f"right/{right_name} 4 5 6 0 0 0 0 0 0 1 1.0\n",
+            f"right/{right_name} 0.9 2 3 0 0 0 0 0 0 1 1.0\n",
             encoding="utf-8",
+        )
+        frames = []
+        for side, focal, name in (
+            ("left", 788.0, left_name),
+            ("right", 788.1, right_name),
+        ):
+            frames.append(
+                {
+                    "file_path": f"{side}\\{name}",
+                    "w": 2912,
+                    "h": 2912,
+                    "fl_x": focal,
+                    "fl_y": 789.0 + (0.1 if side == "right" else 0.0),
+                    "cx": 1456.0,
+                    "cy": 1456.0,
+                    "k1": 0.08,
+                    "k2": -0.01,
+                    "k3": 0.0,
+                    "k4": 0.0,
+                }
+            )
+        (run / "transforms.json").write_text(
+            json.dumps({"frames": frames}), encoding="utf-8"
         )
         (run / "colorized.las").write_bytes(b"synthetic-las")
         return recording, run
@@ -71,12 +94,19 @@ class DatasetManifestTests(unittest.TestCase):
         self.assertEqual(first["recording_id"], "客户 数据 scene")
         self.assertEqual(len(first["cameras"]), 2)
         self.assertEqual(len(first["images"]), 2)
-        self.assertEqual(first["rig_frames"], [])
-        self.assertEqual(first["warnings"], ["rig_pairing_pending_pr02"])
+        self.assertEqual(len(first["rig_frames"]), 1)
+        self.assertEqual(first["warnings"], [])
+        self.assertTrue(first["rig"]["extrinsics_fixed"])
+        self.assertEqual(
+            first["rig_diagnostics"]["calibration_vs_transforms"]["max_abs_difference"],
+            0.0,
+        )
+        self.assertLess(first["rig_diagnostics"]["relative_translation_error_m"]["max"], 1e-12)
+        self.assertLess(first["rig_diagnostics"]["relative_rotation_error_rad"]["max"], 1e-12)
         for image in first["images"]:
             self.assertFalse(Path(image["path"]).is_absolute())
             self.assertNotIn("\\", image["path"])
-            self.assertIsNone(image["rig_frame_id"])
+            self.assertIsNotNone(image["rig_frame_id"])
         self.assertEqual(first["images"][0]["c2w"][0][3], 1.0)
 
     def test_missing_image_is_a_hard_failure(self) -> None:

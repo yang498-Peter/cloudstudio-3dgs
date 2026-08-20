@@ -101,6 +101,8 @@ Python 3.12 和 PyTorch 2.11.0+cu128。执行 `scripts\bootstrap.ps1 -Training` 
 - [x] Phase 0(部分):数据格式核验 → `docs/S1_DATA_FORMAT.md`;mipmap 数据契约 → `docs/references/`
 - [x] Phase 0(基线):CPU 依赖锁、gsplat 上游/补丁锁、bootstrap/doctor、CPU CI
 - [ ] Phase 0(外部验收):空白新机器安装 + gsplat CUDA 编译 + GPU 冒烟
+- [x] 路线 PR-01:确定性数据 Manifest、内容哈希、原子写出、缺失输入硬失败
+- [x] 路线 PR-02:记录级标定、619 对真实左右 Rig、固定外参与量化诊断
 - [x] Phase 1(前置):重投影验证初步通过(gs2 场景目视贴合,约定=c2w_gl),
       正式 Gate 需再覆盖 2–3 场景 + 逐点误差统计
 - [x] Phase 1(前置):COLMAP 数据集导出实测通过(gs2_keyframes:174 图/2 相机/101 万点,

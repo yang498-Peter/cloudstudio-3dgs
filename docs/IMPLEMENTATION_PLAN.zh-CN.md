@@ -109,3 +109,35 @@ CPU 与静态门槛可在当前机器闭环；新建空环境 bootstrap、完整
 真实 gs2 只读检查确认原始目录共有 1,246 张图（左右各 623），`ImgPose.txt` 只有 1,238 条有效位姿（左右各 619），两台物理相机均被识别，另 8 张原图已列入 `unposed_images`。这与旧文档“1,246 张原图”并不矛盾，但说明原图数不能直接当成可训练位姿数。
 
 默认完整内容哈希已在真实数据上执行：首次读取约 4.4GB 图片和 1,023,660,519 字节点云耗时 16.819 秒；同输入第二次耗时 4.937 秒，两个 Manifest SHA256 均为 `0e4d65b37fb682df97fb2957d4c1ac08b3e8bcaf3c680f68a74989967f56b822`，没有 `not_computed` 哈希警告。真实输出写在被 Git 忽略的 `outputs/pr01-real-manifest/`，未修改原始记录。
+
+## 5. 当前阶段记录：PR-02
+
+### 问题现象
+
+全帧转换器此前从 `transforms.json` 每侧第一张关键帧复制内参，左右图片没有稳定的 `rig_frame_id`，也没有证明逐帧左右相对位姿与记录级标定外参一致。普通逐图 pose optimization 因而可能破坏物理基线。
+
+### 修改文件
+
+- `cloudstudio_3dgs/geometry/rig.py`
+- `cloudstudio_3dgs/data/schema.py`
+- `cloudstudio_3dgs/data/manifest.py`
+- `cloudstudio_3dgs/data/s1_reader.py`
+- `converter/s1_to_colmap.py`
+- `tests/test_rig.py`
+- `tests/test_dataset_manifest.py`
+- `tests/test_s1_to_colmap.py`
+
+### 修改内容
+
+- 从每条记录自己的 `info/calibration.json` 建立 `camera_from_lidar` 左右固定外参，计算 `expected_right_to_left`。
+- 以 50 ms 容差进行确定性一对一时间戳配对；同一对左右图片共享稳定 `rig_frame_id`，未配对项完整列出。
+- 诊断输出配对数、时间差 p50/p95/max、相对平移/旋转误差、外参散布和左右内参差异。
+- `transforms.json` 只用于内参差异检查和候选位姿证据，不再作为全帧物理相机内参来源。
+- COLMAP 全帧出口改为记录级标定；真实 gs2 的 1,238 帧只产生两组物理相机内参。
+- 旋转微小角误差采用稳定的 `atan2(sin, cos)` 计算，避免 `acos(trace)` 把微弧度误差量化成零。
+
+### 验证方式与当前状态
+
+非单位旋转和非零平移的合成 Rig 测试恢复误差均小于 `1e-12`，超出容差的图片保持显式未配对。真实 gs2 得到 619 对、左右未配对均为 0；时间差 p50/p95/max 为 4,096 / 16,128 / 121,088 ns；相对平移误差 p50/p95/max 为 2.903 µm / 12.467 µm / 66.183 µm；相对旋转误差 p50/p95/max 为 1.531 / 7.026 / 17.305 µrad。记录级标定与 `transforms.json` 内参最大绝对差为 `1.735e-18`，全帧转换器确认 1,238 帧、两组唯一内参。
+
+这些结果证明本次真实数据内部的固定 Rig 契约一致，但尚不等同于外部靶场标定精度认证；训练中 Rig-aware pose refinement 仍属于 PR-12。
