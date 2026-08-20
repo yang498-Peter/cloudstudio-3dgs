@@ -386,7 +386,7 @@ PR-05 只建立逐图数据结构和几何 valid 基线；真实人物/车辆/�
 
 真实 gs2 绑定 Manifest `54c01ab...3563ee3` 与 PR-08 split 后，得到 557 个训练 Rig / 1,114 张训练图，validation 使用数为 0。共生成 6,787 对：双目 557、左右时序各 2,218、左右空间回环各 897；签名图内同时固化完整 train/validation ID 集并由 verifier 复查。两次 JSON 和 HLoc pairs 输出均逐字节一致，文件 SHA256 分别为 `8e57cac4...f5e938`、`fba14a66...6a892`，内部匹配图 SHA256 为 `367e1d20...54ef6a`。
 
-当前机器只有 PyCOLMAP 4.1.1，尚未安装锁定的 HLoc/LightGlue 可选运行时，因此真实 ALIKED 特征、LightGlue 匹配、HLoc 三角化和真实 BA 均为 `NOT_RUN`。本机 PyCOLMAP/Ceres 合成测试实际执行；CPU CI 不安装该可选包时显式 `SKIPPED`，其余契约测试仍必须通过。真实重投影 p50 改善至少 30% 的验收门没有证据，不能声明 PR-10 真实候选已接受；本阶段当前完成的是源码契约、真实训练匹配图和合成求解闭环。
+真实集成已在锁定 HLoc `c13273b...`、LightGlue `eb42fee...`、PyCOLMAP `4.1.1` 与 CUDA 运行时上完成。1114 张训练图和 6787 对匹配经已知位姿几何验证后，完整注册 1114 图并三角化得到 765,590 点、3,083,168 个观测。真实 Stage 2 BA 的重投影 p50 从 `1.592867 px` 降到 `1.078868 px`，改善 `32.2688%`，通过 30% 门；p95 从 `3.405874 px` 降到 `2.833360 px`，焦距最大相对变化 `0.0657%`，场景尺度漂移 `0.0053%`，Rig 外参漂移约 `1e-14` 量级，候选通过全部 Gate。Stage 3 虽继续小幅降低 p50，但改变了禁止发布的 `k3/k4`，因此 `camera_parameter_bounds=FAIL` 并选择 before；当前正式选择 Stage 2。
 
 ## 13. 当前阶段记录：PR-11
 
@@ -481,4 +481,23 @@ PR-05/PR-07 的历史 mask 与 12 图 partial depth 绑定早期 dataset Manifes
 
 新增定向测试与完整 CPU 回归共 `95/95` 通过，GitHub Actions run `32399041352` 通过。相同 image root、pairs 与输出目录执行 `--resume --require-cuda` 后明确跳过 1114 张已完成特征，只补算剩余 3947 对；续跑约 44 分钟后完整得到 `1114/1114` 个 feature group 和 `6787/6787` 个 match group。
 
-最终签名 `feature_runtime_manifest.json` 的签名为 `e16b15de...f6ad`，文件 SHA 为 `b1a1142f...2b27`；feature H5 为 `1,357,797,328` bytes、SHA `403c0d2b...7b41`，match H5 为 `140,048,836` bytes、SHA `5f901202...5fd5`。Manifest 证明 `cuda_used=true`，HLoc `c13273b...`、LightGlue `eb42fee...` 与 PyCOLMAP `4.1.1` 均为 `PASS`。因此只把真实 ALIKED/LightGlue 门升级为完成；真实 HLoc 三角化、Rig BA、重投影改善和候选接受仍保持 `NOT_RUN`。
+最终签名 `feature_runtime_manifest.json` 的签名为 `e16b15de...f6ad`，文件 SHA 为 `b1a1142f...2b27`；feature H5 为 `1,357,797,328` bytes、SHA `403c0d2b...7b41`，match H5 为 `140,048,836` bytes、SHA `5f901202...5fd5`。Manifest 证明 `cuda_used=true`，HLoc `c13273b...`、LightGlue `eb42fee...` 与 PyCOLMAP `4.1.1` 均为 `PASS`。该步完成时只升级真实 ALIKED/LightGlue 门，三角化与 BA 当时仍为 `NOT_RUN`；随后由下一节单独执行和验收。
+
+### 真实集成门 D：Manifest 参考模型、三角化与分阶段 Rig BA
+
+#### 问题现象
+
+已有 COLMAP 转换器会把 `left/xxx.jpg`、`right/xxx.jpg` 扁平化为 `left_xxx.jpg`、`right_xxx.jpg`，而 HLoc pairs 保留目录名。两者名称不一致时，train-only 参考模型会把全部训练图判为缺失；直接依赖尚未提交的转换器变更也不能形成可复现证据。
+
+#### 修改文件与修改内容
+
+- `cloudstudio_3dgs/ba/pycolmap_adapter.py`：从已签名 dataset Manifest 原生构建 1238 图已知位姿 PyCOLMAP 模型，严格要求 `c2w_opencv`、有限刚体位姿、有效相机模型和唯一规范化路径，并原样保留 HLoc 的 `left/...`、`right/...` 名称。
+- `tools/run_hloc_triangulation.py`：增加与 `--reference-model` 互斥的 `--dataset-manifest`；三角化 Manifest 绑定 dataset 身份、文件 SHA、物化参考模型与来源策略。
+- `tests/test_pycolmap_ba.py`：覆盖名称保留、位姿中心、两相机模型与错误 pose convention 的硬失败。
+- `baselines/gs2_rig_ba.baseline.json`、`tests/test_ba_runtime_lock.py`、`README.md`：记录真实三角化、三阶段 BA、选中 Stage 2 与 Stage 3 回退。
+
+#### 验证方式与当前状态
+
+真实 Manifest 在内存构建出 `1238/1238` 个有位姿图像和 2 个相机，pairs 涉及的 1114 个名称缺失数为 0。三角化签名 `3010f470...3ef7`、模型 SHA `a68ebb3c...4687`，注册 `1114/1114` 图、765,590 点和 3,083,168 个观测，平均 track length `4.02718`、平均重投影误差 `1.55971 px`。
+
+Stage 1 签名 `b91b8b74...e07b`，p50 改善 `32.0293%` 并通过；Stage 2 签名 `ca6bc08b...dfc9`，p50 改善 `32.2688%`、p95 改善，全部 Gate PASS，选中模型 SHA `64282ec6...1c04`。Stage 3 签名 `558be49c...3d4c`，右相机禁止发布的 `k3/k4` 最大变化 `5.353e-4`，`camera_parameter_bounds=FAIL`、`candidate_accepted=false`、`published=before`。因此 Stage 2 是当前真实 BA 候选；这不等于真实 3DGS 训练或画质验收，训练仍暂缓。

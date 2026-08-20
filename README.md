@@ -143,7 +143,18 @@ python tools/run_hloc_triangulation.py `
   --feature-runtime-manifest G:\3dgs-datasets\gs2_ba\features\feature_runtime_manifest.json `
   --output G:\3dgs-datasets\gs2_ba\triangulation
 
-# Stage 1 只优化 Rig 位姿；Stage 2 可优化 fx/fy；Stage 3 才可选 k1/k2
+# 没有同名 COLMAP 4 参考模型时，可直接从已签名 dataset Manifest 构建；
+# 保留 left/... 与 right/... 名称，--dataset-manifest 和 --reference-model 互斥
+python tools/run_hloc_triangulation.py `
+  --image-dir G:\3dgs-datasets\gs2_colmap\images `
+  --dataset-manifest G:\3dgs-datasets\gs2_manifest\dataset_manifest.json `
+  --pairs G:\3dgs-datasets\gs2_ba\pairs.txt `
+  --features G:\3dgs-datasets\gs2_ba\features\features-aliked-n16.h5 `
+  --matches G:\3dgs-datasets\gs2_ba\features\matches-aliked-lightglue.h5 `
+  --feature-runtime-manifest G:\3dgs-datasets\gs2_ba\features\feature_runtime_manifest.json `
+  --output G:\3dgs-datasets\gs2_ba\triangulation
+
+# Stage 1 只优化 Rig 位姿；Stage 2 可优化 fx/fy；Stage 3 才尝试畸变（发布仅允许 k1/k2）
 python tools/run_rig_ba.py `
   --model G:\3dgs-datasets\gs2_ba\triangulation\sfm `
   --manifest G:\3dgs-datasets\gs2_manifest\dataset_manifest.json `
@@ -229,7 +240,7 @@ PR-11 新 Trainer 使用独立的 `upstream/cloudstudio_trainer.lock.json`：只
 - [x] 路线 PR-07:KB4 LiDAR ray-range、前表面 z-buffer、confidence、mask 和确定性稀疏缓存；当前 Rig Manifest 的真实 `1238/1238` 全量缓存已完成并以 2/4 worker 逐文件 SHA 重放一致，Trainer 真实 CUDA depth loss 仍为 `NOT_RUN`
 - [x] 路线 PR-08:Rig Frame 切分、泄漏告警、masked PSNR/SSIM/LPIPS、深度指标和 HTML 报告
 - [x] 路线 PR-09:关键帧 SE(3) 修正、鲁棒过滤、Rig 时间插值、基线保持和默认位姿回退门
-- [x] 路线 PR-10:训练集匹配图、锁定 ALIKED/LightGlue/HLoc、固定 Rig + POS 先验分阶段 BA 与回退报告；真实 1114 图 ALIKED + 6787 对 LightGlue 已完成并签名，真实三角化/BA 验收仍为 `NOT_RUN`
+- [x] 路线 PR-10:训练集匹配图、锁定 ALIKED/LightGlue/HLoc、固定 Rig + POS 先验分阶段 BA 与回退报告；真实 1114 图/6787 对已三角化为 765,590 点，Stage 2 BA 通过并选用，Stage 3 因越权改变 k3/k4 被 fail-closed 拒绝
 - [x] 路线 PR-11(源码/合成 CUDA):自有 raw-fisheye Dataset/Trainer、3DGUT、逐图 mask/crop、LiDAR ray-range、显式 split、checkpoint、坐标 Manifest、masked evaluation 和 peak VRAM；真实 gs2 同配置回归、完整 MCMC Windows 算子和中断式 GPU resume 仍为 `NOT_RUN`
 - [x] Phase 1(前置):重投影验证初步通过(gs2 场景目视贴合,约定=c2w_gl),
       正式 Gate 需再覆盖 2–3 场景 + 逐点误差统计

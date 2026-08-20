@@ -42,7 +42,7 @@ class BaRuntimeLockTests(unittest.TestCase):
         self.assertEqual(lock["components"]["aliked"]["license"], "BSD-3-Clause")
         self.assertFalse(lock["runtime_policy"]["skip_geometric_verification"])
 
-    def test_checked_in_real_baseline_keeps_real_ba_gate_open(self) -> None:
+    def test_checked_in_real_baseline_records_selected_stage_and_rejected_stage_3(self) -> None:
         path = Path(__file__).resolve().parents[1] / "baselines" / "gs2_rig_ba.baseline.json"
         baseline = json.loads(path.read_text(encoding="utf-8"))
 
@@ -56,16 +56,18 @@ class BaRuntimeLockTests(unittest.TestCase):
         )
         self.assertTrue(baseline["real_aliked_lightglue"]["cuda_used"])
         self.assertTrue(baseline["acceptance"]["real_aliked_lightglue"])
-        self.assertEqual(
-            baseline["acceptance"]["real_hloc_triangulation"], "not_run"
-        )
-        self.assertEqual(
+        self.assertTrue(baseline["acceptance"]["real_hloc_triangulation"])
+        self.assertTrue(
             baseline["acceptance"][
                 "real_reprojection_p50_improvement_at_least_30_percent"
-            ],
-            "not_run",
+            ]
         )
-        self.assertFalse(baseline["acceptance"]["real_candidate_accepted"])
+        self.assertTrue(baseline["acceptance"]["real_candidate_accepted"])
+        self.assertEqual(baseline["acceptance"]["real_selected_stage"], "stage_2")
+        self.assertTrue(
+            baseline["acceptance"]["real_stage_3_rejected_fail_closed"]
+        )
+        self.assertFalse(baseline["real_rig_ba"]["stage_3"]["candidate_accepted"])
 
 
 if __name__ == "__main__":

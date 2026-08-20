@@ -12,6 +12,7 @@ import numpy as np
 
 from cloudstudio_3dgs.ba.pycolmap_adapter import (
     apply_fixed_stereo_rig,
+    build_reference_model_from_manifest,
     build_training_reference_model,
     reconstruction_snapshot,
     run_bundle_adjustment_stage,
@@ -120,6 +121,82 @@ def synthetic_problem():
     "optional pycolmap runtime is not installed",
 )
 class PycolmapRigBaTests(unittest.TestCase):
+    def test_manifest_reference_preserves_hloc_names_and_known_poses(self) -> None:
+        left_c2w = np.eye(4)
+        right_c2w = np.eye(4)
+        right_c2w[0, 3] = 0.1
+        manifest = {
+            "cameras": [
+                {
+                    "camera_id": side,
+                    "width": 800,
+                    "height": 800,
+                    "intrinsic": {
+                        "fl_x": 800.0,
+                        "fl_y": 801.0,
+                        "cx": 400.0,
+                        "cy": 401.0,
+                    },
+                    "distortion": {
+                        "camera_model": "OPENCV_FISHEYE",
+                        "params": {"k1": 0.1, "k2": -0.02, "k3": 0.0, "k4": 0.0},
+                    },
+                }
+                for side in ("left", "right")
+            ],
+            "images": [
+                {
+                    "path": "camera/left/001.jpg",
+                    "camera_id": "left",
+                    "pose_convention": "c2w_opencv",
+                    "c2w": left_c2w.tolist(),
+                },
+                {
+                    "path": "camera/right/001.jpg",
+                    "camera_id": "right",
+                    "pose_convention": "c2w_opencv",
+                    "c2w": right_c2w.tolist(),
+                },
+            ],
+        }
+
+        reference = build_reference_model_from_manifest(manifest)
+        images = {image.name: image for image in reference.images.values()}
+
+        self.assertEqual(set(images), {"left/001.jpg", "right/001.jpg"})
+        self.assertEqual(reference.num_cameras(), 2)
+        self.assertTrue(all(image.has_pose for image in images.values()))
+        np.testing.assert_allclose(
+            images["right/001.jpg"].projection_center(), [0.1, 0.0, 0.0]
+        )
+
+    def test_manifest_reference_rejects_non_opencv_pose_convention(self) -> None:
+        manifest = {
+            "cameras": [
+                {
+                    "camera_id": "left",
+                    "width": 8,
+                    "height": 8,
+                    "intrinsic": {"fl_x": 8.0, "fl_y": 8.0, "cx": 4.0, "cy": 4.0},
+                    "distortion": {
+                        "camera_model": "OPENCV_FISHEYE",
+                        "params": {"k1": 0.0, "k2": 0.0, "k3": 0.0, "k4": 0.0},
+                    },
+                }
+            ],
+            "images": [
+                {
+                    "path": "camera/left/001.jpg",
+                    "camera_id": "left",
+                    "pose_convention": "c2w_opengl",
+                    "c2w": np.eye(4).tolist(),
+                }
+            ],
+        }
+
+        with self.assertRaisesRegex(ValueError, "not c2w_opencv"):
+            build_reference_model_from_manifest(manifest)
+
     def test_rig_ba_cli_publishes_checked_synthetic_candidate(self) -> None:
         reconstruction, dataset = synthetic_problem()
         dataset["manifest_sha256"] = hashlib.sha256(

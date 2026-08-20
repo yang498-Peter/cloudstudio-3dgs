@@ -21,6 +21,97 @@ def _normalise_name(value: str) -> str:
     return value.replace("\\", "/").removeprefix("camera/")
 
 
+def build_reference_model_from_manifest(dataset: dict[str, Any]) -> Any:
+    """Build a known-pose COLMAP model without renaming manifest image paths."""
+    pycolmap = _pycolmap()
+    camera_records = dataset.get("cameras")
+    image_records = dataset.get("images")
+    if not isinstance(camera_records, list) or not camera_records:
+        raise ValueError("dataset manifest has no camera records")
+    if not isinstance(image_records, list) or not image_records:
+        raise ValueError("dataset manifest has no image records")
+
+    output = pycolmap.Reconstruction()
+    camera_ids: dict[str, int] = {}
+    for numeric_id, record in enumerate(
+        sorted(camera_records, key=lambda item: str(item["camera_id"])), start=1
+    ):
+        stable_id = str(record["camera_id"])
+        if stable_id in camera_ids:
+            raise ValueError(f"dataset manifest repeats camera ID {stable_id}")
+        intrinsic = record.get("intrinsic", {})
+        model = str(record.get("distortion", {}).get("camera_model", ""))
+        base_params = [
+            intrinsic.get("fl_x"),
+            intrinsic.get("fl_y"),
+            intrinsic.get("cx"),
+            intrinsic.get("cy"),
+        ]
+        if model == "OPENCV_FISHEYE":
+            distortion = record.get("distortion", {}).get("params", {})
+            params = base_params + [
+                distortion.get("k1"),
+                distortion.get("k2"),
+                distortion.get("k3"),
+                distortion.get("k4"),
+            ]
+        elif model == "PINHOLE":
+            params = base_params
+        else:
+            raise ValueError(f"unsupported manifest camera model: {model}")
+        parameters = np.asarray(params, dtype=np.float64)
+        width = int(record.get("width", 0))
+        height = int(record.get("height", 0))
+        if width <= 0 or height <= 0 or not np.all(np.isfinite(parameters)):
+            raise ValueError(f"manifest camera {stable_id} has invalid calibration")
+        output.add_camera_with_trivial_rig(
+            pycolmap.Camera(
+                model=model,
+                width=width,
+                height=height,
+                params=parameters,
+                camera_id=numeric_id,
+            )
+        )
+        camera_ids[stable_id] = numeric_id
+
+    normalised_names: set[str] = set()
+    for numeric_id, record in enumerate(
+        sorted(image_records, key=lambda item: _normalise_name(str(item["path"]))),
+        start=1,
+    ):
+        name = _normalise_name(str(record["path"]))
+        if not name or name in normalised_names:
+            raise ValueError(f"dataset manifest repeats image path {name}")
+        normalised_names.add(name)
+        camera_id = str(record.get("camera_id", ""))
+        if camera_id not in camera_ids:
+            raise ValueError(f"manifest image {name} has unknown camera {camera_id}")
+        if record.get("pose_convention") != "c2w_opencv":
+            raise ValueError(f"manifest image {name} is not c2w_opencv")
+        c2w = np.asarray(record.get("c2w"), dtype=np.float64)
+        if (
+            c2w.shape != (4, 4)
+            or not np.all(np.isfinite(c2w))
+            or not np.allclose(c2w[3], [0.0, 0.0, 0.0, 1.0], atol=1e-9)
+            or not np.allclose(c2w[:3, :3].T @ c2w[:3, :3], np.eye(3), atol=1e-6)
+            or not np.isclose(np.linalg.det(c2w[:3, :3]), 1.0, atol=1e-6)
+        ):
+            raise ValueError(f"manifest image {name} has an invalid rigid c2w pose")
+        world_to_camera = np.linalg.inv(c2w)
+        image = pycolmap.Image(
+            name=name,
+            camera_id=camera_ids[camera_id],
+            image_id=numeric_id,
+        )
+        output.add_image_with_trivial_frame(
+            image, pycolmap.Rigid3d(world_to_camera[:3])
+        )
+    if output.num_images() != len(image_records):
+        raise ValueError("manifest reference model has an unexpected image count")
+    return output
+
+
 def build_training_reference_model(
     reconstruction: Any, image_names: set[str]
 ) -> Any:

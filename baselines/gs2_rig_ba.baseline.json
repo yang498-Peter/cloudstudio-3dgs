@@ -39,6 +39,53 @@
       "pycolmap": "PASS"
     }
   },
+  "real_hloc_triangulation": {
+    "triangulation_manifest_sha256": "3010f470799a1694553969506364500e0e71ef81b006170927256299f3bf3ef7",
+    "triangulation_manifest_file_sha256": "c9abe74794cd12a8b48345e1e441393cb421b988137ff35b0c4f83ef83e80616",
+    "sfm_model_sha256": "a68ebb3c69354a3c263217c90e629a5650a20e48d248f9a76cc73f08f9274687",
+    "reference_source": "dataset_manifest",
+    "registered_images": 1114,
+    "training_images": 1114,
+    "points3D": 765590,
+    "observations": 3083168,
+    "mean_track_length": 4.02718,
+    "mean_reprojection_error_px": 1.55971
+  },
+  "real_rig_ba": {
+    "selected_stage": "stage_2",
+    "selected_model_sha256": "64282ec6095e45116fba434b08f3a2abef24c48f170e66ebef129234bf5e1c04",
+    "stage_1": {
+      "ba_report_sha256": "b91b8b7466cac1d53c7256ff01bf856641a56e52601cb8a0a47a1ac3a265e07b",
+      "ba_report_file_sha256": "60f36347f84305c89be579b1b5eee14d8a8bf20b1a1aaed2f0cbc878da29ded6",
+      "candidate_accepted": true,
+      "reprojection_p50_before_px": 1.5928668142273295,
+      "reprojection_p50_after_px": 1.082682771193133,
+      "reprojection_p50_improvement_fraction": 0.32029297018261843,
+      "reprojection_p95_after_px": 2.8464766310322385
+    },
+    "stage_2": {
+      "ba_report_sha256": "ca6bc08baf1c16b5e7844eb5e577c28e60a9508362f59c31bd9b8fdbf404dfc9",
+      "ba_report_file_sha256": "40e9a196d3f553bbcafa4ec70eee79193894c8c1a6c70e2304f5ed69fe61a72",
+      "candidate_accepted": true,
+      "reprojection_p50_before_px": 1.5928668142273295,
+      "reprojection_p50_after_px": 1.0788681299206564,
+      "reprojection_p50_improvement_fraction": 0.32268779769638456,
+      "reprojection_p95_before_px": 3.4058736107507084,
+      "reprojection_p95_after_px": 2.833359901947117,
+      "maximum_focal_relative_change": 0.000656641694106758,
+      "maximum_rig_translation_drift_m": 4.28724376396416e-14,
+      "maximum_rig_rotation_drift_deg": 4.833102368323101e-14,
+      "scene_scale_drift_fraction": 5.291535691653859e-05
+    },
+    "stage_3": {
+      "ba_report_sha256": "558be49c295e25b92ee2d3e995973fd2c73143c08797c2e962ee743115743d4c",
+      "ba_report_file_sha256": "05f6dca2241273ee770f293a48390a904c5a1bb4ad98f646680c383a8824f9f7",
+      "candidate_accepted": false,
+      "published_model": "before",
+      "failed_gate": "camera_parameter_bounds",
+      "maximum_forbidden_k3_k4_change": 0.0005353134005142814
+    }
+  },
   "synthetic_pycolmap_stage_1": {
     "solver_usable": true,
     "candidate_accepted": true,
@@ -56,8 +103,10 @@
     "pos_initialization_and_position_prior_contract": true,
     "fixed_stereo_rig_synthetic_ba": true,
     "real_aliked_lightglue": true,
-    "real_hloc_triangulation": "not_run",
-    "real_reprojection_p50_improvement_at_least_30_percent": "not_run",
-    "real_candidate_accepted": false
+    "real_hloc_triangulation": true,
+    "real_reprojection_p50_improvement_at_least_30_percent": true,
+    "real_candidate_accepted": true,
+    "real_selected_stage": "stage_2",
+    "real_stage_3_rejected_fail_closed": true
   }
 }
