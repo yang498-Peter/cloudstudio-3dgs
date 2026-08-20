@@ -97,6 +97,28 @@ A/B/C 分辨率阶段、valid-aware crop、OOM 降级、checkpoint 跨分辨率�
    精确暂存本任务文件 → 提交并推送 → 核对 `origin/master` SHA 一致。
 4. 阻塞项(如 G7 数据)明确写入本文件 §5 并继续推进非阻塞阶段,不空转。
 
+## 4.5 阶段 A/B 完成记录(2026-08-21 当日更新)
+
+- **阶段 A 完成**:免管理员 CUDA 12.8 环境 + gsplat `f2d1413` 全量 30 核 JIT 编译成功
+  (`.torch-ext/gsplat_cuda.pyd`,107MB,全程零源码修改;配方固化在
+  `train/env_machine_b.cmd` + `train/setup_machine_b_no_admin.cmd`)。
+  噪声关档合成验收与旧机器基线**逐位一致**(initial 0.399251 → final 0.186986,
+  best 0.183097,LiDAR L1 0.131814 m),跨机可复现性成立。
+- **阶段 B 完成**:`quat_scale_to_covar_preci_fwd/bwd` + `relocation` 全部注册并在
+  GPU 真实执行;`--full-mcmc` 合成验收 loss 改善 87.40%,高斯 24→29 真实致密化,
+  无 NaN。修正了验收脚本两处设计缺陷:8 点种子下 `int(1.05N)` 增量恒为 0;
+  means lr=1e-8 把噪声幅度(∝ lr×noise_lr)压到噪底。
+- **真实数据新发现(阻塞真实训练的算法级问题)**:UK 场景 39 万初始化点 × factor 4
+  下,eval3d 批式光栅化 `fwd_batch_state` 达 36.6 亿元素,超出上游 int32 设备偏移
+  上限(`RasterizeToPixelsFromWorld3DGSParallelBatchBwd.cu` 的显式守卫)。
+  鱼眼全景视场几乎每帧可见全部高斯,批状态 ∝ tile-高斯相交数,是该路径的固有开销。
+  短期解:15 万点初始化 + cap_max 20 万 + factor 4;
+  根本解:PR-13 valid-aware 随机 crop 训练把每步 tile 数压下来,或上游 64 位偏移。
+- **person mask(PR-06)UK 实测**:1044 图推理完成,50 张抽样逐帧目视评审
+  30 PASS / 20 FAIL(签名报告 `person_mask_review.json`,status=FAIL 如实留档)。
+  两类系统性缺陷:操作员近场局部肢体漏检;剪影立牌/火盆/墙雕间歇性误杀。
+  按生产契约训练仍挂载该掩膜(严格优于无掩膜),质量迭代交由 PR-06 后续。
+
 ## 5. 当前阻塞与外部依赖
 
 - **G7 真实 gs2 数据迁移**:等待人工拷贝 75GB 原始记录 + `process/` 解算成品到本机
