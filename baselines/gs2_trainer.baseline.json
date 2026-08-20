@@ -39,6 +39,8 @@
     "raw_fisheye_3dgut_cuda_backward": true,
     "per_image_mask_and_crop": true,
     "lidar_euclidean_ray_range_loss": true,
+    "positive_lidar_weight_requires_depth_inputs": true,
+    "partial_depth_manifest_fails_closed": true,
     "explicit_split_and_masked_evaluation": true,
     "coordinate_transform_manifest": true,
     "checkpoint_state_and_identity_unit_test": true,

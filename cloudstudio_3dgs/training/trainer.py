@@ -144,6 +144,10 @@ class TrainerConfig:
             raise ValueError("MCMC noise stop must be -1 or non-negative")
         if (self.depth_manifest is None) != (self.depth_root is None):
             raise ValueError("depth_manifest and depth_root must be provided together")
+        if self.lidar_range_weight > 0.0 and self.depth_manifest is None:
+            raise ValueError(
+                "positive lidar_range_weight requires depth_manifest and depth_root"
+            )
         required_paths = {
             "dataset_manifest": self.dataset_manifest,
             "recording_root": self.recording_root,

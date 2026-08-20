@@ -429,3 +429,20 @@ PR-05 只建立逐图数据结构和几何 valid 基线；真实人物/车辆/�
 在锁定提交 `f2d1413...` 的独立干净 worktree 上，RTX 5070 Laptop GPU 实际执行 80 步 raw-fisheye 3DGUT CUDA 前向/反向与 `RGB-Ed` LiDAR loss。总 loss 从 `0.399251` 降到 `0.186986`，改善 `53.1658%`，best 为 `0.183097`；末步 LiDAR range L1 为 `0.131814 m`，训练 peak VRAM 为 `8,731,648 bytes`。完整两个 validation 视角生成 masked 质量报告，PSNR mean `13.0758 dB`、SSIM mean `0.891985`、LiDAR range MAE/RMSE mean `0.105848/0.106903 m`；LPIPS 未执行，所以报告诚实保持 `PARTIAL`。签名 run Manifest SHA256 为 `68f1061a...be91dd`，质量报告 SHA256 为 `0549481c...7b9211`，详细证据锁入 `baselines/gs2_trainer.baseline.json`。
 
 当前 Windows 安装可执行 3DGUT 渲染核，但短验收若启用 MCMC 位置噪声会因 `quat_scale_to_covar_preci_fwd` 未注册失败；本次 80 步验收因此把噪声停止步设为 0，完整 MCMC 噪声/致密化仍为 `NOT_RUN`，不能据此声明长程 MCMC 已通过。真实 gs2 与历史 smoke 同配置回归、中断式 GPU checkpoint resume、真实完整 validation 的 LPIPS/画质和 8GB 长程显存门也均为 `NOT_RUN`。本阶段完成的是自有 Trainer 源码契约与真实 CUDA 小型收敛闭环，不升级为真实客户数据训练 GO。
+
+### PR-11 真实集成前置修复：深度监督完整性
+
+#### 问题现象
+
+真实 gs2 基线当前只有 `12/1238` 张深度缓存。此前 Trainer 在 `lidar_range_weight > 0` 时仍允许完全不提供 depth Manifest；提供 partial depth Manifest 时，缺失图片也会静默退化为纯 RGB 训练。这会让配置声称启用了 LiDAR range loss，但实际只有部分或零帧接受深度监督，违反“缺深度不得静默跳过”的数据契约。
+
+#### 修改文件与修改内容
+
+- `cloudstudio_3dgs/training/trainer.py`：正 LiDAR loss 权重必须同时提供 depth Manifest 和 depth root。
+- `cloudstudio_3dgs/training/dataset.py`：只要启用 depth 输入，其 image ID 必须与完整 dataset 一致；同时逐图核对 camera ID 和 combined-mask SHA，拒绝错相机或错 mask 的缓存。
+- `baselines/gs2_trainer.baseline.json`：把两个 fail-closed 门加入受版本控制的 Trainer 验收基线。
+- `tests/test_training.py`：增加“正 depth 权重但无缓存”和“partial depth Manifest”两个独立红测试。
+
+#### 验证方式与当前状态
+
+修复前两个测试均按预期失败，证明旧实现确实会静默接受；修复后 PR-11 定向测试 `11/11`、完整测试集 `91/91` 通过，Python 源码编译与本次修改文件乱码检查通过。该修复没有启动 GPU 训练，也不会把当前 `12/1238` partial depth 基线升级为完成；真实训练恢复前仍必须生成全量 1238 图缓存。

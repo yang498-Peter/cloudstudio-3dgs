@@ -147,6 +147,24 @@ class S1TrainingDataset:
         )
         if set(masks) != set(images):
             raise ValueError("mask manifest must cover every dataset image")
+        if self.depth_manifest is not None and set(depths) != set(images):
+            missing = sorted(set(images) - set(depths))
+            extra = sorted(set(depths) - set(images))
+            detail = []
+            if missing:
+                detail.append(f"missing={missing[:4]}")
+            if extra:
+                detail.append(f"unknown={extra[:4]}")
+            raise ValueError(
+                "depth manifest must cover every dataset image; " + ", ".join(detail)
+            )
+        for image_id, depth in depths.items():
+            if str(depth.get("camera_id", "")) != str(images[image_id]["camera_id"]):
+                raise ValueError(f"depth record camera mismatch for {image_id}")
+            if str(depth.get("combined_mask_sha256", "")) != str(
+                masks[image_id]["combined_mask_sha256"]
+            ):
+                raise ValueError(f"depth record mask identity mismatch for {image_id}")
         selected_ids = [str(value) for value in self.split_manifest["splits"][split]]
         if not selected_ids or len(selected_ids) != len(set(selected_ids)):
             raise ValueError(f"{split} split contains invalid image IDs")

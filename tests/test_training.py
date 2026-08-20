@@ -223,6 +223,44 @@ class TrainingDatasetTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "source image SHA256 mismatch"):
                 training[0]
 
+    def test_partial_depth_manifest_fails_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            recording = root / "recording"
+            dataset = _dataset_fixture(recording)
+            dataset_path = root / "dataset_manifest.json"
+            dataset_path.write_text(json.dumps(dataset), encoding="utf-8")
+            masks = build_per_image_masks(dataset, root / "masks")
+            depth = _write_depth_fixture(root / "depth-cache", dataset, masks)
+            depth["images"] = depth["images"][:-1]
+            depth.pop("depth_manifest_sha256")
+            depth["depth_manifest_sha256"] = hashlib.sha256(
+                canonical_json_bytes(depth)
+            ).hexdigest()
+            (root / "depth-cache" / "depth_manifest.json").write_text(
+                json.dumps(depth, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+                encoding="utf-8",
+            )
+            split = build_split_manifest(
+                dataset,
+                SplitConfig(mode="manual", golden_rig_frames=1),
+                manual={"rig_000": "train", "rig_001": "val"},
+            )
+            split_path = root / "split_manifest.json"
+            write_split_manifest(split_path, split)
+
+            with self.assertRaisesRegex(ValueError, "depth manifest must cover every dataset image"):
+                S1TrainingDataset(
+                    dataset_manifest_path=dataset_path,
+                    recording_root=recording,
+                    mask_manifest_path=root / "masks" / "mask_manifest.json",
+                    mask_root=root / "masks",
+                    split_manifest_path=split_path,
+                    split="train",
+                    depth_manifest_path=root / "depth-cache" / "depth_manifest.json",
+                    depth_root=root / "depth-cache",
+                )
+
 
 class TrainingContractTests(unittest.TestCase):
     def test_checked_in_baseline_keeps_real_and_full_mcmc_gates_open(self) -> None:
@@ -251,6 +289,12 @@ class TrainingContractTests(unittest.TestCase):
             baseline["acceptance"]["real_gs2_same_config_smoke_regression"],
             "not_run",
         )
+        self.assertTrue(
+            baseline["acceptance"]["positive_lidar_weight_requires_depth_inputs"]
+        )
+        self.assertTrue(
+            baseline["acceptance"]["partial_depth_manifest_fails_closed"]
+        )
 
     def test_coordinate_manifest_is_signed_identity_without_normalization(self) -> None:
         manifest = build_coordinate_transform_manifest("a" * 64)
@@ -275,6 +319,7 @@ class TrainingContractTests(unittest.TestCase):
                 "initialization_ply": "sparse_pc.ply",
                 "output_dir": "run",
                 "gsplat_lock": "upstream/cloudstudio_trainer.lock.json",
+                "lidar_range_weight": 0.0,
             }
         )
         config.validate()
@@ -287,6 +332,24 @@ class TrainingContractTests(unittest.TestCase):
         self.assertNotIn("S1_KEEP_FISHEYE", source)
         self.assertNotIn("simple_trainer", source)
         self.assertNotIn("examples.datasets", source)
+
+    def test_positive_lidar_weight_requires_depth_inputs(self) -> None:
+        config = TrainerConfig.from_dict(
+            {
+                "run_id": "missing-depth",
+                "dataset_manifest": "dataset.json",
+                "recording_root": "recording",
+                "mask_manifest": "masks.json",
+                "mask_root": "masks",
+                "split_manifest": "split.json",
+                "initialization_ply": "sparse_pc.ply",
+                "output_dir": "run",
+                "gsplat_lock": "upstream/cloudstudio_trainer.lock.json",
+                "lidar_range_weight": 0.05,
+            }
+        )
+        with self.assertRaisesRegex(ValueError, "positive lidar_range_weight requires"):
+            config.validate()
 
     def test_unpatched_lock_is_required_before_importing_runtime(self) -> None:
         lock = json.loads((ROOT / "upstream" / "cloudstudio_trainer.lock.json").read_text(encoding="utf-8"))
