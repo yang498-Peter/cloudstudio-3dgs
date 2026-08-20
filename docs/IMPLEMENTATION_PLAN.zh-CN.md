@@ -206,3 +206,37 @@ CPU 与静态门槛可在当前机器闭环；新建空环境 bootstrap、完整
 在最终体素尺度下，voxel 输出覆盖全部 376,906 个源占用体素；相同规模的 stride 样本只覆盖 140,656 个，覆盖率为 37.3186%，voxel 提升 62.6814 个百分点。两个独立全量运行的 PLY SHA256 均为 `66fbe6205f5fb8ebde104ef13a3735a9a0d091607ffa9a67936c7586eafc42df`，报告也逐字节一致。真实输出位于 Git 忽略的 `outputs/pr04-real-lidar-init*/`，没有写入原始记录。
 
 PR-04 只完成初始化数据质量闭环；新 PLY 尚未接入正式训练数据集，GPU 训练、画质和显存门槛仍为 `NOT_RUN`，因此旧 `gs2_smoke` 基线继续保持阻塞，不能升级为训练 GO。
+
+## 8. 当前阶段记录：PR-05
+
+### 问题现象
+
+旧 `make_fisheye_masks.py` 按物理相机生成一张圆形 mask，再复制给该相机所有图片；它无法表示同一相机在不同时刻出现不同人物、车辆或深度有效区。仓库也没有一个数据加载入口能保证 image、valid/static mask、depth、confidence 共享同一裁剪窗口，factor 下的尺寸和 masked 指标同样没有测试。
+
+### 修改文件
+
+- `cloudstudio_3dgs/data/image_sample.py`
+- `cloudstudio_3dgs/data/mask_manifest.py`
+- `cloudstudio_3dgs/evaluation/image_metrics.py`
+- `tools/build_per_image_masks.py`
+- `tools/make_fisheye_masks.py`
+- `tests/test_image_sample.py`
+- `baselines/gs2_masks.baseline.json`
+- `README.md`
+
+### 修改内容
+
+- 正式训练 mask 定义为 `fisheye_valid & static_mask & optional_depth_valid`。每张图片以 `image_id` 指向自己的 mask 路径，不允许相机级隐式回退；static 尚未生成时显式使用 identity policy，depth-valid 尚未生成时显式标记为 PR-07 待办。
+- 从记录级 OPENCV_FISHEYE 标定和 95° 半视场角生成几何 valid mask，输出逐图 `mask_manifest.json`；Manifest 绑定 PR-01 数据集 SHA256，自身也带可校验 SHA256，重复 image ID、共享 combined-mask 路径、不安全路径和篡改均失败。
+- `prepare_image_sample` 先以一个全分辨率 `CropWindow` 同步裁剪 image、valid/static/depth-valid、depth、confidence，再以 factor 1/2/4 同步缩放；mask 使用 nearest，RGB 使用 Lanczos，depth/confidence 使用 nearest。
+- depth 存在时，非有限、非正 range、非有限/非正 confidence 与显式 depth-valid 会共同收紧最终 mask；缺文件、尺寸不一致、空指标区域和不整除 factor 的 crop 均失败。
+- 新增 masked MSE/PSNR；黑边或动态区只要 mask 为 false 就不计入指标，零有效像素不得返回伪造分数。
+- 旧 `make_fisheye_masks.py` 保留给历史 COLMAP 文本模型实验，但启动时明确警告其相机级复制结果不能作为逐图 mask 已接入的证据。
+
+### 验证方式与当前状态
+
+合成测试证明同一相机的两张图片可加载不同 static mask；factor 1/2/4 下 image、mask、depth、confidence 尺寸一致；factor 1 的 crop 对四类数据逐像素等于原数组切片；depth/confidence 失效像素按公式剔除；masked PSNR 忽略 mask 外误差且空 mask 失败；两次 mask Manifest 与 PNG 输出确定性一致，篡改 Manifest 会失败。
+
+真实 gs2 的 PR-01 Manifest 共 1,238 张有位姿图片。本阶段生成 1,238 个唯一逐图路径和 1,238 个 PNG，总计 22,305,046 字节；左/右几何 valid 比例分别为 0.701814 和 0.720464。两次独立运行的内部 Manifest SHA256 都是 `ad6a814005cb4bd457563fc6093d08281707fee0ea88f1ab594cc71f64eb633b`，JSON 文件 SHA256 都是 `eb4fa2c9691634d30402a694964fb5c0f205388106ff4c795d503af5636ed2c4`。真实首图加载得到 factor 1/2/4 的 2912/1456/728 方形 image 与 mask，尺寸全部一致。
+
+PR-05 只建立逐图数据结构和几何 valid 基线；真实人物/车辆/天空 static mask 属于 PR-06，逐图 LiDAR depth-valid 属于 PR-07，自有 Trainer 消费该契约属于 PR-11。真实动态区域回放和训练画质仍为 `NOT_RUN`，不能据此声明动态剔除或训练质量通过。

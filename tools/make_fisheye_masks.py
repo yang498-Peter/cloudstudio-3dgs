@@ -1,5 +1,12 @@
 #!/usr/bin/env python3
-"""Generate circular valid-region masks for the S1 fisheye images in a
+"""Legacy COLMAP-only helper for circular S1 fisheye valid-region masks.
+
+The canonical product contract is now ``tools/build_per_image_masks.py`` plus
+``mask_manifest.json``. This legacy helper is retained for old text-model
+COLMAP experiments only; it replicates a camera-level mask and must not be used
+as evidence that per-image static/depth masks were loaded.
+
+Generate circular valid-region masks for the S1 fisheye images in a
 COLMAP dataset (the square frames have black corners outside the lens image
 circle; unmasked they poison 3DGS training with fake black supervision).
 
@@ -65,10 +72,15 @@ def main() -> int:
     ap.add_argument("--margin", type=float, default=0.985, help="shrink factor on the detected circle")
     args = ap.parse_args()
 
+    print(
+        "WARNING: legacy camera-level mask replication; use "
+        "tools/build_per_image_masks.py for the per-image training contract"
+    )
+
     sparse = args.dataset / "sparse" / "0"
     cams: dict[int, list[float]] = {}
     sizes: dict[int, tuple[int, int]] = {}
-    for line in (sparse / "cameras.txt").read_text().splitlines():
+    for line in (sparse / "cameras.txt").read_text(encoding="utf-8").splitlines():
         if line.startswith("#") or not line.strip():
             continue
         p = line.split()
@@ -76,7 +88,7 @@ def main() -> int:
         sizes[int(p[0])] = (int(p[2]), int(p[3]))
 
     by_cam: dict[int, list[str]] = {c: [] for c in cams}
-    lines = (sparse / "images.txt").read_text().splitlines()
+    lines = (sparse / "images.txt").read_text(encoding="utf-8").splitlines()
     for i in range(0, len(lines), 2):
         p = lines[i].split()
         if len(p) >= 10:
