@@ -387,3 +387,43 @@ PR-05 只建立逐图数据结构和几何 valid 基线；真实人物/车辆/�
 真实 gs2 绑定 Manifest `54c01ab...3563ee3` 与 PR-08 split 后，得到 557 个训练 Rig / 1,114 张训练图，validation 使用数为 0。共生成 6,787 对：双目 557、左右时序各 2,218、左右空间回环各 897；签名图内同时固化完整 train/validation ID 集并由 verifier 复查。两次 JSON 和 HLoc pairs 输出均逐字节一致，文件 SHA256 分别为 `8e57cac4...f5e938`、`fba14a66...6a892`，内部匹配图 SHA256 为 `367e1d20...54ef6a`。
 
 当前机器只有 PyCOLMAP 4.1.1，尚未安装锁定的 HLoc/LightGlue 可选运行时，因此真实 ALIKED 特征、LightGlue 匹配、HLoc 三角化和真实 BA 均为 `NOT_RUN`。本机 PyCOLMAP/Ceres 合成测试实际执行；CPU CI 不安装该可选包时显式 `SKIPPED`，其余契约测试仍必须通过。真实重投影 p50 改善至少 30% 的验收门没有证据，不能声明 PR-10 真实候选已接受；本阶段当前完成的是源码契约、真实训练匹配图和合成求解闭环。
+
+## 13. 当前阶段记录：PR-11
+
+### 问题现象
+
+历史 GPU 路径通过长期修改 gsplat 的 `examples/simple_trainer.py` 与 `examples/datasets/colmap.py` 保留鱼眼畸变，并以 `S1_KEEP_FISHEYE` 环境变量切换行为。该路径把产品数据契约耦合到上游示例代码；旧深度 loss 使用投影 z-depth，也不符合 PR-07 已锁定的 Euclidean ray range。原示例没有把 PR-05 逐图 mask、PR-08 Rig split、坐标身份、断点输入身份、完整 masked validation 和 peak VRAM 统一成一个可审计的自有运行 Manifest。
+
+### 修改文件
+
+- `cloudstudio_3dgs/training/dataset.py`
+- `cloudstudio_3dgs/training/backend.py`
+- `cloudstudio_3dgs/training/losses.py`
+- `cloudstudio_3dgs/training/checkpoint.py`
+- `cloudstudio_3dgs/training/contracts.py`
+- `cloudstudio_3dgs/training/trainer.py`
+- `tools/train_gsplat.py`
+- `tools/run_synthetic_training_acceptance.py`
+- `upstream/cloudstudio_trainer.lock.json`
+- `tests/test_training.py`
+- `baselines/gs2_trainer.baseline.json`
+- `README.md`、`NOTICE.md`
+
+### 修改内容
+
+- 新 Dataset 只消费签名 dataset/mask/split/depth Manifest，原始图片和逐图 mask/depth artifact 首次读取时复核 SHA256；不 import gsplat 示例数据集。训练和验证必须来自显式 split，输入坐标必须是 `s1_local`。
+- 原始 `OPENCV_FISHEYE` 的 `k1-k4` 直接传给 gsplat，渲染固定为 `camera_model=fisheye`、`with_ut=true`、`with_eval3d=true`。锁定版上游明确禁止 UT 与 packed 同时启用，因此自有适配器固定 `packed=false`，没有沿用示例默认。
+- crop/factor 同步作用于 RGB、combined mask、range 和 confidence，裁剪后 `cx/cy` 平移、全部内参再按 factor 缩放。RGB mask 与稀疏 depth mask 分开保留，开启 LiDAR loss 不会把 RGB 监督错误缩窄到只有 LiDAR 像素。
+- LiDAR 直接监督 `RGB-Ed` 的 expected hit distance，语义与 PR-07 的 Euclidean ray range 一致；loss 只聚合 combined mask、有效 range 和正 confidence 的交集。
+- 自有 Trainer 直接创建 Gaussian 参数和逐参数 Adam，直接调用 MCMC Strategy；从未创建或 import Viewer。MCMC 细化和噪声调度进入签名配置，短合成收敛验收可显式关闭噪声，但正式默认仍保留上游完整 MCMC 调度。
+- checkpoint 原子写出参数、逐参数 optimizer、MCMC state、采样器和 CPU/CUDA RNG；恢复前严格核对 dataset/mask/split/depth、crop/factor、坐标、训练配置、初始化 PLY 和 gsplat 运行时身份。MCMC 改变 Gaussian 数量后也会按 checkpoint shape 重建参数引用，再恢复 optimizer state。
+- `coordinate_transform_manifest.json` 显式记录 `s1_local -> s1_local` 米制恒等变换和未做 normalization；训练结束保存完整 validation 的 reference/render/mask、可用时的 ray-range 与 LiDAR cache，签名 `run_manifest.json` 同时记录训练耗时、Gaussian 数、模型 hash 所需路径和 peak VRAM，可继续交给 PR-08 质量报告。
+- 新 gsplat lock 不含 patch。运行时必须是精确版本的干净 VCS commit，普通 wheel 当前不作为可验证来源。新路径不读取 `S1_KEEP_FISHEYE`，也不依赖两份上游 example 文件。历史 patch 链仍保留为对照，不能充当 PR-11 新路径证据。
+
+### 验证方式与当前状态
+
+九项新增测试覆盖逐图原始 artifact 篡改失败、raw fisheye/crop/factor 内参、RGB 与稀疏 depth mask 分离、坐标 Manifest 签名、3DGUT/MCMC/无 Viewer 配置契约、无 patch lock、规范 PLY、基线开放门和 loss；checkpoint 测试还从不同 Gaussian shape 恢复参数，并拒绝身份变化。当前完整 CPU/可选 Torch 测试集通过，源码编译通过。
+
+在锁定提交 `f2d1413...` 的独立干净 worktree 上，RTX 5070 Laptop GPU 实际执行 80 步 raw-fisheye 3DGUT CUDA 前向/反向与 `RGB-Ed` LiDAR loss。总 loss 从 `0.399251` 降到 `0.186986`，改善 `53.1658%`，best 为 `0.183097`；末步 LiDAR range L1 为 `0.131814 m`，训练 peak VRAM 为 `8,731,648 bytes`。完整两个 validation 视角生成 masked 质量报告，PSNR mean `13.0758 dB`、SSIM mean `0.891985`、LiDAR range MAE/RMSE mean `0.105848/0.106903 m`；LPIPS 未执行，所以报告诚实保持 `PARTIAL`。签名 run Manifest SHA256 为 `68f1061a...be91dd`，质量报告 SHA256 为 `0549481c...7b9211`，详细证据锁入 `baselines/gs2_trainer.baseline.json`。
+
+当前 Windows 安装可执行 3DGUT 渲染核，但短验收若启用 MCMC 位置噪声会因 `quat_scale_to_covar_preci_fwd` 未注册失败；本次 80 步验收因此把噪声停止步设为 0，完整 MCMC 噪声/致密化仍为 `NOT_RUN`，不能据此声明长程 MCMC 已通过。真实 gs2 与历史 smoke 同配置回归、中断式 GPU checkpoint resume、真实完整 validation 的 LPIPS/画质和 8GB 长程显存门也均为 `NOT_RUN`。本阶段完成的是自有 Trainer 源码契约与真实 CUDA 小型收敛闭环，不升级为真实客户数据训练 GO。

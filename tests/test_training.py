@@ -1,0 +1,380 @@
+from __future__ import annotations
+
+import hashlib
+import importlib.util
+import json
+import tempfile
+import unittest
+from pathlib import Path
+
+import numpy as np
+from PIL import Image
+
+from cloudstudio_3dgs.data.depth_cache import sparse_depth_npz_bytes
+from cloudstudio_3dgs.data.image_sample import CropWindow
+from cloudstudio_3dgs.data.manifest import canonical_json_bytes
+from cloudstudio_3dgs.data.mask_manifest import build_per_image_masks
+from cloudstudio_3dgs.data.point_cloud import write_binary_ply
+from cloudstudio_3dgs.evaluation.splits import SplitConfig, build_split_manifest, write_split_manifest
+from cloudstudio_3dgs.geometry.lidar_projection import SparseDepthMap
+from cloudstudio_3dgs.training.backend import verify_gsplat_runtime
+from cloudstudio_3dgs.training.checkpoint import load_checkpoint, save_checkpoint
+from cloudstudio_3dgs.training.contracts import (
+    build_coordinate_transform_manifest,
+    verify_coordinate_transform_manifest,
+)
+from cloudstudio_3dgs.training.dataset import S1TrainingDataset
+from cloudstudio_3dgs.training.losses import (
+    confidence_weighted_range_l1,
+    masked_rgb_l1,
+    masked_rgb_ssim_loss,
+)
+from cloudstudio_3dgs.training.trainer import TrainerConfig, load_initialization_ply
+
+
+ROOT = Path(__file__).resolve().parents[1]
+HAS_TORCH = importlib.util.find_spec("torch") is not None
+
+
+def _sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def _dataset_fixture(recording_root: Path) -> dict:
+    cameras = []
+    for side in ("left", "right"):
+        cameras.append(
+            {
+                "camera_id": side,
+                "side": side,
+                "camera_type": "fisheye",
+                "width": 32,
+                "height": 32,
+                "intrinsic": {"fl_x": 12.0, "fl_y": 14.0, "cx": 15.5, "cy": 16.5},
+                "distortion": {
+                    "camera_model": "OPENCV_FISHEYE",
+                    "params": {"k1": 0.02, "k2": -0.003, "k3": 0.0002, "k4": 0.0},
+                },
+            }
+        )
+    images = []
+    rig_frames = []
+    for frame_index in range(2):
+        image_ids = []
+        for side in ("left", "right"):
+            image_id = f"img_{side}_{frame_index:03d}"
+            relative = Path("camera") / side / f"{frame_index:03d}.png"
+            path = recording_root / relative
+            path.parent.mkdir(parents=True, exist_ok=True)
+            pixels = np.full((32, 32, 3), 30 + frame_index * 60, dtype=np.uint8)
+            pixels[..., 1] += 10 if side == "right" else 0
+            Image.fromarray(pixels).save(path, format="PNG", optimize=False)
+            image_ids.append(image_id)
+            pose = np.eye(4)
+            pose[0, 3] = frame_index * 0.2
+            pose[1, 3] = -0.05 if side == "left" else 0.05
+            images.append(
+                {
+                    "image_id": image_id,
+                    "rig_frame_id": f"rig_{frame_index:03d}",
+                    "camera_id": side,
+                    "side": side,
+                    "timestamp_ns": 1_000_000_000 + frame_index,
+                    "path_root": "recording",
+                    "path": relative.as_posix(),
+                    "sha256": _sha256(path),
+                    "size_bytes": path.stat().st_size,
+                    "c2w": pose.tolist(),
+                }
+            )
+        rig_frames.append(
+            {
+                "rig_frame_id": f"rig_{frame_index:03d}",
+                "timestamp_ns": 1_000_000_000 + frame_index,
+                "left_image_id": image_ids[0],
+                "right_image_id": image_ids[1],
+                "image_ids": image_ids,
+                "timestamp_delta_ns": 0,
+            }
+        )
+    manifest = {
+        "schema_version": 1,
+        "coordinate_frame": "s1_local",
+        "cameras": cameras,
+        "images": images,
+        "rig_frames": rig_frames,
+    }
+    manifest["manifest_sha256"] = hashlib.sha256(canonical_json_bytes(manifest)).hexdigest()
+    return manifest
+
+
+def _write_depth_fixture(root: Path, dataset: dict, masks: dict) -> dict:
+    mask_by_id = {item["image_id"]: item for item in masks["images"]}
+    records = []
+    for image in dataset["images"]:
+        image_id = image["image_id"]
+        sparse = SparseDepthMap(
+            (32, 32),
+            np.array([15 * 32 + 15, 16 * 32 + 16], dtype=np.int32),
+            np.array([2.0, 3.0], dtype=np.float32),
+            np.array([1.0, 0.5], dtype=np.float32),
+            np.array([0, 1], dtype=np.int64),
+            np.array([1, 1], dtype=np.int32),
+        )
+        payload = sparse_depth_npz_bytes(sparse)
+        relative = f"depth/{image_id}.npz"
+        path = root / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(payload)
+        records.append(
+            {
+                "image_id": image_id,
+                "camera_id": image["camera_id"],
+                "path": relative,
+                "sha256": hashlib.sha256(payload).hexdigest(),
+                "shape": [32, 32],
+                "valid_pixels": 2,
+                "combined_mask_sha256": mask_by_id[image_id]["combined_mask_sha256"],
+            }
+        )
+    manifest = {
+        "schema_version": 1,
+        "dataset_manifest_sha256": dataset["manifest_sha256"],
+        "mask_manifest_sha256": masks["mask_manifest_sha256"],
+        "coordinate_frame": "s1_local",
+        "depth_semantics": "euclidean_ray_range_m",
+        "images": records,
+    }
+    manifest["depth_manifest_sha256"] = hashlib.sha256(canonical_json_bytes(manifest)).hexdigest()
+    (root / "depth_manifest.json").write_text(
+        json.dumps(manifest, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    return manifest
+
+
+class TrainingDatasetTests(unittest.TestCase):
+    def test_raw_fisheye_crop_masks_depth_and_intrinsics_stay_aligned(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            recording = root / "recording"
+            dataset = _dataset_fixture(recording)
+            dataset_path = root / "dataset_manifest.json"
+            dataset_path.write_text(json.dumps(dataset), encoding="utf-8")
+            masks = build_per_image_masks(dataset, root / "masks")
+            _write_depth_fixture(root / "depth-cache", dataset, masks)
+            split = build_split_manifest(
+                dataset,
+                SplitConfig(mode="manual", golden_rig_frames=1),
+                manual={"rig_000": "train", "rig_001": "val"},
+            )
+            split_path = root / "split_manifest.json"
+            write_split_manifest(split_path, split)
+            training = S1TrainingDataset(
+                dataset_manifest_path=dataset_path,
+                recording_root=recording,
+                mask_manifest_path=root / "masks" / "mask_manifest.json",
+                mask_root=root / "masks",
+                split_manifest_path=split_path,
+                split="train",
+                depth_manifest_path=root / "depth-cache" / "depth_manifest.json",
+                depth_root=root / "depth-cache",
+                factor=2,
+                crop=CropWindow(4, 6, 24, 20),
+            )
+            sample = training[0]
+
+        self.assertEqual(len(training), 2)
+        self.assertEqual(sample.image.shape, (10, 12, 3))
+        self.assertEqual(sample.rgb_mask.shape, (10, 12))
+        self.assertEqual(sample.depth_mask.shape, (10, 12))
+        self.assertGreater(int(sample.rgb_mask.sum()), int(sample.depth_mask.sum()))
+        np.testing.assert_allclose(sample.K[0], [6.0, 0.0, 5.75])
+        np.testing.assert_allclose(sample.K[1], [0.0, 7.0, 5.25])
+        np.testing.assert_allclose(sample.radial_coeffs, [0.02, -0.003, 0.0002, 0.0])
+        self.assertEqual(training.identity["split"], "train")
+        self.assertIsNotNone(training.identity["depth_manifest_sha256"])
+
+    def test_source_image_tampering_fails_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            recording = root / "recording"
+            dataset = _dataset_fixture(recording)
+            dataset_path = root / "dataset_manifest.json"
+            dataset_path.write_text(json.dumps(dataset), encoding="utf-8")
+            masks = build_per_image_masks(dataset, root / "masks")
+            split = build_split_manifest(
+                dataset,
+                SplitConfig(mode="manual", golden_rig_frames=1),
+                manual={"rig_000": "train", "rig_001": "val"},
+            )
+            split_path = root / "split_manifest.json"
+            write_split_manifest(split_path, split)
+            training = S1TrainingDataset(
+                dataset_manifest_path=dataset_path,
+                recording_root=recording,
+                mask_manifest_path=root / "masks" / "mask_manifest.json",
+                mask_root=root / "masks",
+                split_manifest_path=split_path,
+                split="train",
+            )
+            first_record = training._records[0][0]
+            (recording / first_record["path"]).write_bytes(b"tampered")
+            with self.assertRaisesRegex(ValueError, "source image SHA256 mismatch"):
+                training[0]
+
+
+class TrainingContractTests(unittest.TestCase):
+    def test_checked_in_baseline_keeps_real_and_full_mcmc_gates_open(self) -> None:
+        baseline = json.loads(
+            (ROOT / "baselines" / "gs2_trainer.baseline.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        lock_path = ROOT / "upstream" / "cloudstudio_trainer.lock.json"
+        self.assertEqual(baseline["runtime"]["lock_file_sha256"], _sha256(lock_path))
+        self.assertFalse(baseline["runtime"]["source_patch_required"])
+        self.assertGreater(
+            baseline["synthetic_cuda"]["loss_improvement_fraction"], 0.20
+        )
+        self.assertEqual(
+            baseline["acceptance"][
+                "full_mcmc_noise_and_densification_windows_runtime"
+            ],
+            "not_run_missing_registered_cuda_operator",
+        )
+        self.assertEqual(
+            baseline["acceptance"]["real_gs2_same_config_smoke_regression"],
+            "not_run",
+        )
+
+    def test_coordinate_manifest_is_signed_identity_without_normalization(self) -> None:
+        manifest = build_coordinate_transform_manifest("a" * 64)
+        self.assertEqual(
+            verify_coordinate_transform_manifest(manifest),
+            manifest["coordinate_transform_sha256"],
+        )
+        self.assertFalse(manifest["normalization_applied"])
+        manifest["model_frame"] = "normalized"
+        with self.assertRaisesRegex(ValueError, "SHA256 mismatch"):
+            verify_coordinate_transform_manifest(manifest)
+
+    def test_trainer_contract_uses_direct_fisheye_3dgut_mcmc_without_viewer(self) -> None:
+        config = TrainerConfig.from_dict(
+            {
+                "run_id": "contract",
+                "dataset_manifest": "dataset.json",
+                "recording_root": "recording",
+                "mask_manifest": "masks.json",
+                "mask_root": "masks",
+                "split_manifest": "split.json",
+                "initialization_ply": "sparse_pc.ply",
+                "output_dir": "run",
+                "gsplat_lock": "upstream/cloudstudio_trainer.lock.json",
+            }
+        )
+        config.validate()
+        contract = config.contract_dict()
+        self.assertEqual(contract["renderer"]["camera_model"], "fisheye")
+        self.assertEqual(contract["renderer"]["range_mode"], "RGB-Ed")
+        self.assertEqual(contract["strategy"]["name"], "MCMC")
+        self.assertFalse(contract["viewer"])
+        source = (ROOT / "cloudstudio_3dgs" / "training" / "trainer.py").read_text(encoding="utf-8")
+        self.assertNotIn("S1_KEEP_FISHEYE", source)
+        self.assertNotIn("simple_trainer", source)
+        self.assertNotIn("examples.datasets", source)
+
+    def test_unpatched_lock_is_required_before_importing_runtime(self) -> None:
+        lock = json.loads((ROOT / "upstream" / "cloudstudio_trainer.lock.json").read_text(encoding="utf-8"))
+        self.assertIsNone(lock["patch"])
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "patched.json"
+            lock["patch"] = "local.patch"
+            path.write_text(json.dumps(lock), encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "must not require"):
+                verify_gsplat_runtime(path)
+
+    def test_canonical_initialization_ply_round_trips(self) -> None:
+        xyz = np.array([[0, 0, 1], [1, 0, 2], [0, 1, 3], [1, 1, 4]], dtype=np.float32)
+        rgb = np.array([[255, 0, 0], [0, 255, 0], [0, 0, 255], [128, 128, 128]], dtype=np.uint8)
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "sparse_pc.ply"
+            write_binary_ply(path, xyz, rgb)
+            actual_xyz, actual_rgb = load_initialization_ply(path)
+        np.testing.assert_array_equal(actual_xyz, xyz)
+        np.testing.assert_array_equal(actual_rgb, rgb)
+
+
+@unittest.skipUnless(HAS_TORCH, "torch is an optional training dependency")
+class TorchTrainingContractTests(unittest.TestCase):
+    def test_masked_losses_ignore_invalid_pixels_and_use_range_confidence(self) -> None:
+        import torch
+
+        target = torch.zeros((2, 2, 3))
+        prediction = target.clone()
+        prediction[0, 0] = 1.0
+        mask = torch.tensor([[False, True], [True, True]])
+        self.assertEqual(float(masked_rgb_l1(prediction, target, mask)), 0.0)
+        self.assertAlmostEqual(float(masked_rgb_ssim_loss(target, target, mask)), 0.0, places=6)
+        predicted_range = torch.tensor([[2.5, 7.0], [4.0, 1.0]])
+        target_range = torch.tensor([[2.0, 3.0], [4.0, 5.0]])
+        confidence = torch.tensor([[1.0, 0.0], [0.5, 1.0]])
+        depth_mask = torch.tensor([[True, True], [True, False]])
+        self.assertAlmostEqual(
+            float(confidence_weighted_range_l1(predicted_range, target_range, confidence, depth_mask)),
+            1.0 / 3.0,
+            places=6,
+        )
+
+    def test_checkpoint_resume_restores_state_and_rejects_identity_change(self) -> None:
+        import torch
+
+        params = torch.nn.ParameterDict(
+            {"value": torch.nn.Parameter(torch.tensor([2.0, 3.0]))}
+        )
+        optimizers = {"value": torch.optim.Adam([params["value"]], lr=0.1)}
+        generator = torch.Generator().manual_seed(7)
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "checkpoint.pt"
+            save_checkpoint(
+                path,
+                step=12,
+                identity={"dataset": "a"},
+                params=params,
+                optimizers=optimizers,
+                strategy_state={"counter": torch.tensor([3])},
+                sampler_state=generator.get_state(),
+                training_state={
+                    "initial_loss": 1.0,
+                    "best_loss": 0.5,
+                    "last_metrics": {"loss": 0.6},
+                },
+            )
+            params = torch.nn.ParameterDict(
+                {"value": torch.nn.Parameter(torch.tensor([0.0]))}
+            )
+            optimizers = {"value": torch.optim.Adam([params["value"]], lr=0.1)}
+            step, strategy, sampler_state, training_state = load_checkpoint(
+                path,
+                expected_identity={"dataset": "a"},
+                params=params,
+                optimizers=optimizers,
+                map_location="cpu",
+            )
+            with self.assertRaisesRegex(ValueError, "identity"):
+                load_checkpoint(
+                    path,
+                    expected_identity={"dataset": "b"},
+                    params=params,
+                    optimizers=optimizers,
+                    map_location="cpu",
+                )
+        self.assertEqual(step, 12)
+        self.assertEqual(params["value"].tolist(), [2.0, 3.0])
+        self.assertEqual(int(strategy["counter"].item()), 3)
+        self.assertTrue(torch.equal(sampler_state, generator.get_state()))
+        self.assertEqual(training_state["best_loss"], 0.5)
+
+
+if __name__ == "__main__":
+    unittest.main()

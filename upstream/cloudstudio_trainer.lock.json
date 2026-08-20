@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "package": "gsplat",
+  "repo": "https://github.com/nerfstudio-project/gsplat.git",
+  "commit": "f2d14131483644e9977451b6403f6f0b73e6637f",
+  "version": "1.5.3",
+  "python": "3.12",
+  "torch": "2.11.0+cu128",
+  "cuda": "12.8",
+  "cuda_arch_list": "12.0",
+  "patch": null,
+  "source_policy": "clean_vcs_commit"
+}

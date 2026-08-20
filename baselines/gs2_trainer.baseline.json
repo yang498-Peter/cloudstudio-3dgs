@@ -1,0 +1,53 @@
+{
+  "schema_version": 1,
+  "baseline_id": "cloudstudio-owned-gsplat-trainer-pr11",
+  "runtime": {
+    "gsplat_commit": "f2d14131483644e9977451b6403f6f0b73e6637f",
+    "gsplat_version": "1.5.3",
+    "lock_file_sha256": "6c29e71410dc0c090fc164bb81258eafb764b2277a91e74a8673282317eb6799",
+    "source_kind": "clean_vcs",
+    "source_patch_required": false,
+    "gpu": "NVIDIA GeForce RTX 5070 Laptop GPU"
+  },
+  "synthetic_cuda": {
+    "steps": 80,
+    "raw_fisheye": true,
+    "with_ut": true,
+    "with_eval3d": true,
+    "range_mode": "RGB-Ed",
+    "mcmc_strategy_instantiated": true,
+    "mcmc_noise_disabled_for_short_convergence_run": true,
+    "initial_loss": 0.39925122261047363,
+    "final_loss": 0.18698598444461823,
+    "best_loss": 0.18309736251831055,
+    "loss_improvement_fraction": 0.5316583297553239,
+    "final_lidar_range_l1_m": 0.1318141520023346,
+    "peak_vram_bytes": 8731648,
+    "run_manifest_sha256": "68f1061a6137de82d1941d3fa6aa5a8c7c5ee7c6b4b811c993e1b50e2abe91dd",
+    "quality_report_sha256": "0549481ca45c43ea3cd241f47fb26cb6d7e622dde63c44e80ce64b7c5d7b9211",
+    "validation": {
+      "frames": 2,
+      "masked_psnr_db_mean": 13.075830194372344,
+      "masked_ssim_mean": 0.8919850518195735,
+      "lidar_range_mae_m_mean": 0.10584819875657558,
+      "lidar_range_rmse_m_mean": 0.10690304504466706,
+      "lpips": "not_run"
+    }
+  },
+  "acceptance": {
+    "owned_dataset_and_trainer": true,
+    "raw_fisheye_3dgut_cuda_backward": true,
+    "per_image_mask_and_crop": true,
+    "lidar_euclidean_ray_range_loss": true,
+    "explicit_split_and_masked_evaluation": true,
+    "coordinate_transform_manifest": true,
+    "checkpoint_state_and_identity_unit_test": true,
+    "peak_vram_measured": true,
+    "s1_keep_fisheye_not_required": true,
+    "clean_locked_upstream_without_patch": true,
+    "full_mcmc_noise_and_densification_windows_runtime": "not_run_missing_registered_cuda_operator",
+    "interrupted_gpu_checkpoint_resume": "not_run",
+    "real_gs2_same_config_smoke_regression": "not_run",
+    "real_gs2_formal_masked_quality": "not_run"
+  }
+}

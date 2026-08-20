@@ -37,13 +37,16 @@ cloudstudio-3dgs/
 │   ├── build_ba_match_graph.py # 仅训练集的双目/时序/空间回环匹配图
 │   ├── run_hloc_aliked_lightglue.py # 锁定运行时的 ALIKED + LightGlue
 │   ├── run_hloc_triangulation.py # 已知 POS 位姿几何验证与三角化
-│   └── run_rig_ba.py          # 固定双相机 Rig、POS 先验和分阶段 BA
+│   ├── run_rig_ba.py          # 固定双相机 Rig、POS 先验和分阶段 BA
+│   ├── train_gsplat.py        # CloudStudio 自有 raw-fisheye 3DGUT/MCMC Trainer
+│   └── run_synthetic_training_acceptance.py # 真实 CUDA 合成收敛验收
 ├── converter/     # S1 数据 → gsplat/nerfstudio 可读格式的转换器
 │   ├── s1_common.py           # 共享:确定性 voxel 初始化、位姿换算(c2w_gl→w2c_cv)、PLY/四元数
 │   ├── s1_to_colmap.py        # → COLMAP 格式(gsplat simple_trainer 输入,已实测)
 │   └── s1_to_nerfstudio.py    # → nerfstudio transforms.json 格式
 ├── cloudstudio_3dgs/           # 产品侧正式 Python 模块
-│   └── data/                    # 确定性数据 Manifest 与 S1 输入读取
+│   ├── data/                    # 确定性数据 Manifest 与 S1 输入读取
+│   └── training/                # 自有 Dataset/Trainer、3DGUT、MCMC、损失与 checkpoint
 ├── experiments/   # 实验记录(runs.csv 指标矩阵)
 └── NOTICE.md
 ```
@@ -141,6 +144,16 @@ python tools/run_rig_ba.py `
   --through-stage stage_1 `
   --position-prior-stddev-m 0.05
 
+# PR-11：直接调用锁定 gsplat API；配置 JSON 必须给出 dataset/mask/split/init/output 等路径
+# raw fisheye、3DGUT、MCMC、LiDAR ray-range、逐图 mask/crop 和完整 validation 评测均由自有模块负责
+python tools/train_gsplat.py --config G:\3dgs-runs\gs2_pr11_config.json
+
+# 用锁定提交的干净 gsplat checkout 做小型真实 CUDA 收敛验收
+python tools/run_synthetic_training_acceptance.py `
+  --output G:\3dgs-runs\pr11_synthetic `
+  --gsplat-lock upstream\cloudstudio_trainer.lock.json `
+  --steps 80
+
 # 重投影验证(全项目最高优先级检查点):
 # 把解算点云投影回原始鱼眼图,输出多种坐标约定的叠加图供目视比对
 python tools/reproject_check.py `
@@ -169,6 +182,11 @@ CUDA 训练环境另需 NVIDIA 驱动、CUDA Toolkit 12.8、VS2022 BuildTools、
 Python 3.12 和 PyTorch 2.11.0+cu128。执行 `scripts\bootstrap.ps1 -Training` 时，
 脚本会按 `upstream/gsplat.lock.json` 检出精确上游提交、校验补丁 SHA256、检查补丁可应用性，
 再调用 Windows 构建脚本。不要直接安装 gsplat 的 `examples\requirements.txt`，它可能替换已选定的 CUDA PyTorch。
+
+PR-11 新 Trainer 使用独立的 `upstream/cloudstudio_trainer.lock.json`：只接受精确版本且无源码修改的
+干净 VCS checkout，不 import 或修改
+`examples/simple_trainer.py`、`examples/datasets/colmap.py`，也不读取 `S1_KEEP_FISHEYE`。
+历史 smoke 补丁链仍保留作对照，不能当作新 Trainer 的运行时证据。
 
 当前历史训练数据集仍包含约 1,019,218 个初始化点，超过旧 smoke 的 1,000,000 个 Gaussian 上限，
 所以 `baselines/gs2_smoke.baseline.json` 继续标记为阻塞。PR-04 已从同一真实 LAS 独立生成
@@ -204,6 +222,7 @@ Python 3.12 和 PyTorch 2.11.0+cu128。执行 `scripts\bootstrap.ps1 -Training` 
 - [x] 路线 PR-08:Rig Frame 切分、泄漏告警、masked PSNR/SSIM/LPIPS、深度指标和 HTML 报告
 - [x] 路线 PR-09:关键帧 SE(3) 修正、鲁棒过滤、Rig 时间插值、基线保持和默认位姿回退门
 - [x] 路线 PR-10:训练集匹配图、锁定 ALIKED/LightGlue/HLoc、固定 Rig + POS 先验分阶段 BA 与回退报告；真实特征/BA 验收仍为 `NOT_RUN`
+- [x] 路线 PR-11(源码/合成 CUDA):自有 raw-fisheye Dataset/Trainer、3DGUT、逐图 mask/crop、LiDAR ray-range、显式 split、checkpoint、坐标 Manifest、masked evaluation 和 peak VRAM；真实 gs2 同配置回归、完整 MCMC Windows 算子和中断式 GPU resume 仍为 `NOT_RUN`
 - [x] Phase 1(前置):重投影验证初步通过(gs2 场景目视贴合,约定=c2w_gl),
       正式 Gate 需再覆盖 2–3 场景 + 逐点误差统计
 - [x] Phase 1(前置):COLMAP 数据集导出实测通过(gs2_keyframes:174 图/2 相机/101 万点,

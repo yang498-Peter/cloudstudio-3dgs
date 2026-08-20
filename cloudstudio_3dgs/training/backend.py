@@ -1,0 +1,185 @@
+"""Direct gsplat API adapter for raw-fisheye 3DGUT and MCMC."""
+
+from __future__ import annotations
+
+import importlib.metadata
+import json
+import subprocess
+from pathlib import Path
+from typing import Any
+
+
+def verify_gsplat_runtime(lock_path: Path) -> dict[str, Any]:
+    """Require the locked version and, for VCS installs, the exact clean commit."""
+    lock = json.loads(Path(lock_path).read_text(encoding="utf-8"))
+    if lock.get("patch") not in (None, ""):
+        raise ValueError("CloudStudio trainer lock must not require a gsplat source patch")
+    if lock.get("source_policy") != "clean_vcs_commit":
+        raise ValueError("CloudStudio trainer currently requires clean_vcs_commit provenance")
+    installed_version = importlib.metadata.version("gsplat")
+    if installed_version != str(lock["version"]):
+        raise RuntimeError(
+            f"gsplat version mismatch: expected {lock['version']}, got {installed_version}"
+        )
+    import gsplat
+
+    module_path = Path(gsplat.__file__).resolve()
+    repository = next((parent for parent in module_path.parents if (parent / ".git").exists()), None)
+    evidence: dict[str, Any] = {
+        "package": "gsplat",
+        "version": installed_version,
+        "module_path": str(module_path),
+        "locked_commit": str(lock["commit"]),
+    }
+    if repository is None:
+        raise RuntimeError("gsplat must be imported from a clean checkout at the locked commit")
+    head = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=repository,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    dirty = subprocess.run(
+        ["git", "status", "--porcelain"],
+        cwd=repository,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    if head != str(lock["commit"]):
+        raise RuntimeError(f"gsplat commit mismatch: expected {lock['commit']}, got {head}")
+    if dirty:
+        raise RuntimeError("gsplat checkout has local modifications")
+    evidence.update(
+        {
+            "source_kind": "clean_vcs",
+            "repository_path": str(repository),
+            "commit": head,
+            "clean": True,
+        }
+    )
+    return evidence
+
+
+class GsplatBackend:
+    """Small adapter whose only renderer dependency is the public gsplat API."""
+
+    def __init__(
+        self,
+        *,
+        device: str,
+        cap_max: int,
+        lock_path: Path,
+        mcmc_config: dict[str, Any] | None = None,
+    ) -> None:
+        self.runtime = verify_gsplat_runtime(lock_path)
+        import torch
+        from gsplat import rasterization
+        from gsplat.strategy import MCMCStrategy
+
+        self.torch = torch
+        self.rasterization = rasterization
+        self.device = device
+        self.strategy = MCMCStrategy(
+            cap_max=cap_max,
+            verbose=False,
+            **({} if mcmc_config is None else mcmc_config),
+        )
+        noise_stop = -1 if mcmc_config is None else int(
+            mcmc_config.get("noise_injection_stop_iter", -1)
+        )
+        if noise_stop != 0:
+            from gsplat.cuda._backend import _C  # noqa: F401
+
+            if not hasattr(torch.ops.gsplat, "quat_scale_to_covar_preci_fwd"):
+                raise RuntimeError(
+                    "locked gsplat CUDA runtime has no quat_scale_to_covar_preci_fwd; "
+                    "full MCMC noise/densification cannot start"
+                )
+
+    def initialize(
+        self,
+        xyz: Any,
+        rgb: Any,
+        *,
+        init_scale_m: float,
+        learning_rates: dict[str, float],
+    ) -> tuple[Any, dict[str, Any], Any]:
+        torch = self.torch
+        points = torch.as_tensor(xyz, dtype=torch.float32, device=self.device)
+        colors = torch.as_tensor(rgb, dtype=torch.float32, device=self.device) / 255.0
+        if len(points) < 4:
+            raise ValueError("at least four initialization points are required")
+        if init_scale_m <= 0.0:
+            raise ValueError("init_scale_m must be positive")
+        quaternions = torch.zeros((len(points), 4), device=self.device)
+        quaternions[:, 0] = 1.0
+        params = torch.nn.ParameterDict(
+            {
+                "means": torch.nn.Parameter(points),
+                "scales": torch.nn.Parameter(
+                    torch.full((len(points), 3), float(init_scale_m), device=self.device).log()
+                ),
+                "quats": torch.nn.Parameter(quaternions),
+                "opacities": torch.nn.Parameter(
+                    torch.full((len(points),), 0.1, device=self.device).logit()
+                ),
+                "colors": torch.nn.Parameter(colors.clamp(1e-4, 1.0 - 1e-4).logit()),
+            }
+        )
+        optimizers = {
+            name: torch.optim.Adam(
+                [{"params": [parameter], "lr": float(learning_rates[name]), "name": name}],
+                eps=1e-15,
+            )
+            for name, parameter in params.items()
+        }
+        self.strategy.check_sanity(params, optimizers)
+        return params, optimizers, self.strategy.initialize_state()
+
+    def render(self, params: Any, sample: Any, *, with_range: bool) -> tuple[Any, Any, Any, dict[str, Any]]:
+        torch = self.torch
+        c2w = torch.as_tensor(sample.c2w, device=self.device)[None]
+        K = torch.as_tensor(sample.K, device=self.device)[None]
+        radial = torch.as_tensor(sample.radial_coeffs, device=self.device)[None]
+        render, alpha, info = self.rasterization(
+            means=params["means"],
+            quats=params["quats"],
+            scales=params["scales"],
+            opacities=torch.sigmoid(params["opacities"]),
+            colors=torch.sigmoid(params["colors"]),
+            viewmats=torch.linalg.inv(c2w),
+            Ks=K,
+            width=sample.width,
+            height=sample.height,
+            packed=False,
+            render_mode="RGB-Ed" if with_range else "RGB",
+            camera_model="fisheye",
+            radial_coeffs=radial,
+            with_ut=True,
+            with_eval3d=True,
+            global_z_order=False,
+            rasterize_mode="classic",
+        )
+        rgb = render[0, ..., :3]
+        range_m = render[0, ..., 3] if with_range else None
+        return rgb, range_m, alpha[0, ..., 0], info
+
+    def strategy_post_step(
+        self,
+        params: Any,
+        optimizers: dict[str, Any],
+        state: Any,
+        *,
+        step: int,
+        info: dict[str, Any],
+    ) -> None:
+        self.strategy.step_post_backward(
+            params=params,
+            optimizers=optimizers,
+            state=state,
+            step=step,
+            info=info,
+            lr=optimizers["means"].param_groups[0]["lr"],
+        )
