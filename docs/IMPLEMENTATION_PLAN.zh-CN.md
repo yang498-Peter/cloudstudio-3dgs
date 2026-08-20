@@ -386,4 +386,4 @@ PR-05 只建立逐图数据结构和几何 valid 基线；真实人物/车辆/�
 
 真实 gs2 绑定 Manifest `54c01ab...3563ee3` 与 PR-08 split 后，得到 557 个训练 Rig / 1,114 张训练图，validation 使用数为 0。共生成 6,787 对：双目 557、左右时序各 2,218、左右空间回环各 897；签名图内同时固化完整 train/validation ID 集并由 verifier 复查。两次 JSON 和 HLoc pairs 输出均逐字节一致，文件 SHA256 分别为 `8e57cac4...f5e938`、`fba14a66...6a892`，内部匹配图 SHA256 为 `367e1d20...54ef6a`。
 
-当前机器只有 PyCOLMAP 4.1.1，尚未安装锁定的 HLoc/LightGlue 可选运行时，因此真实 ALIKED 特征、LightGlue 匹配、HLoc 三角化和真实 BA 均为 `NOT_RUN`。真实重投影 p50 改善至少 30% 的验收门没有证据，不能声明 PR-10 真实候选已接受；本阶段当前完成的是源码契约、真实训练匹配图和合成求解闭环。
+当前机器只有 PyCOLMAP 4.1.1，尚未安装锁定的 HLoc/LightGlue 可选运行时，因此真实 ALIKED 特征、LightGlue 匹配、HLoc 三角化和真实 BA 均为 `NOT_RUN`。本机 PyCOLMAP/Ceres 合成测试实际执行；CPU CI 不安装该可选包时显式 `SKIPPED`，其余契约测试仍必须通过。真实重投影 p50 改善至少 30% 的验收门没有证据，不能声明 PR-10 真实候选已接受；本阶段当前完成的是源码契约、真实训练匹配图和合成求解闭环。

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import importlib.util
 import json
 import tempfile
 import unittest
@@ -114,6 +115,10 @@ def synthetic_problem():
     return reconstruction, dataset
 
 
+@unittest.skipUnless(
+    importlib.util.find_spec("pycolmap"),
+    "optional pycolmap runtime is not installed",
+)
 class PycolmapRigBaTests(unittest.TestCase):
     def test_rig_ba_cli_publishes_checked_synthetic_candidate(self) -> None:
         reconstruction, dataset = synthetic_problem()
