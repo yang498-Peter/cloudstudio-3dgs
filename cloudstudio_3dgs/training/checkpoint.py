@@ -18,6 +18,8 @@ def save_checkpoint(
     strategy_state: Any,
     sampler_state: Any,
     training_state: dict[str, Any],
+    auxiliary_params: dict[str, Any] | None = None,
+    auxiliary_optimizers: dict[str, Any] | None = None,
 ) -> None:
     import torch
 
@@ -32,6 +34,16 @@ def save_checkpoint(
         "strategy_state": strategy_state,
         "sampler_state": sampler_state,
         "training_state": training_state,
+        "auxiliary_params": {
+            name: value.detach().clone()
+            for name, value in ({} if auxiliary_params is None else auxiliary_params).items()
+        },
+        "auxiliary_optimizers": {
+            name: optimizer.state_dict()
+            for name, optimizer in (
+                {} if auxiliary_optimizers is None else auxiliary_optimizers
+            ).items()
+        },
         "torch_rng_state": torch.get_rng_state(),
         "cuda_rng_state": torch.cuda.get_rng_state_all() if torch.cuda.is_available() else None,
     }
@@ -55,6 +67,8 @@ def load_checkpoint(
     params: Any,
     optimizers: dict[str, Any],
     map_location: str,
+    auxiliary_params: dict[str, Any] | None = None,
+    auxiliary_optimizers: dict[str, Any] | None = None,
 ) -> tuple[int, Any, Any, dict[str, Any]]:
     import torch
 
@@ -76,6 +90,24 @@ def load_checkpoint(
         if name not in payload["optimizers"]:
             raise ValueError(f"checkpoint has no optimizer state for {name}")
         optimizer.load_state_dict(payload["optimizers"][name])
+    expected_auxiliary = {} if auxiliary_params is None else auxiliary_params
+    checkpoint_auxiliary = payload.get("auxiliary_params", {})
+    if set(checkpoint_auxiliary) != set(expected_auxiliary):
+        raise ValueError("checkpoint auxiliary parameter names do not match the trainer")
+    with torch.no_grad():
+        for name, parameter in expected_auxiliary.items():
+            value = checkpoint_auxiliary[name]
+            if parameter.shape != value.shape:
+                raise ValueError(f"checkpoint auxiliary parameter shape mismatch for {name}")
+            parameter.copy_(value.to(map_location))
+    expected_auxiliary_optimizers = (
+        {} if auxiliary_optimizers is None else auxiliary_optimizers
+    )
+    checkpoint_auxiliary_optimizers = payload.get("auxiliary_optimizers", {})
+    if set(checkpoint_auxiliary_optimizers) != set(expected_auxiliary_optimizers):
+        raise ValueError("checkpoint auxiliary optimizer names do not match the trainer")
+    for name, optimizer in expected_auxiliary_optimizers.items():
+        optimizer.load_state_dict(checkpoint_auxiliary_optimizers[name])
     torch.set_rng_state(payload["torch_rng_state"].cpu())
     if torch.cuda.is_available() and payload.get("cuda_rng_state") is not None:
         torch.cuda.set_rng_state_all(payload["cuda_rng_state"])

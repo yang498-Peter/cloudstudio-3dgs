@@ -194,6 +194,9 @@ class TrainingDatasetTests(unittest.TestCase):
         np.testing.assert_allclose(sample.radial_coeffs, [0.02, -0.003, 0.0002, 0.0])
         self.assertEqual(training.identity["split"], "train")
         self.assertIsNotNone(training.identity["depth_manifest_sha256"])
+        np.testing.assert_allclose(
+            training.rig_frame_centers()["rig_000"], [0.0, 0.0, 0.0]
+        )
 
     def test_source_image_tampering_fails_closed(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -295,6 +298,13 @@ class TrainingContractTests(unittest.TestCase):
         self.assertTrue(
             baseline["acceptance"]["partial_depth_manifest_fails_closed"]
         )
+        self.assertTrue(
+            baseline["acceptance"]["rig_pose_shared_delta_preserves_baseline"]
+        )
+        self.assertEqual(
+            baseline["acceptance"]["real_gs2_rig_pose_refinement_ablation"],
+            "not_run_training_paused",
+        )
 
     def test_coordinate_manifest_is_signed_identity_without_normalization(self) -> None:
         manifest = build_coordinate_transform_manifest("a" * 64)
@@ -327,11 +337,56 @@ class TrainingContractTests(unittest.TestCase):
         self.assertEqual(contract["renderer"]["camera_model"], "fisheye")
         self.assertEqual(contract["renderer"]["range_mode"], "RGB-Ed")
         self.assertEqual(contract["strategy"]["name"], "MCMC")
+        self.assertFalse(contract["rig_pose_refinement"]["enabled"])
         self.assertFalse(contract["viewer"])
         source = (ROOT / "cloudstudio_3dgs" / "training" / "trainer.py").read_text(encoding="utf-8")
         self.assertNotIn("S1_KEEP_FISHEYE", source)
         self.assertNotIn("simple_trainer", source)
         self.assertNotIn("examples.datasets", source)
+
+    def test_rig_pose_refinement_contract_is_explicit_and_validated(self) -> None:
+        config = TrainerConfig.from_dict(
+            {
+                "run_id": "pose-contract",
+                "dataset_manifest": "dataset.json",
+                "recording_root": "recording",
+                "mask_manifest": "masks.json",
+                "mask_root": "masks",
+                "split_manifest": "split.json",
+                "initialization_ply": "sparse_pc.ply",
+                "output_dir": "run",
+                "gsplat_lock": "upstream/cloudstudio_trainer.lock.json",
+                "lidar_range_weight": 0.0,
+                "rig_pose_refinement": {
+                    "enabled": True,
+                    "learning_rate": 0.0002,
+                    "minimum_loss_improvement_fraction": 0.02,
+                },
+            }
+        )
+        config.validate()
+        contract = config.contract_dict()["rig_pose_refinement"]
+        self.assertTrue(contract["enabled"])
+        self.assertEqual(contract["learning_rate"], 0.0002)
+        self.assertEqual(contract["validation_pose_policy"], "never_optimized")
+
+        invalid = TrainerConfig.from_dict(
+            {
+                "run_id": "pose-invalid",
+                "dataset_manifest": "dataset.json",
+                "recording_root": "recording",
+                "mask_manifest": "masks.json",
+                "mask_root": "masks",
+                "split_manifest": "split.json",
+                "initialization_ply": "sparse_pc.ply",
+                "output_dir": "run",
+                "gsplat_lock": "upstream/cloudstudio_trainer.lock.json",
+                "lidar_range_weight": 0.0,
+                "rig_pose_refinement": {"enabled": True, "maximum_translation_m": 0.0},
+            }
+        )
+        with self.assertRaisesRegex(ValueError, "maximum_translation_m"):
+            invalid.validate()
 
     def test_positive_lidar_weight_requires_depth_inputs(self) -> None:
         config = TrainerConfig.from_dict(

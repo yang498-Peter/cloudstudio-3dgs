@@ -196,6 +196,53 @@ class S1TrainingDataset:
             },
         }
 
+    @property
+    def rig_frame_ids(self) -> tuple[str, ...]:
+        """Return selected Rig Frames once, preserving split-manifest order."""
+        result: list[str] = []
+        seen: set[str] = set()
+        for image, _, _ in self._records:
+            rig_frame_id = str(image.get("rig_frame_id") or "")
+            if not rig_frame_id:
+                raise ValueError(f"image {image['image_id']} has no Rig Frame")
+            if rig_frame_id not in seen:
+                result.append(rig_frame_id)
+                seen.add(rig_frame_id)
+        return tuple(result)
+
+    def indices_for_rig_frames(self, maximum_rig_frames: int) -> tuple[int, ...]:
+        if maximum_rig_frames <= 0:
+            raise ValueError("maximum_rig_frames must be positive")
+        rig_frame_ids = self.rig_frame_ids
+        if len(rig_frame_ids) <= maximum_rig_frames:
+            selected = set(rig_frame_ids)
+        else:
+            positions = np.linspace(
+                0, len(rig_frame_ids) - 1, maximum_rig_frames, dtype=np.int64
+            )
+            selected = {rig_frame_ids[int(index)] for index in positions}
+        return tuple(
+            index
+            for index, (image, _, _) in enumerate(self._records)
+            if str(image.get("rig_frame_id") or "") in selected
+        )
+
+    def rig_frame_centers(self) -> dict[str, np.ndarray]:
+        """Use the mean camera center as a stable rotation pivot for each Rig Frame."""
+        grouped: dict[str, list[np.ndarray]] = {}
+        for image, _, _ in self._records:
+            rig_frame_id = str(image.get("rig_frame_id") or "")
+            c2w = np.asarray(image.get("c2w"), dtype=np.float64)
+            if not rig_frame_id or c2w.shape != (4, 4) or not np.all(np.isfinite(c2w)):
+                raise ValueError(f"image {image['image_id']} has no valid Rig pose")
+            grouped.setdefault(rig_frame_id, []).append(c2w[:3, 3])
+        if set(grouped) != set(self.rig_frame_ids):
+            raise ValueError("training split Rig Frame centers are incomplete")
+        return {
+            rig_frame_id: np.mean(np.stack(centers), axis=0)
+            for rig_frame_id, centers in grouped.items()
+        }
+
     def __len__(self) -> int:
         return len(self._records)
 

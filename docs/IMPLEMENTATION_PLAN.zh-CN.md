@@ -1,6 +1,6 @@
 # cloudstudio-3dgs 持续优化实施计划
 
-更新时间：2026-08-20
+更新时间：2026-08-21
 
 ## 1. 目标与执行规则
 
@@ -501,3 +501,36 @@ PR-05/PR-07 的历史 mask 与 12 图 partial depth 绑定早期 dataset Manifes
 真实 Manifest 在内存构建出 `1238/1238` 个有位姿图像和 2 个相机，pairs 涉及的 1114 个名称缺失数为 0。三角化签名 `3010f470...3ef7`、模型 SHA `a68ebb3c...4687`，注册 `1114/1114` 图、765,590 点和 3,083,168 个观测，平均 track length `4.02718`、平均重投影误差 `1.55971 px`。
 
 Stage 1 签名 `b91b8b74...e07b`，p50 改善 `32.0293%` 并通过；Stage 2 签名 `ca6bc08b...dfc9`，p50 改善 `32.2688%`、p95 改善，全部 Gate PASS，选中模型 SHA `64282ec6...1c04`。Stage 3 签名 `558be49c...3d4c`，右相机禁止发布的 `k3/k4` 最大变化 `5.353e-4`，`camera_parameter_bounds=FAIL`、`candidate_accepted=false`、`published=before`。因此 Stage 2 是当前真实 BA 候选；这不等于真实 3DGS 训练或画质验收，训练仍暂缓。
+
+## 14. 当前阶段记录：PR-12
+
+### 问题现象
+
+PR-11 Trainer 固定使用 Manifest 位姿，无法在图像监督下对残余 Rig pose 误差做小范围联合优化。若直接给左右图片各自独立的 pose 参数，会破坏物理双目基线；若只判断训练是否结束而不比较原始/候选位姿，零改善或过大修正也可能被错误发布。旋转若直接绕全局原点应用，在离原点较远的局部坐标中还会把微小角度放大成伪平移。
+
+### 修改文件
+
+- `cloudstudio_3dgs/training/rig_pose.py`
+- `cloudstudio_3dgs/training/dataset.py`
+- `cloudstudio_3dgs/training/backend.py`
+- `cloudstudio_3dgs/training/checkpoint.py`
+- `cloudstudio_3dgs/training/trainer.py`
+- `tests/test_rig_pose_refinement.py`
+- `tests/test_training.py`
+- `baselines/gs2_trainer.baseline.json`
+- `README.md`
+
+### 修改内容
+
+- PR-12 为显式 opt-in。每个训练 Rig Frame 只创建一个 `[tx, ty, tz, rx, ry, rz]` 可微增量；同一增量同时左乘左右 `c2w`，validation Rig 不创建参数也不参与候选比较。
+- 每个 Rig 以左右原始相机中心的均值作为旋转枢轴，因此旋转不会绕全局原点制造与场景坐标大小相关的平移；增量中的 translation 直接等于 Rig 中心位移。
+- 增加平移和轴角旋转 L2 先验、独立 Adam 学习率、最大平移/旋转边界和最小损失改善阈值；所有字段进入 Trainer 签名契约与 checkpoint 身份。
+- checkpoint 可选保存和恢复 pose 参数及其 optimizer state，不把 pose optimizer 交给只管理 Gaussian 的 MCMC Strategy。
+- 训练结束后冻结 Gaussian，在确定性的训练 Rig 子集上分别用原始位姿与候选位姿计算同口径 RGB/LiDAR 监督损失。只有改善达到阈值且修正不越界才发布 refined；否则 pose 参数清零，最终 checkpoint 和签名 run Manifest 明确发布 original。
+- 报告保存逐 Rig 候选平移/轴角、p50/p95/max、比较损失与三个 Gate；固定基线由“同一世界左乘修正”在构造上保证。
+
+### 验证方式与当前状态
+
+先加入缺模块红测试，确认旧代码无法满足 PR-12；实现后 `tests.test_rig_pose_refinement + tests.test_training` 共 `17/17` 通过，提交前完整测试集 `103/103` 通过且 Python 源码编译、当前阶段 diff 与 UTF-8 乱码检查均通过。CPU Torch 合成优化从零参数恢复已知 6DoF 修正，最终矩阵损失低于初值的 `1e-4`；大坐标 Rig 的左右相对位姿在 float32 数值容差内不变，Rig 中心位移等于显式 translation。测试还覆盖每 Rig 去重共享、未知 Rig 硬失败、无改善回退、越界回退、嵌套配置验证，以及 pose 参数和 optimizer 的 checkpoint 恢复。
+
+本阶段没有启动真实训练。真实 gs2 的 on/off 消融、masked PSNR/SSIM/LPIPS、LiDAR range、清晰度与接缝评审均保持 `NOT_RUN`；在这些证据完成前，只声明 PR-12 源码与 CPU 合成闭环，不声明画质提升。

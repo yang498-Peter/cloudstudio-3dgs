@@ -138,9 +138,20 @@ class GsplatBackend:
         self.strategy.check_sanity(params, optimizers)
         return params, optimizers, self.strategy.initialize_state()
 
-    def render(self, params: Any, sample: Any, *, with_range: bool) -> tuple[Any, Any, Any, dict[str, Any]]:
+    def render(
+        self,
+        params: Any,
+        sample: Any,
+        *,
+        with_range: bool,
+        c2w_override: Any | None = None,
+    ) -> tuple[Any, Any, Any, dict[str, Any]]:
         torch = self.torch
-        c2w = torch.as_tensor(sample.c2w, device=self.device)[None]
+        c2w = torch.as_tensor(
+            sample.c2w if c2w_override is None else c2w_override,
+            dtype=torch.float32,
+            device=self.device,
+        )[None]
         K = torch.as_tensor(sample.K, device=self.device)[None]
         radial = torch.as_tensor(sample.radial_coeffs, device=self.device)[None]
         render, alpha, info = self.rasterization(

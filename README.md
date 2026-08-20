@@ -167,6 +167,19 @@ python tools/run_rig_ba.py `
 # raw fisheye、3DGUT、MCMC、LiDAR ray-range、逐图 mask/crop 和完整 validation 评测均由自有模块负责
 python tools/train_gsplat.py --config G:\3dgs-runs\gs2_pr11_config.json
 
+# PR-12 是显式 opt-in；把以下对象加入 Trainer 配置才启用 Rig-aware 位姿微调。
+# 每个训练 Rig Frame 只有一个共享增量，validation 位姿永不优化；候选不改善或越界时自动清零回退。
+# "rig_pose_refinement": {
+#   "enabled": true,
+#   "learning_rate": 0.0001,
+#   "translation_prior_weight": 0.001,
+#   "rotation_prior_weight": 0.001,
+#   "maximum_translation_m": 0.25,
+#   "maximum_rotation_deg": 2.0,
+#   "minimum_loss_improvement_fraction": 0.01,
+#   "evaluation_rig_frames": 32
+# }
+
 # 用锁定提交的干净 gsplat checkout 做小型真实 CUDA 收敛验收
 python tools/run_synthetic_training_acceptance.py `
   --output G:\3dgs-runs\pr11_synthetic `
@@ -242,6 +255,7 @@ PR-11 新 Trainer 使用独立的 `upstream/cloudstudio_trainer.lock.json`：只
 - [x] 路线 PR-09:关键帧 SE(3) 修正、鲁棒过滤、Rig 时间插值、基线保持和默认位姿回退门
 - [x] 路线 PR-10:训练集匹配图、锁定 ALIKED/LightGlue/HLoc、固定 Rig + POS 先验分阶段 BA 与回退报告；真实 1114 图/6787 对已三角化为 765,590 点，Stage 2 BA 通过并选用，Stage 3 因越权改变 k3/k4 被 fail-closed 拒绝
 - [x] 路线 PR-11(源码/合成 CUDA):自有 raw-fisheye Dataset/Trainer、3DGUT、逐图 mask/crop、LiDAR ray-range、显式 split、checkpoint、坐标 Manifest、masked evaluation 和 peak VRAM；真实 gs2 同配置回归、完整 MCMC Windows 算子和中断式 GPU resume 仍为 `NOT_RUN`
+- [x] 路线 PR-12(源码/CPU 合成):每个训练 Rig Frame 一个共享 6DoF 增量、Rig 中心枢轴、平移/旋转先验、checkpoint 恢复、固定基线与无改善/越界自动回退；真实 gs2 训练消融仍为 `NOT_RUN`（训练暂缓）
 - [x] Phase 1(前置):重投影验证初步通过(gs2 场景目视贴合,约定=c2w_gl),
       正式 Gate 需再覆盖 2–3 场景 + 逐点误差统计
 - [x] Phase 1(前置):COLMAP 数据集导出实测通过(gs2_keyframes:174 图/2 相机/101 万点,

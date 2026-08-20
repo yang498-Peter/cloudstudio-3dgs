@@ -44,11 +44,16 @@
     "explicit_split_and_masked_evaluation": true,
     "coordinate_transform_manifest": true,
     "checkpoint_state_and_identity_unit_test": true,
+    "rig_pose_refinement_source_and_synthetic": true,
+    "rig_pose_checkpoint_auxiliary_state": true,
+    "rig_pose_shared_delta_preserves_baseline": true,
+    "rig_pose_no_improvement_falls_back": true,
     "peak_vram_measured": true,
     "s1_keep_fisheye_not_required": true,
     "clean_locked_upstream_without_patch": true,
     "full_mcmc_noise_and_densification_windows_runtime": "not_run_missing_registered_cuda_operator",
     "interrupted_gpu_checkpoint_resume": "not_run",
+    "real_gs2_rig_pose_refinement_ablation": "not_run_training_paused",
     "real_gs2_same_config_smoke_regression": "not_run",
     "real_gs2_formal_masked_quality": "not_run"
   }

@@ -27,6 +27,12 @@ from cloudstudio_3dgs.training.losses import (
     masked_rgb_l1,
     masked_rgb_ssim_loss,
 )
+from cloudstudio_3dgs.training.rig_pose import (
+    RigPoseRefinementConfig,
+    RigPoseRefiner,
+    build_pose_refinement_report,
+    disabled_pose_refinement_report,
+)
 
 
 @dataclass(frozen=True)
@@ -59,6 +65,9 @@ class TrainerConfig:
     mcmc_refine_every: int = 100
     mcmc_noise_injection_stop_iter: int = -1
     mcmc_noise_lr: float = 500_000.0
+    rig_pose_refinement: RigPoseRefinementConfig = field(
+        default_factory=RigPoseRefinementConfig
+    )
     learning_rates: dict[str, float] = field(
         default_factory=lambda: {
             "means": 1.6e-4,
@@ -89,6 +98,10 @@ class TrainerConfig:
         }
         crop_value = value.get("crop")
         crop = None if crop_value is None else CropWindow(**crop_value)
+        pose_value = value.get("rig_pose_refinement", {})
+        if not isinstance(pose_value, dict):
+            raise ValueError("rig_pose_refinement must be an object")
+        pose_refinement = RigPoseRefinementConfig(**pose_value)
         options = {
             key: value[key]
             for key in (
@@ -111,7 +124,13 @@ class TrainerConfig:
             )
             if key in value
         }
-        return cls(run_id=str(value["run_id"]), crop=crop, **paths, **options)
+        return cls(
+            run_id=str(value["run_id"]),
+            crop=crop,
+            rig_pose_refinement=pose_refinement,
+            **paths,
+            **options,
+        )
 
     def validate(self) -> None:
         if not self.run_id or any(character in self.run_id for character in "\\/\0"):
@@ -142,6 +161,7 @@ class TrainerConfig:
             raise ValueError("MCMC refine interval must be positive and noise LR non-negative")
         if self.mcmc_noise_injection_stop_iter < -1:
             raise ValueError("MCMC noise stop must be -1 or non-negative")
+        self.rig_pose_refinement.validate()
         if (self.depth_manifest is None) != (self.depth_root is None):
             raise ValueError("depth_manifest and depth_root must be provided together")
         if self.lidar_range_weight > 0.0 and self.depth_manifest is None:
@@ -165,7 +185,7 @@ class TrainerConfig:
     def contract_dict(self) -> dict[str, Any]:
         return {
             "schema_version": 1,
-            "algorithm_version": "cloudstudio_gsplat_trainer_v1",
+            "algorithm_version": "cloudstudio_gsplat_trainer_v2",
             "seed": self.seed,
             "max_steps": self.max_steps,
             "factor": self.factor,
@@ -203,6 +223,7 @@ class TrainerConfig:
                 "noise_injection_stop_iter": self.mcmc_noise_injection_stop_iter,
                 "noise_lr": self.mcmc_noise_lr,
             },
+            "rig_pose_refinement": self.rig_pose_refinement.to_dict(),
             "viewer": False,
         }
 
@@ -287,6 +308,83 @@ def _tensor_sample(sample: TrainingSample, torch: Any, device: str) -> dict[str,
             }
         )
     return result
+
+
+def _render_supervision_loss(
+    *,
+    backend: GsplatBackend,
+    params: Any,
+    sample: TrainingSample,
+    tensors: dict[str, Any],
+    config: TrainerConfig,
+    c2w_override: Any | None = None,
+) -> tuple[Any, Any, Any, Any, dict[str, Any]]:
+    has_range = "range_m" in tensors and config.lidar_range_weight > 0.0
+    rendered, rendered_range, _, info = backend.render(
+        params,
+        sample,
+        with_range=has_range,
+        c2w_override=c2w_override,
+    )
+    l1 = masked_rgb_l1(rendered, tensors["rgb"], tensors["rgb_mask"])
+    ssim = masked_rgb_ssim_loss(rendered, tensors["rgb"], tensors["rgb_mask"])
+    loss = config.rgb_l1_weight * l1 + config.rgb_ssim_weight * ssim
+    range_loss = None
+    if has_range:
+        assert rendered_range is not None
+        range_loss = confidence_weighted_range_l1(
+            rendered_range,
+            tensors["range_m"],
+            tensors["confidence"],
+            tensors["depth_mask"],
+        )
+        loss = loss + config.lidar_range_weight * range_loss
+    return loss, l1, ssim, range_loss, info
+
+
+def _compare_pose_candidate(
+    *,
+    backend: GsplatBackend,
+    params: Any,
+    dataset: S1TrainingDataset,
+    refiner: RigPoseRefiner,
+    config: TrainerConfig,
+) -> tuple[float, float, int]:
+    """Compare original and candidate poses on the same frozen model and samples."""
+    torch = backend.torch
+    before: list[Any] = []
+    after: list[Any] = []
+    indices = dataset.indices_for_rig_frames(
+        config.rig_pose_refinement.evaluation_rig_frames
+    )
+    with torch.no_grad():
+        for index in indices:
+            sample = dataset[index]
+            tensors = _tensor_sample(sample, torch, config.device)
+            original_loss, _, _, _, _ = _render_supervision_loss(
+                backend=backend,
+                params=params,
+                sample=sample,
+                tensors=tensors,
+                config=config,
+            )
+            refined_loss, _, _, _, _ = _render_supervision_loss(
+                backend=backend,
+                params=params,
+                sample=sample,
+                tensors=tensors,
+                config=config,
+                c2w_override=refiner.apply(sample.rig_frame_id, sample.c2w),
+            )
+            before.append(original_loss.detach())
+            after.append(refined_loss.detach())
+    if not before:
+        raise ValueError("pose refinement comparison selected no training images")
+    return (
+        float(torch.stack(before).mean().cpu()),
+        float(torch.stack(after).mean().cpu()),
+        len(indices),
+    )
 
 
 def _save_evaluation_artifacts(
@@ -423,6 +521,20 @@ def train(config: TrainerConfig, *, backend_factory: Any = GsplatBackend) -> dic
         init_scale_m=config.init_scale_m,
         learning_rates=config.learning_rates,
     )
+    pose_refiner = None
+    pose_optimizer = None
+    auxiliary_params: dict[str, Any] = {}
+    auxiliary_optimizers: dict[str, Any] = {}
+    if config.rig_pose_refinement.enabled:
+        pose_refiner = RigPoseRefiner(
+            trainset.rig_frame_ids,
+            config=config.rig_pose_refinement,
+            device=config.device,
+            rig_frame_centers=trainset.rig_frame_centers(),
+        )
+        pose_optimizer = pose_refiner.make_optimizer()
+        auxiliary_params["rig_pose_deltas"] = pose_refiner.deltas
+        auxiliary_optimizers["rig_pose_deltas"] = pose_optimizer
     completed_steps = 0
     last_metrics: dict[str, Any] = {}
     initial_loss: float | None = None
@@ -434,6 +546,8 @@ def train(config: TrainerConfig, *, backend_factory: Any = GsplatBackend) -> dic
             params=params,
             optimizers=optimizers,
             map_location=config.device,
+            auxiliary_params=auxiliary_params,
+            auxiliary_optimizers=auxiliary_optimizers,
         )
         sampler.set_state(sampler_state.cpu())
         last_metrics = dict(training_state["last_metrics"])
@@ -449,25 +563,30 @@ def train(config: TrainerConfig, *, backend_factory: Any = GsplatBackend) -> dic
         index = int(torch.randint(len(trainset), (1,), generator=sampler).item())
         sample = trainset[index]
         tensors = _tensor_sample(sample, torch, config.device)
-        has_range = "range_m" in tensors and config.lidar_range_weight > 0.0
-        rendered, rendered_range, _, info = backend.render(params, sample, with_range=has_range)
-        l1 = masked_rgb_l1(rendered, tensors["rgb"], tensors["rgb_mask"])
-        ssim = masked_rgb_ssim_loss(rendered, tensors["rgb"], tensors["rgb_mask"])
-        loss = config.rgb_l1_weight * l1 + config.rgb_ssim_weight * ssim
-        range_loss = None
-        if has_range:
-            assert rendered_range is not None
-            range_loss = confidence_weighted_range_l1(
-                rendered_range,
-                tensors["range_m"],
-                tensors["confidence"],
-                tensors["depth_mask"],
-            )
-            loss = loss + config.lidar_range_weight * range_loss
+        c2w_override = (
+            None
+            if pose_refiner is None
+            else pose_refiner.apply(sample.rig_frame_id, sample.c2w)
+        )
+        loss, l1, ssim, range_loss, info = _render_supervision_loss(
+            backend=backend,
+            params=params,
+            sample=sample,
+            tensors=tensors,
+            config=config,
+            c2w_override=c2w_override,
+        )
+        pose_prior = None
+        if pose_refiner is not None:
+            pose_prior = pose_refiner.prior_loss()
+            loss = loss + pose_prior
         loss.backward()
         for optimizer in optimizers.values():
             optimizer.step()
             optimizer.zero_grad(set_to_none=True)
+        if pose_optimizer is not None:
+            pose_optimizer.step()
+            pose_optimizer.zero_grad(set_to_none=True)
         backend.strategy_post_step(
             params,
             optimizers,
@@ -482,6 +601,9 @@ def train(config: TrainerConfig, *, backend_factory: Any = GsplatBackend) -> dic
             "lidar_range_l1_m": None
             if range_loss is None
             else float(range_loss.detach().cpu()),
+            "rig_pose_prior": None
+            if pose_prior is None
+            else float(pose_prior.detach().cpu()),
         }
         if initial_loss is None:
             initial_loss = last_metrics["loss"]
@@ -501,11 +623,49 @@ def train(config: TrainerConfig, *, backend_factory: Any = GsplatBackend) -> dic
                     "initial_loss": initial_loss,
                     "best_loss": best_loss,
                 },
+                auxiliary_params=auxiliary_params,
+                auxiliary_optimizers=auxiliary_optimizers,
             )
 
     torch.cuda.synchronize(config.device)
     duration_seconds = time.perf_counter() - started
     peak_vram_bytes = int(torch.cuda.max_memory_allocated(config.device))
+    pose_report = disabled_pose_refinement_report(config.rig_pose_refinement)
+    if pose_refiner is not None:
+        loss_before, loss_after, evaluated_images = _compare_pose_candidate(
+            backend=backend,
+            params=params,
+            dataset=trainset,
+            refiner=pose_refiner,
+            config=config,
+        )
+        pose_report = build_pose_refinement_report(
+            pose_refiner.rig_frame_ids,
+            pose_refiner.snapshot(),
+            loss_before=loss_before,
+            loss_after=loss_after,
+            config=config.rig_pose_refinement,
+        )
+        pose_report["comparison"]["evaluated_images"] = evaluated_images
+        if not pose_report["candidate_accepted"]:
+            pose_refiner.zero_()
+        save_checkpoint(
+            checkpoint_path,
+            step=config.max_steps,
+            identity=checkpoint_identity,
+            params=params,
+            optimizers=optimizers,
+            strategy_state=strategy_state,
+            sampler_state=sampler.get_state(),
+            training_state={
+                "last_metrics": last_metrics,
+                "initial_loss": initial_loss,
+                "best_loss": best_loss,
+                "rig_pose_refinement": pose_report,
+            },
+            auxiliary_params=auxiliary_params,
+            auxiliary_optimizers=auxiliary_optimizers,
+        )
     frames = _save_evaluation_artifacts(
         backend=backend,
         params=params,
@@ -525,6 +685,7 @@ def train(config: TrainerConfig, *, backend_factory: Any = GsplatBackend) -> dic
             "trainer_contract": contract,
             "gsplat_runtime": backend.runtime,
             "initialization_ply_sha256": initialization_sha256,
+            "rig_pose_refinement": pose_report,
             "frames": frames,
             "training": {
                 "status": "COMPLETE",
