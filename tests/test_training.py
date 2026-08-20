@@ -232,7 +232,11 @@ class TrainingContractTests(unittest.TestCase):
             )
         )
         lock_path = ROOT / "upstream" / "cloudstudio_trainer.lock.json"
-        self.assertEqual(baseline["runtime"]["lock_file_sha256"], _sha256(lock_path))
+        lock = json.loads(lock_path.read_text(encoding="utf-8"))
+        lock_semantic_sha256 = hashlib.sha256(canonical_json_bytes(lock)).hexdigest()
+        self.assertEqual(
+            baseline["runtime"]["lock_semantic_sha256"], lock_semantic_sha256
+        )
         self.assertFalse(baseline["runtime"]["source_patch_required"])
         self.assertGreater(
             baseline["synthetic_cuda"]["loss_improvement_fraction"], 0.20

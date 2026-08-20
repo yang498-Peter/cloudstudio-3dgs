@@ -4,7 +4,7 @@
   "runtime": {
     "gsplat_commit": "f2d14131483644e9977451b6403f6f0b73e6637f",
     "gsplat_version": "1.5.3",
-    "lock_file_sha256": "6c29e71410dc0c090fc164bb81258eafb764b2277a91e74a8673282317eb6799",
+    "lock_semantic_sha256": "fcdc9e2a7f38b5346c45dd8f42866606383516895238d24179f9db8635168c43",
     "source_kind": "clean_vcs",
     "source_patch_required": false,
     "gpu": "NVIDIA GeForce RTX 5070 Laptop GPU"

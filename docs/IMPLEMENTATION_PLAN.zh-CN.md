@@ -424,6 +424,8 @@ PR-05 只建立逐图数据结构和几何 valid 基线；真实人物/车辆/�
 
 九项新增测试覆盖逐图原始 artifact 篡改失败、raw fisheye/crop/factor 内参、RGB 与稀疏 depth mask 分离、坐标 Manifest 签名、3DGUT/MCMC/无 Viewer 配置契约、无 patch lock、规范 PLY、基线开放门和 loss；checkpoint 测试还从不同 Gaussian shape 恢复参数，并拒绝身份变化。当前完整 CPU/可选 Torch 测试集通过，源码编译通过。
 
+第一次远端 CPU CI 发现 Trainer lock 的基线使用了 Windows 工作区 CRLF 文件字节 SHA，而 Git checkout 在 CI 中是 LF，导致内容相同却错误失败。基线和测试现改为对解析后的规范 JSON 计算语义 SHA256，仍能检测字段篡改，同时不受 Git 换行策略影响；该修复不改变训练行为，也没有重跑 GPU 训练。
+
 在锁定提交 `f2d1413...` 的独立干净 worktree 上，RTX 5070 Laptop GPU 实际执行 80 步 raw-fisheye 3DGUT CUDA 前向/反向与 `RGB-Ed` LiDAR loss。总 loss 从 `0.399251` 降到 `0.186986`，改善 `53.1658%`，best 为 `0.183097`；末步 LiDAR range L1 为 `0.131814 m`，训练 peak VRAM 为 `8,731,648 bytes`。完整两个 validation 视角生成 masked 质量报告，PSNR mean `13.0758 dB`、SSIM mean `0.891985`、LiDAR range MAE/RMSE mean `0.105848/0.106903 m`；LPIPS 未执行，所以报告诚实保持 `PARTIAL`。签名 run Manifest SHA256 为 `68f1061a...be91dd`，质量报告 SHA256 为 `0549481c...7b9211`，详细证据锁入 `baselines/gs2_trainer.baseline.json`。
 
 当前 Windows 安装可执行 3DGUT 渲染核，但短验收若启用 MCMC 位置噪声会因 `quat_scale_to_covar_preci_fwd` 未注册失败；本次 80 步验收因此把噪声停止步设为 0，完整 MCMC 噪声/致密化仍为 `NOT_RUN`，不能据此声明长程 MCMC 已通过。真实 gs2 与历史 smoke 同配置回归、中断式 GPU checkpoint resume、真实完整 validation 的 LPIPS/画质和 8GB 长程显存门也均为 `NOT_RUN`。本阶段完成的是自有 Trainer 源码契约与真实 CUDA 小型收敛闭环，不升级为真实客户数据训练 GO。
