@@ -13,7 +13,7 @@
 | T-3DGS | 瞬态剔除备选 | 需核验 | 未引入 |
 | laspy | LAS 点云读取(工具脚本) | MIT | 使用中 |
 | numpy / Pillow | 数值/图像 | BSD / MIT-CMU | 使用中 |
-| SciPy | QA 距离变换与二维近邻查询 | BSD-3-Clause | 使用中 |
+| SciPy | QA 距离变换、近邻查询与可选点云局部 PCA | BSD-3-Clause | 使用中 |
 | SpotLessSplats | 瞬态剔除思路 | 无完整官方开源 → 自实现思路,不抄代码 | — |
 
 CloudStudio 本体为 BSD-2-Clause(自家),本工程只读取其产生的数据文件,不链接其代码。

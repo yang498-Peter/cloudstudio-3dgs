@@ -1,0 +1,31 @@
+{
+  "schema_version": 1,
+  "baseline_id": "gs2-lidar-init-pr04",
+  "config": "configs/lidar_init_8gb.json",
+  "source": {
+    "file_name": "colorized.las",
+    "coordinate_frame": "s1_local",
+    "size_bytes": 1023660519,
+    "sha256": "784295bb2cdb3e09164e01147ab85dd55fb3a01cad1b31fd86edb1811693328b",
+    "point_count": 28435004
+  },
+  "output": {
+    "point_count": 376906,
+    "voxel_size": 0.1195999139997516,
+    "sha256_xyz_rgb": "a179db00e0b127f5423c1f8ef7294f8e81cb8423bdd9bacd7ae224322c6ceb24",
+    "ply_sha256": "66fbe6205f5fb8ebde104ef13a3735a9a0d091607ffa9a67936c7586eafc42df",
+    "rgb_mode": "uint16_scaled",
+    "rgb_black_fraction": 0.008047099276742742
+  },
+  "coverage": {
+    "voxel_coverage_ratio": 1.0,
+    "stride_coverage_ratio": 0.3731858871973383,
+    "coverage_gain": 0.6268141128026616
+  },
+  "acceptance": {
+    "same_seed_second_run_byte_identical": true,
+    "point_count_at_or_below_target": true,
+    "point_count_below_cap": true,
+    "gpu_training_with_this_ply": "not_run"
+  }
+}

@@ -2,9 +2,19 @@
 
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 
 import numpy as np
+
+REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
+if str(REPOSITORY_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPOSITORY_ROOT))
+
+from cloudstudio_3dgs.data.point_cloud import (
+    VoxelInitializationConfig,
+    build_lidar_initialization,
+)
 
 # OpenGL(nerfstudio) camera axes -> OpenCV camera axes basis flip
 GL_TO_CV = np.diag([1.0, -1.0, -1.0])
@@ -16,41 +26,34 @@ def load_transforms(run_dir: Path) -> dict:
     return json.loads((run_dir / "transforms.json").read_text(encoding="utf-8"))
 
 
-def subsample_las(run_dir: Path, n_target: int) -> tuple[np.ndarray, np.ndarray]:
-    """Stride-subsample the solver point cloud to ~n_target points.
-
-    Returns (xyz float64 [N,3], rgb uint8 [N,3]). Handles both plain and
-    project-prefixed LAS names (newer solver runs emit <project>_colorized.las).
-    """
-    import laspy
-
-    candidates = ["colorized.las", "colorized.laz", "uncolorized.las"]
-    las_path = None
-    for name in candidates:
-        if (run_dir / name).exists():
-            las_path = run_dir / name
-            break
-    if las_path is None:
-        prefixed = sorted(run_dir.glob("*_colorized.las")) or sorted(run_dir.glob("*_uncolorized.las"))
-        if prefixed:
-            las_path = prefixed[0]
-    if las_path is None:
-        raise FileNotFoundError(f"no LAS point cloud found in {run_dir}")
-
-    xyzs, rgbs = [], []
-    with laspy.open(las_path) as reader:
-        stride = max(1, reader.header.point_count // n_target)
-        for chunk in reader.chunk_iterator(2_000_000):
-            xyzs.append(np.column_stack([chunk.x, chunk.y, chunk.z])[::stride])
-            dims = set(chunk.point_format.dimension_names)
-            if {"red", "green", "blue"} <= dims:
-                rgb16 = np.column_stack([chunk.red, chunk.green, chunk.blue])[::stride]
-                rgbs.append((rgb16 >> 8).astype(np.uint8))
-            else:
-                rgbs.append(np.full((len(xyzs[-1]), 3), 180, dtype=np.uint8))
-    xyz, rgb = np.concatenate(xyzs), np.concatenate(rgbs)
-    print(f"point cloud: {las_path.name} -> {len(xyz):,} points (stride {stride})")
-    return xyz, rgb
+def subsample_las(
+    run_dir: Path,
+    n_target: int,
+    *,
+    cap_max: int = 1_000_000,
+    voxel_size: float | str = "auto",
+    edge_preservation_ratio: float = 0.2,
+    seed: int = 0,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Build deterministic, budget-safe voxel representatives from local LAS."""
+    result = build_lidar_initialization(
+        run_dir,
+        VoxelInitializationConfig(
+            target_points=n_target,
+            cap_max=cap_max,
+            voxel_size=voxel_size,
+            edge_preservation_ratio=edge_preservation_ratio,
+            seed=seed,
+        ),
+    )
+    output = result.report["output"]
+    coverage = result.report["coverage"]
+    print(
+        f"point cloud: {result.report['source']['file_name']} -> "
+        f"{len(result.xyz):,} voxel points at {output['voxel_size']:.6g} m "
+        f"(coverage gain vs stride {coverage['coverage_gain']:.3%})"
+    )
+    return result.xyz, result.rgb
 
 
 def write_ply(path: Path, xyz: np.ndarray, rgb: np.ndarray) -> None:

@@ -27,9 +27,10 @@ cloudstudio-3dgs/
 ├── docs/          # 计划、数据格式规格、数据清单
 ├── tools/         # 独立工具脚本
 │   ├── inspect_recording.py   # 体检一条 S1 记录(标定/图像/位姿/点云是否齐全)
-│   └── reproject_check.py     # Phase 1 硬门槛:点云投影到鱼眼图叠加显示,验证标定+位姿+坐标约定
+│   ├── reproject_check.py     # Phase 1 硬门槛:点云投影到鱼眼图叠加显示,验证标定+位姿+坐标约定
+│   └── build_lidar_init.py    # 确定性 voxel 初始化、预算和覆盖率报告、可选 PCA
 ├── converter/     # S1 数据 → gsplat/nerfstudio 可读格式的转换器
-│   ├── s1_common.py           # 共享:LAS 降采样、位姿换算(c2w_gl→w2c_cv)、PLY/四元数
+│   ├── s1_common.py           # 共享:确定性 voxel 初始化、位姿换算(c2w_gl→w2c_cv)、PLY/四元数
 │   ├── s1_to_colmap.py        # → COLMAP 格式(gsplat simple_trainer 输入,已实测)
 │   └── s1_to_nerfstudio.py    # → nerfstudio transforms.json 格式
 ├── cloudstudio_3dgs/           # 产品侧正式 Python 模块
@@ -56,6 +57,12 @@ python -m cloudstudio_3dgs.evaluation.data_qa `
   --run G:\S1\2026-06-17_12-40-48gs2\process\2026-06-17_12-40-48gs2_3 `
   --output G:\3dgs-datasets\gs2_qa
 
+# 确定性 LiDAR 初始化；默认 40 万目标，严格小于 100 万 Gaussian 上限
+python tools/build_lidar_init.py `
+  --run G:\S1\2026-06-17_12-40-48gs2\process\2026-06-17_12-40-48gs2_3 `
+  --output G:\3dgs-datasets\gs2_lidar_init `
+  --config configs/lidar_init_8gb.json
+
 # 重投影验证(全项目最高优先级检查点):
 # 把解算点云投影回原始鱼眼图,输出多种坐标约定的叠加图供目视比对
 python tools/reproject_check.py `
@@ -67,7 +74,8 @@ python tools/reproject_check.py `
 python converter/s1_to_colmap.py `
   --run-dir  G:\S1\2026-06-17_12-40-48gs2\process\2026-06-17_12-40-48gs2_3 `
   --raw-dir  G:\S1\2026-06-17_12-40-48gs2 `
-  --out-dir  G:\3dgs-datasets\gs2_keyframes
+  --out-dir  G:\3dgs-datasets\gs2_keyframes `
+  --init-points 400000
 ```
 
 ## 可复现环境基线
@@ -84,8 +92,10 @@ Python 3.12 和 PyTorch 2.11.0+cu128。执行 `scripts\bootstrap.ps1 -Training` 
 脚本会按 `upstream/gsplat.lock.json` 检出精确上游提交、校验补丁 SHA256、检查补丁可应用性，
 再调用 Windows 构建脚本。不要直接安装 gsplat 的 `examples\requirements.txt`，它可能替换已选定的 CUDA PyTorch。
 
-当前历史数据集包含约 1,019,218 个初始化点，超过旧 smoke 的 1,000,000 个 Gaussian 上限。
-因此 `baselines/gs2_smoke.baseline.json` 明确标记为阻塞；在 PR-04 重新生成点云前，不能把该配置作为有效画质基线。
+当前历史训练数据集仍包含约 1,019,218 个初始化点，超过旧 smoke 的 1,000,000 个 Gaussian 上限，
+所以 `baselines/gs2_smoke.baseline.json` 继续标记为阻塞。PR-04 已从同一真实 LAS 独立生成
+376,906 点的新初始化 PLY，结果锁定在 `baselines/gs2_lidar_init.baseline.json`；只有把新 PLY 接入训练数据集并完成 GPU smoke 后，
+才能解除训练基线的阻塞状态。
 
 ## 关键事实(已用真实数据核验,详见 S1_DATA_FORMAT.md)
 
@@ -110,6 +120,7 @@ Python 3.12 和 PyTorch 2.11.0+cu128。执行 `scripts\bootstrap.ps1 -Training` 
 - [x] 路线 PR-01:确定性数据 Manifest、内容哈希、原子写出、缺失输入硬失败
 - [x] 路线 PR-02:记录级标定、619 对真实左右 Rig、固定外参与量化诊断
 - [x] 路线 PR-03:定量数据 QA、JSON/HTML/叠加图、可配置 fail-closed 门槛
+- [x] 路线 PR-04:确定性 voxel LiDAR 初始化、RGB 位深识别、点数预算和 stride 覆盖率对照
 - [x] Phase 1(前置):重投影验证初步通过(gs2 场景目视贴合,约定=c2w_gl),
       正式 Gate 需再覆盖 2–3 场景 + 逐点误差统计
 - [x] Phase 1(前置):COLMAP 数据集导出实测通过(gs2_keyframes:174 图/2 相机/101 万点,

@@ -12,6 +12,13 @@ cap_max = 1000000
 normalize_world_space = false
 keep_fisheye_distortion = true
 
+[initialization]
+algorithm = "deterministic_voxel_grid_v1"
+target_points = 400000
+voxel_size = "auto"
+edge_preservation_ratio = 0.2
+seed = 0
+
 [input]
 dataset = "data/gs2_keyframes"
 coordinate_frame = "s1_local"

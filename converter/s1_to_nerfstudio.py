@@ -7,7 +7,7 @@ normalizer, not a SfM replacement:
   1. frames: fix file_path separators, point them at the raw camera/ images,
      add camera_model=OPENCV_FISHEYE, optionally rewrite transform_matrix into
      the target convention (set --pose-convention from reproject_check results).
-  2. point cloud: subsample colorized.las to --init-points and write PLY with
+  2. point cloud: voxelize colorized.las to --init-points and write PLY with
      RGB, referenced as ply_file_path (gsplat/nerfstudio init).
   3. output dir: transforms.json + sparse_pc.ply + images/ (symlink or copy).
 
@@ -17,7 +17,7 @@ with OpenGL/nerfstudio axes (c2w_gl), i.e. passthrough. See docs/S1_DATA_FORMAT.
 
 Usage:
     python converter/s1_to_nerfstudio.py --run-dir <process/run> --raw-dir <recording> \
-        --out-dir <dataset_out> [--init-points 1000000] [--copy-images]
+        --out-dir <dataset_out> [--init-points 400000] [--copy-images]
 """
 
 from __future__ import annotations
@@ -51,7 +51,12 @@ def main() -> int:
     ap.add_argument("--run-dir", required=True, type=Path)
     ap.add_argument("--raw-dir", required=True, type=Path)
     ap.add_argument("--out-dir", required=True, type=Path)
-    ap.add_argument("--init-points", type=int, default=1_000_000)
+    ap.add_argument("--init-points", type=int, default=400_000)
+    ap.add_argument("--cap-max", type=int, default=1_000_000)
+    ap.add_argument("--voxel-size", default="auto",
+                    help="'auto' or a positive voxel size in metres")
+    ap.add_argument("--edge-preservation-ratio", type=float, default=0.2)
+    ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--pose-convention", default="c2w_gl",
                     choices=["c2w_cv", "c2w_gl", "w2c_cv", "w2c_gl"],
                     help="verified c2w_gl for solver transforms.json (2026-07-02); "
@@ -84,7 +89,15 @@ def main() -> int:
             "transform_matrix": c2w.tolist(),
         })
 
-    xyz, rgb = subsample_las(args.run_dir, args.init_points)
+    voxel_size = "auto" if args.voxel_size == "auto" else float(args.voxel_size)
+    xyz, rgb = subsample_las(
+        args.run_dir,
+        args.init_points,
+        cap_max=args.cap_max,
+        voxel_size=voxel_size,
+        edge_preservation_ratio=args.edge_preservation_ratio,
+        seed=args.seed,
+    )
     write_ply(args.out_dir / "sparse_pc.ply", xyz, rgb)
 
     out = {

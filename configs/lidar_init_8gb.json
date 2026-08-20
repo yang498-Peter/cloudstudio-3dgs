@@ -1,0 +1,10 @@
+{
+  "target_points": 400000,
+  "cap_max": 1000000,
+  "voxel_size": "auto",
+  "edge_preservation_ratio": 0.2,
+  "seed": 0,
+  "chunk_size": 2000000,
+  "auto_tolerance": 0.9,
+  "auto_max_passes": 8
+}
