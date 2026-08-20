@@ -32,6 +32,8 @@ cloudstudio-3dgs/
 │   ├── s1_common.py           # 共享:LAS 降采样、位姿换算(c2w_gl→w2c_cv)、PLY/四元数
 │   ├── s1_to_colmap.py        # → COLMAP 格式(gsplat simple_trainer 输入,已实测)
 │   └── s1_to_nerfstudio.py    # → nerfstudio transforms.json 格式
+├── cloudstudio_3dgs/           # 产品侧正式 Python 模块
+│   └── data/                    # 确定性数据 Manifest 与 S1 输入读取
 ├── experiments/   # 实验记录(runs.csv 指标矩阵)
 └── NOTICE.md
 ```
@@ -41,6 +43,12 @@ cloudstudio-3dgs/
 ```powershell
 # 体检一条记录
 python tools/inspect_recording.py G:\S1\2026-06-17_12-40-48gs2
+
+# 建立正式数据清单；默认计算图片和点云内容哈希，不静默跳过缺失图片
+python -m cloudstudio_3dgs.data.manifest `
+  --recording G:\S1\2026-06-17_12-40-48gs2 `
+  --run G:\S1\2026-06-17_12-40-48gs2\process\2026-06-17_12-40-48gs2_3 `
+  --output G:\3dgs-datasets\gs2_manifest
 
 # 重投影验证(全项目最高优先级检查点):
 # 把解算点云投影回原始鱼眼图,输出多种坐标约定的叠加图供目视比对

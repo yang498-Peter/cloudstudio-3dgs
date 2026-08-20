@@ -78,3 +78,34 @@ CPU 与静态门槛可在当前机器闭环；新建空环境 bootstrap、完整
 
 远端首次 CPU CI 暴露了 Windows checkout 将补丁转为 CRLF、导致 SHA256 与本地 LF 文件不同的问题。
 修复方式是在 `.gitattributes` 中强制 `*.patch` 使用 LF，并在单元测试中同时守卫 UTF-8、无 BOM、LF 和 SHA256；补丁适用性作业本身已通过。
+
+## 4. 当前阶段记录：PR-01
+
+### 问题现象
+
+旧转换器直接从源目录生成 COLMAP 文件，没有一个稳定的数据身份层；图片身份依赖扁平化文件名，缺图时会打印并继续，输入内容、坐标语义、位姿来源和未完成的 Rig 配对也没有机器可读记录。
+
+### 修改文件
+
+- `cloudstudio_3dgs/data/schema.py`
+- `cloudstudio_3dgs/data/s1_reader.py`
+- `cloudstudio_3dgs/data/manifest.py`
+- `tests/test_dataset_manifest.py`
+- `README.md`
+
+### 修改内容
+
+- 从每条记录自己的 `info/calibration.json` 和 `ImgPose.txt` 建立确定性 Manifest。
+- 每张有位姿图片保存稳定 ID、原始相对路径、相机侧、纳秒时间戳、内容哈希、位姿来源、c2w 和后续 split/mask/depth 槽位；原始目录中没有位姿的图片单独列入 `unposed_images`。
+- 路径使用逻辑根和 POSIX 相对路径，不写入机器绝对路径；缺图、重复图、危险路径、零四元数和缺点云均立即失败。
+- 默认计算图片、标定、位姿和点云 SHA256；显式跳过大文件哈希时，必须把未计算状态写入 Manifest warnings。
+- 输出目录非空时默认拒绝；`--force` 仅原子替换 Manifest，不删除目录内其他文件。
+- PR-01 不虚构左右 Rig 配对，`rig_frame_id` 暂为空并写入 `rig_pairing_pending_pr02`；真实配对与外参统计由 PR-02 完成。
+
+### 验证方式与当前状态
+
+合成测试覆盖重复构建哈希一致、中文和空格路径、相对路径、缺图硬失败、未入位姿集图片显式报告、跳过哈希的持久警告、非空目录拒绝、原子替换且保留其他文件。
+
+真实 gs2 只读检查确认原始目录共有 1,246 张图（左右各 623），`ImgPose.txt` 只有 1,238 条有效位姿（左右各 619），两台物理相机均被识别，另 8 张原图已列入 `unposed_images`。这与旧文档“1,246 张原图”并不矛盾，但说明原图数不能直接当成可训练位姿数。
+
+默认完整内容哈希已在真实数据上执行：首次读取约 4.4GB 图片和 1,023,660,519 字节点云耗时 16.819 秒；同输入第二次耗时 4.937 秒，两个 Manifest SHA256 均为 `0e4d65b37fb682df97fb2957d4c1ac08b3e8bcaf3c680f68a74989967f56b822`，没有 `not_computed` 哈希警告。真实输出写在被 Git 忽略的 `outputs/pr01-real-manifest/`，未修改原始记录。
