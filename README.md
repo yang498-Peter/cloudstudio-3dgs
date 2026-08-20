@@ -229,7 +229,7 @@ PR-11 新 Trainer 使用独立的 `upstream/cloudstudio_trainer.lock.json`：只
 - [x] 路线 PR-07:KB4 LiDAR ray-range、前表面 z-buffer、confidence、mask 和确定性稀疏缓存；当前 Rig Manifest 的真实 `1238/1238` 全量缓存已完成并以 2/4 worker 逐文件 SHA 重放一致，Trainer 真实 CUDA depth loss 仍为 `NOT_RUN`
 - [x] 路线 PR-08:Rig Frame 切分、泄漏告警、masked PSNR/SSIM/LPIPS、深度指标和 HTML 报告
 - [x] 路线 PR-09:关键帧 SE(3) 修正、鲁棒过滤、Rig 时间插值、基线保持和默认位姿回退门
-- [x] 路线 PR-10:训练集匹配图、锁定 ALIKED/LightGlue/HLoc、固定 Rig + POS 先验分阶段 BA 与回退报告；真实特征/BA 验收仍为 `NOT_RUN`
+- [x] 路线 PR-10:训练集匹配图、锁定 ALIKED/LightGlue/HLoc、固定 Rig + POS 先验分阶段 BA 与回退报告；真实 1114 图 ALIKED + 6787 对 LightGlue 已完成并签名，真实三角化/BA 验收仍为 `NOT_RUN`
 - [x] 路线 PR-11(源码/合成 CUDA):自有 raw-fisheye Dataset/Trainer、3DGUT、逐图 mask/crop、LiDAR ray-range、显式 split、checkpoint、坐标 Manifest、masked evaluation 和 peak VRAM；真实 gs2 同配置回归、完整 MCMC Windows 算子和中断式 GPU resume 仍为 `NOT_RUN`
 - [x] Phase 1(前置):重投影验证初步通过(gs2 场景目视贴合,约定=c2w_gl),
       正式 Gate 需再覆盖 2–3 场景 + 逐点误差统计

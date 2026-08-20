@@ -49,6 +49,17 @@ class BaRuntimeLockTests(unittest.TestCase):
         self.assertEqual(baseline["real_match_graph"]["validation_images_used"], 0)
         self.assertTrue(baseline["synthetic_pycolmap_stage_1"]["candidate_accepted"])
         self.assertEqual(
+            baseline["real_aliked_lightglue"]["feature_image_count"], 1114
+        )
+        self.assertEqual(
+            baseline["real_aliked_lightglue"]["match_pair_count"], 6787
+        )
+        self.assertTrue(baseline["real_aliked_lightglue"]["cuda_used"])
+        self.assertTrue(baseline["acceptance"]["real_aliked_lightglue"])
+        self.assertEqual(
+            baseline["acceptance"]["real_hloc_triangulation"], "not_run"
+        )
+        self.assertEqual(
             baseline["acceptance"][
                 "real_reprojection_p50_improvement_at_least_30_percent"
             ],

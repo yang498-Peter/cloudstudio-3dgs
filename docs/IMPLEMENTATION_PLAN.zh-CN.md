@@ -479,4 +479,6 @@ PR-05/PR-07 的历史 mask 与 12 图 partial depth 绑定早期 dataset Manifes
 
 #### 验证方式与当前状态
 
-先运行新增定向测试和完整 CPU 回归，再用相同 image root、pairs 与输出目录执行 `--resume --require-cuda`。只有完成全部 6787 对并生成签名 `feature_runtime_manifest.json` 后，才升级真实 ALIKED/LightGlue 门；当前仍保持进行中，不把 2840 对 partial H5 当成完成证据。
+新增定向测试与完整 CPU 回归共 `95/95` 通过，GitHub Actions run `32399041352` 通过。相同 image root、pairs 与输出目录执行 `--resume --require-cuda` 后明确跳过 1114 张已完成特征，只补算剩余 3947 对；续跑约 44 分钟后完整得到 `1114/1114` 个 feature group 和 `6787/6787` 个 match group。
+
+最终签名 `feature_runtime_manifest.json` 的签名为 `e16b15de...f6ad`，文件 SHA 为 `b1a1142f...2b27`；feature H5 为 `1,357,797,328` bytes、SHA `403c0d2b...7b41`，match H5 为 `140,048,836` bytes、SHA `5f901202...5fd5`。Manifest 证明 `cuda_used=true`，HLoc `c13273b...`、LightGlue `eb42fee...` 与 PyCOLMAP `4.1.1` 均为 `PASS`。因此只把真实 ALIKED/LightGlue 门升级为完成；真实 HLoc 三角化、Rig BA、重投影改善和候选接受仍保持 `NOT_RUN`。

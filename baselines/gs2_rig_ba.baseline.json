@@ -23,6 +23,22 @@
     },
     "repeat_outputs_byte_identical": true
   },
+  "real_aliked_lightglue": {
+    "feature_runtime_manifest_sha256": "e16b15de0149929bd79b486d8d804f5314c3fb55c65692f8e52f8ce693f9f6ad",
+    "feature_runtime_manifest_file_sha256": "b1a1142f27783ad7a6394104024ab8e6c89ef82c894a543f57c281e726772b27",
+    "features_file_sha256": "403c0d2b5d127bce97d5e1156878366c5b4ceec2b630563bf54498c68ecb7b41",
+    "matches_file_sha256": "5f9012026f7e471e7a190e3e24d1350002a7ee69e381b87c1af9e480c3835fd5",
+    "feature_file_bytes": 1357797328,
+    "match_file_bytes": 140048836,
+    "feature_image_count": 1114,
+    "match_pair_count": 6787,
+    "cuda_used": true,
+    "runtime_statuses": {
+      "hloc": "PASS",
+      "lightglue": "PASS",
+      "pycolmap": "PASS"
+    }
+  },
   "synthetic_pycolmap_stage_1": {
     "solver_usable": true,
     "candidate_accepted": true,
@@ -39,7 +55,7 @@
     "known_pose_triangulation_contract": true,
     "pos_initialization_and_position_prior_contract": true,
     "fixed_stereo_rig_synthetic_ba": true,
-    "real_aliked_lightglue": "not_run",
+    "real_aliked_lightglue": true,
     "real_hloc_triangulation": "not_run",
     "real_reprojection_p50_improvement_at_least_30_percent": "not_run",
     "real_candidate_accepted": false
