@@ -75,11 +75,25 @@ python tools/build_lidar_init.py `
   --output G:\3dgs-datasets\gs2_lidar_init `
   --config configs/lidar_init_8gb.json
 
-# 为每张有位姿图片建立独立 mask 路径；PR-06/PR-07 再分别填入 static/depth-valid
+# 为每张有位姿图片建立独立几何 valid mask；人影动态层保持独立，不覆盖此 Manifest
 python tools/build_per_image_masks.py `
   --manifest G:\3dgs-datasets\gs2_manifest\dataset_manifest.json `
   --output G:\3dgs-datasets\gs2_masks `
   --theta-max-deg 95
+
+# PR-06：用官方 TorchVision 权重生成独立、签名的人影动态层；权重只从 lock 中的官方 URL 获取且不入 Git
+# 800 像素是 Mask R-CNN 原生推理尺度，最终 mask 回放到原图并外扩 12 px；左右各抽 25 张人工复核
+python tools/build_person_masks.py `
+  --manifest G:\3dgs-datasets\gs2_manifest\dataset_manifest.json `
+  --base-mask-manifest G:\3dgs-datasets\gs2_masks\mask_manifest.json `
+  --recording-root G:\S1\2026-06-17_12-40-48gs2 `
+  --weights G:\3dgs-models\maskrcnn_resnet50_fpn_v2_coco-73cbd019.pth `
+  --runtime-lock upstream\person_mask.lock.json `
+  --output G:\3dgs-datasets\gs2_person_masks `
+  --inference-max-dimension 800 `
+  --score-threshold 0.65 `
+  --dilation-pixels 12 `
+  --review-frames-per-camera 25
 
 # 从 PR-04 voxel PLY 建立逐图稀疏 LiDAR ray-range 缓存；去掉 --max-images 才是全量
 python tools/build_depth_cache.py `
@@ -163,7 +177,17 @@ python tools/run_rig_ba.py `
   --through-stage stage_1 `
   --position-prior-stddev-m 0.05
 
-# PR-11：直接调用锁定 gsplat API；配置 JSON 必须给出 dataset/mask/split/init/output 等路径
+# 在改变 Stage 2 之前先只读审计高残差是否集中在人影上；红色填充为人影，青/紫圈分别为人影内/外高残差
+python tools/audit_ba_person_residuals.py `
+  --model G:\3dgs-datasets\gs2_ba\ba_stage2\candidate_model `
+  --manifest G:\3dgs-datasets\gs2_manifest\dataset_manifest.json `
+  --base-mask-manifest G:\3dgs-datasets\gs2_masks\mask_manifest.json `
+  --person-mask-manifest G:\3dgs-datasets\gs2_person_masks\person_mask_manifest.json `
+  --person-mask-root G:\3dgs-datasets\gs2_person_masks `
+  --recording-root G:\S1\2026-06-17_12-40-48gs2 `
+  --output G:\3dgs-datasets\gs2_ba\person_residual_audit
+
+# PR-11/PR-06：正式训练配置必须同时给出 person_mask_manifest/person_mask_root；仅合成测试可显式关闭此门
 # raw fisheye、3DGUT、MCMC、LiDAR ray-range、逐图 mask/crop 和完整 validation 评测均由自有模块负责
 python tools/train_gsplat.py --config G:\3dgs-runs\gs2_pr11_config.json
 
@@ -250,6 +274,7 @@ PR-11 新 Trainer 使用独立的 `upstream/cloudstudio_trainer.lock.json`：只
 - [x] 路线 PR-03:定量数据 QA、JSON/HTML/叠加图、可配置 fail-closed 门槛
 - [x] 路线 PR-04:确定性 voxel LiDAR 初始化、RGB 位深识别、点数预算和 stride 覆盖率对照
 - [x] 路线 PR-05:逐图片 valid/static/depth-valid mask 契约、统一 crop/factor 和 masked PSNR
+- [ ] 路线 PR-06(进行中):独立人影动态 mask、官方权重身份锁、50 图抽检、Stage 2 高残差重叠审计，以及 RGB/SSIM/LiDAR loss 的统一动态排除；真实审计完成前不重跑 BA、不启动位姿 A/B
 - [x] 路线 PR-07:KB4 LiDAR ray-range、前表面 z-buffer、confidence、mask 和确定性稀疏缓存；当前 Rig Manifest 的真实 `1238/1238` 全量缓存已完成并以 2/4 worker 逐文件 SHA 重放一致，Trainer 真实 CUDA depth loss 仍为 `NOT_RUN`
 - [x] 路线 PR-08:Rig Frame 切分、泄漏告警、masked PSNR/SSIM/LPIPS、深度指标和 HTML 报告
 - [x] 路线 PR-09:关键帧 SE(3) 修正、鲁棒过滤、Rig 时间插值、基线保持和默认位姿回退门
@@ -262,5 +287,5 @@ PR-11 新 Trainer 使用独立的 `upstream/cloudstudio_trainer.lock.json`：只
       w2c 位姿往返校验与基线一致)
 - [ ] Phase 1(剩余):gsplat 安装(待批准外部仓库)→ 裸跑 3DGUT+MCMC → 对比 mipmap
 - [ ] Phase 2:LiDAR 深度监督 + 正则
-- [ ] Phase 3:动态物剔除(SAM2 mask + 点云-照片交叉验证)
+- [ ] Phase 3:动态物剔除（PR-06 先完成人影层；车辆/天空与点云-照片交叉验证后续独立推进）
 - [ ] Phase 4:产品化(CLI/API、Web 查看器、SPZ/SOG)

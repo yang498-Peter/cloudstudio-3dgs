@@ -46,9 +46,12 @@ class TrainerConfig:
     initialization_ply: Path
     output_dir: Path
     gsplat_lock: Path
+    person_mask_manifest: Path | None = None
+    person_mask_root: Path | None = None
     depth_manifest: Path | None = None
     depth_root: Path | None = None
     resume_checkpoint: Path | None = None
+    require_person_masks: bool = True
     device: str = "cuda:0"
     seed: int = 42
     max_steps: int = 3_000
@@ -91,6 +94,8 @@ class TrainerConfig:
                 "initialization_ply",
                 "output_dir",
                 "gsplat_lock",
+                "person_mask_manifest",
+                "person_mask_root",
                 "depth_manifest",
                 "depth_root",
                 "resume_checkpoint",
@@ -106,6 +111,7 @@ class TrainerConfig:
             key: value[key]
             for key in (
                 "device",
+                "require_person_masks",
                 "seed",
                 "max_steps",
                 "checkpoint_every",
@@ -164,6 +170,14 @@ class TrainerConfig:
         self.rig_pose_refinement.validate()
         if (self.depth_manifest is None) != (self.depth_root is None):
             raise ValueError("depth_manifest and depth_root must be provided together")
+        if (self.person_mask_manifest is None) != (self.person_mask_root is None):
+            raise ValueError(
+                "person_mask_manifest and person_mask_root must be provided together"
+            )
+        if self.require_person_masks and self.person_mask_manifest is None:
+            raise ValueError(
+                "production 3DGS training requires person_mask_manifest and person_mask_root"
+            )
         if self.lidar_range_weight > 0.0 and self.depth_manifest is None:
             raise ValueError(
                 "positive lidar_range_weight requires depth_manifest and depth_root"
@@ -203,6 +217,11 @@ class TrainerConfig:
                 "rgb_l1": self.rgb_l1_weight,
                 "rgb_ssim": self.rgb_ssim_weight,
                 "lidar_range": self.lidar_range_weight,
+            },
+            "dynamic_person_mask": {
+                "required": self.require_person_masks,
+                "rgb_composition": "base_rgb_mask & ~person_dynamic_mask",
+                "depth_composition": "base_depth_valid & ~person_dynamic_mask",
             },
             "learning_rates": dict(sorted(self.learning_rates.items())),
             "renderer": {
@@ -458,6 +477,8 @@ def train(config: TrainerConfig, *, backend_factory: Any = GsplatBackend) -> dic
         mask_root=config.mask_root,
         split_manifest_path=config.split_manifest,
         split="train",
+        person_mask_manifest_path=config.person_mask_manifest,
+        person_mask_root=config.person_mask_root,
         depth_manifest_path=config.depth_manifest,
         depth_root=config.depth_root,
         factor=config.factor,
@@ -470,6 +491,8 @@ def train(config: TrainerConfig, *, backend_factory: Any = GsplatBackend) -> dic
         mask_root=config.mask_root,
         split_manifest_path=config.split_manifest,
         split="val",
+        person_mask_manifest_path=config.person_mask_manifest,
+        person_mask_root=config.person_mask_root,
         depth_manifest_path=config.depth_manifest,
         depth_root=config.depth_root,
         factor=config.factor,
@@ -678,6 +701,7 @@ def train(config: TrainerConfig, *, backend_factory: Any = GsplatBackend) -> dic
             "run_id": config.run_id,
             "dataset_manifest_sha256": trainset.dataset_sha256,
             "mask_manifest_sha256": trainset.mask_sha256,
+            "person_mask_manifest_sha256": trainset.person_mask_sha256,
             "split_manifest_sha256": trainset.split_sha256,
             "depth_manifest_sha256": trainset.depth_sha256,
             "coordinate_transform_sha256": coordinate["coordinate_transform_sha256"],

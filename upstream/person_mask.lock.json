@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "runtime": "torchvision",
+  "runtime_version": "0.26.0+cu128",
+  "torch_version": "2.11.0+cu128",
+  "architecture": "maskrcnn_resnet50_fpn_v2",
+  "weights": "MaskRCNN_ResNet50_FPN_V2_Weights.COCO_V1",
+  "weights_url": "https://download.pytorch.org/models/maskrcnn_resnet50_fpn_v2_coco-73cbd019.pth",
+  "weights_sha256": "73cbd0190fcbe3ba339921fbce2c3a0b6bb9126c9a133c85e43a2a8e060a109e",
+  "person_class_index": 1,
+  "code_license": "BSD-3-Clause",
+  "weights_distribution": "not_redistributed",
+  "notes": "Official TorchVision COCO_V1 weights. The repository stores only this identity lock; users must obtain the weights from the official URL and review applicable dataset/model terms."
+}

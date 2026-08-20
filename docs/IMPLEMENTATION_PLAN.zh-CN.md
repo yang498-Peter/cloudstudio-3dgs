@@ -534,3 +534,37 @@ PR-11 Trainer 固定使用 Manifest 位姿，无法在图像监督下对残余 R
 先加入缺模块红测试，确认旧代码无法满足 PR-12；实现后 `tests.test_rig_pose_refinement + tests.test_training` 共 `17/17` 通过，提交前完整测试集 `103/103` 通过且 Python 源码编译、当前阶段 diff 与 UTF-8 乱码检查均通过。CPU Torch 合成优化从零参数恢复已知 6DoF 修正，最终矩阵损失低于初值的 `1e-4`；大坐标 Rig 的左右相对位姿在 float32 数值容差内不变，Rig 中心位移等于显式 translation。测试还覆盖每 Rig 去重共享、未知 Rig 硬失败、无改善回退、越界回退、嵌套配置验证，以及 pose 参数和 optimizer 的 checkpoint 恢复。
 
 本阶段没有启动真实训练。真实 gs2 的 on/off 消融、masked PSNR/SSIM/LPIPS、LiDAR range、清晰度与接缝评审均保持 `NOT_RUN`；在这些证据完成前，只声明 PR-12 源码与 CPU 合成闭环，不声明画质提升。
+
+## 15. 当前阶段记录：PR-06 人影动态 mask 与 BA 残差审计
+
+### 问题现象
+
+已有逐图 mask 主要表达鱼眼有效视野，深度缓存另有 depth-valid；两者都不能证明人物已经被排除。若只在某次训练命令中临时识别人影，原始 POS 与 Stage 2 POS 的 A/B 可能使用不同遮挡条件，画质差异就无法归因于位姿。现有 Stage 2 BA 虽已通过全局重投影门，也没有证据说明少量高残差是否集中在人物、反光或其他运动物体上。
+
+### 修改文件
+
+- `cloudstudio_3dgs/data/person_masks.py`
+- `cloudstudio_3dgs/data/torchvision_person.py`
+- `cloudstudio_3dgs/data/image_sample.py`
+- `cloudstudio_3dgs/training/dataset.py`
+- `cloudstudio_3dgs/training/trainer.py`
+- `cloudstudio_3dgs/ba/person_residual_audit.py`
+- `tools/build_person_masks.py`
+- `tools/audit_ba_person_residuals.py`
+- `upstream/person_mask.lock.json`
+- `tests/test_person_masks.py`、`tests/test_training.py`
+- `baselines/gs2_person_masks.baseline.json`
+- `README.md`、`NOTICE.md`
+
+### 修改内容
+
+- 人影层使用独立 `person_mask_manifest.json`，逐图绑定源图 SHA、base mask Manifest SHA、模型架构、运行时版本、官方权重 URL 与完整 SHA256；不改写既有 valid mask，也不重建已完成的 2.1 GB depth cache。
+- 使用 TorchVision `maskrcnn_resnet50_fpn_v2` COCO_V1 的 person 类。仓库只登记官方 URL/哈希，不分发约 177 MB 权重；正式配置采用 800 像素推理、score 0.65、mask 0.5，并在 2912² 原图空间外扩 12 px。这个选择偏向覆盖动态边缘，而不是追求人物轮廓像素级精确。
+- Trainer 在同一个 full-resolution crop/factor 前执行 `base_rgb_mask & ~person_dynamic_mask`；最终 depth mask 再与 depth-valid 相交，因此 RGB L1、masked SSIM 与 LiDAR ray-range 都不学习人影。正式训练默认缺 person Manifest 即失败，只有合成验收可显式声明不需要人物层。
+- person Manifest SHA 进入 Dataset identity、checkpoint identity 和签名 run Manifest。后续原始 POS / Stage 2 POS A/B 必须引用同一个 SHA，不能各自重算 mask。
+- BA 审计逐图流式加载 mask，对 Stage 2 模型的全部 3D observation 重算像素残差；默认把 `>=5 px` 视为高残差，只有高残差至少 20 个且其中至少 30% 落在人影上，才建议重跑 masked BA。工具同时输出人影内/外高残差叠加图，供人工识别反光或其他未建模动态物。
+- 所有生成器先校验 dataset/base/person 签名与逐文件 SHA；partial person Manifest、路径逃逸、错相机、错源图、篡改 mask 和生产训练缺 person mask 均 fail-closed。已发布的 person Manifest 不允许 `--force` 就地覆盖，复算必须使用新目录。
+
+### 验证方式与当前状态
+
+先加入缺模块红测试；当前定向单元测试覆盖独立/确定性签名、模型 lock、RGB/depth 同步排除、crop/factor、partial/tampered Manifest、训练身份和 BA 决策阈值。真实 1,238 图 mask、左右各 25 图人工抽检及 Stage 2 的 3,083,168 个观测审计正在执行；在签名、抽检和重叠结论完成前，BA 是否重跑保持 `PENDING`，3DGS A/B 与正式训练保持 `NOT_RUN`。

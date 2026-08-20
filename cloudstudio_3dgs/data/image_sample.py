@@ -98,6 +98,7 @@ def prepare_image_sample(
     valid_mask: np.ndarray,
     *,
     static_mask: np.ndarray | None = None,
+    dynamic_mask: np.ndarray | None = None,
     depth_valid_mask: np.ndarray | None = None,
     depth: np.ndarray | None = None,
     confidence: np.ndarray | None = None,
@@ -119,6 +120,10 @@ def prepare_image_sample(
     _validate_spatial_shape("valid_mask", valid, shape)
     static = np.ones(shape, dtype=bool) if static_mask is None else np.asarray(static_mask, dtype=bool)
     _validate_spatial_shape("static_mask", static, shape)
+    dynamic = None if dynamic_mask is None else np.asarray(dynamic_mask, dtype=bool)
+    if dynamic is not None:
+        _validate_spatial_shape("dynamic_mask", dynamic, shape)
+        static &= ~dynamic
 
     depth_array = None if depth is None else np.asarray(depth, dtype=np.float32)
     confidence_array = None if confidence is None else np.asarray(confidence, dtype=np.float32)
@@ -192,6 +197,7 @@ def load_image_sample(
     valid_mask_path: Path,
     *,
     static_mask_path: Path | None = None,
+    dynamic_mask_path: Path | None = None,
     depth_valid_mask_path: Path | None = None,
     depth_path: Path | None = None,
     confidence_path: Path | None = None,
@@ -206,6 +212,7 @@ def load_image_sample(
             raise FileNotFoundError(f"missing {name}: {path}")
     optional_paths = (
         ("static mask", static_mask_path),
+        ("dynamic mask", dynamic_mask_path),
         ("depth-valid mask", depth_valid_mask_path),
         ("depth", depth_path),
         ("confidence", confidence_path),
@@ -218,6 +225,7 @@ def load_image_sample(
         image = np.asarray(source.convert("RGB"), dtype=np.uint8)
     valid = _read_mask(valid_mask_path)
     static = None if static_mask_path is None else _read_mask(static_mask_path)
+    dynamic = None if dynamic_mask_path is None else _read_mask(dynamic_mask_path)
     depth_valid = (
         None if depth_valid_mask_path is None else _read_mask(depth_valid_mask_path)
     )
@@ -231,6 +239,7 @@ def load_image_sample(
         image,
         valid,
         static_mask=static,
+        dynamic_mask=dynamic,
         depth_valid_mask=depth_valid,
         depth=depth,
         confidence=confidence,

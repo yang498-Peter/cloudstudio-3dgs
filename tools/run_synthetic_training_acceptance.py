@@ -288,6 +288,7 @@ def main() -> int:
             gsplat_lock=args.gsplat_lock,
             depth_manifest=depth_manifest_path,
             depth_root=depth_root,
+            require_person_masks=False,
             max_steps=args.steps,
             checkpoint_every=max(1, args.steps // 2),
             factor=1,

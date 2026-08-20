@@ -16,6 +16,7 @@ from cloudstudio_3dgs.data.mask_manifest import (
     verify_dataset_manifest,
     verify_mask_manifest,
 )
+from cloudstudio_3dgs.data.person_masks import verify_person_mask_manifest
 from cloudstudio_3dgs.evaluation.splits import verify_split_manifest
 
 
@@ -82,6 +83,8 @@ class S1TrainingDataset:
         mask_root: Path,
         split_manifest_path: Path,
         split: SplitName,
+        person_mask_manifest_path: Path | None = None,
+        person_mask_root: Path | None = None,
         depth_manifest_path: Path | None = None,
         depth_root: Path | None = None,
         factor: int = 1,
@@ -92,6 +95,10 @@ class S1TrainingDataset:
             raise ValueError("split must be train or val")
         if (depth_manifest_path is None) != (depth_root is None):
             raise ValueError("depth_manifest_path and depth_root must be provided together")
+        if (person_mask_manifest_path is None) != (person_mask_root is None):
+            raise ValueError(
+                "person_mask_manifest_path and person_mask_root must be provided together"
+            )
 
         self.dataset_manifest = _read_json(dataset_manifest_path)
         self.mask_manifest = _read_json(mask_manifest_path)
@@ -105,6 +112,26 @@ class S1TrainingDataset:
             raise ValueError("mask manifest is bound to a different dataset")
         if self.split_manifest.get("dataset_manifest_sha256") != self.dataset_sha256:
             raise ValueError("split manifest is bound to a different dataset")
+
+        self.person_mask_manifest = None
+        self.person_mask_sha256 = None
+        if person_mask_manifest_path is not None:
+            self.person_mask_manifest = _read_json(person_mask_manifest_path)
+            self.person_mask_sha256 = verify_person_mask_manifest(
+                self.person_mask_manifest
+            )
+            if (
+                self.person_mask_manifest.get("dataset_manifest_sha256")
+                != self.dataset_sha256
+            ):
+                raise ValueError("person mask manifest is bound to a different dataset")
+            if (
+                self.person_mask_manifest.get("base_mask_manifest_sha256")
+                != self.mask_sha256
+            ):
+                raise ValueError(
+                    "person mask manifest is bound to a different base mask manifest"
+                )
 
         self.depth_manifest = None
         self.depth_sha256 = None
@@ -122,6 +149,9 @@ class S1TrainingDataset:
 
         self.recording_root = Path(recording_root)
         self.mask_root = Path(mask_root)
+        self.person_mask_root = (
+            None if person_mask_root is None else Path(person_mask_root)
+        )
         self.depth_root = None if depth_root is None else Path(depth_root)
         self.factor = factor
         self.crop = crop
@@ -140,6 +170,14 @@ class S1TrainingDataset:
 
         images = {str(item["image_id"]): item for item in self.dataset_manifest["images"]}
         masks = {str(item["image_id"]): item for item in self.mask_manifest["images"]}
+        person_masks = (
+            {}
+            if self.person_mask_manifest is None
+            else {
+                str(item["image_id"]): item
+                for item in self.person_mask_manifest["images"]
+            }
+        )
         depths = (
             {}
             if self.depth_manifest is None
@@ -147,6 +185,35 @@ class S1TrainingDataset:
         )
         if set(masks) != set(images):
             raise ValueError("mask manifest must cover every dataset image")
+        if self.person_mask_manifest is not None and set(person_masks) != set(images):
+            missing = sorted(set(images) - set(person_masks))
+            extra = sorted(set(person_masks) - set(images))
+            detail = []
+            if missing:
+                detail.append(f"missing={missing[:4]}")
+            if extra:
+                detail.append(f"unknown={extra[:4]}")
+            raise ValueError(
+                "person mask manifest must cover every dataset image; "
+                + ", ".join(detail)
+            )
+        for image_id, person in person_masks.items():
+            if str(person.get("camera_id", "")) != str(
+                images[image_id]["camera_id"]
+            ):
+                raise ValueError(f"person mask record camera mismatch for {image_id}")
+            if str(person.get("source_image_sha256", "")) != str(
+                images[image_id]["sha256"]
+            ):
+                raise ValueError(
+                    f"person mask record source image mismatch for {image_id}"
+                )
+            if str(person.get("source_image_path_root", "")) != "recording" or str(
+                person.get("source_image_path", "")
+            ) != str(images[image_id]["path"]):
+                raise ValueError(
+                    f"person mask record source path mismatch for {image_id}"
+                )
         if self.depth_manifest is not None and set(depths) != set(images):
             missing = sorted(set(images) - set(depths))
             extra = sorted(set(depths) - set(images))
@@ -172,7 +239,12 @@ class S1TrainingDataset:
         if unknown:
             raise ValueError(f"{split} split references unknown images: {sorted(unknown)[:4]}")
         self._records = [
-            (images[image_id], masks[image_id], depths.get(image_id))
+            (
+                images[image_id],
+                masks[image_id],
+                person_masks.get(image_id),
+                depths.get(image_id),
+            )
             for image_id in selected_ids
         ]
         self.split = split
@@ -182,6 +254,7 @@ class S1TrainingDataset:
         return {
             "dataset_manifest_sha256": self.dataset_sha256,
             "mask_manifest_sha256": self.mask_sha256,
+            "person_mask_manifest_sha256": self.person_mask_sha256,
             "split_manifest_sha256": self.split_sha256,
             "depth_manifest_sha256": self.depth_sha256,
             "split": self.split,
@@ -201,7 +274,7 @@ class S1TrainingDataset:
         """Return selected Rig Frames once, preserving split-manifest order."""
         result: list[str] = []
         seen: set[str] = set()
-        for image, _, _ in self._records:
+        for image, _, _, _ in self._records:
             rig_frame_id = str(image.get("rig_frame_id") or "")
             if not rig_frame_id:
                 raise ValueError(f"image {image['image_id']} has no Rig Frame")
@@ -223,14 +296,14 @@ class S1TrainingDataset:
             selected = {rig_frame_ids[int(index)] for index in positions}
         return tuple(
             index
-            for index, (image, _, _) in enumerate(self._records)
+            for index, (image, _, _, _) in enumerate(self._records)
             if str(image.get("rig_frame_id") or "") in selected
         )
 
     def rig_frame_centers(self) -> dict[str, np.ndarray]:
         """Use the mean camera center as a stable rotation pivot for each Rig Frame."""
         grouped: dict[str, list[np.ndarray]] = {}
-        for image, _, _ in self._records:
+        for image, _, _, _ in self._records:
             rig_frame_id = str(image.get("rig_frame_id") or "")
             c2w = np.asarray(image.get("c2w"), dtype=np.float64)
             if not rig_frame_id or c2w.shape != (4, 4) or not np.all(np.isfinite(c2w)):
@@ -257,13 +330,25 @@ class S1TrainingDataset:
         self._verified_paths.add(path)
 
     def __getitem__(self, index: int) -> TrainingSample:
-        image_record, mask_record, depth_record = self._records[index]
+        image_record, mask_record, person_mask_record, depth_record = self._records[index]
         if image_record.get("path_root") != "recording":
             raise ValueError(f"unsupported image path_root for {image_record['image_id']}")
         image_path = _safe_artifact(self.recording_root, str(image_record["path"]))
         mask_path = _safe_artifact(self.mask_root, str(mask_record["combined_mask_path"]))
         self._verify(image_path, str(image_record["sha256"]), "source image")
         self._verify(mask_path, str(mask_record["combined_mask_sha256"]), "combined mask")
+
+        person_mask_path = None
+        if person_mask_record is not None:
+            assert self.person_mask_root is not None
+            person_mask_path = _safe_artifact(
+                self.person_mask_root, str(person_mask_record["person_mask_path"])
+            )
+            self._verify(
+                person_mask_path,
+                str(person_mask_record["person_mask_sha256"]),
+                "person dynamic mask",
+            )
 
         depth_path = None
         if depth_record is not None:
@@ -274,6 +359,7 @@ class S1TrainingDataset:
         sample = load_image_sample(
             image_path,
             mask_path,
+            dynamic_mask_path=person_mask_path,
             depth_path=depth_path,
             confidence_path=depth_path,
             factor=self.factor,

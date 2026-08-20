@@ -9,6 +9,7 @@
 | nerfstudio | 数据约定参考 | Apache-2.0 | 仅格式参考 |
 | dn-splatter (maturk/dn-splatter) | 深度/法向监督 loss 设计参考 | 需核验(引入前查) | 未引入 |
 | SAM2 (Meta) | 语义 mask(人/车) | Apache-2.0 | 未引入 |
+| TorchVision Mask R-CNN ResNet-50 FPN V2 | 独立人影动态 mask 推理 | BSD-3-Clause（代码）；官方 COCO_V1 权重不随仓库分发，数据集/模型条款需使用方复核 | PR-06 精确 URL 与 SHA-256 锁定，仅使用 person 类 |
 | 3dgrut (nv-tlabs/3dgrut) | 3DGUT 官方参考 | 需核验(引入前查) | 仅阅读 |
 | T-3DGS | 瞬态剔除备选 | 需核验 | 未引入 |
 | laspy | LAS 点云读取(工具脚本) | MIT | 使用中 |

@@ -14,6 +14,7 @@ from cloudstudio_3dgs.data.depth_cache import sparse_depth_npz_bytes
 from cloudstudio_3dgs.data.image_sample import CropWindow
 from cloudstudio_3dgs.data.manifest import canonical_json_bytes
 from cloudstudio_3dgs.data.mask_manifest import build_per_image_masks
+from cloudstudio_3dgs.data.person_masks import PersonMaskConfig, build_person_masks
 from cloudstudio_3dgs.data.point_cloud import write_binary_ply
 from cloudstudio_3dgs.evaluation.splits import SplitConfig, build_split_manifest, write_split_manifest
 from cloudstudio_3dgs.geometry.lidar_projection import SparseDepthMap
@@ -154,6 +155,95 @@ def _write_depth_fixture(root: Path, dataset: dict, masks: dict) -> dict:
 
 
 class TrainingDatasetTests(unittest.TestCase):
+    def test_person_layer_is_signed_identity_and_tightens_rgb_and_depth(self) -> None:
+        class CenterPersonSegmenter:
+            def segment(self, image: np.ndarray) -> list[dict]:
+                mask = np.zeros(image.shape[:2], dtype=bool)
+                mask[12:20, 12:20] = True
+                return [
+                    {
+                        "mask": mask,
+                        "score": 0.99,
+                        "box_xyxy": [12.0, 12.0, 20.0, 20.0],
+                    }
+                ]
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            recording = root / "recording"
+            dataset = _dataset_fixture(recording)
+            dataset_path = root / "dataset_manifest.json"
+            dataset_path.write_text(json.dumps(dataset), encoding="utf-8")
+            masks = build_per_image_masks(dataset, root / "masks")
+            _write_depth_fixture(root / "depth-cache", dataset, masks)
+            person = build_person_masks(
+                dataset,
+                masks,
+                recording,
+                root / "person",
+                segmenter=CenterPersonSegmenter(),
+                model_identity={
+                    "runtime": "test",
+                    "version": "1",
+                    "architecture": "center",
+                    "weights": "fixture",
+                    "weights_sha256": "a" * 64,
+                    "person_class_index": 1,
+                },
+                config=PersonMaskConfig(dilation_pixels=0),
+            )
+            split = build_split_manifest(
+                dataset,
+                SplitConfig(mode="manual", golden_rig_frames=1),
+                manual={"rig_000": "train", "rig_001": "val"},
+            )
+            split_path = root / "split_manifest.json"
+            write_split_manifest(split_path, split)
+            training = S1TrainingDataset(
+                dataset_manifest_path=dataset_path,
+                recording_root=recording,
+                mask_manifest_path=root / "masks" / "mask_manifest.json",
+                mask_root=root / "masks",
+                person_mask_manifest_path=root
+                / "person"
+                / "person_mask_manifest.json",
+                person_mask_root=root / "person",
+                split_manifest_path=split_path,
+                split="train",
+                depth_manifest_path=root / "depth-cache" / "depth_manifest.json",
+                depth_root=root / "depth-cache",
+            )
+            sample = training[0]
+
+            self.assertEqual(
+                training.identity["person_mask_manifest_sha256"],
+                person["person_mask_manifest_sha256"],
+            )
+            self.assertFalse(sample.rgb_mask[16, 16])
+            self.assertFalse(sample.depth_mask[16, 16])
+
+            partial = dict(person)
+            partial["images"] = person["images"][:-1]
+            partial.pop("person_mask_manifest_sha256")
+            partial["person_mask_manifest_sha256"] = hashlib.sha256(
+                canonical_json_bytes(partial)
+            ).hexdigest()
+            partial_path = root / "person" / "partial.json"
+            partial_path.write_text(json.dumps(partial), encoding="utf-8")
+            with self.assertRaisesRegex(
+                ValueError, "person mask manifest must cover every dataset image"
+            ):
+                S1TrainingDataset(
+                    dataset_manifest_path=dataset_path,
+                    recording_root=recording,
+                    mask_manifest_path=root / "masks" / "mask_manifest.json",
+                    mask_root=root / "masks",
+                    person_mask_manifest_path=partial_path,
+                    person_mask_root=root / "person",
+                    split_manifest_path=split_path,
+                    split="train",
+                )
+
     def test_raw_fisheye_crop_masks_depth_and_intrinsics_stay_aligned(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -266,6 +356,24 @@ class TrainingDatasetTests(unittest.TestCase):
 
 
 class TrainingContractTests(unittest.TestCase):
+    def test_production_training_fails_closed_without_person_masks(self) -> None:
+        config = TrainerConfig.from_dict(
+            {
+                "run_id": "missing-person-mask",
+                "dataset_manifest": "dataset.json",
+                "recording_root": "recording",
+                "mask_manifest": "masks.json",
+                "mask_root": "masks",
+                "split_manifest": "split.json",
+                "initialization_ply": "sparse_pc.ply",
+                "output_dir": "run",
+                "gsplat_lock": "upstream/cloudstudio_trainer.lock.json",
+                "lidar_range_weight": 0.0,
+            }
+        )
+        with self.assertRaisesRegex(ValueError, "requires person_mask_manifest"):
+            config.validate()
+
     def test_checked_in_baseline_keeps_real_and_full_mcmc_gates_open(self) -> None:
         baseline = json.loads(
             (ROOT / "baselines" / "gs2_trainer.baseline.json").read_text(
@@ -329,6 +437,7 @@ class TrainingContractTests(unittest.TestCase):
                 "initialization_ply": "sparse_pc.ply",
                 "output_dir": "run",
                 "gsplat_lock": "upstream/cloudstudio_trainer.lock.json",
+                "require_person_masks": False,
                 "lidar_range_weight": 0.0,
             }
         )
@@ -338,6 +447,7 @@ class TrainingContractTests(unittest.TestCase):
         self.assertEqual(contract["renderer"]["range_mode"], "RGB-Ed")
         self.assertEqual(contract["strategy"]["name"], "MCMC")
         self.assertFalse(contract["rig_pose_refinement"]["enabled"])
+        self.assertFalse(contract["dynamic_person_mask"]["required"])
         self.assertFalse(contract["viewer"])
         source = (ROOT / "cloudstudio_3dgs" / "training" / "trainer.py").read_text(encoding="utf-8")
         self.assertNotIn("S1_KEEP_FISHEYE", source)
@@ -356,6 +466,7 @@ class TrainingContractTests(unittest.TestCase):
                 "initialization_ply": "sparse_pc.ply",
                 "output_dir": "run",
                 "gsplat_lock": "upstream/cloudstudio_trainer.lock.json",
+                "require_person_masks": False,
                 "lidar_range_weight": 0.0,
                 "rig_pose_refinement": {
                     "enabled": True,
@@ -381,6 +492,7 @@ class TrainingContractTests(unittest.TestCase):
                 "initialization_ply": "sparse_pc.ply",
                 "output_dir": "run",
                 "gsplat_lock": "upstream/cloudstudio_trainer.lock.json",
+                "require_person_masks": False,
                 "lidar_range_weight": 0.0,
                 "rig_pose_refinement": {"enabled": True, "maximum_translation_m": 0.0},
             }
@@ -400,6 +512,7 @@ class TrainingContractTests(unittest.TestCase):
                 "initialization_ply": "sparse_pc.ply",
                 "output_dir": "run",
                 "gsplat_lock": "upstream/cloudstudio_trainer.lock.json",
+                "require_person_masks": False,
                 "lidar_range_weight": 0.05,
             }
         )
