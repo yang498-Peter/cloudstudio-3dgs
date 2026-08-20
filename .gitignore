@@ -21,3 +21,7 @@ data/
 .DS_Store
 external/
 
+.cuda128/
+.mamba/
+.torch-ext/
+micromamba.exe
