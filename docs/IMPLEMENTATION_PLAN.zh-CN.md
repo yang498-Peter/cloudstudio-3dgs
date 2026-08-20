@@ -275,3 +275,39 @@ PR-05 只建立逐图数据结构和几何 valid 基线；真实人物/车辆/�
 真实 gs2 验证使用 PR-04 的 376,906 点 PLY，对 1,238 张图片中均匀选出的 12 张生成缓存。有效深度像素 min/p50/p95/max 为 66,384 / 170,916.5 / 225,255.8 / 226,248，12 个 NPZ 共 22,829,361 字节。4 worker 与 2 worker 两次运行的全部 NPZ 和 Manifest 逐字节一致；cache key 为 `aa6262d8382edf0c88ef3333237afacc81eae1a4af835ec2818d0d6d128122b6`，Manifest 文件 SHA256 为 `f6fa9565f46812d863b43fb95b449737bcb2e92692e42d85c75d46320a64dd34`。真实缓存首帧在 2704² crop 下以 factor 1/2/4 得到 2704/1352/676 方形的 image、mask、depth、confidence，空间尺寸一致。
 
 本次真实结果明确为 `complete_dataset=false`：它只覆盖 12 帧，并使用 PR-04 voxel PLY 而不是 2,843 万点原始 LAS。全量 1,238 帧缓存、全分辨率 LAS 密度对比、真实动态/天空 mask 回放和 Trainer depth loss 均为 `NOT_RUN`；因此 PR-07 只能声明“深度缓存源码与部分真实数据闭环”，不能声明深度训练或画质验收通过。
+
+## 10. 当前阶段记录：PR-08
+
+### 问题现象
+
+旧 gsplat 示例按排序后的单张图片序号执行 `index % test_every` 切分，不理解固定双鱼眼 Rig，也没有空间泄漏告警。2026-08-20 的 666 图历史 GPU 训练中，333 对近同步左右图有 84 对被拆到训练/验证两侧，且没有一对左右图同时进入验证集，因此其 PSNR/SSIM/LPIPS 只能作为旧流程阶段性参考，不能升级为正式 PR-08 评估。旧流程还会把鱼眼黑边计入指标，缺少统一的 LiDAR 深度误差、资源统计、固定视角和可审计 HTML 报告。
+
+### 修改文件
+
+- `cloudstudio_3dgs/evaluation/splits.py`
+- `cloudstudio_3dgs/evaluation/image_metrics.py`
+- `cloudstudio_3dgs/evaluation/quality_report.py`
+- `tools/build_split_manifest.py`
+- `tools/evaluate_run.py`
+- `tests/test_splits.py`
+- `tests/test_quality_metrics.py`
+- `tests/test_quality_report.py`
+- `baselines/gs2_evaluation.baseline.json`
+- `NOTICE.md`
+- `README.md`
+
+### 修改内容
+
+- 以完整 Rig Frame 为最小单元提供 deterministic temporal block、spatial block 和严格 manual 三种切分；每张图片必须属于唯一完整左右对，否则正式切分失败。
+- split Manifest 绑定数据 Manifest SHA256，固定 golden Rig Frames，并统计每个验证位姿到最近训练位姿的距离；低于配置阈值时显式告警，不把相邻帧泄漏伪装成泛化能力。
+- masked PSNR/SSIM/LPIPS 只聚合 combined mask 内像素，空 mask 失败；LPIPS 是可选依赖，未安装或未执行时保留 `NOT_RUN`。LiDAR 深度指标只接受 Euclidean ray range，并输出 confidence 加权 MAE/RMSE 和绝对误差 p95。
+- 签名 run Manifest 必须完整且仅覆盖 validation 图片，禁止只挑高分图或混入训练图。所有 artifact 只能用 run root 下的安全相对路径，Windows 反斜杠路径穿越同样失败。
+- 每次评估原子写出签名 `quality_report.json` 和自包含 `quality_report.html`，并为固定 golden views 生成 reference/render/masked-render 对比图；训练时长、显存峰值、Gaussian 数量和模型大小/哈希缺失时逐项标记 `NOT_RUN`，报告状态保持 `PARTIAL`。
+
+### 验证方式与当前状态
+
+合成测试覆盖左右同 split、temporal/spatial/manual 模式、切分篡改、训练/验证重叠、近邻泄漏告警、黑边不影响 PSNR/SSIM、masked LPIPS 空间聚合、LiDAR ray-range MAE/RMSE、路径越界、验证集挑图和 run/split 身份不一致。两次报告生成的 JSON、HTML 和 golden assets 逐字节一致。
+
+真实 gs2 当前完整 Manifest SHA256 为 `54c01abedb8be28d839d4ee9685de63c88059efc129eceacd501fa9943563ee3`，包含 619 个 Rig Frame / 1,238 张有位姿图片。默认 temporal block 切分两次生成的文件 SHA256 均为 `b9886ad4c0bb4d3dfc1503e93722d75ec6a93c7772a32f8b0e85860851d3f99e`：train 为 557 Rig / 1,114 图，validation 为 62 Rig / 124 图，固定 8 个 golden Rig。最近训练位姿距离 min/p50/p95 为 0.0973 / 0.3516 / 0.9434 m，0.25 m 阈值下有 3 个显式泄漏告警。
+
+现有 3,000 步 GPU 结果来自另一份 666 图数据集和旧单图切分，不能与本次 split Manifest 绑定。按新 split 重训、124 张 validation 的 masked LPIPS、全量 LiDAR depth、训练峰值显存和正式 `quality_report.html` 均为 `NOT_RUN`；因此 PR-08 只声明“正式评估契约、真实 Rig 切分和合成报告闭环”，不声明 GPU 画质验收通过。

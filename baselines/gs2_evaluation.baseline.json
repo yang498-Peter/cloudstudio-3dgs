@@ -1,0 +1,51 @@
+{
+  "schema_version": 1,
+  "baseline_id": "gs2-rig-evaluation-pr08-contract",
+  "inputs": {
+    "dataset_manifest_sha256": "54c01abedb8be28d839d4ee9685de63c88059efc129eceacd501fa9943563ee3",
+    "rig_frame_count": 619,
+    "image_count": 1238
+  },
+  "configuration": {
+    "algorithm_version": "rig_frame_split_v1",
+    "mode": "temporal_block",
+    "validation_fraction": 0.1,
+    "seed": 0,
+    "temporal_block_count": 10,
+    "nearest_train_warning_m": 0.25,
+    "golden_rig_frames": 8
+  },
+  "output": {
+    "split_manifest_sha256": "dbb4cf465526d4251a3aadf77150505131183ba67a5576cef4686e87324535c9",
+    "split_manifest_file_sha256": "b9886ad4c0bb4d3dfc1503e93722d75ec6a93c7772a32f8b0e85860851d3f99e",
+    "train_rig_frames": 557,
+    "train_images": 1114,
+    "validation_rig_frames": 62,
+    "validation_images": 124,
+    "golden_rig_frames": 8,
+    "leakage_warning_count": 3,
+    "nearest_train_distance_m": {
+      "min": 0.0972856446359768,
+      "p50": 0.351558882475521,
+      "p95": 0.943403344617581
+    }
+  },
+  "historical_gpu_run_audit": {
+    "dataset_images": 666,
+    "paired_rig_frames": 333,
+    "old_index_modulo_split_mismatched_rig_frames": 84,
+    "old_split_rig_frames_with_both_images_in_validation": 0,
+    "formal_pr08_compatible": false
+  },
+  "acceptance": {
+    "paired_images_same_split": true,
+    "split_runs_byte_identical": true,
+    "black_border_excluded_from_image_metrics": true,
+    "complete_validation_set_required": true,
+    "quality_json_html_and_golden_assets_byte_identical": true,
+    "new_split_gpu_training": "not_run",
+    "real_masked_lpips": "not_run",
+    "real_lidar_depth_metrics": "not_run",
+    "peak_vram_measurement": "not_run"
+  }
+}
