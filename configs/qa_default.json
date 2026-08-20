@@ -1,0 +1,33 @@
+{
+  "schema_version": 1,
+  "projection": {
+    "max_points": 50000,
+    "min_range_m": 0.3,
+    "max_range_m": 60.0,
+    "max_theta_deg": 100.0,
+    "minimum_visible_fraction_p50": 0.005,
+    "edge_frames_per_camera": 3,
+    "edge_image_max_dimension": 728,
+    "edge_gradient_percentile": 90.0,
+    "depth_edge_neighbor_px": 3.0,
+    "depth_edge_log_range_delta": 0.05,
+    "maximum_edge_distance_p50_px": 8.0,
+    "minimum_edge_frame_success_fraction": 1.0
+  },
+  "timing": {
+    "maximum_pair_delta_ms": 50.0,
+    "maximum_frame_interval_ms": 1000.0
+  },
+  "trajectory": {
+    "maximum_speed_mps": 15.0,
+    "maximum_angular_speed_deg_s": 180.0
+  },
+  "rig": {
+    "maximum_translation_error_p95_m": 0.01,
+    "maximum_rotation_error_p95_rad": 0.01,
+    "maximum_intrinsic_difference": 0.001
+  },
+  "point_cloud": {
+    "maximum_black_rgb_fraction": 0.25
+  }
+}

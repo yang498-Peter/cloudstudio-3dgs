@@ -141,3 +141,34 @@ CPU 与静态门槛可在当前机器闭环；新建空环境 bootstrap、完整
 非单位旋转和非零平移的合成 Rig 测试恢复误差均小于 `1e-12`，超出容差的图片保持显式未配对。真实 gs2 得到 619 对、左右未配对均为 0；时间差 p50/p95/max 为 4,096 / 16,128 / 121,088 ns；相对平移误差 p50/p95/max 为 2.903 µm / 12.467 µm / 66.183 µm；相对旋转误差 p50/p95/max 为 1.531 / 7.026 / 17.305 µrad。记录级标定与 `transforms.json` 内参最大绝对差为 `1.735e-18`，全帧转换器确认 1,238 帧、两组唯一内参。
 
 这些结果证明本次真实数据内部的固定 Rig 契约一致，但尚不等同于外部靶场标定精度认证；训练中 Rig-aware pose refinement 仍属于 PR-12。
+
+## 6. 当前阶段记录：PR-03
+
+### 问题现象
+
+旧 `reproject_check.py` 只能生成四种坐标约定的目视叠加图和图内点比例，不能量化 KB4 投影、时间同步、轨迹异常、Rig 误差、RGB 范围、点云范围、逐帧可见点数或 LiDAR 深度边缘到图像边缘距离，也没有 fail-closed 训练前门槛。
+
+### 修改文件
+
+- `cloudstudio_3dgs/geometry/kb4.py`
+- `cloudstudio_3dgs/evaluation/data_qa.py`
+- `configs/qa_default.json`
+- `tests/test_kb4.py`
+- `tests/test_data_qa.py`
+- `pyproject.toml`、`uv.lock`
+- `.github/workflows/unit-tests.yml`
+
+### 修改内容
+
+- 建立可测试的 KB4 正投影/反投影，支持超过 180° 镜头并显式限制量程和最大入射角。
+- 全量流式统计 LAS 点数、XYZ 范围、RGB min/median/p99/max 和纯黑比例；确定性抽取 QA 投影点。
+- 为所有有位姿图片输出可见 LiDAR 点数和比例；按左右相机均匀选择帧，使用图像梯度距离变换与 LiDAR 邻域 range 跳变计算边缘距离并生成叠加图。
+- 输出左右图像间隔、配对时间差、Rig 轨迹速度/角速度、固定外参误差和标定/`transforms` 差异。
+- 所有阈值来自 JSON 配置。默认失败返回退出码 2；只有 `--allow-qa-warning` 才返回 0，且 `status=WARNING_OVERRIDDEN`、`override_used=true` 持久写入报告。
+- 输出 `qa/report.json`、`qa/report.html` 和 `qa/overlays/*.jpg`；远端 CI 编译范围扩大到正式 Python 包。
+
+### 验证方式与当前状态
+
+合成 KB4 1,000 点像素往返最大误差低于 `0.05 px`，合成 LAS 和十一个 fail-closed gate 有单元测试。真实 gs2 全量统计 28,435,004 个点，范围为 `[-39.1872,-70.2405,-5.9661]` 至 `[103.0488,78.4596,15.3523]`，RGB 纯黑比例为 0.004107；50,000 点用于 1,238 帧投影，6 张边缘叠加图均成功生成，默认十一个 gate 全部通过，最终复验耗时 10.573 秒。
+
+真实关键指标：可见点比例 p50=0.6594，边缘距离 p50=4 px，配对最大差 0.121088 ms，帧间隔最大 500.134 ms，轨迹最大速度 1.028 m/s、最大角速度 67.769°/s。故意把最低可见比例设为 0.99 时，默认退出码为 2、报告为 `FAIL`；显式 override 后退出码为 0，报告为 `WARNING_OVERRIDDEN` 且保留失败 gate。叠加图已人工抽查，绿色图像边缘与红色 LiDAR range 边缘整体贴合；这仍不是外部靶标的绝对像素精度认证。

@@ -9,6 +9,7 @@ dependencies = [
     "laspy>=2.5,<3",
     "numpy>=1.26,<3",
     "pillow>=10,<13",
+    "scipy>=1.14,<2",
 ]
 
 [tool.uv]
