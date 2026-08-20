@@ -125,6 +125,14 @@ python tools/run_hloc_aliked_lightglue.py `
   --output G:\3dgs-datasets\gs2_ba\features `
   --require-cuda
 
+# 若特征/匹配因断电或中断只写出未签名 H5，可用同一输入续跑；未知文件或已签名目录会失败
+python tools/run_hloc_aliked_lightglue.py `
+  --image-dir G:\3dgs-datasets\gs2_colmap\images `
+  --pairs G:\3dgs-datasets\gs2_ba\pairs.txt `
+  --output G:\3dgs-datasets\gs2_ba\features `
+  --require-cuda `
+  --resume
+
 # 从已有 POS/COLMAP 模型自动裁出 train-only 已知位姿模型并三角化
 python tools/run_hloc_triangulation.py `
   --image-dir G:\3dgs-datasets\gs2_colmap\images `

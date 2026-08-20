@@ -21,6 +21,12 @@ from cloudstudio_3dgs.ba.runtime_lock import (
     load_runtime_lock,
     runtime_lock_sha256,
 )
+from cloudstudio_3dgs.ba.hloc_artifacts import (
+    FEATURES_NAME,
+    MATCHES_NAME,
+    RUNTIME_MANIFEST_NAME,
+    prepare_hloc_output,
+)
 from cloudstudio_3dgs.data.manifest import canonical_json_bytes
 
 
@@ -54,7 +60,13 @@ def main() -> int:
     parser.add_argument("--pairs", required=True, type=Path)
     parser.add_argument("--output", required=True, type=Path)
     parser.add_argument("--require-cuda", action="store_true")
-    parser.add_argument("--overwrite", action="store_true")
+    output_mode = parser.add_mutually_exclusive_group()
+    output_mode.add_argument("--overwrite", action="store_true")
+    output_mode.add_argument(
+        "--resume",
+        action="store_true",
+        help="resume only known unsigned HLoc H5 artifacts without recomputing completed entries",
+    )
     parser.add_argument(
         "--runtime-lock",
         type=Path,
@@ -93,12 +105,11 @@ def main() -> int:
         raise RuntimeError("installed HLoc has no aliked-n16 extractor configuration")
     if "aliked+lightglue" not in match_features.confs:
         raise RuntimeError("installed HLoc has no aliked+lightglue matcher configuration")
-    if args.output.exists():
-        if not args.output.is_dir():
-            raise NotADirectoryError(f"HLoc output is not a directory: {args.output}")
-        if any(args.output.iterdir()) and not args.overwrite:
-            raise FileExistsError(f"HLoc output is not empty: {args.output}; pass --overwrite")
-    args.output.mkdir(parents=True, exist_ok=True)
+    upstream_overwrite = prepare_hloc_output(
+        args.output,
+        overwrite=args.overwrite,
+        resume=args.resume,
+    )
     pair_lines = [
         line.split() for line in args.pairs.read_text(encoding="utf-8").splitlines()
     ]
@@ -108,21 +119,21 @@ def main() -> int:
     if any(not (args.image_dir / name).is_file() for name in names):
         missing = [name for name in names if not (args.image_dir / name).is_file()]
         raise FileNotFoundError(f"HLoc image list has missing files: {missing[:4]}")
-    features_path = args.output / "features-aliked-n16.h5"
-    matches_path = args.output / "matches-aliked-lightglue.h5"
+    features_path = args.output / FEATURES_NAME
+    matches_path = args.output / MATCHES_NAME
     extract_features.main(
         extract_features.confs["aliked-n16"],
         args.image_dir,
         image_list=names,
         feature_path=features_path,
-        overwrite=args.overwrite,
+        overwrite=upstream_overwrite,
     )
     match_features.main(
         match_features.confs["aliked+lightglue"],
         args.pairs,
         features_path,
         matches=matches_path,
-        overwrite=args.overwrite,
+        overwrite=upstream_overwrite,
     )
     runtime = {
         "schema_version": 1,
@@ -142,7 +153,7 @@ def main() -> int:
         canonical_json_bytes(runtime)
     ).hexdigest()
     atomic_write(
-        args.output / "feature_runtime_manifest.json",
+        args.output / RUNTIME_MANIFEST_NAME,
         (json.dumps(runtime, ensure_ascii=False, indent=2, sort_keys=True) + "\n").encode(
             "utf-8"
         ),

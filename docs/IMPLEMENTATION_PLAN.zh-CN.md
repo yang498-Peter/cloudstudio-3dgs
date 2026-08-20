@@ -463,3 +463,20 @@ PR-05/PR-07 的历史 mask 与 12 图 partial depth 绑定早期 dataset Manifes
 #### 验证方式与当前状态
 
 完整缓存 `complete_dataset=true`，cache key 为 `d3bbed76...`，signed Manifest SHA 为 `3c114dfd...`，Manifest 文件 SHA 为 `747a68a9...`；1238 个 depth artifact 共 `2,112,535,370` bytes。有效像素数 min/p50/p95/max 为 `19,817 / 158,693.5 / 224,370.45 / 256,660`。Trainer 数据契约已无 GPU 地加载 `1114 train + 124 val`，共享同一 depth 身份。该阶段只证明真实全量深度输入完整、可重复、可装载；真实 CUDA depth loss、画质改善和 MCMC 仍未运行。
+
+### 真实集成门 C：HLoc 中断续跑前置修复
+
+#### 问题现象
+
+真实 1114 张训练图 ALIKED 特征已全部写入约 1.36 GB H5，6787 对 LightGlue 匹配在 2840 对时因会话中断停止。HLoc 上游在 `overwrite=false` 时可跳过已存在的特征和匹配，但项目包装器此前只允许空输出目录或 `--overwrite`，因此无法利用上游续跑能力，只能重算全部特征。
+
+#### 修改文件与修改内容
+
+- `cloudstudio_3dgs/ba/hloc_artifacts.py`：增加 fail-closed 输出模式，只允许两个已知未签名 H5 半成品进入 resume；拒绝未知文件、缺 feature 的 match、目录项和已有最终运行时签名。
+- `tools/run_hloc_aliked_lightglue.py`：增加与 `--overwrite` 互斥的 `--resume`，续跑时把 `overwrite=false` 传给上游 HLoc。
+- `tests/test_hloc_artifacts.py`：覆盖 fresh、overwrite、合法 partial resume、未知 artifact、已签名完成目录和冲突模式。
+- `README.md`：记录真实中断后的续跑命令和边界。
+
+#### 验证方式与当前状态
+
+先运行新增定向测试和完整 CPU 回归，再用相同 image root、pairs 与输出目录执行 `--resume --require-cuda`。只有完成全部 6787 对并生成签名 `feature_runtime_manifest.json` 后，才升级真实 ALIKED/LightGlue 门；当前仍保持进行中，不把 2840 对 partial H5 当成完成证据。
