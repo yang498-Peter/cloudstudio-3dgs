@@ -29,7 +29,8 @@ cloudstudio-3dgs/
 │   ├── inspect_recording.py   # 体检一条 S1 记录(标定/图像/位姿/点云是否齐全)
 │   ├── reproject_check.py     # Phase 1 硬门槛:点云投影到鱼眼图叠加显示,验证标定+位姿+坐标约定
 │   ├── build_lidar_init.py    # 确定性 voxel 初始化、预算和覆盖率报告、可选 PCA
-│   └── build_per_image_masks.py # 逐图 valid/static/depth-valid mask Manifest
+│   ├── build_per_image_masks.py # 逐图 valid/static/depth-valid mask Manifest
+│   └── build_depth_cache.py   # KB4 ray-range、z-buffer、confidence 稀疏缓存
 ├── converter/     # S1 数据 → gsplat/nerfstudio 可读格式的转换器
 │   ├── s1_common.py           # 共享:确定性 voxel 初始化、位姿换算(c2w_gl→w2c_cv)、PLY/四元数
 │   ├── s1_to_colmap.py        # → COLMAP 格式(gsplat simple_trainer 输入,已实测)
@@ -69,6 +70,15 @@ python tools/build_per_image_masks.py `
   --manifest G:\3dgs-datasets\gs2_manifest\dataset_manifest.json `
   --output G:\3dgs-datasets\gs2_masks `
   --theta-max-deg 95
+
+# 从 PR-04 voxel PLY 建立逐图稀疏 LiDAR ray-range 缓存；去掉 --max-images 才是全量
+python tools/build_depth_cache.py `
+  --manifest G:\3dgs-datasets\gs2_manifest\dataset_manifest.json `
+  --mask-manifest G:\3dgs-datasets\gs2_masks\mask_manifest.json `
+  --point-cloud G:\3dgs-datasets\gs2_lidar_init\sparse_pc.ply `
+  --output G:\3dgs-datasets\gs2_depth `
+  --workers 4 `
+  --max-images 12
 
 # 重投影验证(全项目最高优先级检查点):
 # 把解算点云投影回原始鱼眼图,输出多种坐标约定的叠加图供目视比对
@@ -129,6 +139,7 @@ Python 3.12 和 PyTorch 2.11.0+cu128。执行 `scripts\bootstrap.ps1 -Training` 
 - [x] 路线 PR-03:定量数据 QA、JSON/HTML/叠加图、可配置 fail-closed 门槛
 - [x] 路线 PR-04:确定性 voxel LiDAR 初始化、RGB 位深识别、点数预算和 stride 覆盖率对照
 - [x] 路线 PR-05:逐图片 valid/static/depth-valid mask 契约、统一 crop/factor 和 masked PSNR
+- [x] 路线 PR-07:KB4 LiDAR ray-range、前表面 z-buffer、confidence、mask 和确定性稀疏缓存
 - [x] Phase 1(前置):重投影验证初步通过(gs2 场景目视贴合,约定=c2w_gl),
       正式 Gate 需再覆盖 2–3 场景 + 逐点误差统计
 - [x] Phase 1(前置):COLMAP 数据集导出实测通过(gs2_keyframes:174 图/2 相机/101 万点,

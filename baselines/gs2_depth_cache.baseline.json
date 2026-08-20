@@ -1,0 +1,44 @@
+{
+  "schema_version": 1,
+  "baseline_id": "gs2-lidar-depth-pr07-partial",
+  "inputs": {
+    "dataset_manifest_sha256": "0e4d65b37fb682df97fb2957d4c1ac08b3e8bcaf3c680f68a74989967f56b822",
+    "mask_manifest_sha256": "ad6a814005cb4bd457563fc6093d08281707fee0ea88f1ab594cc71f64eb633b",
+    "point_cloud_sha256": "66fbe6205f5fb8ebde104ef13a3735a9a0d091607ffa9a67936c7586eafc42df",
+    "point_cloud_points": 376906
+  },
+  "configuration": {
+    "algorithm_version": "kb4_ray_zbuffer_v1",
+    "min_range_m": 0.2,
+    "max_range_m": 80.0,
+    "max_theta_deg": 95.0,
+    "confidence_support_points": 3,
+    "confidence_subpixel_sigma_px": 0.75,
+    "max_images": 12
+  },
+  "output": {
+    "complete_dataset": false,
+    "total_dataset_images": 1238,
+    "image_count": 12,
+    "cache_key": "aa6262d8382edf0c88ef3333237afacc81eae1a4af835ec2818d0d6d128122b6",
+    "depth_manifest_sha256": "849527e32661fb7c386b2d2e8fe45593a0936ce3bb3c23174ea49ccbbea49686",
+    "depth_manifest_file_sha256": "f6fa9565f46812d863b43fb95b449737bcb2e92692e42d85c75d46320a64dd34",
+    "depth_files_size_bytes": 22829361,
+    "valid_pixels": {
+      "min": 66384,
+      "p50": 170916.5,
+      "p95": 225255.8,
+      "max": 226248
+    }
+  },
+  "acceptance": {
+    "sphere_plane_error_below_1mm": true,
+    "front_surface_z_buffer": true,
+    "masked_region_has_no_supervision": true,
+    "factor_1_2_4_and_crop": true,
+    "workers_2_4_byte_identical": true,
+    "full_1238_image_cache": "not_run",
+    "full_resolution_las_cache": "not_run",
+    "trainer_depth_loss": "not_run"
+  }
+}

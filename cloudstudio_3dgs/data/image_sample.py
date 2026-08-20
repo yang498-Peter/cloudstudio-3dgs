@@ -53,9 +53,20 @@ def _read_float_array(path: Path, key: str) -> np.ndarray:
         value = np.load(path, allow_pickle=False)
     elif path.suffix.lower() == ".npz":
         with np.load(path, allow_pickle=False) as archive:
-            if key not in archive:
+            actual_key = "range_m" if key == "depth" and "range_m" in archive else key
+            if actual_key not in archive:
                 raise KeyError(f"{path} does not contain array {key!r}")
-            value = archive[key]
+            value = archive[actual_key]
+            if value.ndim == 1 and {"pixel_index", "shape"} <= set(archive.files):
+                shape = np.asarray(archive["shape"], dtype=np.int64)
+                indexes = np.asarray(archive["pixel_index"], dtype=np.int64)
+                if shape.shape != (2,) or len(indexes) != len(value):
+                    raise ValueError(f"invalid sparse depth layout in {path}")
+                dense = np.zeros((int(shape[0]), int(shape[1])), dtype=np.float32)
+                if np.any(indexes < 0) or np.any(indexes >= dense.size):
+                    raise ValueError(f"sparse depth pixel index is outside shape in {path}")
+                dense.flat[indexes] = value
+                value = dense
     else:
         raise ValueError(f"expected .npy or .npz for {key}, got {path}")
     return np.asarray(value, dtype=np.float32)

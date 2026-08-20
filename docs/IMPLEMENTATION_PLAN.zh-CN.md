@@ -240,3 +240,38 @@ PR-04 只完成初始化数据质量闭环；新 PLY 尚未接入正式训练数
 真实 gs2 的 PR-01 Manifest 共 1,238 张有位姿图片。本阶段生成 1,238 个唯一逐图路径和 1,238 个 PNG，总计 22,305,046 字节；左/右几何 valid 比例分别为 0.701814 和 0.720464。两次独立运行的内部 Manifest SHA256 都是 `ad6a814005cb4bd457563fc6093d08281707fee0ea88f1ab594cc71f64eb633b`，JSON 文件 SHA256 都是 `eb4fa2c9691634d30402a694964fb5c0f205388106ff4c795d503af5636ed2c4`。真实首图加载得到 factor 1/2/4 的 2912/1456/728 方形 image 与 mask，尺寸全部一致。
 
 PR-05 只建立逐图数据结构和几何 valid 基线；真实人物/车辆/天空 static mask 属于 PR-06，逐图 LiDAR depth-valid 属于 PR-07，自有 Trainer 消费该契约属于 PR-11。真实动态区域回放和训练画质仍为 `NOT_RUN`，不能据此声明动态剔除或训练质量通过。
+
+## 9. 当前阶段记录：PR-07
+
+### 问题现象
+
+旧流程只把 LiDAR 点写入没有 observation track 的 COLMAP `points3D.bin`，gsplat 示例 Trainer 的 track-based `depth_loss` 因而拿不到有效深度监督。仓库没有逐图 KB4 深度投影、前表面 z-buffer、confidence、combined mask 剔除、缓存身份或并行生成器，也无法证明缓存能与 PR-05 的 factor/crop 同时使用。
+
+### 修改文件
+
+- `cloudstudio_3dgs/geometry/lidar_projection.py`
+- `cloudstudio_3dgs/data/depth_cache.py`
+- `cloudstudio_3dgs/data/image_sample.py`
+- `tools/build_depth_cache.py`
+- `tests/test_lidar_projection.py`
+- `tests/test_depth_cache.py`
+- `baselines/gs2_depth_cache.baseline.json`
+- `README.md`
+
+### 修改内容
+
+- 将局部坐标点变换到逐图相机坐标后使用 KB4 投影，深度语义固定为 Euclidean ray range；按四舍五入像素执行确定性 z-buffer，range 最小的前表面获胜，相同 range 再按源点索引稳定决胜。
+- confidence 由投影点到像素中心的亚像素误差和同像素支持点数共同确定；缓存同时保留 source index、support count、range 和 confidence，便于后续诊断。
+- combined mask 在缓存写出前应用，因此凡是 PR-06 标成动态/天空或 PR-07 标成 depth-invalid 的像素都不会留下监督。当前真实 mask 仍只有几何 valid，不能把合成剔除测试升级为真实动态剔除证据。
+- 缓存使用确定性稀疏 NPZ，只保存有效 pixel index，避免为 2912² 图写入大量零；ZIP 时间戳、数组顺序、dtype 和压缩参数固定。`image_sample` 可直接把稀疏 range/confidence 还原，再与 image/mask 共用 factor 1/2/4 和 full-resolution crop。
+- 全局 cache key 绑定算法版本、数据 Manifest、mask Manifest、点云 SHA256、实际点数、投影配置和选中图片 ID；任一输入或配置变化都会产生新 key。
+- CPU 生成支持线程并行，但 worker 数不进入内容身份；不同 worker 数必须逐字节生成同一 Manifest 和 NPZ。
+- 支持 PR-04 规范 PLY、NPY/NPZ、LAS，以及安装了 laspy 压缩后端时的 LAZ。超过 500 万点的 LAS 默认拒绝无界加载；可显式 `--max-points` 做确定性诊断抽样，正式路径优先使用 PR-04 voxel PLY，避免无界内存和 LAS 写入顺序重新影响产品缓存。超过 100,000 的全局/ECEF 尺度坐标会失败，必须先转换到 S1 局部坐标。
+
+### 验证方式与当前状态
+
+合成球面和 z=4 m 平面的 ray-range 最大误差均低于 1 mm；同一像素的 3/5/7 m 表面只留下 3 m；combined mask 为 false 的动态像素不产生缓存；稀疏缓存还原后在 factor 1/2/4 与 crop 下，image、mask、depth、confidence 尺寸完全一致。小型端到端测试还覆盖 PLY/LAS 输入、并行 1/2 worker 逐字节确定性、缓存读取、partial 状态和配置变更导致 cache key 变化。
+
+真实 gs2 验证使用 PR-04 的 376,906 点 PLY，对 1,238 张图片中均匀选出的 12 张生成缓存。有效深度像素 min/p50/p95/max 为 66,384 / 170,916.5 / 225,255.8 / 226,248，12 个 NPZ 共 22,829,361 字节。4 worker 与 2 worker 两次运行的全部 NPZ 和 Manifest 逐字节一致；cache key 为 `aa6262d8382edf0c88ef3333237afacc81eae1a4af835ec2818d0d6d128122b6`，Manifest 文件 SHA256 为 `f6fa9565f46812d863b43fb95b449737bcb2e92692e42d85c75d46320a64dd34`。真实缓存首帧在 2704² crop 下以 factor 1/2/4 得到 2704/1352/676 方形的 image、mask、depth、confidence，空间尺寸一致。
+
+本次真实结果明确为 `complete_dataset=false`：它只覆盖 12 帧，并使用 PR-04 voxel PLY 而不是 2,843 万点原始 LAS。全量 1,238 帧缓存、全分辨率 LAS 密度对比、真实动态/天空 mask 回放和 Trainer depth loss 均为 `NOT_RUN`；因此 PR-07 只能声明“深度缓存源码与部分真实数据闭环”，不能声明深度训练或画质验收通过。
