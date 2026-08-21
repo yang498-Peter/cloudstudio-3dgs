@@ -606,3 +606,31 @@ Stage 2 模型 SHA `64282ec6...1c04` 的全部 1,114 张训练图完成流式审
 先加入缺模块红测试，旧代码因 `runtime_evidence` 不存在按预期失败。实现后 `tests.test_mcmc_runtime + tests.test_training + tests.test_rig_pose_refinement` 共 `25/25` 通过，完整测试集 `117/117` 通过。
 
 本机 RTX 5070 Laptop、Torch `2.11.0+cu128`、CUDA `12.8` 的实际注册审计结果为 `FAIL`：当前加载扩展只有 `3dgs=false, 3dgut=true, reloc=true`，缺少 `quat_scale_to_covar_preci_fwd`、`quat_scale_to_covar_preci_bwd` 和 `mcmc_perturb_positions`；同时外部 gsplat checkout 正包含另一台机器尚未提交的构建修订，源码身份门也因 dirty worktree 失败。证据 SHA256 为 `73415f98...4d38d`。因此 Gate 1 尚未关闭，非零噪声、真实 relocate/add、forward/backward 执行和中断恢复全部仍为 `NOT_RUN`；本阶段没有启动真实数据训练，也不声明画质提升。
+
+## 17. 当前阶段记录：Gate 1B/1C 跨机 full-MCMC 与恢复等价性
+
+### 问题现象
+
+澳洲机器提交 `6473258` 增加 `--full-mcmc`，并报告在 RTX 5070 Ti、干净 gsplat `f2d1413` 上完成 80 步非零噪声训练，loss 改善 `87.40%`、Gaussian `24→29` 且无 NaN。该提交正确发现：8 点初始化下 `int(1.05N)` 永远不增长，以及 `means_lr=1e-8` 会把 `lr×noise_lr` 缩放后的噪声压到近零。但当时尚未合入 Gate 1A 的统一算子清单和 telemetry，也没有强制制造 dead Gaussian，因此只证明 add 路径发生，不能证明 relocation、fused perturb 注册或中断恢复一致性。
+
+### 修改文件
+
+- `cloudstudio_3dgs/training/checkpoint.py`
+- `cloudstudio_3dgs/training/runtime_evidence.py`
+- `cloudstudio_3dgs/training/trainer.py`
+- `tools/audit_mcmc_runtime.py`
+- `tools/run_synthetic_training_acceptance.py`
+- `tests/test_mcmc_runtime.py`
+- `README.md`
+
+### 修改内容
+
+- Trainer 新增仅供验收工具调用的受控中断入口：在指定步完成 optimizer、MCMC、telemetry 和原子 checkpoint 后抛出带 checkpoint 路径与完成步数的明确异常，不生成伪完整 run Manifest。
+- 新增 checkpoint 全状态比较：递归核对 Gaussian 参数及索引顺序、optimizer、MCMC strategy、采样器、训练 telemetry、Rig 辅助状态、CPU/CUDA RNG、step 和 identity；浮点状态使用显式 `atol/rtol`，整数与 RNG 必须逐值一致。
+- `audit_mcmc_runtime.py --execute-kernels` 在注册检查后实际执行 covariance forward/backward 和 fused `mcmc_perturb_positions`，要求输出与梯度有限且位置确实发生非零变化，避免把“算子名字存在”误写成“kernel 已执行”。
+- `--resume-equivalence` 先运行连续参考，再在同一总步数配置下于中点受控停止并从 checkpoint 恢复；最终比较两个 checkpoint，而不是比较包含运行时长的 run Manifest。
+- full-MCMC 验收后端只在合成验收中把一个初始 opacity 设到 `0.001`，确保 refine 窗口必须真实执行 relocation；24 点初始化继续保证 add 至少为 1。最终 PASS 同时要求 native kernel smoke、`PASS_REGISTERED`、noise 步数等于总步数、refine/relocate/add 均非零、最终 Gaussian 状态有限、loss 改善至少 20%，且 resume 全状态比较通过。
+
+### 验证方式与当前状态
+
+先加入缺少 `compare_checkpoint_payloads` 的红测试，旧代码按预期无法导入；实现后 Gate 1/Trainer/Rig pose 定向测试 `26/26`、完整测试集 `118/118` 通过，CLI、Python 编译与当前阶段 diff/UTF-8 检查通过。提交前以 `--execute-kernels` 重跑本机严格审计，结果仍为 `FAIL`：native smoke 明确记为 `NOT_RUN_INCOMPLETE_RUNTIME`，证据 SHA256 为 `10a5180a...0379`。本机 gsplat checkout 仍含共享未提交构建改动且已加载扩展缺关键算子，所以没有绕过 clean-lock 运行新的 GPU 合成验收；`relocation` 与 `resume_equivalence` 保持 `NOT_RUN`。下一次澳洲机器同步当前分支后，应运行 README 的 `--full-mcmc --resume-equivalence` 命令并提交签名 JSON，只有全部条件通过才能关闭 Gate 1。

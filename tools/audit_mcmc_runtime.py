@@ -18,7 +18,10 @@ if str(ROOT) not in sys.path:
 
 from cloudstudio_3dgs.data.manifest import canonical_json_bytes
 from cloudstudio_3dgs.training.backend import verify_gsplat_runtime
-from cloudstudio_3dgs.training.runtime_evidence import audit_loaded_mcmc_runtime
+from cloudstudio_3dgs.training.runtime_evidence import (
+    audit_loaded_mcmc_runtime,
+    execute_mcmc_native_kernel_smoke,
+)
 
 
 def _atomic_json(path: Path, value: dict) -> None:
@@ -51,7 +54,7 @@ def _sanitize_runtime(runtime: dict) -> dict:
     return {key: runtime[key] for key in sorted(allowed) if key in runtime}
 
 
-def build_evidence(lock_path: Path) -> dict:
+def build_evidence(lock_path: Path, *, execute_kernels: bool = False) -> dict:
     import torch
 
     lock = json.loads(lock_path.read_text(encoding="utf-8"))
@@ -68,12 +71,11 @@ def build_evidence(lock_path: Path) -> dict:
             "clean": False,
         }
     report = audit_loaded_mcmc_runtime(runtime)
+    registration_passed = report["status"] == "PASS_REGISTERED"
     evidence = {
         "schema_version": 1,
         "evidence_type": "cloudstudio_full_mcmc_runtime_registration",
-        "gate_status": "PASS_REGISTRATION_ONLY"
-        if report["status"] == "PASS_REGISTERED"
-        else "FAIL",
+        "gate_status": "PASS_REGISTRATION_ONLY" if registration_passed else "FAIL",
         "environment": {
             "platform": platform.platform(),
             "python": platform.python_version(),
@@ -109,6 +111,25 @@ def build_evidence(lock_path: Path) -> dict:
             "real_gpu_training": "NOT_RUN",
         },
     }
+    if execute_kernels:
+        if registration_passed:
+            try:
+                kernel_smoke = execute_mcmc_native_kernel_smoke()
+            except Exception as exc:
+                kernel_smoke = {
+                    "schema_version": 1,
+                    "status": "FAIL",
+                    "error": f"{type(exc).__name__}: {exc}",
+                }
+        else:
+            kernel_smoke = {
+                "schema_version": 1,
+                "status": "NOT_RUN_INCOMPLETE_RUNTIME",
+            }
+        evidence["native_kernel_smoke"] = kernel_smoke
+        evidence["gate_status"] = (
+            "PASS_KERNEL_SMOKE" if kernel_smoke["status"] == "PASS" else "FAIL"
+        )
     evidence["runtime_evidence_sha256"] = hashlib.sha256(
         canonical_json_bytes(evidence)
     ).hexdigest()
@@ -124,13 +145,16 @@ def main() -> int:
         default=ROOT / "upstream" / "cloudstudio_trainer.lock.json",
     )
     parser.add_argument("--overwrite", action="store_true")
+    parser.add_argument("--execute-kernels", action="store_true")
     args = parser.parse_args()
     if args.output.exists() and not args.overwrite:
         raise FileExistsError(f"runtime evidence already exists: {args.output}")
-    evidence = build_evidence(args.gsplat_lock)
+    evidence = build_evidence(
+        args.gsplat_lock, execute_kernels=args.execute_kernels
+    )
     _atomic_json(args.output, evidence)
     print(json.dumps(evidence, ensure_ascii=False, indent=2, sort_keys=True))
-    return 0 if evidence["gate_status"] == "PASS_REGISTRATION_ONLY" else 2
+    return 0 if str(evidence["gate_status"]).startswith("PASS_") else 2
 
 
 if __name__ == "__main__":

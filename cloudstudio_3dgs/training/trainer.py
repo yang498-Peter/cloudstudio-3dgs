@@ -41,6 +41,18 @@ from cloudstudio_3dgs.training.runtime_evidence import (
 )
 
 
+class ControlledTrainingInterruption(RuntimeError):
+    """Acceptance-only stop raised after an atomic resumable checkpoint."""
+
+    def __init__(self, *, completed_steps: int, checkpoint_path: Path) -> None:
+        self.completed_steps = int(completed_steps)
+        self.checkpoint_path = Path(checkpoint_path)
+        super().__init__(
+            f"controlled interruption after {self.completed_steps} steps: "
+            f"{self.checkpoint_path}"
+        )
+
+
 @dataclass(frozen=True)
 class TrainerConfig:
     run_id: str
@@ -464,10 +476,22 @@ def _save_evaluation_artifacts(
     return frames
 
 
-def train(config: TrainerConfig, *, backend_factory: Any = GsplatBackend) -> dict[str, Any]:
+def train(
+    config: TrainerConfig,
+    *,
+    backend_factory: Any = GsplatBackend,
+    controlled_stop_after_steps: int | None = None,
+) -> dict[str, Any]:
     """Train and write a signed run manifest. No Viewer is created or imported."""
     config.validate()
     import torch
+
+    if controlled_stop_after_steps is not None:
+        controlled_stop_after_steps = int(controlled_stop_after_steps)
+        if not 0 < controlled_stop_after_steps < config.max_steps:
+            raise ValueError(
+                "controlled_stop_after_steps must be between zero and max_steps"
+            )
 
     if not torch.cuda.is_available():
         raise RuntimeError("CUDA is required for the 3DGUT gsplat trainer")
@@ -680,7 +704,12 @@ def train(config: TrainerConfig, *, backend_factory: Any = GsplatBackend) -> dic
             initial_loss = last_metrics["loss"]
         best_loss = min(best_loss, last_metrics["loss"])
         completed = step + 1
-        if completed % config.checkpoint_every == 0 or completed == config.max_steps:
+        checkpoint_due = (
+            completed % config.checkpoint_every == 0
+            or completed == config.max_steps
+            or completed == controlled_stop_after_steps
+        )
+        if checkpoint_due:
             mcmc_telemetry["last_snapshot"] = snapshot_gaussians(
                 params, min_opacity=backend.strategy.min_opacity
             )
@@ -706,6 +735,12 @@ def train(config: TrainerConfig, *, backend_factory: Any = GsplatBackend) -> dic
                 },
                 auxiliary_params=auxiliary_params,
                 auxiliary_optimizers=auxiliary_optimizers,
+            )
+        if completed == controlled_stop_after_steps:
+            torch.cuda.synchronize(config.device)
+            raise ControlledTrainingInterruption(
+                completed_steps=completed,
+                checkpoint_path=checkpoint_path,
             )
 
     torch.cuda.synchronize(config.device)

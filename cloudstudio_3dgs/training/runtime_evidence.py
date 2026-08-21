@@ -123,6 +123,73 @@ def audit_loaded_mcmc_runtime(source_runtime: Mapping[str, Any]) -> dict[str, An
     )
 
 
+def execute_mcmc_native_kernel_smoke(device: str = "cuda:0") -> dict[str, Any]:
+    """Execute covariance forward/backward and fused position perturbation."""
+    import torch
+    from gsplat.cuda._wrapper import quat_scale_to_covar_preci
+
+    if not torch.cuda.is_available() or not str(device).startswith("cuda"):
+        raise RuntimeError("native MCMC kernel smoke requires an explicit CUDA device")
+    quats = torch.zeros((4, 4), dtype=torch.float32, device=device)
+    quats[:, 0] = 1.0
+    quats.requires_grad_(True)
+    scales = torch.full(
+        (4, 3), 0.1, dtype=torch.float32, device=device, requires_grad=True
+    )
+    covariances, _ = quat_scale_to_covar_preci(
+        quats,
+        scales,
+        compute_covar=True,
+        compute_preci=False,
+        triu=False,
+    )
+    assert covariances is not None
+    covariance_loss = covariances.square().sum()
+    covariance_loss.backward()
+    covariance_forward_finite = bool(torch.isfinite(covariances).all().item())
+    covariance_backward_finite = bool(
+        quats.grad is not None
+        and scales.grad is not None
+        and torch.isfinite(quats.grad).all().item()
+        and torch.isfinite(scales.grad).all().item()
+    )
+
+    positions = torch.zeros((4, 3), dtype=torch.float32, device=device)
+    log_scales = torch.full(
+        (4, 3), float(torch.tensor(0.1).log()), dtype=torch.float32, device=device
+    )
+    opacity_logits = torch.full(
+        (4,), float(torch.tensor(0.001).logit()), dtype=torch.float32, device=device
+    )
+    noise = torch.ones_like(positions)
+    torch.ops.gsplat.mcmc_perturb_positions(
+        positions,
+        quats.detach(),
+        log_scales,
+        opacity_logits,
+        noise,
+        1.0,
+    )
+    torch.cuda.synchronize(device)
+    perturb_max_abs_delta = float(positions.abs().max().cpu())
+    perturb_finite = bool(torch.isfinite(positions).all().item())
+    passed = (
+        covariance_forward_finite
+        and covariance_backward_finite
+        and perturb_finite
+        and perturb_max_abs_delta > 0.0
+    )
+    return {
+        "schema_version": 1,
+        "status": "PASS" if passed else "FAIL",
+        "device": str(device),
+        "covariance_forward_finite": covariance_forward_finite,
+        "covariance_backward_finite": covariance_backward_finite,
+        "fused_perturb_finite": perturb_finite,
+        "fused_perturb_max_abs_delta": perturb_max_abs_delta,
+    }
+
+
 def _quantiles(tensor: Any) -> dict[str, float]:
     import torch
 
