@@ -32,6 +32,7 @@ from cloudstudio_3dgs.training.runtime_evidence import (
     sign_full_mcmc_gate_evidence,
     verify_full_mcmc_gate_evidence,
 )
+from cloudstudio_3dgs.training.scale_calibration import MetricScaleCalibrationConfig
 from cloudstudio_3dgs.training.trainer import (
     ControlledTrainingInterruption,
     TrainerConfig,
@@ -371,6 +372,11 @@ def main() -> int:
             factor=1,
             cap_max=64,
             init_scale_m=0.16,
+            metric_scale_calibration=MetricScaleCalibrationConfig(
+                mode="fixed",
+                means_step_fraction=None,
+                noise_std_fraction=None,
+            ),
             rgb_l1_weight=1.0,
             rgb_ssim_weight=0.0,
             lidar_range_weight=0.01,

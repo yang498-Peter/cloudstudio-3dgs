@@ -29,6 +29,7 @@ if str(ROOT) not in sys.path:
 from cloudstudio_3dgs.data.manifest import canonical_json_bytes
 from cloudstudio_3dgs.data.point_cloud import write_binary_ply
 from cloudstudio_3dgs.training.backend import GsplatBackend
+from cloudstudio_3dgs.training.scale_calibration import MetricScaleCalibrationConfig
 from cloudstudio_3dgs.training.trainer import (
     TrainerConfig,
     load_initialization_ply,
@@ -73,6 +74,11 @@ def _trainer_config(paths: dict, run_dir: Path, *, max_steps: int, resume: Path 
         factor=1,
         cap_max=64,
         init_scale_m=0.16,
+        metric_scale_calibration=MetricScaleCalibrationConfig(
+            mode="fixed",
+            means_step_fraction=None,
+            noise_std_fraction=None,
+        ),
         rgb_l1_weight=1.0,
         rgb_ssim_weight=0.0,
         lidar_range_weight=0.01,
@@ -108,6 +114,7 @@ def _config_json(config: TrainerConfig, path: Path) -> None:
         "factor": config.factor,
         "cap_max": config.cap_max,
         "init_scale_m": config.init_scale_m,
+        "metric_scale_calibration": config.metric_scale_calibration.to_dict(),
         "rgb_l1_weight": config.rgb_l1_weight,
         "rgb_ssim_weight": config.rgb_ssim_weight,
         "lidar_range_weight": config.lidar_range_weight,

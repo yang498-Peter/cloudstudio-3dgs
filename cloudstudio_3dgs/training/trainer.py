@@ -28,6 +28,10 @@ from cloudstudio_3dgs.training.losses import (
     masked_rgb_l1,
     masked_rgb_ssim_loss,
 )
+from cloudstudio_3dgs.training.scale_calibration import (
+    MetricScaleCalibrationConfig,
+    build_metric_scale_calibration,
+)
 from cloudstudio_3dgs.training.rig_pose import (
     RigPoseRefinementConfig,
     RigPoseRefiner,
@@ -79,6 +83,9 @@ class TrainerConfig:
     crop: CropWindow | None = None
     cap_max: int = 1_000_000
     init_scale_m: float = 0.05
+    metric_scale_calibration: MetricScaleCalibrationConfig = field(
+        default_factory=MetricScaleCalibrationConfig
+    )
     rgb_l1_weight: float = 0.8
     rgb_ssim_weight: float = 0.2
     lidar_range_weight: float = 0.05
@@ -126,6 +133,10 @@ class TrainerConfig:
         if not isinstance(pose_value, dict):
             raise ValueError("rig_pose_refinement must be an object")
         pose_refinement = RigPoseRefinementConfig(**pose_value)
+        scale_value = value.get("metric_scale_calibration", {})
+        if not isinstance(scale_value, dict):
+            raise ValueError("metric_scale_calibration must be an object")
+        scale_calibration = MetricScaleCalibrationConfig(**scale_value)
         options = {
             key: value[key]
             for key in (
@@ -153,6 +164,7 @@ class TrainerConfig:
             run_id=str(value["run_id"]),
             crop=crop,
             rig_pose_refinement=pose_refinement,
+            metric_scale_calibration=scale_calibration,
             **paths,
             **options,
         )
@@ -168,6 +180,7 @@ class TrainerConfig:
             raise ValueError("cap_max must be greater than four")
         if self.init_scale_m <= 0.0:
             raise ValueError("init_scale_m must be positive")
+        self.metric_scale_calibration.validate()
         weights = (self.rgb_l1_weight, self.rgb_ssim_weight, self.lidar_range_weight)
         if any(weight < 0.0 for weight in weights):
             raise ValueError("loss weights must be non-negative")
@@ -217,8 +230,8 @@ class TrainerConfig:
 
     def contract_dict(self) -> dict[str, Any]:
         return {
-            "schema_version": 1,
-            "algorithm_version": "cloudstudio_gsplat_trainer_v2",
+            "schema_version": 2,
+            "algorithm_version": "cloudstudio_gsplat_trainer_v3",
             "seed": self.seed,
             "max_steps": self.max_steps,
             "factor": self.factor,
@@ -232,6 +245,10 @@ class TrainerConfig:
             },
             "cap_max": self.cap_max,
             "init_scale_m": self.init_scale_m,
+            "initialization": {
+                "fixed_scale_m": self.init_scale_m,
+                **self.metric_scale_calibration.to_dict(),
+            },
             "loss_weights": {
                 "rgb_l1": self.rgb_l1_weight,
                 "rgb_ssim": self.rgb_ssim_weight,
@@ -243,6 +260,10 @@ class TrainerConfig:
                 "depth_composition": "base_depth_valid & ~person_dynamic_mask",
             },
             "learning_rates": dict(sorted(self.learning_rates.items())),
+            "optimizer": {
+                "configured_learning_rates": dict(sorted(self.learning_rates.items())),
+                "means_step_fraction": self.metric_scale_calibration.means_step_fraction,
+            },
             "renderer": {
                 "camera_model": "fisheye",
                 "projection": "3DGUT",
@@ -260,6 +281,7 @@ class TrainerConfig:
                 "refine_every": self.mcmc_refine_every,
                 "noise_injection_stop_iter": self.mcmc_noise_injection_stop_iter,
                 "noise_lr": self.mcmc_noise_lr,
+                "noise_std_fraction": self.metric_scale_calibration.noise_std_fraction,
             },
             "rig_pose_refinement": self.rig_pose_refinement.to_dict(),
             "viewer": False,
@@ -572,6 +594,21 @@ def train(
     _atomic_json(output_dir / "coordinate_transform_manifest.json", coordinate)
     contract = config.contract_dict()
     config_sha256 = hashlib.sha256(canonical_json_bytes(contract)).hexdigest()
+    initialization_sha256 = _sha256_file(config.initialization_ply)
+    xyz, rgb = load_initialization_ply(config.initialization_ply)
+    if len(xyz) >= config.cap_max:
+        raise ValueError(
+            f"initialization has {len(xyz)} Gaussians but cap_max is {config.cap_max}"
+        )
+    initial_scales_m, scale_calibration = build_metric_scale_calibration(
+        xyz,
+        policy=config.metric_scale_calibration,
+        fixed_scale_m=config.init_scale_m,
+        configured_means_lr=float(config.learning_rates["means"]),
+        configured_noise_lr=config.mcmc_noise_lr,
+    )
+    effective_learning_rates = dict(config.learning_rates)
+    effective_learning_rates["means"] = float(scale_calibration["effective_means_lr_m"])
     backend = backend_factory(
         device=config.device,
         cap_max=config.cap_max,
@@ -581,10 +618,9 @@ def train(
             "refine_stop_iter": config.mcmc_refine_stop_iter,
             "refine_every": config.mcmc_refine_every,
             "noise_injection_stop_iter": config.mcmc_noise_injection_stop_iter,
-            "noise_lr": config.mcmc_noise_lr,
+            "noise_lr": float(scale_calibration["effective_noise_lr"]),
         },
     )
-    initialization_sha256 = _sha256_file(config.initialization_ply)
     runtime_contract = {
         key: backend.runtime.get(key)
         for key in ("package", "version", "locked_commit", "source_kind", "commit", "wheel_sha256")
@@ -595,22 +631,18 @@ def train(
         "coordinate_transform_sha256": coordinate["coordinate_transform_sha256"],
         "trainer_config_sha256": config_sha256,
         "initialization_ply_sha256": initialization_sha256,
+        "scale_calibration_sha256": scale_calibration["scale_calibration_sha256"],
         "gsplat_runtime": runtime_contract,
     }
     torch.manual_seed(config.seed)
     torch.cuda.manual_seed_all(config.seed)
     sampler = torch.Generator(device="cpu")
     sampler.manual_seed(config.seed)
-    xyz, rgb = load_initialization_ply(config.initialization_ply)
-    if len(xyz) >= config.cap_max:
-        raise ValueError(
-            f"initialization has {len(xyz)} Gaussians but cap_max is {config.cap_max}"
-        )
     params, optimizers, strategy_state = backend.initialize(
         xyz,
         rgb,
-        init_scale_m=config.init_scale_m,
-        learning_rates=config.learning_rates,
+        init_scales_m=initial_scales_m,
+        learning_rates=effective_learning_rates,
     )
     pose_refiner = None
     pose_optimizer = None
@@ -844,6 +876,7 @@ def train(
             "trainer_contract": contract,
             "gsplat_runtime": backend.runtime,
             "initialization_ply_sha256": initialization_sha256,
+            "metric_scale_calibration": scale_calibration,
             "rig_pose_refinement": pose_report,
             "frames": frames,
             "training": {

@@ -765,3 +765,37 @@ Machine-B 的真实 UK 训练首次运行到质量报告时发现：训练与渲
 ### 验证方式与当前状态
 
 该修复只校正质量评估输入，不改变训练 loss、checkpoint 或 Gaussian 参数。新增定向测试 `1/1` 通过；全仓 `126` 项为 `125 PASS + 1 SKIPPED`，唯一跳过仍是默认环境未指向 clean locked gsplat 的真实 CUDA footprint，本轮 Gate 1 签名证据已在隔离 runtime 中实际覆盖该项。当前状态为 **PASS（源码/CPU 契约）**；Machine-B 当前 30k 运行若在 `62dabe6` 之前启动，旧进程不会自动获得修复，必须以其实际代码 commit 与最终 run Manifest 判断能否直接生成质量报告，不能仅凭“训练完成”升级画质 Gate。
+
+## 23. 当前阶段记录：Gate 2A KNN 尺度与米制 MCMC 噪声定标
+
+### 问题现象
+
+上游 MCMC 的 position perturb 实现对 log-scale 取指数、形成 covariance，再乘 `means_lr × noise_lr`；各向同性近似下名义位移尺度为 `scale² × means_lr × noise_lr`。上游默认 `noise_lr=5e5` 依赖归一化场景，而 CloudStudio 明确使用不归一化的 S1 局部米制坐标。此前把固定 5 cm scale、`means_lr=1.6e-4` 和 `noise_lr=5e5` 直接组合，名义透明高斯单步扰动达到局部 scale 的约 4 倍；真实尸检中均值云从约 ±20 m 扩散到约 200 m，不能继续靠训练步数或 cap 临时压住。
+
+### 修改文件
+
+- `cloudstudio_3dgs/training/scale_calibration.py`
+- `cloudstudio_3dgs/training/backend.py`
+- `cloudstudio_3dgs/training/trainer.py`
+- `tools/audit_metric_scale_calibration.py`
+- `tools/run_synthetic_training_acceptance.py`
+- `tools/run_mcmc_resume_equivalence.py`
+- `tests/test_training.py`
+- `baselines/gs2_metric_scale_calibration.baseline.json`
+- `README.md`
+- `docs/IMPLEMENTATION_PLAN.zh-CN.md`
+
+### 修改内容
+
+- 生产默认从每个 LiDAR 初始化点的 3 个最近邻距离计算 RMS KNN scale，与 upstream 初始化语义一致；以全体中位局部间距作 reference，并把异常稀密点限制在 reference 的 `0.25×..4×`。Backend 接受 `[N]` 或 `[N,3]` 的正有限米制尺度，在参数中继续保存 log-scale，renderer 边界继续只做一次指数。
+- 默认 means LR 为 reference scale 的 `0.0032`，保持原固定 5 cm 配置对应的相对步长；MCMC noise LR 由目标名义扰动 `0.25×reference scale` 反解，不再硬编码 50 万。定标策略、原始参数、有效参数、尺度分布和 canonical SHA 写入 checkpoint identity 与签名 run Manifest，输入 PLY 或策略改变后旧 checkpoint 会 fail-closed。
+- Gate 1 两个合成/恢复工具显式使用 `mode=fixed` 且两个 fraction 为 `null`，保留历史 `init_scale/means_lr/noise_lr`，避免 Gate 2 默认升级悄悄改变 Gate 1 证据含义。
+- 新增只读审计 CLI，可在 GPU 训练前对任意初始化 PLY 输出不含绝对路径、原子写入的定标 evidence；已有输出拒绝覆盖。
+
+### 验证方式与当前状态
+
+合成立方体缩放 10 倍时，每点 KNN scale 与 effective means LR 都精确放大 10 倍，effective noise LR 缩小 100 倍，最终名义 noise 仍保持局部 scale 的 25%；固定显式模式保持 `0.05 / 1.6e-4 / 5e5`，名义比例 4.0，可重放 Gate 1。Backend CPU 测试验证逐点 scale 精确进入 log 参数；签名 baseline 测试会拒绝 effective noise 字段篡改。
+
+真实 PR-04 初始化 PLY `66fbe620...42df` 的 376,906 点完成两份独立文件重放：两份 per-point scale 字节完全相同，报告 SHA 均为 `fcce9850d0683e29194aff76f3229a6663cf720004c59c272a2a2c35d4fc73d4`。定标耗时约 0.35 秒；reference/p50 为 `0.097916096 m`，p95 `0.132621631 m`，959 点（约 0.254%）被钳制；effective means LR 为 `0.0003133315`，effective noise LR 为 `8148.5784`，名义 noise 为 `0.024479024 m`。全仓 `130` 项为 `129 PASS + 1 SKIPPED`；唯一跳过是默认环境的 clean-runtime CUDA footprint，Gate 1 已有独立签名实跑覆盖。
+
+当前状态为 **PASS（Gate 2A 源码、CPU 契约、真实点云定标）**，但真实 GPU 短 A/B 与画质仍为 `NOT_RUN`。下一项继续按 Work Package 推进 SH、local masked SSIM、robust log-range、opacity/scale regularization、周期 golden eval 和 best checkpoint；在这些质量地基完成前，不启动新的正式长训练。

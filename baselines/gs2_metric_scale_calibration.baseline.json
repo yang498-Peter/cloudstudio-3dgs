@@ -1,0 +1,59 @@
+{
+  "schema_version": 1,
+  "baseline_id": "gs2-metric-scale-calibration-gate2",
+  "source": {
+    "baseline": "baselines/gs2_lidar_init.baseline.json",
+    "ply_sha256": "66fbe6205f5fb8ebde104ef13a3735a9a0d091607ffa9a67936c7586eafc42df",
+    "point_count": 376906,
+    "coordinate_frame": "s1_local_metric"
+  },
+  "calibration": {
+    "schema_version": 1,
+    "policy": {
+      "mode": "knn",
+      "knn_neighbors": 3,
+      "scale_multiplier": 1.0,
+      "clamp_min_ratio": 0.25,
+      "clamp_max_ratio": 4.0,
+      "means_step_fraction": 0.0032,
+      "noise_std_fraction": 0.25
+    },
+    "point_count": 376906,
+    "reference_scale_m": 0.09791609644889832,
+    "scale_distribution_m": {
+      "min": 0.02447902411222458,
+      "p50": 0.09791609644889832,
+      "p95": 0.132621631026268,
+      "max": 0.39166438579559326
+    },
+    "invalid_replaced_count": 0,
+    "clipped_count": 959,
+    "raw_scale_distribution_m": {
+      "min": 0.004996014255143412,
+      "p50": 0.09791609704349546,
+      "p95": 0.1326216333900936,
+      "max": 3.6897181837615625
+    },
+    "clamp_min_m": 0.024479024260873866,
+    "clamp_max_m": 0.39166438817398186,
+    "configured_fixed_scale_m": 0.05,
+    "configured_means_lr": 0.00016,
+    "configured_noise_lr": 500000.0,
+    "effective_means_lr_m": 0.0003133315086364746,
+    "effective_noise_lr": 8148.578382912355,
+    "nominal_noise_std_m": 0.02447902411222458,
+    "nominal_noise_std_fraction": 0.25,
+    "scale_calibration_sha256": "fcce9850d0683e29194aff76f3229a6663cf720004c59c272a2a2c35d4fc73d4"
+  },
+  "replay": {
+    "independent_ply_copies": 2,
+    "input_ply_byte_equal": true,
+    "per_point_scales_byte_equal": true,
+    "report_sha256_equal": true
+  },
+  "acceptance": {
+    "cpu_contract": "PASS",
+    "real_gpu_short_ab": "NOT_RUN",
+    "real_quality_gate": "NOT_RUN"
+  }
+}

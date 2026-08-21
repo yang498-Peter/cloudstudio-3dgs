@@ -30,6 +30,11 @@ from cloudstudio_3dgs.training.losses import (
     masked_rgb_l1,
     masked_rgb_ssim_loss,
 )
+from cloudstudio_3dgs.training.scale_calibration import (
+    MetricScaleCalibrationConfig,
+    build_metric_scale_calibration,
+    verify_metric_scale_calibration_report,
+)
 from cloudstudio_3dgs.training.trainer import TrainerConfig, load_initialization_ply
 
 
@@ -425,6 +430,95 @@ class TrainingContractTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "SHA256 mismatch"):
             verify_coordinate_transform_manifest(manifest)
 
+    def test_knn_scales_and_mcmc_noise_follow_local_metric_scale(self) -> None:
+        xyz = np.asarray(
+            [
+                [x, y, z]
+                for x in (0.0, 1.0)
+                for y in (0.0, 1.0)
+                for z in (0.0, 1.0)
+            ],
+            dtype=np.float32,
+        )
+        policy = MetricScaleCalibrationConfig(
+            mode="knn",
+            knn_neighbors=3,
+            means_step_fraction=0.0032,
+            noise_std_fraction=0.25,
+        )
+        base_scales, base = build_metric_scale_calibration(
+            xyz,
+            policy=policy,
+            fixed_scale_m=0.05,
+            configured_means_lr=1.6e-4,
+            configured_noise_lr=500_000.0,
+        )
+        large_scales, large = build_metric_scale_calibration(
+            xyz * 10.0,
+            policy=policy,
+            fixed_scale_m=0.05,
+            configured_means_lr=1.6e-4,
+            configured_noise_lr=500_000.0,
+        )
+
+        np.testing.assert_allclose(base_scales, np.ones(len(xyz)), rtol=1e-6)
+        np.testing.assert_allclose(large_scales, base_scales * 10.0, rtol=1e-6)
+        self.assertAlmostEqual(large["reference_scale_m"], base["reference_scale_m"] * 10.0)
+        self.assertAlmostEqual(
+            large["effective_means_lr_m"], base["effective_means_lr_m"] * 10.0
+        )
+        self.assertAlmostEqual(
+            large["effective_noise_lr"], base["effective_noise_lr"] / 100.0
+        )
+        self.assertAlmostEqual(base["nominal_noise_std_fraction"], 0.25)
+        self.assertAlmostEqual(large["nominal_noise_std_fraction"], 0.25)
+        self.assertAlmostEqual(
+            large["nominal_noise_std_m"], base["nominal_noise_std_m"] * 10.0
+        )
+        self.assertEqual(len(base["scale_calibration_sha256"]), 64)
+
+    def test_fixed_explicit_scale_mode_preserves_gate1_parameters(self) -> None:
+        policy = MetricScaleCalibrationConfig(
+            mode="fixed",
+            means_step_fraction=None,
+            noise_std_fraction=None,
+        )
+        scales, report = build_metric_scale_calibration(
+            np.eye(4, 3, dtype=np.float32),
+            policy=policy,
+            fixed_scale_m=0.05,
+            configured_means_lr=1.6e-4,
+            configured_noise_lr=500_000.0,
+        )
+        np.testing.assert_array_equal(scales, np.full(4, 0.05, dtype=np.float32))
+        self.assertEqual(report["effective_means_lr_m"], 1.6e-4)
+        self.assertEqual(report["effective_noise_lr"], 500_000.0)
+        self.assertAlmostEqual(report["nominal_noise_std_fraction"], 4.0, places=6)
+
+    def test_checked_in_real_metric_scale_baseline_is_bound_and_signed(self) -> None:
+        baseline = json.loads(
+            (ROOT / "baselines" / "gs2_metric_scale_calibration.baseline.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        lidar = json.loads(
+            (ROOT / "baselines" / "gs2_lidar_init.baseline.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        self.assertEqual(baseline["source"]["ply_sha256"], lidar["output"]["ply_sha256"])
+        self.assertEqual(baseline["source"]["point_count"], lidar["output"]["point_count"])
+        self.assertEqual(
+            verify_metric_scale_calibration_report(baseline["calibration"]),
+            baseline["calibration"]["scale_calibration_sha256"],
+        )
+        self.assertEqual(baseline["acceptance"]["cpu_contract"], "PASS")
+        self.assertEqual(baseline["acceptance"]["real_gpu_short_ab"], "NOT_RUN")
+        tampered = json.loads(json.dumps(baseline["calibration"]))
+        tampered["effective_noise_lr"] *= 2.0
+        with self.assertRaisesRegex(ValueError, "SHA256 mismatch"):
+            verify_metric_scale_calibration_report(tampered)
+
     def test_trainer_contract_uses_direct_fisheye_3dgut_mcmc_without_viewer(self) -> None:
         config = TrainerConfig.from_dict(
             {
@@ -446,6 +540,9 @@ class TrainingContractTests(unittest.TestCase):
         self.assertEqual(contract["renderer"]["camera_model"], "fisheye")
         self.assertEqual(contract["renderer"]["range_mode"], "RGB-Ed")
         self.assertEqual(contract["strategy"]["name"], "MCMC")
+        self.assertEqual(contract["initialization"]["mode"], "knn")
+        self.assertEqual(contract["optimizer"]["means_step_fraction"], 0.0032)
+        self.assertEqual(contract["strategy"]["noise_std_fraction"], 0.25)
         self.assertFalse(contract["rig_pose_refinement"]["enabled"])
         self.assertFalse(contract["dynamic_person_mask"]["required"])
         self.assertFalse(contract["viewer"])
@@ -689,6 +786,43 @@ class TorchTrainingContractTests(unittest.TestCase):
 
 @unittest.skipUnless(HAS_TORCH, "torch is an optional training dependency")
 class RenderScaleContractTests(unittest.TestCase):
+    def test_backend_initializes_per_point_metric_knn_scales(self) -> None:
+        import torch
+
+        from cloudstudio_3dgs.training.backend import GsplatBackend
+
+        class Strategy:
+            @staticmethod
+            def check_sanity(params, optimizers) -> None:
+                if set(params) != set(optimizers):
+                    raise AssertionError("parameter/optimizer key mismatch")
+
+            @staticmethod
+            def initialize_state():
+                return {}
+
+        backend = object.__new__(GsplatBackend)
+        backend.torch = torch
+        backend.device = "cpu"
+        backend.strategy = Strategy()
+        xyz = np.eye(4, 3, dtype=np.float32)
+        rgb = np.full((4, 3), 128, dtype=np.uint8)
+        scales = np.array([0.01, 0.02, 0.04, 0.08], dtype=np.float32)
+        params, optimizers, state = backend.initialize(
+            xyz,
+            rgb,
+            init_scales_m=scales,
+            learning_rates={
+                name: 1e-4
+                for name in ("means", "scales", "quats", "opacities", "colors")
+            },
+        )
+        torch.testing.assert_close(
+            params["scales"].exp(), torch.as_tensor(scales)[:, None].repeat(1, 3)
+        )
+        self.assertEqual(set(params), set(optimizers))
+        self.assertEqual(state, {})
+
     def test_backend_converts_stored_log_scales_to_linear(self) -> None:
         import torch
 
