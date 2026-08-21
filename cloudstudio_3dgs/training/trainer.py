@@ -15,8 +15,10 @@ from typing import Any
 import numpy as np
 from PIL import Image
 
+from cloudstudio_3dgs.data.depth_cache import sparse_depth_npz_bytes
 from cloudstudio_3dgs.data.image_sample import CropWindow
 from cloudstudio_3dgs.data.manifest import canonical_json_bytes
+from cloudstudio_3dgs.geometry.lidar_projection import SparseDepthMap
 from cloudstudio_3dgs.evaluation.quality_report import sign_run_manifest
 from cloudstudio_3dgs.training.backend import GsplatBackend
 from cloudstudio_3dgs.training.checkpoint import load_checkpoint, save_checkpoint
@@ -464,7 +466,40 @@ def _save_evaluation_artifacts(
                 rendered_depth_path = prefix.with_name(f"{sample.image_id}_range.npy")
                 lidar_path = prefix.with_name(f"{sample.image_id}_lidar.npz")
                 np.save(rendered_depth_path, rendered_range.detach().cpu().numpy().astype(np.float32))
-                shutil.copyfile(sample.depth_cache_path, lidar_path)
+                # Save the factor/crop-adjusted supervision the trainer actually
+                # consumed, not the raw full-resolution cache: the quality
+                # report compares it against the rendered range at render
+                # resolution, and a 2912-basis cache next to a 728-basis
+                # render fails its shape gate (first exposed by the real ukgs
+                # run; the factor-1 synthetic fixture made the raw copy look
+                # correct). Source indexes and support counts do not survive
+                # the resample, so they carry sentinels and metrics ignore them.
+                assert (
+                    sample.depth_range_m is not None
+                    and sample.depth_confidence is not None
+                    and sample.depth_mask is not None
+                )
+                supervision_valid = (
+                    sample.depth_mask
+                    & np.isfinite(sample.depth_range_m)
+                    & (sample.depth_range_m > 0.0)
+                    & np.isfinite(sample.depth_confidence)
+                    & (sample.depth_confidence > 0.0)
+                )
+                flat_index = np.flatnonzero(supervision_valid.reshape(-1)).astype(np.int32)
+                adjusted = SparseDepthMap(
+                    (int(sample.height), int(sample.width)),
+                    flat_index,
+                    sample.depth_range_m.reshape(-1)[flat_index].astype(np.float32),
+                    np.clip(
+                        sample.depth_confidence.reshape(-1)[flat_index].astype(np.float32),
+                        1e-6,
+                        1.0,
+                    ),
+                    np.full(len(flat_index), -1, dtype=np.int64),
+                    np.zeros(len(flat_index), dtype=np.int32),
+                )
+                lidar_path.write_bytes(sparse_depth_npz_bytes(adjusted))
                 frame.update(
                     {
                         "rendered_depth_path": rendered_depth_path.relative_to(output_dir).as_posix(),
