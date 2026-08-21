@@ -101,6 +101,8 @@ class TrainerConfig:
     lidar_log_range_huber_delta: float = 0.05
     color_model: str = "rgb_sigmoid"
     sh_degree: int = 2
+    sh_degree_interval: int = 1000
+    means_lr_final_factor: float = 1.0
     mcmc_refine_start_iter: int = 500
     mcmc_refine_stop_iter: int = 25_000
     mcmc_refine_every: int = 100
@@ -177,6 +179,8 @@ class TrainerConfig:
                 "lidar_log_range_huber_delta",
                 "color_model",
                 "sh_degree",
+                "sh_degree_interval",
+                "means_lr_final_factor",
                 "mcmc_refine_start_iter",
                 "mcmc_refine_stop_iter",
                 "mcmc_refine_every",
@@ -212,6 +216,10 @@ class TrainerConfig:
             raise ValueError("color_model must be 'rgb_sigmoid' or 'sh'")
         if not 0 <= self.sh_degree <= 3:
             raise ValueError("sh_degree must be within [0, 3]")
+        if self.sh_degree_interval < 0:
+            raise ValueError("sh_degree_interval must be non-negative")
+        if not 0.0 < self.means_lr_final_factor <= 1.0:
+            raise ValueError("means_lr_final_factor must be in (0, 1]")
         weights = (self.rgb_l1_weight, self.rgb_ssim_weight, self.lidar_range_weight)
         if any(weight < 0.0 for weight in weights):
             raise ValueError("loss weights must be non-negative")
@@ -297,6 +305,13 @@ class TrainerConfig:
             "color_model": {
                 "mode": self.color_model,
                 "sh_degree": self.sh_degree if self.color_model == "sh" else None,
+                "sh_degree_interval": self.sh_degree_interval
+                if self.color_model == "sh"
+                else None,
+            },
+            "means_lr_schedule": {
+                "mode": "exponential_to_final_factor",
+                "final_factor": self.means_lr_final_factor,
             },
             "loss_contract": {
                 "rgb_ssim": {
@@ -439,6 +454,7 @@ def _render_supervision_loss(
     config: TrainerConfig,
     c2w_override: Any | None = None,
     rgb_gain: Any | None = None,
+    active_sh_degree: int | None = None,
 ) -> tuple[Any, Any, Any, Any, dict[str, Any]]:
     has_range = "range_m" in tensors and config.lidar_range_weight > 0.0
     rendered, rendered_range, _, info = backend.render(
@@ -446,6 +462,7 @@ def _render_supervision_loss(
         sample,
         with_range=has_range,
         c2w_override=c2w_override,
+        active_sh_degree=active_sh_degree,
     )
     if rgb_gain is not None:
         # Per-frame auto-exposure compensation: scale the render toward the
@@ -807,6 +824,20 @@ def train(
             if pose_refiner is None
             else pose_refiner.apply(sample.rig_frame_id, sample.c2w)
         )
+        if config.means_lr_final_factor < 1.0:
+            # Deterministic function of the step (no scheduler state), so an
+            # interrupted resume lands on exactly the same learning rate.
+            decayed = float(
+                effective_learning_rates["means"]
+                * (config.means_lr_final_factor ** (step / max(1, config.max_steps)))
+            )
+            for group in optimizers["means"].param_groups:
+                group["lr"] = decayed
+        active_sh_degree = None
+        if config.color_model == "sh" and config.sh_degree_interval > 0:
+            active_sh_degree = min(
+                config.sh_degree, step // config.sh_degree_interval
+            )
         loss, l1, ssim, range_loss, info = _render_supervision_loss(
             backend=backend,
             params=params,
@@ -815,6 +846,7 @@ def train(
             config=config,
             c2w_override=c2w_override,
             rgb_gain=None if exposure is None else exposure.gain(sample.image_id),
+            active_sh_degree=active_sh_degree,
         )
         pose_prior = None
         if pose_refiner is not None:

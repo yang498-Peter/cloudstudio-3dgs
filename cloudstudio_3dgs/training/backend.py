@@ -187,6 +187,7 @@ class GsplatBackend:
         *,
         with_range: bool,
         c2w_override: Any | None = None,
+        active_sh_degree: int | None = None,
     ) -> tuple[Any, Any, Any, dict[str, Any]]:
         torch = self.torch
         c2w = torch.as_tensor(
@@ -211,7 +212,12 @@ class GsplatBackend:
             **(
                 {
                     "colors": torch.cat([params["sh0"], params["shN"]], dim=1),
-                    "sh_degree": self.sh_degree,
+                    # Progressive unlock: rasterization evaluates only the first
+                    # (active+1)^2 bands, so early training cannot fake geometry
+                    # with view-dependent color while poses/structure settle.
+                    "sh_degree": self.sh_degree
+                    if active_sh_degree is None
+                    else min(self.sh_degree, max(0, int(active_sh_degree))),
                 }
                 if getattr(self, "color_model", "rgb_sigmoid") == "sh"
                 else {"colors": torch.sigmoid(params["colors"])}
