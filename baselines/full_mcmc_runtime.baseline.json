@@ -24,12 +24,12 @@
         "auxiliary_state",
         "CPU_and_CUDA_RNG_state"
       ],
-      "continuous_run_manifest_sha256": "ed65035703f2012ac41e71027544780901dece607e252781a6a2c7e7ccbdfeaa",
+      "continuous_run_manifest_sha256": "5bddf16eb93097263679b7f447225565ff74ff735a16696956daeab69c7369f9",
       "controlled_stop_step": 40,
-      "max_abs_error": 1.1324882507324219e-06,
+      "max_abs_error": 1.9073486328125e-06,
       "mismatch_count": 0,
       "note": "controlled-stop full-state comparison; complements the kill-based process-level interruption evidence",
-      "resumed_run_manifest_sha256": "efda074dadda5987c965c6f252ec6f147b3cf6a99edfc4b26005800bce0732e6",
+      "resumed_run_manifest_sha256": "8e9a8ac169bc6ec783e6e176adf40c7c275f20a3589f9f078793b16c0d24ac59",
       "rtol": 1e-06,
       "status": "PASS"
     },
@@ -49,14 +49,18 @@
       "run_id": "ukgs-smoke-f4-150k-3k",
       "run_manifest_sha256": "2107c7b10512bfb73d0cd0909dae55f592174cd294d87147d43d8089d7570308"
     },
+    "render_scale_contract": {
+      "note": "all pre-fix render outputs used log-domain scales squared into covariance (~3 m blobs); evidence regenerated after passing linear scales to rasterization. Guarded by RenderScaleContractTests.",
+      "regression_test": "tests/test_training.py::RenderScaleContractTests"
+    },
     "synthetic_full_mcmc": {
       "final_gaussian_count": 29,
       "finite_throughout": true,
       "initial_gaussian_count": 24,
-      "loss_improvement_fraction": 0.8739567466187197,
+      "loss_improvement_fraction": 0.35882732559375125,
       "noise_injection_step_count": 80,
       "refine_event_count": 5,
-      "run_manifest_sha256": "8495221570164b392cdaacda64ede34a0e1e1138c9cd11a34c320b68c88dd306",
+      "run_manifest_sha256": "8e9a8ac169bc6ec783e6e176adf40c7c275f20a3589f9f078793b16c0d24ac59",
       "total_added": 5,
       "total_relocated": 0
     }
@@ -120,6 +124,6 @@
     "source_kind": "clean_vcs",
     "version": "1.5.3"
   },
-  "runtime_evidence_sha256": "c6283affe665a0fbcdaa0285cbc392f6953cc1269c25013b25a45ffd43600a5c",
+  "runtime_evidence_sha256": "1ebc0278b6c104dc374f94c646f76dc910e0489fbece747e9827246c0a0fd6e5",
   "schema_version": 1
 }

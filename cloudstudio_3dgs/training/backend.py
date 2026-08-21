@@ -160,7 +160,14 @@ class GsplatBackend:
         render, alpha, info = self.rasterization(
             means=params["means"],
             quats=params["quats"],
-            scales=params["scales"],
+            # Parameters store log-scales (the convention the upstream MCMC
+            # strategy operates on), but rasterization() expects LINEAR metric
+            # scales - the upstream canonical call is torch.exp(splats["scales"]).
+            # Passing the raw log values squared log(0.05)=-3 into the
+            # covariance, rendering every 5 cm Gaussian as a ~3 m blob: real
+            # scenes collapsed into structureless mush while the 2 m synthetic
+            # fixture still "converged" and hid the bug.
+            scales=torch.exp(params["scales"]),
             opacities=torch.sigmoid(params["opacities"]),
             colors=torch.sigmoid(params["colors"]),
             viewmats=torch.linalg.inv(c2w),

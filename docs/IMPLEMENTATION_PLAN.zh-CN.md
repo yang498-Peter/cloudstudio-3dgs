@@ -667,3 +667,27 @@ Stage 2 模型 SHA `64282ec6...1c04` 的全部 1,114 张训练图完成流式审
 随后同步 Machine-B 分支 `8886ede`：RTX 5070 Ti 的干净锁定 runtime 已证明所有注册算子、covariance/fused perturb 执行、80 步 add `24→29`、kill-based resume、受控中断后的 parameters/optimizer/MCMC/sampler/telemetry/CPU-CUDA RNG 全状态比较，以及 3000 步真实数据 runtime。3DGUT CUDA float atomic 导致连续/恢复运行存在约 `1.13e-6` 的数值漂移，因此 comparator 使用有实测依据的 `atol=5e-6`；这不是 bit-exact 声明。该证据同时明确 `total_relocated=0`，且旧 telemetry 只有 noise branch 调用次数、没有 position delta 探针，却把总门写成 PASS。合并时已保留全部正向证据，并把 baseline 纠正为 `FAIL`，列出“实际 noise 未探测、零 relocation”两个 blocker 后重新计算 SHA；checkpoint 恢复还吸收了 Machine-B 实测发现的 CUDA RNG blob 必须转回 CPU `uint8` 才能传给 `set_rng_state_all` 的修复。
 
 当前本机没有完整 CUDA runtime，因此没有本地重跑合成或真实 3DGS 训练。Gate 1 下一步是在 Machine-B 同步本分支后，以 opacity `1e-8` 的已知 dead Gaussian 和新 position-noise 探针重跑，生成 `full_mcmc_gate_evidence.json` 并通过独立 CLI；在此之前不能由 CPU 单元测试或已有 3000 步 runtime 关闭总门，且该 3000 步运行已明确因 metric-scale MCMC noise 失配不接受画质结论。
+
+## 19. 当前阶段记录：Renderer log-scale/linear-scale 契约修复
+
+### 问题现象
+
+Machine-B 首次真实 1044 图训练的全部验证视图呈无结构灰糊；未训练的 LiDAR 初始化直接渲染同样灰糊，但把同一点云通过数据侧 KB4 做 CPU point-splat 可以看到正确场景结构。逐层排除位姿、点云和相机投影后，定位到 Trainer 参数按 upstream MCMC 约定存储 `log(scale_m)`，而 `gsplat.rasterization()` 接口要求线性米制 scale。旧代码把约 `log(0.05)=-3` 直接送入 covariance，等效把 5 cm Gaussian 画成约 3 m blob；2 m 微型合成场景仍可通过大 blob 的颜色平均降低 loss，所以旧的 80 步“收敛”没有发现该错误。
+
+### 修改文件
+
+- `cloudstudio_3dgs/training/backend.py`
+- `tests/test_training.py`
+- `baselines/full_mcmc_runtime.baseline.json`
+- `docs/IMPLEMENTATION_PLAN.zh-CN.md`
+
+### 修改内容
+
+- 只在 renderer 边界使用 `torch.exp(params["scales"])` 转回线性米制 scale；optimizer、MCMC strategy、checkpoint 和 telemetry 继续保存 log-scale，不引入双重指数或 checkpoint schema 迁移。
+- 增加不依赖 gsplat/CUDA 的 CPU 合约测试，用捕获 rasterization 参数的 fake backend 明确断言存储的 `log(0.1)` 到边界变为 `0.1`；另保留真实 CUDA footprint 测试，四个 z=2 m、scale=0.1 m、f=100 px 的 Gaussian 覆盖像素必须落在有限区间，防止 log-scale 再次洗满整帧。
+- Machine-B 在修复后重新运行 80 步 full-MCMC：loss 改善从旧错误路径的 `87.40%` 修正为 `35.88%`，Gaussian 仍为 `24→29`，full-state resume `mismatch_count=0`、最大绝对漂移约 `1.91e-6`。baseline 保存新 run SHA 和 render-scale 根因，但总门继续因实际 noise delta 未探测、relocation 为零而保持 `FAIL`。
+- 修复前 3000 步真实运行仍只保留为 GPU runtime/资源证据；其渲染质量、历史 smoke PSNR 和任何清晰度结论全部作废，不能作为 Gate 2 或真实 A/B 基线。
+
+### 验证方式与当前状态
+
+`tests.test_training` 共 `16/16` 执行，其中 15 通过；真实 CUDA footprint 因本机 gsplat checkout 非干净锁定 runtime 明确 `SKIPPED`，不能据此声称本机 GPU 验收。全仓 `123` 项测试为 `122 PASS + 1 SKIPPED`，CPU renderer 合约、Gate 1 签名/恢复、BA、mask、depth、Rig 和既有训练契约均通过。Machine-B 已用完整 runtime 生成修复后的合成运行证据，但仍需同步最新 dead-Gaussian/noise-probe/签名 schema 再跑一次，才具备关闭 Gate 1 的条件。
