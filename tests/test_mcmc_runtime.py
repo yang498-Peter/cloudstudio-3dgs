@@ -88,10 +88,28 @@ class MCMCRuntimeReportTests(unittest.TestCase):
             actual = hashlib.sha256(canonical_json_bytes(baseline)).hexdigest()
             self.assertEqual(actual, expected)
             self.assertEqual(baseline["gate_status"], "FAIL")
-            self.assertEqual(
-                baseline["execution_gates"]["interrupted_resume_equivalence"],
-                "NOT_RUN",
-            )
+            gates = baseline["execution_gates"]
+            execution = baseline.get("execution_evidence")
+            if execution is None:
+                self.assertEqual(
+                    gates["interrupted_resume_equivalence"], "NOT_RUN"
+                )
+            else:
+                self.assertEqual(gates["interrupted_resume_equivalence"], "PASS")
+                self.assertEqual(gates["sample_add_occurred"], "PASS")
+                self.assertNotEqual(gates["mcmc_noise_nonzero"], "PASS")
+                self.assertEqual(gates["real_gpu_training"], "PASS_RUNTIME_ONLY")
+                self.assertNotEqual(gates["relocation_occurred"], "PASS")
+                synthetic = execution["synthetic_full_mcmc"]
+                self.assertGreaterEqual(synthetic["total_added"], 1)
+                self.assertEqual(synthetic["total_relocated"], 0)
+                self.assertTrue(
+                    execution["interrupted_resume"]["kill_based_interruption"]
+                )
+                self.assertEqual(execution["full_state_resume"]["status"], "PASS")
+                self.assertEqual(
+                    execution["full_state_resume"]["mismatch_count"], 0
+                )
 
     def _passing_gate_evidence(self) -> dict:
         commit = "a" * 40

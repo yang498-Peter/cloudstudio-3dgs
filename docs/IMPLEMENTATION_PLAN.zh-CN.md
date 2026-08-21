@@ -662,4 +662,8 @@ Stage 2 模型 SHA `64282ec6...1c04` 的全部 1,114 张训练图完成流式审
 
 ### 验证方式与当前状态
 
-先加入缺少签名/验证函数的红测试，旧代码按预期 ImportError；实现后 Gate 1/Trainer 定向测试 `24/24`、完整测试集 `121/121` 通过。测试覆盖签名 PASS、字段篡改、配置 noise 但实际零位移、Backend 真实 position delta 探针、只探测一次，以及既有 checkpoint/Trainer 契约；Python 编译、两个 CLI help、当前阶段 diff 与 UTF-8 乱码检查均通过。当前本机没有完整 CUDA runtime，因此本阶段只实现并验证证据契约，没有启动合成或真实 3DGS 训练；Gate 1 仍等待 Machine-B 生成 `full_mcmc_gate_evidence.json` 并通过独立 CLI，不能由 CPU 单元测试关闭。
+先加入缺少签名/验证函数的红测试，旧代码按预期 ImportError；实现后 Gate 1/Trainer 定向测试 `24/24`、完整测试集 `121/121` 通过。测试覆盖签名 PASS、字段篡改、配置 noise 但实际零位移、Backend 真实 position delta 探针、只探测一次，以及既有 checkpoint/Trainer 契约；Python 编译、两个 CLI help、当前阶段 diff 与 UTF-8 乱码检查均通过。
+
+随后同步 Machine-B 分支 `8886ede`：RTX 5070 Ti 的干净锁定 runtime 已证明所有注册算子、covariance/fused perturb 执行、80 步 add `24→29`、kill-based resume、受控中断后的 parameters/optimizer/MCMC/sampler/telemetry/CPU-CUDA RNG 全状态比较，以及 3000 步真实数据 runtime。3DGUT CUDA float atomic 导致连续/恢复运行存在约 `1.13e-6` 的数值漂移，因此 comparator 使用有实测依据的 `atol=5e-6`；这不是 bit-exact 声明。该证据同时明确 `total_relocated=0`，且旧 telemetry 只有 noise branch 调用次数、没有 position delta 探针，却把总门写成 PASS。合并时已保留全部正向证据，并把 baseline 纠正为 `FAIL`，列出“实际 noise 未探测、零 relocation”两个 blocker 后重新计算 SHA；checkpoint 恢复还吸收了 Machine-B 实测发现的 CUDA RNG blob 必须转回 CPU `uint8` 才能传给 `set_rng_state_all` 的修复。
+
+当前本机没有完整 CUDA runtime，因此没有本地重跑合成或真实 3DGS 训练。Gate 1 下一步是在 Machine-B 同步本分支后，以 opacity `1e-8` 的已知 dead Gaussian 和新 position-noise 探针重跑，生成 `full_mcmc_gate_evidence.json` 并通过独立 CLI；在此之前不能由 CPU 单元测试或已有 3000 步 runtime 关闭总门，且该 3000 步运行已明确因 metric-scale MCMC noise 失配不接受画质结论。

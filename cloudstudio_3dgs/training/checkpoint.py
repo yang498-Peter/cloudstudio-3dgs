@@ -229,9 +229,13 @@ def load_checkpoint(
         raise ValueError("checkpoint auxiliary optimizer names do not match the trainer")
     for name, optimizer in expected_auxiliary_optimizers.items():
         optimizer.load_state_dict(checkpoint_auxiliary_optimizers[name])
-    torch.set_rng_state(payload["torch_rng_state"].cpu())
+    torch.set_rng_state(payload["torch_rng_state"].cpu().to(torch.uint8))
     if torch.cuda.is_available() and payload.get("cuda_rng_state") is not None:
-        torch.cuda.set_rng_state_all(payload["cuda_rng_state"])
+        # torch.load with a CUDA map_location moves the saved RNG blobs onto the
+        # device, but set_rng_state_all requires CPU ByteTensors.
+        torch.cuda.set_rng_state_all(
+            [state.cpu().to(torch.uint8) for state in payload["cuda_rng_state"]]
+        )
     training_state = payload.get("training_state")
     if not isinstance(training_state, dict):
         raise ValueError("checkpoint has no training metric state")

@@ -415,9 +415,18 @@ def main() -> int:
             make_config(resumed_dir, resume_checkpoint),
             backend_factory=backend_factory,
         )
+        # The 3DGUT rasterization backward accumulates gradients through CUDA
+        # float atomics, so summation order differs between otherwise identical
+        # runs and bit-exact state equality is unattainable in principle. On
+        # machine B the sole divergence across the full resumable state was a
+        # 3.7e-7 max-abs drift on the (lr 1e-8, effectively frozen) quats -
+        # angle noise of ~1e-7 rad. Set atol one decade above that floor;
+        # genuine resume bugs (wrong RNG stream, missing optimizer state)
+        # produce mismatches many orders of magnitude larger.
         resume_report = compare_checkpoint_payloads(
             continuous_dir / "checkpoints" / "latest.pt",
             resumed_dir / "checkpoints" / "latest.pt",
+            atol=5e-6,
         )
         resume_report["controlled_stop_step"] = stop_step
         resume_report["continuous_run_manifest_sha256"] = manifest[
