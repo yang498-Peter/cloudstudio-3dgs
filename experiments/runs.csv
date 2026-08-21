@@ -1,4 +1,5 @@
 date,scene,config,init_points,depth_loss_w,psnr_test,ssim_test,lpips_test,psnr_train,depth_absrel,depth_rmse_cm,pct_lt_2cm,pct_lt_5cm,train_time_min,num_gaussians,notes
 ukgs-probe8k-p0_ref,ukgs,8000,4,0.10153,0.5636,1000000,43.2,1.11,0,05bbb4e4988a4b7e55b86524f6c24aa6d95d8535e148e865927f88c35bb27926,gate2 defaults reference
 ukgs-probe8k-p4-parity,ukgs,8000,4,0.10507,0.5611,1000000,44.2,1.73,0.5219,364adb0fea0aa40d1ddb54b05c67c3057d9ecc30025a82253832267ae0c77408,parity preset: exposure+SH3 progressive+meansLR decay 0.01
-ukgs-probe8k-p4b-parity-d015,ukgs,8000,4,0.11678,0.5401,1000000,43.7,1.74,0.5159,c01cc91492598033f827dcffe19a74596d43989d0033aeaa7fdc2ce872f74a6e,parity + lidar weight 0.15 (WINNER -> promoted to default preset)
+ukgs-probe8k-p4b-parity-d015,ukgs,8000,4,0.11678,0.5401,1000000,43.7,1.74,0.5159,c01cc91492598033f827dcffe19a74596d43989d0033aeaa7fdc2ce872f74a6e,parity + lidar weight 0.15 (REJECTED by full-set metrics: PSNR 14.25 vs P4 15.59)
+# correction 2026-08-22: full 106-frame masked metrics overturn the single-view visual call: P4 parity (depth 0.05) wins PSNR 15.59/SSIM 0.5528/dMAE 4.01 vs P4b 14.25/0.5308/3.93; depth weight 0.15 over-regularizes appearance. P4 promoted; 30k rerun uses P4.
