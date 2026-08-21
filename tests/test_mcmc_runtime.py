@@ -59,7 +59,14 @@ class MCMCRuntimeReportTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "quat_scale_to_covar_preci_fwd"):
             require_full_mcmc_runtime(report)
 
-    def test_checked_in_runtime_baseline_is_signed_and_keeps_gate_failed(self) -> None:
+    def test_checked_in_runtime_baseline_is_signed_and_gate_passed(self) -> None:
+        # Machine B (RTX 5070 Ti, full-kernel clean build of the locked commit)
+        # produced the real GPU execution evidence: noise injected on every
+        # step, five refine events adding Gaussians, a kill-based interrupted
+        # resume within 5e-3 relative loss tolerance, and a completed 3000-step
+        # real-data training run. Relocation was invoked but relocated zero
+        # Gaussians because none went dead, and the real-data run is runtime
+        # evidence only - its visual quality is explicitly not accepted.
         baseline = json.loads(
             (ROOT / "baselines" / "full_mcmc_runtime.baseline.json").read_text(
                 encoding="utf-8"
@@ -68,10 +75,17 @@ class MCMCRuntimeReportTests(unittest.TestCase):
         expected = baseline.pop("runtime_evidence_sha256")
         actual = hashlib.sha256(canonical_json_bytes(baseline)).hexdigest()
         self.assertEqual(actual, expected)
-        self.assertEqual(baseline["gate_status"], "FAIL")
-        self.assertEqual(
-            baseline["execution_gates"]["interrupted_resume_equivalence"],
-            "NOT_RUN",
+        self.assertEqual(baseline["gate_status"], "PASS")
+        gates = baseline["execution_gates"]
+        self.assertEqual(gates["interrupted_resume_equivalence"], "PASS")
+        self.assertEqual(gates["sample_add_occurred"], "PASS")
+        self.assertEqual(gates["mcmc_noise_nonzero"], "PASS")
+        self.assertEqual(gates["real_gpu_training"], "PASS_RUNTIME_ONLY")
+        evidence = baseline["execution_evidence"]
+        self.assertGreaterEqual(evidence["synthetic_full_mcmc"]["total_added"], 1)
+        self.assertTrue(evidence["interrupted_resume"]["kill_based_interruption"])
+        self.assertLessEqual(
+            evidence["interrupted_resume"]["loss_relative_difference"], 5e-3
         )
 
 

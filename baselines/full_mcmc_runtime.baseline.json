@@ -1,23 +1,52 @@
 {
   "environment": {
     "cuda_available": true,
-    "gpu": "NVIDIA GeForce RTX 5070 Laptop GPU",
+    "gpu": "NVIDIA GeForce RTX 5070 Ti",
     "platform": "Windows-11-10.0.26200-SP0",
-    "python": "3.12.9",
+    "python": "3.12.10",
     "torch": "2.11.0+cu128",
     "torch_cuda": "12.8"
   },
   "evidence_type": "cloudstudio_full_mcmc_runtime_registration",
-  "execution_gates": {
-    "covariance_forward_backward": "NOT_RUN",
-    "interrupted_resume_equivalence": "NOT_RUN",
-    "mcmc_noise_nonzero": "NOT_RUN",
-    "rasterization_forward_backward": "NOT_RUN",
-    "real_gpu_training": "NOT_RUN",
-    "relocation_occurred": "NOT_RUN",
-    "sample_add_occurred": "NOT_RUN"
+  "execution_evidence": {
+    "interrupted_resume": {
+      "evidence_sha256": "b63cc5bad3479e8757e99c48dc0a8c63c644aaabbffc168c9998526ac880e337",
+      "gaussian_count_equal": true,
+      "interrupted_after_step": 40,
+      "kill_based_interruption": true,
+      "loss_relative_difference": 1.4330394408280102e-07
+    },
+    "real_gpu_training_runtime": {
+      "completed_steps": 3000,
+      "duration_seconds": 7471.82818750001,
+      "gaussian_count": 200000,
+      "note": "runtime evidence only; rendered validation quality is NOT accepted (metric-scale MCMC noise mis-calibration diffuses Gaussians; see Gate 2)",
+      "peak_vram_bytes": 17921091584,
+      "run_id": "ukgs-smoke-f4-150k-3k",
+      "run_manifest_sha256": "2107c7b10512bfb73d0cd0909dae55f592174cd294d87147d43d8089d7570308"
+    },
+    "synthetic_full_mcmc": {
+      "final_gaussian_count": 29,
+      "finite_throughout": true,
+      "initial_gaussian_count": 24,
+      "loss_improvement_fraction": 0.8739567466187197,
+      "noise_injection_step_count": 80,
+      "refine_event_count": 5,
+      "run_manifest_sha256": "8495221570164b392cdaacda64ede34a0e1e1138c9cd11a34c320b68c88dd306",
+      "total_added": 5,
+      "total_relocated": 0
+    }
   },
-  "gate_status": "FAIL",
+  "execution_gates": {
+    "covariance_forward_backward": "PASS",
+    "interrupted_resume_equivalence": "PASS",
+    "mcmc_noise_nonzero": "PASS",
+    "rasterization_forward_backward": "PASS",
+    "real_gpu_training": "PASS_RUNTIME_ONLY",
+    "relocation_occurred": "INVOKED_ZERO_RELOCATED_NO_DEAD_GAUSSIANS",
+    "sample_add_occurred": "PASS"
+  },
+  "gate_status": "PASS",
   "lock": {
     "commit": "f2d14131483644e9977451b6403f6f0b73e6637f",
     "cuda": "12.8",
@@ -31,47 +60,42 @@
   },
   "operator_registration": {
     "build_features": {
-      "3dgs": false,
+      "3dgs": true,
       "3dgut": true,
       "reloc": true
     },
-    "clean_locked_source": false,
+    "clean_locked_source": true,
     "cuda_available": true,
-    "cuda_device_name": "NVIDIA GeForce RTX 5070 Laptop GPU",
+    "cuda_device_name": "NVIDIA GeForce RTX 5070 Ti",
     "evidence_scope": "operator_registration_only",
     "limitations": [
       "registration does not prove forward or backward kernel execution",
       "registration does not prove relocation, sampling, or noise occurred",
       "registration does not prove interrupted-resume equivalence"
     ],
-    "missing_build_features": [
-      "3dgs"
-    ],
-    "missing_native_ops": [
-      "mcmc_perturb_positions",
-      "quat_scale_to_covar_preci_bwd",
-      "quat_scale_to_covar_preci_fwd"
-    ],
+    "missing_build_features": [],
+    "missing_native_ops": [],
     "native_ops": {
-      "mcmc_perturb_positions": false,
+      "mcmc_perturb_positions": true,
       "projection_ut_3dgs_fused": true,
-      "quat_scale_to_covar_preci_bwd": false,
-      "quat_scale_to_covar_preci_fwd": false,
+      "quat_scale_to_covar_preci_bwd": true,
+      "quat_scale_to_covar_preci_fwd": true,
       "rasterize_to_pixels_from_world_3dgs": true,
       "relocation": true
     },
     "sample_add_python_api": true,
     "schema_version": 1,
-    "status": "FAIL_INCOMPLETE_RUNTIME"
+    "status": "PASS_REGISTERED"
   },
-  "provenance_error": "RuntimeError: gsplat checkout has local modifications",
+  "provenance_error": null,
   "runtime": {
-    "clean": false,
-    "commit": null,
+    "clean": true,
+    "commit": "f2d14131483644e9977451b6403f6f0b73e6637f",
     "locked_commit": "f2d14131483644e9977451b6403f6f0b73e6637f",
     "package": "gsplat",
-    "version": null
+    "source_kind": "clean_vcs",
+    "version": "1.5.3"
   },
-  "runtime_evidence_sha256": "73415f987e0b6924f6a3007bd44929d8d6e829d68b58eb64eb23ade867c4d38d",
+  "runtime_evidence_sha256": "36e567f8c415d25d56fa408a6a42f6c964e5c93baa21dcafb332c4fd94ed6142",
   "schema_version": 1
 }
