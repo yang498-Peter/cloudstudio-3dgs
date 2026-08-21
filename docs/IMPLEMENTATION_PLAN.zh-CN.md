@@ -719,3 +719,27 @@ Machine-B 首次真实 1044 图训练的全部验证视图呈无结构灰糊；�
 ### 验证方式与当前状态
 
 先加入缺少 promotion 模块的红测试，旧代码按预期 ImportError；实现后测试证明合法签名可原子落盘、字段篡改无法创建目标文件、已有 PASS 默认不可覆盖。全仓 `125` 项为 `124 PASS + 1 SKIPPED`，Python 编译、CLI help、diff 与 UTF-8 乱码检查通过；唯一跳过仍是本机缺少干净完整 gsplat runtime 的真实 GPU footprint。该工具不生成 GPU 证据，也不会把当前 FAIL baseline 自动升级；Machine-B 严格重跑仍是关闭 Gate 1 的必要条件。
+
+## 21. 当前阶段记录：Gate 1 严格签名证据关闭
+
+### 问题现象
+
+Machine-B 已推送的 `5822147` 修复了 renderer 的 log-scale/linear-scale 契约，但远端分支尚未包含满足最新统一 schema 的 relocation、实际 position-noise、米制 footprint 与签名 promotion 证据。共享 `external/gsplat` 仍有其他机器的未提交构建修改，不能拿它绕过 clean-lock 门；同时，旧报告的 `2h05m → 16m` 应换算为约 `7.8×`，不是 `125×`，后续性能结论必须使用可复核的同配置计时。
+
+### 修改文件
+
+- `baselines/full_mcmc_runtime.baseline.json`
+- `README.md`
+- `docs/IMPLEMENTATION_PLAN.zh-CN.md`
+
+### 修改与执行内容
+
+- 从锁文件指向的 gsplat `f2d14131483644e9977451b6403f6f0b73e6637f` 建立独立干净 checkout，不修改共享 dirty runtime；环境为 Windows 11、Python `3.12.9`、Torch `2.11.0+cu128`、CUDA `12.8`、RTX 5070 Laptop。
+- Windows JIT 构建中确认 `NVCC_CCBIN` 必须指向 MSVC 工具目录；PyTorch 2.11 的 Ninja host compile 仍调用 `cl`，而当前进程同时存在大小写不同的重复 `PATH/Path`。最终在隔离子进程中只保留一条规范化 `Path`，完成全量扩展加载并核对 required-op 缺失数为 `0`。这只是本机环境诊断，不改写仓库构建脚本，也不把 `/FORCE:UNRESOLVED` 的世界空间批处理入口冒充为已执行证据。
+- 使用 `run_synthetic_training_acceptance.py --steps 80 --full-mcmc --resume-equivalence` 生成统一 evidence，再由 `verify_full_mcmc_gate.py` 独立校验，最后通过 `promote_full_mcmc_gate.py` 原子替换 FAIL baseline；没有手工复制或修改签名 JSON。
+
+### 验证方式与当前状态
+
+签名证据 SHA256 为 `6e88d380c15889707950da680fc5f5b53a50b4b5e9179b4e918a05d128f31aa7`，runtime 为干净锁定源码。covariance forward/backward、rasterization forward/backward、fused position perturb、实际 MCMC noise、relocation、sample add、米制 scale rasterization 和中断恢复八类检查全部通过：80/80 步进入 noise，实际非零 position 探针通过，relocate `1`、add `5`、Gaussian `24→29`，四个 0.1 m Gaussian 的 footprint 为 `368 px`，最终状态 finite；连续/恢复 checkpoint 的 parameters、optimizer、MCMC、sampler、telemetry 与 CPU/CUDA RNG 比较为 `0` 失配，最大绝对漂移 `1.9073486328125e-6`，低于有 CUDA 原子噪底依据的 `5e-6` 容差。
+
+当前状态为 **PASS（Gate 1 执行与恢复证据）**。这不升级为真实场景画质验收：修复前全部渲染数值继续作废，Machine-B 的 30k 真实训练在产物和签名推送前保持外部进行中/未验收。本次合成运行的 position-noise 最大位移为 `2.755 m`，说明固定上游噪声对米制大场景可能过强；Gate 2 第一优先项因此是把 means LR、noise LR 与场景尺度/初始化间距绑定，并用一次一变量的真实数据短跑验证，不能直接沿用合成配置。
