@@ -5,7 +5,6 @@ from __future__ import annotations
 import hashlib
 import json
 import os
-import shutil
 import tempfile
 import time
 from dataclasses import dataclass, field
@@ -25,9 +24,14 @@ from cloudstudio_3dgs.training.checkpoint import load_checkpoint, save_checkpoin
 from cloudstudio_3dgs.training.contracts import build_coordinate_transform_manifest
 from cloudstudio_3dgs.training.dataset import S1TrainingDataset, TrainingSample
 from cloudstudio_3dgs.training.losses import (
+    confidence_weighted_log_range_huber,
     confidence_weighted_range_l1,
     masked_rgb_l1,
     masked_rgb_ssim_loss,
+)
+from cloudstudio_3dgs.training.scale_calibration import (
+    MetricScaleCalibrationConfig,
+    build_metric_scale_calibration,
 )
 from cloudstudio_3dgs.training.rig_pose import (
     RigPoseRefinementConfig,
@@ -80,9 +84,17 @@ class TrainerConfig:
     crop: CropWindow | None = None
     cap_max: int = 1_000_000
     init_scale_m: float = 0.05
+    metric_scale_calibration: MetricScaleCalibrationConfig = field(
+        default_factory=MetricScaleCalibrationConfig
+    )
     rgb_l1_weight: float = 0.8
     rgb_ssim_weight: float = 0.2
     lidar_range_weight: float = 0.05
+    ssim_window_size: int = 11
+    ssim_sigma: float = 1.5
+    ssim_min_valid_fraction: float = 0.8
+    lidar_range_loss_mode: str = "robust_log_huber"
+    lidar_log_range_huber_delta: float = 0.05
     mcmc_refine_start_iter: int = 500
     mcmc_refine_stop_iter: int = 25_000
     mcmc_refine_every: int = 100
@@ -127,6 +139,10 @@ class TrainerConfig:
         if not isinstance(pose_value, dict):
             raise ValueError("rig_pose_refinement must be an object")
         pose_refinement = RigPoseRefinementConfig(**pose_value)
+        scale_value = value.get("metric_scale_calibration", {})
+        if not isinstance(scale_value, dict):
+            raise ValueError("metric_scale_calibration must be an object")
+        scale_calibration = MetricScaleCalibrationConfig(**scale_value)
         options = {
             key: value[key]
             for key in (
@@ -141,6 +157,11 @@ class TrainerConfig:
                 "rgb_l1_weight",
                 "rgb_ssim_weight",
                 "lidar_range_weight",
+                "ssim_window_size",
+                "ssim_sigma",
+                "ssim_min_valid_fraction",
+                "lidar_range_loss_mode",
+                "lidar_log_range_huber_delta",
                 "mcmc_refine_start_iter",
                 "mcmc_refine_stop_iter",
                 "mcmc_refine_every",
@@ -154,6 +175,7 @@ class TrainerConfig:
             run_id=str(value["run_id"]),
             crop=crop,
             rig_pose_refinement=pose_refinement,
+            metric_scale_calibration=scale_calibration,
             **paths,
             **options,
         )
@@ -169,11 +191,20 @@ class TrainerConfig:
             raise ValueError("cap_max must be greater than four")
         if self.init_scale_m <= 0.0:
             raise ValueError("init_scale_m must be positive")
+        self.metric_scale_calibration.validate()
         weights = (self.rgb_l1_weight, self.rgb_ssim_weight, self.lidar_range_weight)
         if any(weight < 0.0 for weight in weights):
             raise ValueError("loss weights must be non-negative")
         if self.rgb_l1_weight + self.rgb_ssim_weight <= 0.0:
             raise ValueError("at least one RGB loss weight must be positive")
+        if self.ssim_window_size <= 0 or self.ssim_window_size % 2 == 0:
+            raise ValueError("ssim_window_size must be a positive odd integer")
+        if self.ssim_sigma <= 0.0 or not 0.0 < self.ssim_min_valid_fraction <= 1.0:
+            raise ValueError("SSIM sigma/valid fraction are outside the supported range")
+        if self.lidar_range_loss_mode not in {"linear_l1", "robust_log_huber"}:
+            raise ValueError("lidar_range_loss_mode must be linear_l1 or robust_log_huber")
+        if self.lidar_log_range_huber_delta <= 0.0:
+            raise ValueError("lidar_log_range_huber_delta must be positive")
         expected_lrs = {"means", "scales", "quats", "opacities", "colors"}
         if set(self.learning_rates) != expected_lrs:
             raise ValueError(f"learning_rates must contain exactly {sorted(expected_lrs)}")
@@ -218,8 +249,8 @@ class TrainerConfig:
 
     def contract_dict(self) -> dict[str, Any]:
         return {
-            "schema_version": 1,
-            "algorithm_version": "cloudstudio_gsplat_trainer_v2",
+            "schema_version": 2,
+            "algorithm_version": "cloudstudio_gsplat_trainer_v3",
             "seed": self.seed,
             "max_steps": self.max_steps,
             "factor": self.factor,
@@ -233,10 +264,29 @@ class TrainerConfig:
             },
             "cap_max": self.cap_max,
             "init_scale_m": self.init_scale_m,
+            "initialization": {
+                "fixed_scale_m": self.init_scale_m,
+                **self.metric_scale_calibration.to_dict(),
+            },
             "loss_weights": {
                 "rgb_l1": self.rgb_l1_weight,
                 "rgb_ssim": self.rgb_ssim_weight,
                 "lidar_range": self.lidar_range_weight,
+            },
+            "loss_contract": {
+                "rgb_ssim": {
+                    "mode": "mask_aware_local_gaussian",
+                    "window_size": self.ssim_window_size,
+                    "sigma": self.ssim_sigma,
+                    "minimum_valid_fraction": self.ssim_min_valid_fraction,
+                    "global_masked_ssim": "diagnostic_only",
+                },
+                "lidar_range": {
+                    "mode": self.lidar_range_loss_mode,
+                    "semantics": "euclidean_ray_range_m",
+                    "log_huber_delta": self.lidar_log_range_huber_delta,
+                    "confidence_weighted": True,
+                },
             },
             "dynamic_person_mask": {
                 "required": self.require_person_masks,
@@ -244,6 +294,10 @@ class TrainerConfig:
                 "depth_composition": "base_depth_valid & ~person_dynamic_mask",
             },
             "learning_rates": dict(sorted(self.learning_rates.items())),
+            "optimizer": {
+                "configured_learning_rates": dict(sorted(self.learning_rates.items())),
+                "means_step_fraction": self.metric_scale_calibration.means_step_fraction,
+            },
             "renderer": {
                 "camera_model": "fisheye",
                 "projection": "3DGUT",
@@ -261,6 +315,7 @@ class TrainerConfig:
                 "refine_every": self.mcmc_refine_every,
                 "noise_injection_stop_iter": self.mcmc_noise_injection_stop_iter,
                 "noise_lr": self.mcmc_noise_lr,
+                "noise_std_fraction": self.metric_scale_calibration.noise_std_fraction,
             },
             "rig_pose_refinement": self.rig_pose_refinement.to_dict(),
             "viewer": False,
@@ -366,17 +421,37 @@ def _render_supervision_loss(
         c2w_override=c2w_override,
     )
     l1 = masked_rgb_l1(rendered, tensors["rgb"], tensors["rgb_mask"])
-    ssim = masked_rgb_ssim_loss(rendered, tensors["rgb"], tensors["rgb_mask"])
+    ssim = (
+        masked_rgb_ssim_loss(
+            rendered,
+            tensors["rgb"],
+            tensors["rgb_mask"],
+            window_size=config.ssim_window_size,
+            sigma=config.ssim_sigma,
+            min_valid_fraction=config.ssim_min_valid_fraction,
+        )
+        if config.rgb_ssim_weight > 0.0
+        else rendered.new_zeros(())
+    )
     loss = config.rgb_l1_weight * l1 + config.rgb_ssim_weight * ssim
     range_loss = None
     if has_range:
         assert rendered_range is not None
-        range_loss = confidence_weighted_range_l1(
-            rendered_range,
-            tensors["range_m"],
-            tensors["confidence"],
-            tensors["depth_mask"],
-        )
+        if config.lidar_range_loss_mode == "linear_l1":
+            range_loss = confidence_weighted_range_l1(
+                rendered_range,
+                tensors["range_m"],
+                tensors["confidence"],
+                tensors["depth_mask"],
+            )
+        else:
+            range_loss = confidence_weighted_log_range_huber(
+                rendered_range,
+                tensors["range_m"],
+                tensors["confidence"],
+                tensors["depth_mask"],
+                delta=config.lidar_log_range_huber_delta,
+            )
         loss = loss + config.lidar_range_weight * range_loss
     return loss, l1, ssim, range_loss, info
 
@@ -505,6 +580,10 @@ def _save_evaluation_artifacts(
                         "rendered_depth_path": rendered_depth_path.relative_to(output_dir).as_posix(),
                         "rendered_depth_semantics": "euclidean_ray_range_m",
                         "lidar_depth_cache_path": lidar_path.relative_to(output_dir).as_posix(),
+                        "lidar_depth_cache_semantics": (
+                            "factor_crop_mask_adjusted_euclidean_ray_range_m"
+                        ),
+                        "lidar_depth_valid_pixels": int(len(flat_index)),
                     }
                 )
             frames.append(frame)
@@ -569,6 +648,21 @@ def train(
     _atomic_json(output_dir / "coordinate_transform_manifest.json", coordinate)
     contract = config.contract_dict()
     config_sha256 = hashlib.sha256(canonical_json_bytes(contract)).hexdigest()
+    initialization_sha256 = _sha256_file(config.initialization_ply)
+    xyz, rgb = load_initialization_ply(config.initialization_ply)
+    if len(xyz) >= config.cap_max:
+        raise ValueError(
+            f"initialization has {len(xyz)} Gaussians but cap_max is {config.cap_max}"
+        )
+    initial_scales_m, scale_calibration = build_metric_scale_calibration(
+        xyz,
+        policy=config.metric_scale_calibration,
+        fixed_scale_m=config.init_scale_m,
+        configured_means_lr=float(config.learning_rates["means"]),
+        configured_noise_lr=config.mcmc_noise_lr,
+    )
+    effective_learning_rates = dict(config.learning_rates)
+    effective_learning_rates["means"] = float(scale_calibration["effective_means_lr_m"])
     backend = backend_factory(
         device=config.device,
         cap_max=config.cap_max,
@@ -578,10 +672,9 @@ def train(
             "refine_stop_iter": config.mcmc_refine_stop_iter,
             "refine_every": config.mcmc_refine_every,
             "noise_injection_stop_iter": config.mcmc_noise_injection_stop_iter,
-            "noise_lr": config.mcmc_noise_lr,
+            "noise_lr": float(scale_calibration["effective_noise_lr"]),
         },
     )
-    initialization_sha256 = _sha256_file(config.initialization_ply)
     runtime_contract = {
         key: backend.runtime.get(key)
         for key in ("package", "version", "locked_commit", "source_kind", "commit", "wheel_sha256")
@@ -592,22 +685,18 @@ def train(
         "coordinate_transform_sha256": coordinate["coordinate_transform_sha256"],
         "trainer_config_sha256": config_sha256,
         "initialization_ply_sha256": initialization_sha256,
+        "scale_calibration_sha256": scale_calibration["scale_calibration_sha256"],
         "gsplat_runtime": runtime_contract,
     }
     torch.manual_seed(config.seed)
     torch.cuda.manual_seed_all(config.seed)
     sampler = torch.Generator(device="cpu")
     sampler.manual_seed(config.seed)
-    xyz, rgb = load_initialization_ply(config.initialization_ply)
-    if len(xyz) >= config.cap_max:
-        raise ValueError(
-            f"initialization has {len(xyz)} Gaussians but cap_max is {config.cap_max}"
-        )
     params, optimizers, strategy_state = backend.initialize(
         xyz,
         rgb,
-        init_scale_m=config.init_scale_m,
-        learning_rates=config.learning_rates,
+        init_scales_m=initial_scales_m,
+        learning_rates=effective_learning_rates,
     )
     pose_refiner = None
     pose_optimizer = None
@@ -728,8 +817,13 @@ def train(
             "loss": float(loss.detach().cpu()),
             "rgb_l1": float(l1.detach().cpu()),
             "rgb_ssim_loss": float(ssim.detach().cpu()),
-            "lidar_range_l1_m": None
+            "rgb_local_ssim_loss": float(ssim.detach().cpu()),
+            "lidar_range_loss": None
             if range_loss is None
+            else float(range_loss.detach().cpu()),
+            "lidar_range_loss_mode": config.lidar_range_loss_mode,
+            "lidar_range_l1_m": None
+            if range_loss is None or config.lidar_range_loss_mode != "linear_l1"
             else float(range_loss.detach().cpu()),
             "rig_pose_prior": None
             if pose_prior is None
@@ -841,6 +935,7 @@ def train(
             "trainer_contract": contract,
             "gsplat_runtime": backend.runtime,
             "initialization_ply_sha256": initialization_sha256,
+            "metric_scale_calibration": scale_calibration,
             "rig_pose_refinement": pose_report,
             "frames": frames,
             "training": {

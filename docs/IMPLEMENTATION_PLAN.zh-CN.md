@@ -634,3 +634,196 @@ Stage 2 模型 SHA `64282ec6...1c04` 的全部 1,114 张训练图完成流式审
 ### 验证方式与当前状态
 
 先加入缺少 `compare_checkpoint_payloads` 的红测试，旧代码按预期无法导入；实现后 Gate 1/Trainer/Rig pose 定向测试 `26/26`、完整测试集 `118/118` 通过，CLI、Python 编译与当前阶段 diff/UTF-8 检查通过。提交前以 `--execute-kernels` 重跑本机严格审计，结果仍为 `FAIL`：native smoke 明确记为 `NOT_RUN_INCOMPLETE_RUNTIME`，证据 SHA256 为 `10a5180a...0379`。本机 gsplat checkout 仍含共享未提交构建改动且已加载扩展缺关键算子，所以没有绕过 clean-lock 运行新的 GPU 合成验收；`relocation` 与 `resume_equivalence` 保持 `NOT_RUN`。下一次澳洲机器同步当前分支后，应运行 README 的 `--full-mcmc --resume-equivalence` 命令并提交签名 JSON，只有全部条件通过才能关闭 Gate 1。
+
+## 18. 当前阶段记录：Gate 1D 实际噪声与签名 Exit Gate 证据
+
+### 问题现象
+
+现有 telemetry 的 `noise_injection_step_count` 只证明配置使 MCMC noise 分支被调用，不能证明训练中的 Gaussian position 发生过非零位移；旧的 `synthetic_acceptance.json` 也没有把运行时来源、kernel smoke、refine 分布、resume 比较和每项 Exit Gate 绑定成一个可独立校验的签名证据。另一台 GPU 机器即使终端显示训练成功，仍可能因零幅度 noise、漏跑 resume 或 JSON 被修改而被误升级为 Gate 1 PASS。
+
+### 修改文件
+
+- `cloudstudio_3dgs/training/runtime_evidence.py`
+- `cloudstudio_3dgs/training/backend.py`
+- `tools/run_synthetic_training_acceptance.py`
+- `tools/verify_full_mcmc_gate.py`
+- `tests/test_mcmc_runtime.py`
+- `README.md`
+
+### 修改内容
+
+- MCMC strategy 调用前后只对最多 256 个 Gaussian 做一次轻量 position 探针；探针位于 optimizer step 之后且避开 refine 边界，因此测得的非零 delta 来自实际 noise 路径，而不是 Adam、relocation 或 add。首次观察到非零位移后停止复制，避免在生产点数上逐步增加显存和同步成本。
+- 探针完成标记写入 MCMC strategy state，而不是仅存在 Backend 内存中；checkpoint 会保存和恢复该标记，防止中断恢复后重复探测造成 telemetry 与 uninterrupted 参考不一致。
+- full-MCMC acceptance 新增实际 noise probe 次数、非零次数、最大位移、完整 refine event、Gaussian count curve、总 steps 和明确 `gate_status`。仅配置调用 noise 但实际 delta 为零时，Gate 必须失败。
+- 验收后端的已知 dead Gaussian 从 opacity `0.001` 调低到 `1e-8`，使其在首次 refine 前不会被 opacity 梯度抬过 `min_opacity`；Machine-B 若仍未观察到 relocation，签名 Gate 必须失败而不是把“调用过 relocation 分支但零个对象”当作 PASS。
+- 新增 `cloudstudio_full_mcmc_gate` 签名 schema，把 GPU/Torch/CUDA、锁定 gsplat commit、clean runtime、native covariance/fused perturb smoke、真实训练、relocate/add、分布曲线和 checkpoint 全状态恢复比较绑定到一个 canonical SHA256。
+- 新增独立验证 CLI。验证器要求六项 execution gate 全为 PASS、runtime 与 repo lock 完全一致、loss 至少改善 20%、Gaussian 数量与 add 计数一致、noise 实际非零、relocation 非零、最终状态有限、曲线单调一致，以及连续/恢复 step 和 Gaussian identity/count 无 mismatch。任何字段篡改都会先触发签名失败。
+- checked-in baseline 测试兼容当前 fail-closed registration schema 和未来 Machine-B 提交的完整 PASS schema；在完整签名证据通过验证前，现有 FAIL baseline 不会被自动覆盖。
+
+### 验证方式与当前状态
+
+先加入缺少签名/验证函数的红测试，旧代码按预期 ImportError；实现后 Gate 1/Trainer 定向测试 `24/24`、完整测试集 `121/121` 通过。测试覆盖签名 PASS、字段篡改、配置 noise 但实际零位移、Backend 真实 position delta 探针、只探测一次，以及既有 checkpoint/Trainer 契约；Python 编译、两个 CLI help、当前阶段 diff 与 UTF-8 乱码检查均通过。
+
+随后同步 Machine-B 分支 `8886ede`：RTX 5070 Ti 的干净锁定 runtime 已证明所有注册算子、covariance/fused perturb 执行、80 步 add `24→29`、kill-based resume、受控中断后的 parameters/optimizer/MCMC/sampler/telemetry/CPU-CUDA RNG 全状态比较，以及 3000 步真实数据 runtime。3DGUT CUDA float atomic 导致连续/恢复运行存在约 `1.13e-6` 的数值漂移，因此 comparator 使用有实测依据的 `atol=5e-6`；这不是 bit-exact 声明。该证据同时明确 `total_relocated=0`，且旧 telemetry 只有 noise branch 调用次数、没有 position delta 探针，却把总门写成 PASS。合并时已保留全部正向证据，并把 baseline 纠正为 `FAIL`，列出“实际 noise 未探测、零 relocation”两个 blocker 后重新计算 SHA；checkpoint 恢复还吸收了 Machine-B 实测发现的 CUDA RNG blob 必须转回 CPU `uint8` 才能传给 `set_rng_state_all` 的修复。
+
+当前本机没有完整 CUDA runtime，因此没有本地重跑合成或真实 3DGS 训练。Gate 1 下一步是在 Machine-B 同步本分支后，以 opacity `1e-8` 的已知 dead Gaussian 和新 position-noise 探针重跑，生成 `full_mcmc_gate_evidence.json` 并通过独立 CLI；在此之前不能由 CPU 单元测试或已有 3000 步 runtime 关闭总门，且该 3000 步运行已明确因 metric-scale MCMC noise 失配不接受画质结论。
+
+## 19. 当前阶段记录：Renderer log-scale/linear-scale 契约修复
+
+### 问题现象
+
+Machine-B 首次真实 1044 图训练的全部验证视图呈无结构灰糊；未训练的 LiDAR 初始化直接渲染同样灰糊，但把同一点云通过数据侧 KB4 做 CPU point-splat 可以看到正确场景结构。逐层排除位姿、点云和相机投影后，定位到 Trainer 参数按 upstream MCMC 约定存储 `log(scale_m)`，而 `gsplat.rasterization()` 接口要求线性米制 scale。旧代码把约 `log(0.05)=-3` 直接送入 covariance，等效把 5 cm Gaussian 画成约 3 m blob；2 m 微型合成场景仍可通过大 blob 的颜色平均降低 loss，所以旧的 80 步“收敛”没有发现该错误。
+
+### 修改文件
+
+- `cloudstudio_3dgs/training/backend.py`
+- `cloudstudio_3dgs/training/runtime_evidence.py`
+- `tests/test_training.py`
+- `tests/test_mcmc_runtime.py`
+- `tools/run_synthetic_training_acceptance.py`
+- `baselines/full_mcmc_runtime.baseline.json`
+- `README.md`
+- `docs/IMPLEMENTATION_PLAN.zh-CN.md`
+
+### 修改内容
+
+- 只在 renderer 边界使用 `torch.exp(params["scales"])` 转回线性米制 scale；optimizer、MCMC strategy、checkpoint 和 telemetry 继续保存 log-scale，不引入双重指数或 checkpoint schema 迁移。
+- 增加不依赖 gsplat/CUDA 的 CPU 合约测试，用捕获 rasterization 参数的 fake backend 明确断言存储的 `log(0.1)` 到边界变为 `0.1`；另保留真实 CUDA footprint 测试，四个 z=2 m、scale=0.1 m、f=100 px 的 Gaussian 覆盖像素必须落在有限区间，防止 log-scale 再次洗满整帧。
+- Machine-B 在修复后重新运行 80 步 full-MCMC：loss 改善从旧错误路径的 `87.40%` 修正为 `35.88%`，Gaussian 仍为 `24→29`，full-state resume `mismatch_count=0`、最大绝对漂移约 `1.91e-6`。baseline 保存新 run SHA 和 render-scale 根因，但总门继续因实际 noise delta 未探测、relocation 为零而保持 `FAIL`。
+- 修复前 3000 步真实运行仍只保留为 GPU runtime/资源证据；其渲染质量、历史 smoke PSNR 和任何清晰度结论全部作废，不能作为 Gate 2 或真实 A/B 基线。
+- 将同一个真实 GPU footprint smoke 接入 `run_synthetic_training_acceptance.py` 和签名 `cloudstudio_full_mcmc_gate`：四个已知米制 Gaussian 的 alpha 必须有限，且覆盖像素落在 `40..4000`。独立 verifier 新增 `metric_scale_rasterization` 必过项；仅 loss 收敛、算子注册或源码测试通过，都不能代替 renderer 的实际尺度契约。
+
+### 验证方式与当前状态
+
+`tests.test_training` 共 `16/16` 执行，其中 15 通过；真实 CUDA footprint 因本机 gsplat checkout 非干净锁定 runtime 明确 `SKIPPED`，不能据此声称本机 GPU 验收。签名 verifier 另有红/绿测试证明缺少 `metric_scale_rasterization` 时旧实现会误 PASS、新实现会拒绝。全仓 `124` 项测试为 `123 PASS + 1 SKIPPED`，CPU renderer 合约、Gate 1 签名/恢复、BA、mask、depth、Rig 和既有训练契约均通过。Machine-B 已用完整 runtime 生成修复后的合成运行证据，但仍需同步最新 dead-Gaussian/noise-probe/metric-scale/签名 schema 再跑一次，才具备关闭 Gate 1 的条件。
+
+## 20. 当前阶段记录：Gate 1 签名 baseline 原子升级
+
+### 问题现象
+
+此前 README 只要求先运行 verifier，再由操作者手工把 `full_mcmc_gate_evidence.json` 复制成 checked-in baseline。验证和复制是两个独立动作，存在选错运行目录、复制验证前文件、写到一半中断，以及无意覆盖已有 PASS 证据的风险；这些都会让“验证通过”与最终提交的 JSON 失去事务一致性。
+
+### 修改文件
+
+- `tools/promote_full_mcmc_gate.py`
+- `tests/test_mcmc_runtime.py`
+- `README.md`
+- `docs/IMPLEMENTATION_PLAN.zh-CN.md`
+
+### 修改内容
+
+- 新增唯一 promotion 入口：先用 repo 的 `cloudstudio_trainer.lock.json` 对完整签名 evidence 做 fail-closed 验证，只有所有 execution gate、runtime provenance、实际 noise、relocation/add、metric-scale footprint 和 resume 全部 PASS 才允许写 baseline。
+- 输出使用同目录临时文件、UTF-8/LF、flush、`fsync` 和 `os.replace` 原子替换；验证失败时目标文件不存在或保持原样。
+- 当前 FAIL baseline 可以被新的 PASS evidence 升级；若目标已经是 PASS，默认抛出 `FileExistsError`，只有显式 `--replace-pass` 才允许经人工审查后的替换，避免较弱或错误运行静默覆盖已接受证据。
+
+### 验证方式与当前状态
+
+先加入缺少 promotion 模块的红测试，旧代码按预期 ImportError；实现后测试证明合法签名可原子落盘、字段篡改无法创建目标文件、已有 PASS 默认不可覆盖。全仓 `125` 项为 `124 PASS + 1 SKIPPED`，Python 编译、CLI help、diff 与 UTF-8 乱码检查通过；唯一跳过仍是本机缺少干净完整 gsplat runtime 的真实 GPU footprint。该工具不生成 GPU 证据，也不会把当前 FAIL baseline 自动升级；Machine-B 严格重跑仍是关闭 Gate 1 的必要条件。
+
+## 21. 当前阶段记录：Gate 1 严格签名证据关闭
+
+### 问题现象
+
+Machine-B 已推送的 `5822147` 修复了 renderer 的 log-scale/linear-scale 契约，但远端分支尚未包含满足最新统一 schema 的 relocation、实际 position-noise、米制 footprint 与签名 promotion 证据。共享 `external/gsplat` 仍有其他机器的未提交构建修改，不能拿它绕过 clean-lock 门；同时，旧报告的 `2h05m → 16m` 应换算为约 `7.8×`，不是 `125×`，后续性能结论必须使用可复核的同配置计时。
+
+### 修改文件
+
+- `baselines/full_mcmc_runtime.baseline.json`
+- `README.md`
+- `docs/IMPLEMENTATION_PLAN.zh-CN.md`
+
+### 修改与执行内容
+
+- 从锁文件指向的 gsplat `f2d14131483644e9977451b6403f6f0b73e6637f` 建立独立干净 checkout，不修改共享 dirty runtime；环境为 Windows 11、Python `3.12.9`、Torch `2.11.0+cu128`、CUDA `12.8`、RTX 5070 Laptop。
+- Windows JIT 构建中确认 `NVCC_CCBIN` 必须指向 MSVC 工具目录；PyTorch 2.11 的 Ninja host compile 仍调用 `cl`，而当前进程同时存在大小写不同的重复 `PATH/Path`。最终在隔离子进程中只保留一条规范化 `Path`，完成全量扩展加载并核对 required-op 缺失数为 `0`。这只是本机环境诊断，不改写仓库构建脚本，也不把 `/FORCE:UNRESOLVED` 的世界空间批处理入口冒充为已执行证据。
+- 使用 `run_synthetic_training_acceptance.py --steps 80 --full-mcmc --resume-equivalence` 生成统一 evidence，再由 `verify_full_mcmc_gate.py` 独立校验，最后通过 `promote_full_mcmc_gate.py` 原子替换 FAIL baseline；没有手工复制或修改签名 JSON。
+
+### 验证方式与当前状态
+
+签名证据 SHA256 为 `6e88d380c15889707950da680fc5f5b53a50b4b5e9179b4e918a05d128f31aa7`，runtime 为干净锁定源码。covariance forward/backward、rasterization forward/backward、fused position perturb、实际 MCMC noise、relocation、sample add、米制 scale rasterization 和中断恢复八类检查全部通过：80/80 步进入 noise，实际非零 position 探针通过，relocate `1`、add `5`、Gaussian `24→29`，四个 0.1 m Gaussian 的 footprint 为 `368 px`，最终状态 finite；连续/恢复 checkpoint 的 parameters、optimizer、MCMC、sampler、telemetry 与 CPU/CUDA RNG 比较为 `0` 失配，最大绝对漂移 `1.9073486328125e-6`，低于有 CUDA 原子噪底依据的 `5e-6` 容差。
+
+当前状态为 **PASS（Gate 1 执行与恢复证据）**。这不升级为真实场景画质验收：修复前全部渲染数值继续作废，Machine-B 的 30k 真实训练在产物和签名推送前保持外部进行中/未验收。本次合成运行的 position-noise 最大位移为 `2.755 m`，说明固定上游噪声对米制大场景可能过强；Gate 2 第一优先项因此是把 means LR、noise LR 与场景尺度/初始化间距绑定，并用一次一变量的真实数据短跑验证，不能直接沿用合成配置。
+
+## 22. 当前阶段记录：factor 后 LiDAR 评估产物对齐
+
+### 问题现象
+
+Machine-B 的真实 UK 训练首次运行到质量报告时发现：训练与渲染使用 `factor=4` 后的 728×728 图像和 LiDAR supervision，但 `_save_evaluation_artifacts` 仍把 2912×2912 原始 depth cache 原样复制到运行目录。质量报告按设计要求 RGB mask、rendered range 和 LiDAR target 空间尺寸完全一致，因此真实运行在这里 fail-closed；历史 factor=1 合成 fixture 让这个错误潜伏。
+
+### 修改文件
+
+- `cloudstudio_3dgs/training/trainer.py`
+- `tests/test_training.py`
+- `docs/IMPLEMENTATION_PLAN.zh-CN.md`
+
+### 修改内容
+
+- 吸收 Machine-B 提交 `62dabe6`：评估产物不再复制 full-resolution 源 cache，而是从 Dataset 已完成 factor、crop、base/person/depth-valid mask 合成后的 `depth_range_m`、`depth_confidence` 和 `depth_mask` 重建确定性稀疏 NPZ。
+- 运行 Manifest 的逐帧记录新增 `lidar_depth_cache_semantics=factor_crop_mask_adjusted_euclidean_ray_range_m` 和有效像素数，明确该产物是评估视图监督，不伪装成保留原始 point provenance 的投影 cache；重采样后不再成立的 `source_index/support_count` 使用 `-1/0` 哨兵，质量指标只消费 range、confidence 与 valid pixel。
+- 新增 CPU 回归：源 cache 路径故意不存在，证明实现不能退回复制；同时断言输出 shape、被 mask/NaN/零 confidence 排除后的精确 pixel index、range/confidence、provenance 哨兵和两次输出字节确定性。
+
+### 验证方式与当前状态
+
+该修复只校正质量评估输入，不改变训练 loss、checkpoint 或 Gaussian 参数。新增定向测试 `1/1` 通过；全仓 `126` 项为 `125 PASS + 1 SKIPPED`，唯一跳过仍是默认环境未指向 clean locked gsplat 的真实 CUDA footprint，本轮 Gate 1 签名证据已在隔离 runtime 中实际覆盖该项。当前状态为 **PASS（源码/CPU 契约）**；Machine-B 当前 30k 运行若在 `62dabe6` 之前启动，旧进程不会自动获得修复，必须以其实际代码 commit 与最终 run Manifest 判断能否直接生成质量报告，不能仅凭“训练完成”升级画质 Gate。
+
+## 23. 当前阶段记录：Gate 2A KNN 尺度与米制 MCMC 噪声定标
+
+### 问题现象
+
+上游 MCMC 的 position perturb 实现对 log-scale 取指数、形成 covariance，再乘 `means_lr × noise_lr`；各向同性近似下名义位移尺度为 `scale² × means_lr × noise_lr`。上游默认 `noise_lr=5e5` 依赖归一化场景，而 CloudStudio 明确使用不归一化的 S1 局部米制坐标。此前把固定 5 cm scale、`means_lr=1.6e-4` 和 `noise_lr=5e5` 直接组合，名义透明高斯单步扰动达到局部 scale 的约 4 倍；真实尸检中均值云从约 ±20 m 扩散到约 200 m，不能继续靠训练步数或 cap 临时压住。
+
+### 修改文件
+
+- `cloudstudio_3dgs/training/scale_calibration.py`
+- `cloudstudio_3dgs/training/backend.py`
+- `cloudstudio_3dgs/training/trainer.py`
+- `tools/audit_metric_scale_calibration.py`
+- `tools/run_synthetic_training_acceptance.py`
+- `tools/run_mcmc_resume_equivalence.py`
+- `tests/test_training.py`
+- `baselines/gs2_metric_scale_calibration.baseline.json`
+- `README.md`
+- `docs/IMPLEMENTATION_PLAN.zh-CN.md`
+
+### 修改内容
+
+- 生产默认从每个 LiDAR 初始化点的 3 个最近邻距离计算 RMS KNN scale，与 upstream 初始化语义一致；以全体中位局部间距作 reference，并把异常稀密点限制在 reference 的 `0.25×..4×`。Backend 接受 `[N]` 或 `[N,3]` 的正有限米制尺度，在参数中继续保存 log-scale，renderer 边界继续只做一次指数。
+- 默认 means LR 为 reference scale 的 `0.0032`，保持原固定 5 cm 配置对应的相对步长；MCMC noise LR 由目标名义扰动 `0.25×reference scale` 反解，不再硬编码 50 万。定标策略、原始参数、有效参数、尺度分布和 canonical SHA 写入 checkpoint identity 与签名 run Manifest，输入 PLY 或策略改变后旧 checkpoint 会 fail-closed。
+- Gate 1 两个合成/恢复工具显式使用 `mode=fixed` 且两个 fraction 为 `null`，保留历史 `init_scale/means_lr/noise_lr`，避免 Gate 2 默认升级悄悄改变 Gate 1 证据含义。
+- 新增只读审计 CLI，可在 GPU 训练前对任意初始化 PLY 输出不含绝对路径、原子写入的定标 evidence；已有输出拒绝覆盖。
+
+### 验证方式与当前状态
+
+合成立方体缩放 10 倍时，每点 KNN scale 与 effective means LR 都精确放大 10 倍，effective noise LR 缩小 100 倍，最终名义 noise 仍保持局部 scale 的 25%；固定显式模式保持 `0.05 / 1.6e-4 / 5e5`，名义比例 4.0，可重放 Gate 1。Backend CPU 测试验证逐点 scale 精确进入 log 参数；签名 baseline 测试会拒绝 effective noise 字段篡改。
+
+真实 PR-04 初始化 PLY `66fbe620...42df` 的 376,906 点完成两份独立文件重放：两份 per-point scale 字节完全相同，报告 SHA 均为 `fcce9850d0683e29194aff76f3229a6663cf720004c59c272a2a2c35d4fc73d4`。定标耗时约 0.35 秒；reference/p50 为 `0.097916096 m`，p95 `0.132621631 m`，959 点（约 0.254%）被钳制；effective means LR 为 `0.0003133315`，effective noise LR 为 `8148.5784`，名义 noise 为 `0.024479024 m`。全仓 `130` 项为 `129 PASS + 1 SKIPPED`；唯一跳过是默认环境的 clean-runtime CUDA footprint，Gate 1 已有独立签名实跑覆盖。
+
+当前状态为 **PASS（Gate 2A 源码、CPU 契约、真实点云定标）**，但真实 GPU 短 A/B 与画质仍为 `NOT_RUN`。下一项继续按 Work Package 推进 SH、local masked SSIM、robust log-range、opacity/scale regularization、周期 golden eval 和 best checkpoint；在这些质量地基完成前，不启动新的正式长训练。
+
+## 24. 当前阶段记录：Gate 2B 局部 SSIM 与 robust log-range
+
+### 问题现象
+
+旧 `masked_rgb_ssim_loss` 把整张有效鱼眼区域压成每通道一组均值、方差和协方差，不能表达 11×11 邻域内的边缘、纹理和小结构；person/FoV mask 边缘也没有窗口覆盖率门。旧 LiDAR loss 直接优化 `confidence × |pred-target|` 米制绝对误差，远距离同等相对误差天然更大，深度边缘离群点保持线性影响。这两项都会让正式长训练把容量用于全局颜色统计或少量远距异常点。
+
+### 修改文件
+
+- `cloudstudio_3dgs/training/losses.py`
+- `cloudstudio_3dgs/training/trainer.py`
+- `tools/run_synthetic_training_acceptance.py`
+- `tools/run_mcmc_resume_equivalence.py`
+- `tests/test_training.py`
+- `README.md`
+- `docs/IMPLEMENTATION_PLAN.zh-CN.md`
+
+### 修改内容
+
+- 生产默认 RGB 结构项改为 mask-aware Gaussian-window SSIM：窗口默认 11×11、sigma 1.5，只在中心像素有效且加权有效覆盖率至少 0.8 时计入；卷积前用 `where` 把 mask 外值归零，再按有效 support 归一化局部一阶/二阶矩，避免 NaN 或黑边污染。无任何合格窗口时 fail-closed。原全局 masked SSIM 保留为 `global_masked_rgb_ssim_loss`，只作诊断。
+- 生产默认 LiDAR 项改为 confidence-weighted log-range smooth L1/Huber，delta 默认 0.05；预测/目标继续要求正、有限且通过同一 depth/person mask。log residual 让等比例近/远误差同权，Huber 在大残差区保持有界梯度。配置可显式选择 `linear_l1` 兼容模式。
+- Trainer contract schema v2 记录窗口、sigma、覆盖率、range 模式和 delta；step telemetry 区分 `lidar_range_loss` 与其 mode，不再把无量纲 log loss误写成米制 L1。两个 Gate 1 fixture 显式锁为 `linear_l1`，保留历史 `final_lidar_range_l1_m` 和签名证据语义。
+
+### 验证方式与当前状态
+
+红测试首先因新 local/log loss 不存在而 ImportError。实现后验证：mask 外预测即使写成 100 也不会改变 local SSIM；局部边缘平移会产生非零结构损失；有效覆盖不足时明确失败；预测和目标同时放大 10 倍时 log-range Huber 逐值相同，2× 比例误差符合解析 smooth-L1 值。Trainer/Gate 1 定向测试通过，全仓 `132` 项为 `131 PASS + 1 SKIPPED`，唯一跳过仍是默认环境的 clean-runtime CUDA footprint，已有 Gate 1 隔离实跑证据覆盖。
+
+当前状态为 **PASS（Gate 2B 数学、mask 与配置契约）**。没有启动真实 GPU 训练，因此不能声称 PSNR/SSIM/深度或清晰度已经提升；后续受控 A/B 必须单独比较旧 global+linear 与新 local+log，且保持同一 person Manifest、split、位姿、初始化 PLY、步数和随机种子。

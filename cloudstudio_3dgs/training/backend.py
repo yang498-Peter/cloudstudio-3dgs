@@ -106,7 +106,8 @@ class GsplatBackend:
         xyz: Any,
         rgb: Any,
         *,
-        init_scale_m: float,
+        init_scale_m: float | None = None,
+        init_scales_m: Any | None = None,
         learning_rates: dict[str, float],
     ) -> tuple[Any, dict[str, Any], Any]:
         torch = self.torch
@@ -114,15 +115,31 @@ class GsplatBackend:
         colors = torch.as_tensor(rgb, dtype=torch.float32, device=self.device) / 255.0
         if len(points) < 4:
             raise ValueError("at least four initialization points are required")
-        if init_scale_m <= 0.0:
-            raise ValueError("init_scale_m must be positive")
+        if (init_scale_m is None) == (init_scales_m is None):
+            raise ValueError("provide exactly one of init_scale_m or init_scales_m")
+        if init_scales_m is None:
+            if init_scale_m is None or init_scale_m <= 0.0:
+                raise ValueError("init_scale_m must be positive")
+            scales_m = torch.full(
+                (len(points), 3), float(init_scale_m), device=self.device
+            )
+        else:
+            scales_m = torch.as_tensor(
+                init_scales_m, dtype=torch.float32, device=self.device
+            )
+            if scales_m.ndim == 1 and scales_m.shape == (len(points),):
+                scales_m = scales_m[:, None].repeat(1, 3)
+            if scales_m.shape != (len(points), 3):
+                raise ValueError("init_scales_m must have shape [N] or [N, 3]")
+            if not bool(torch.isfinite(scales_m).all()) or not bool((scales_m > 0.0).all()):
+                raise ValueError("init_scales_m must be finite and positive")
         quaternions = torch.zeros((len(points), 4), device=self.device)
         quaternions[:, 0] = 1.0
         params = torch.nn.ParameterDict(
             {
                 "means": torch.nn.Parameter(points),
                 "scales": torch.nn.Parameter(
-                    torch.full((len(points), 3), float(init_scale_m), device=self.device).log()
+                    scales_m.log()
                 ),
                 "quats": torch.nn.Parameter(quaternions),
                 "opacities": torch.nn.Parameter(
@@ -206,6 +223,17 @@ class GsplatBackend:
             if refine
             else None
         )
+        noise_scheduled = (
+            self.strategy.noise_injection_stop_iter < 0
+            or step < self.strategy.noise_injection_stop_iter
+        )
+        noise_probe_before = None
+        noise_probe_observed = bool(
+            state.get("_cloudstudio_noise_probe_observed", False)
+        )
+        if noise_scheduled and not refine and not noise_probe_observed:
+            probe_count = min(len(params["means"]), 256)
+            noise_probe_before = params["means"][:probe_count].detach().clone()
         self.strategy.step_post_backward(
             params=params,
             optimizers=optimizers,
@@ -214,6 +242,14 @@ class GsplatBackend:
             info=info,
             lr=optimizers["means"].param_groups[0]["lr"],
         )
+        noise_position_delta_max_m = None
+        if noise_probe_before is not None:
+            probe_after = params["means"][: len(noise_probe_before)].detach()
+            noise_position_delta_max_m = float(
+                (probe_after - noise_probe_before).abs().max().cpu()
+            )
+            if noise_position_delta_max_m > 0.0:
+                state["_cloudstudio_noise_probe_observed"] = True
         after = (
             snapshot_gaussians(params, min_opacity=self.strategy.min_opacity)
             if refine
@@ -227,4 +263,5 @@ class GsplatBackend:
             refine_stop_iter=self.strategy.refine_stop_iter,
             refine_every=self.strategy.refine_every,
             noise_injection_stop_iter=self.strategy.noise_injection_stop_iter,
+            noise_position_delta_max_m=noise_position_delta_max_m,
         )

@@ -20,13 +20,17 @@ from cloudstudio_3dgs.training.runtime_evidence import (
     initialize_mcmc_telemetry,
     require_finite_training_tensors,
     require_full_mcmc_runtime,
+    sign_full_mcmc_gate_evidence,
     snapshot_gaussians,
+    verify_full_mcmc_gate_evidence,
 )
 from cloudstudio_3dgs.data.manifest import canonical_json_bytes
 from cloudstudio_3dgs.training.checkpoint import (
     compare_checkpoint_payloads,
     save_checkpoint,
 )
+from cloudstudio_3dgs.training.backend import GsplatBackend
+from tools.promote_full_mcmc_gate import promote_full_mcmc_gate_baseline
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -64,34 +68,192 @@ class MCMCRuntimeReportTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "quat_scale_to_covar_preci_fwd"):
             require_full_mcmc_runtime(report)
 
-    def test_checked_in_runtime_baseline_is_signed_and_gate_passed(self) -> None:
-        # Machine B (RTX 5070 Ti, full-kernel clean build of the locked commit)
-        # produced the real GPU execution evidence: noise injected on every
-        # step, five refine events adding Gaussians, a kill-based interrupted
-        # resume within 5e-3 relative loss tolerance, and a completed 3000-step
-        # real-data training run. Relocation was invoked but relocated zero
-        # Gaussians because none went dead, and the real-data run is runtime
-        # evidence only - its visual quality is explicitly not accepted.
+    def test_checked_in_runtime_baseline_is_signed_and_fail_closed_or_full_pass(self) -> None:
         baseline = json.loads(
             (ROOT / "baselines" / "full_mcmc_runtime.baseline.json").read_text(
                 encoding="utf-8"
             )
         )
-        expected = baseline.pop("runtime_evidence_sha256")
-        actual = hashlib.sha256(canonical_json_bytes(baseline)).hexdigest()
-        self.assertEqual(actual, expected)
-        self.assertEqual(baseline["gate_status"], "PASS")
-        gates = baseline["execution_gates"]
-        self.assertEqual(gates["interrupted_resume_equivalence"], "PASS")
-        self.assertEqual(gates["sample_add_occurred"], "PASS")
-        self.assertEqual(gates["mcmc_noise_nonzero"], "PASS")
-        self.assertEqual(gates["real_gpu_training"], "PASS_RUNTIME_ONLY")
-        evidence = baseline["execution_evidence"]
-        self.assertGreaterEqual(evidence["synthetic_full_mcmc"]["total_added"], 1)
-        self.assertTrue(evidence["interrupted_resume"]["kill_based_interruption"])
-        self.assertLessEqual(
-            evidence["interrupted_resume"]["loss_relative_difference"], 5e-3
+        if baseline.get("evidence_type") == "cloudstudio_full_mcmc_gate":
+            lock = json.loads(
+                (ROOT / "upstream" / "cloudstudio_trainer.lock.json").read_text(
+                    encoding="utf-8"
+                )
+            )
+            report = verify_full_mcmc_gate_evidence(
+                baseline, expected_lock_commit=str(lock["commit"])
+            )
+            self.assertEqual(report["status"], "PASS", report["errors"])
+        else:
+            expected = baseline.pop("runtime_evidence_sha256")
+            actual = hashlib.sha256(canonical_json_bytes(baseline)).hexdigest()
+            self.assertEqual(actual, expected)
+            self.assertEqual(baseline["gate_status"], "FAIL")
+            gates = baseline["execution_gates"]
+            execution = baseline.get("execution_evidence")
+            if execution is None:
+                self.assertEqual(
+                    gates["interrupted_resume_equivalence"], "NOT_RUN"
+                )
+            else:
+                self.assertEqual(gates["interrupted_resume_equivalence"], "PASS")
+                self.assertEqual(gates["sample_add_occurred"], "PASS")
+                self.assertNotEqual(gates["mcmc_noise_nonzero"], "PASS")
+                self.assertEqual(gates["real_gpu_training"], "PASS_RUNTIME_ONLY")
+                self.assertNotEqual(gates["relocation_occurred"], "PASS")
+                synthetic = execution["synthetic_full_mcmc"]
+                self.assertGreaterEqual(synthetic["total_added"], 1)
+                self.assertEqual(synthetic["total_relocated"], 0)
+                self.assertTrue(
+                    execution["interrupted_resume"]["kill_based_interruption"]
+                )
+                self.assertEqual(execution["full_state_resume"]["status"], "PASS")
+                self.assertEqual(
+                    execution["full_state_resume"]["mismatch_count"], 0
+                )
+
+    def _passing_gate_evidence(self) -> dict:
+        commit = "a" * 40
+        return {
+            "schema_version": 1,
+            "evidence_type": "cloudstudio_full_mcmc_gate",
+            "gate_status": "PASS",
+            "environment": {
+                "cuda_available": True,
+                "gpu": "fixture-gpu",
+                "python": "3.12.9",
+                "torch": "2.11.0+cu128",
+                "torch_cuda": "12.8",
+            },
+            "lock": {"commit": commit},
+            "runtime": {
+                "locked_commit": commit,
+                "commit": commit,
+                "clean": True,
+            },
+            "execution_gates": {
+                "covariance_forward_backward": "PASS",
+                "mcmc_noise_nonzero": "PASS",
+                "relocation_occurred": "PASS",
+                "sample_add_occurred": "PASS",
+                "rasterization_forward_backward": "PASS",
+                "metric_scale_rasterization": "PASS",
+                "interrupted_resume_equivalence": "PASS",
+            },
+            "render_scale_contract": {
+                "status": "PASS",
+                "covered_pixels": 512,
+                "minimum_covered_pixels": 40,
+                "maximum_covered_pixels": 4000,
+                "alpha_finite": True,
+            },
+            "native_kernel_smoke": {
+                "status": "PASS",
+                "covariance_forward_finite": True,
+                "covariance_backward_finite": True,
+                "fused_perturb_finite": True,
+                "fused_perturb_max_abs_delta": 0.01,
+            },
+            "training": {
+                "steps": 80,
+                "run_manifest_sha256": "b" * 64,
+                "mcmc_operator_registration": "PASS_REGISTERED",
+                "initial_loss": 1.0,
+                "final_loss": 0.1,
+                "loss_improvement_fraction": 0.9,
+                "initial_gaussian_count": 24,
+                "gaussian_count": 29,
+                "mcmc_noise_step_count": 80,
+                "mcmc_noise_nonzero_step_count": 76,
+                "mcmc_noise_max_abs_delta_m": 0.002,
+                "mcmc_refine_event_count": 4,
+                "mcmc_relocated_count": 1,
+                "mcmc_added_count": 5,
+                "mcmc_final_state_finite": True,
+                "gaussian_count_curve": [
+                    {"step": -1, "gaussian_count": 24},
+                    {"step": 80, "gaussian_count": 29},
+                ],
+                "resume_equivalence": {
+                    "status": "PASS",
+                    "mismatch_count": 0,
+                    "reference_step": 80,
+                    "resumed_step": 80,
+                    "reference_gaussian_count": 29,
+                    "resumed_gaussian_count": 29,
+                },
+            },
+        }
+
+    def test_signed_full_gate_evidence_passes_and_tampering_fails(self) -> None:
+        signed = sign_full_mcmc_gate_evidence(self._passing_gate_evidence())
+        report = verify_full_mcmc_gate_evidence(
+            signed, expected_lock_commit="a" * 40
         )
+        self.assertEqual(report["status"], "PASS")
+        self.assertEqual(report["errors"], [])
+
+        signed["training"]["mcmc_added_count"] = 0
+        tampered = verify_full_mcmc_gate_evidence(
+            signed, expected_lock_commit="a" * 40
+        )
+        self.assertEqual(tampered["status"], "FAIL")
+        self.assertIn("gate evidence signature mismatch", tampered["errors"])
+
+    def test_full_gate_rejects_configured_but_zero_noise(self) -> None:
+        evidence = self._passing_gate_evidence()
+        evidence["training"]["mcmc_noise_nonzero_step_count"] = 0
+        evidence["training"]["mcmc_noise_max_abs_delta_m"] = 0.0
+        signed = sign_full_mcmc_gate_evidence(evidence)
+        report = verify_full_mcmc_gate_evidence(
+            signed, expected_lock_commit="a" * 40
+        )
+        self.assertEqual(report["status"], "FAIL")
+        self.assertIn(
+            "training did not observe nonzero MCMC position noise", report["errors"]
+        )
+
+    def test_full_gate_requires_metric_scale_rasterization_smoke(self) -> None:
+        evidence = self._passing_gate_evidence()
+        evidence.pop("render_scale_contract")
+        evidence["execution_gates"]["metric_scale_rasterization"] = "NOT_RUN"
+        signed = sign_full_mcmc_gate_evidence(evidence)
+        report = verify_full_mcmc_gate_evidence(
+            signed, expected_lock_commit="a" * 40
+        )
+        self.assertEqual(report["status"], "FAIL")
+        self.assertIn("metric scale rasterization smoke did not pass", report["errors"])
+
+    def test_only_verified_gate_evidence_can_be_promoted_atomically(self) -> None:
+        signed = sign_full_mcmc_gate_evidence(self._passing_gate_evidence())
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            output = root / "full_mcmc_runtime.baseline.json"
+            promoted = promote_full_mcmc_gate_baseline(
+                signed,
+                output,
+                expected_lock_commit="a" * 40,
+            )
+            stored = json.loads(output.read_text(encoding="utf-8"))
+            self.assertEqual(promoted["status"], "PASS")
+            self.assertEqual(stored, signed)
+
+            tampered = dict(signed)
+            tampered["gate_status"] = "FAIL"
+            with self.assertRaisesRegex(ValueError, "signature mismatch"):
+                promote_full_mcmc_gate_baseline(
+                    tampered,
+                    root / "tampered.json",
+                    expected_lock_commit="a" * 40,
+                )
+            self.assertFalse((root / "tampered.json").exists())
+
+            with self.assertRaisesRegex(FileExistsError, "already contains PASS"):
+                promote_full_mcmc_gate_baseline(
+                    signed,
+                    output,
+                    expected_lock_commit="a" * 40,
+                )
 
 
 @unittest.skipUnless(torch is not None, "torch is an optional training dependency")
@@ -144,6 +306,20 @@ class MCMCTelemetryTests(unittest.TestCase):
         self.assertEqual(telemetry["noise_injection_step_count"], 1)
         self.assertEqual(telemetry["last_snapshot"]["gaussian_count"], 5)
 
+        noise_only = build_mcmc_step_event(
+            step=601,
+            before=None,
+            after=None,
+            refine_start_iter=500,
+            refine_stop_iter=25_000,
+            refine_every=100,
+            noise_injection_stop_iter=-1,
+            noise_position_delta_max_m=0.002,
+        )
+        append_mcmc_telemetry(telemetry, noise_only)
+        self.assertEqual(telemetry["noise_nonzero_step_count"], 1)
+        self.assertAlmostEqual(telemetry["noise_max_abs_delta_m"], 0.002)
+
     def test_non_finite_parameter_or_gradient_fails_closed(self) -> None:
         params = self._params()
         params["means"].grad = torch.zeros_like(params["means"])
@@ -155,6 +331,37 @@ class MCMCTelemetryTests(unittest.TestCase):
                 stage="after_backward",
                 check_gradients=True,
             )
+
+    def test_backend_observes_real_non_refine_noise_delta_once(self) -> None:
+        class NoiseStrategy:
+            min_opacity = 0.005
+            refine_start_iter = 10
+            refine_stop_iter = 100
+            refine_every = 10
+            noise_injection_stop_iter = -1
+
+            @staticmethod
+            def step_post_backward(*, params, **_kwargs) -> None:
+                params["means"].data.add_(0.002)
+
+        backend = object.__new__(GsplatBackend)
+        backend.strategy = NoiseStrategy()
+        params = {
+            "means": torch.nn.Parameter(torch.zeros((4, 3))),
+        }
+        optimizers = {
+            "means": type("Optimizer", (), {"param_groups": [{"lr": 1.0}]})()
+        }
+        strategy_state = {}
+        first = backend.strategy_post_step(
+            params, optimizers, strategy_state, step=1, info={}
+        )
+        second = backend.strategy_post_step(
+            params, optimizers, strategy_state, step=2, info={}
+        )
+        self.assertAlmostEqual(first["noise_position_delta_max_m"], 0.002)
+        self.assertIsNone(second["noise_position_delta_max_m"])
+        self.assertTrue(strategy_state["_cloudstudio_noise_probe_observed"])
 
     def test_snapshot_marks_exponentiated_scale_overflow_non_finite(self) -> None:
         params = self._params()

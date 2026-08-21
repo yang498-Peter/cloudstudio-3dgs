@@ -191,6 +191,21 @@ python tools/audit_ba_person_residuals.py `
 # raw fisheye、3DGUT、MCMC、LiDAR ray-range、逐图 mask/crop 和完整 validation 评测均由自有模块负责
 python tools/train_gsplat.py --config G:\3dgs-runs\gs2_pr11_config.json
 
+# Gate 2 默认使用 KNN 局部米制间距初始化每点 scale，并联动标定 means LR/MCMC noise。
+# 可在不启动训练时先生成签名定标证据；gs2 实测把 noise_lr 从 500000 降到约 8148.6。
+python tools/audit_metric_scale_calibration.py `
+  --ply outputs\pr04-real-lidar-init-final-a\sparse_pc.ply `
+  --output G:\3dgs-runs\gs2_metric_scale_calibration.json
+
+# 正式配置可显式调整以下策略；mode=fixed 且两个 fraction=null 仅用于重放 Gate 1 历史证据。
+# "metric_scale_calibration": {
+#   "mode": "knn", "knn_neighbors": 3, "scale_multiplier": 1.0,
+#   "clamp_min_ratio": 0.25, "clamp_max_ratio": 4.0,
+#   "means_step_fraction": 0.0032, "noise_std_fraction": 0.25
+# }
+# "ssim_window_size": 11, "ssim_sigma": 1.5, "ssim_min_valid_fraction": 0.8,
+# "lidar_range_loss_mode": "robust_log_huber", "lidar_log_range_huber_delta": 0.05
+
 # PR-12 是显式 opt-in；把以下对象加入 Trainer 配置才启用 Rig-aware 位姿微调。
 # 每个训练 Rig Frame 只有一个共享增量，validation 位姿永不优化；候选不改善或越界时自动清零回退。
 # "rig_pose_refinement": {
@@ -223,6 +238,16 @@ python tools/run_synthetic_training_acceptance.py `
   --steps 80 `
   --full-mcmc `
   --resume-equivalence
+
+# 只有签名证据通过独立验证后，才可替换 baselines/full_mcmc_runtime.baseline.json
+python tools/verify_full_mcmc_gate.py `
+  G:\3dgs-runs\full_mcmc_resume\full_mcmc_gate_evidence.json `
+  --gsplat-lock upstream\cloudstudio_trainer.lock.json
+
+# verifier PASS 后再原子升级 checked-in baseline；已有 PASS 默认禁止覆盖
+python tools/promote_full_mcmc_gate.py `
+  G:\3dgs-runs\full_mcmc_resume\full_mcmc_gate_evidence.json `
+  --gsplat-lock upstream\cloudstudio_trainer.lock.json
 
 # 重投影验证(全项目最高优先级检查点):
 # 把解算点云投影回原始鱼眼图,输出多种坐标约定的叠加图供目视比对
@@ -293,14 +318,15 @@ PR-11 新 Trainer 使用独立的 `upstream/cloudstudio_trainer.lock.json`：只
 - [x] 路线 PR-08:Rig Frame 切分、泄漏告警、masked PSNR/SSIM/LPIPS、深度指标和 HTML 报告
 - [x] 路线 PR-09:关键帧 SE(3) 修正、鲁棒过滤、Rig 时间插值、基线保持和默认位姿回退门
 - [x] 路线 PR-10:训练集匹配图、锁定 ALIKED/LightGlue/HLoc、固定 Rig + POS 先验分阶段 BA 与回退报告；真实 1114 图/6787 对已三角化为 765,590 点，Stage 2 BA 通过并选用，Stage 3 因越权改变 k3/k4 被 fail-closed 拒绝
-- [x] 路线 PR-11(源码/合成 CUDA):自有 raw-fisheye Dataset/Trainer、3DGUT、逐图 mask/crop、LiDAR ray-range、显式 split、checkpoint、坐标 Manifest、masked evaluation 和 peak VRAM；真实 gs2 同配置回归、完整 MCMC Windows 算子和中断式 GPU resume 仍为 `NOT_RUN`
+- [x] 路线 PR-11(源码/合成 CUDA):自有 raw-fisheye Dataset/Trainer、3DGUT、逐图 mask/crop、LiDAR ray-range、显式 split、checkpoint、坐标 Manifest、masked evaluation 和 peak VRAM；完整 MCMC Windows 算子、非零位置噪声、relocate/add、米制 footprint 和中断式 GPU resume 已由 Gate 1 严格签名证据关闭，真实 gs2 同配置画质回归仍为 `NOT_RUN`
 - [x] 路线 PR-12(源码/CPU 合成):每个训练 Rig Frame 一个共享 6DoF 增量、Rig 中心枢轴、平移/旋转先验、checkpoint 恢复、固定基线与无改善/越界自动回退；真实 gs2 训练消融仍为 `NOT_RUN`（训练暂缓）
-- [ ] Gate 1 完整 MCMC：已加入 clean-lock/build-feature/native-op fail-closed 审计、refine/relocate/add/opacity/scale 遥测、NaN/Inf 守卫及连续/恢复 checkpoint 全状态比较。澳洲 RTX 5070 Ti 已报告非零噪声和 `24→29` add，但尚未按统一契约提交 fused perturb、强制 relocation 和 resume 等价证据；本机旧扩展仍为 `FAIL`，总门保持未关闭
+- [x] Gate 1 完整 MCMC：本机 RTX 5070 Laptop 在干净锁定 gsplat `f2d1413` 上完成严格 80 步 full-MCMC 与中断恢复；签名证据 `6e88d380...f31aa7` 经独立 verifier 和原子 promotion 通过。covariance/rasterization 前后向、实际 position-noise、relocate `1`、add `5`、米制 footprint `368 px`、finite 守卫均为 `PASS`，恢复比较 `0` 失配、最大漂移 `1.907e-6`（`atol=5e-6`）。该结论只关闭执行与恢复 Gate，不代表真实场景画质；合成噪声最大位移 `2.755 m` 反而要求 Gate 2 优先完成米制场景尺度感知的 LR/噪声配对
+- [ ] Gate 2 训练器质量地基：KNN 每点尺度 + 米制 means LR/MCMC noise 联动的源码、CPU 契约和真实 376,906 点双重放已通过；定标 SHA `fcce9850...73d4`，中位尺度 `0.097916 m`、effective means LR `3.133e-4`、effective noise LR `8148.6`。11×11 local masked SSIM 与 confidence-weighted robust log-range Huber 的数学/mask 契约也已通过；真实 GPU 短 A/B、SH、正则、周期 golden eval/best checkpoint 仍为 `NOT_RUN`
 - [x] Phase 1(前置):重投影验证初步通过(gs2 场景目视贴合,约定=c2w_gl),
       正式 Gate 需再覆盖 2–3 场景 + 逐点误差统计
 - [x] Phase 1(前置):COLMAP 数据集导出实测通过(gs2_keyframes:174 图/2 相机/101 万点,
       w2c 位姿往返校验与基线一致)
-- [ ] Phase 1(剩余):gsplat 安装(待批准外部仓库)→ 裸跑 3DGUT+MCMC → 对比 mipmap
+- [ ] Phase 1(剩余):Gate 2 训练器质量地基（场景尺度感知 LR/噪声、SH/KNN 尺度、局部 SSIM）→ 真实数据受控基线 → 对比 mipmap
 - [ ] Phase 2:LiDAR 深度监督 + 正则
 - [ ] Phase 3:动态物剔除（PR-06 先完成人影层；车辆/天空与点云-照片交叉验证后续独立推进）
 - [ ] Phase 4:产品化(CLI/API、Web 查看器、SPZ/SOG)
