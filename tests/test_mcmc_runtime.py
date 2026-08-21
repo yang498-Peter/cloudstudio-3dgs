@@ -30,6 +30,7 @@ from cloudstudio_3dgs.training.checkpoint import (
     save_checkpoint,
 )
 from cloudstudio_3dgs.training.backend import GsplatBackend
+from tools.promote_full_mcmc_gate import promote_full_mcmc_gate_baseline
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -222,6 +223,37 @@ class MCMCRuntimeReportTests(unittest.TestCase):
         )
         self.assertEqual(report["status"], "FAIL")
         self.assertIn("metric scale rasterization smoke did not pass", report["errors"])
+
+    def test_only_verified_gate_evidence_can_be_promoted_atomically(self) -> None:
+        signed = sign_full_mcmc_gate_evidence(self._passing_gate_evidence())
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            output = root / "full_mcmc_runtime.baseline.json"
+            promoted = promote_full_mcmc_gate_baseline(
+                signed,
+                output,
+                expected_lock_commit="a" * 40,
+            )
+            stored = json.loads(output.read_text(encoding="utf-8"))
+            self.assertEqual(promoted["status"], "PASS")
+            self.assertEqual(stored, signed)
+
+            tampered = dict(signed)
+            tampered["gate_status"] = "FAIL"
+            with self.assertRaisesRegex(ValueError, "signature mismatch"):
+                promote_full_mcmc_gate_baseline(
+                    tampered,
+                    root / "tampered.json",
+                    expected_lock_commit="a" * 40,
+                )
+            self.assertFalse((root / "tampered.json").exists())
+
+            with self.assertRaisesRegex(FileExistsError, "already contains PASS"):
+                promote_full_mcmc_gate_baseline(
+                    signed,
+                    output,
+                    expected_lock_commit="a" * 40,
+                )
 
 
 @unittest.skipUnless(torch is not None, "torch is an optional training dependency")

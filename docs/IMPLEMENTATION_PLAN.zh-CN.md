@@ -696,3 +696,26 @@ Machine-B 首次真实 1044 图训练的全部验证视图呈无结构灰糊；�
 ### 验证方式与当前状态
 
 `tests.test_training` 共 `16/16` 执行，其中 15 通过；真实 CUDA footprint 因本机 gsplat checkout 非干净锁定 runtime 明确 `SKIPPED`，不能据此声称本机 GPU 验收。签名 verifier 另有红/绿测试证明缺少 `metric_scale_rasterization` 时旧实现会误 PASS、新实现会拒绝。全仓 `124` 项测试为 `123 PASS + 1 SKIPPED`，CPU renderer 合约、Gate 1 签名/恢复、BA、mask、depth、Rig 和既有训练契约均通过。Machine-B 已用完整 runtime 生成修复后的合成运行证据，但仍需同步最新 dead-Gaussian/noise-probe/metric-scale/签名 schema 再跑一次，才具备关闭 Gate 1 的条件。
+
+## 20. 当前阶段记录：Gate 1 签名 baseline 原子升级
+
+### 问题现象
+
+此前 README 只要求先运行 verifier，再由操作者手工把 `full_mcmc_gate_evidence.json` 复制成 checked-in baseline。验证和复制是两个独立动作，存在选错运行目录、复制验证前文件、写到一半中断，以及无意覆盖已有 PASS 证据的风险；这些都会让“验证通过”与最终提交的 JSON 失去事务一致性。
+
+### 修改文件
+
+- `tools/promote_full_mcmc_gate.py`
+- `tests/test_mcmc_runtime.py`
+- `README.md`
+- `docs/IMPLEMENTATION_PLAN.zh-CN.md`
+
+### 修改内容
+
+- 新增唯一 promotion 入口：先用 repo 的 `cloudstudio_trainer.lock.json` 对完整签名 evidence 做 fail-closed 验证，只有所有 execution gate、runtime provenance、实际 noise、relocation/add、metric-scale footprint 和 resume 全部 PASS 才允许写 baseline。
+- 输出使用同目录临时文件、UTF-8/LF、flush、`fsync` 和 `os.replace` 原子替换；验证失败时目标文件不存在或保持原样。
+- 当前 FAIL baseline 可以被新的 PASS evidence 升级；若目标已经是 PASS，默认抛出 `FileExistsError`，只有显式 `--replace-pass` 才允许经人工审查后的替换，避免较弱或错误运行静默覆盖已接受证据。
+
+### 验证方式与当前状态
+
+先加入缺少 promotion 模块的红测试，旧代码按预期 ImportError；实现后测试证明合法签名可原子落盘、字段篡改无法创建目标文件、已有 PASS 默认不可覆盖。全仓 `125` 项为 `124 PASS + 1 SKIPPED`，Python 编译、CLI help、diff 与 UTF-8 乱码检查通过；唯一跳过仍是本机缺少干净完整 gsplat runtime 的真实 GPU footprint。该工具不生成 GPU 证据，也不会把当前 FAIL baseline 自动升级；Machine-B 严格重跑仍是关闭 Gate 1 的必要条件。

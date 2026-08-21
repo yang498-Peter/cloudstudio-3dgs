@@ -229,6 +229,11 @@ python tools/verify_full_mcmc_gate.py `
   G:\3dgs-runs\full_mcmc_resume\full_mcmc_gate_evidence.json `
   --gsplat-lock upstream\cloudstudio_trainer.lock.json
 
+# verifier PASS 后再原子升级 checked-in baseline；已有 PASS 默认禁止覆盖
+python tools/promote_full_mcmc_gate.py `
+  G:\3dgs-runs\full_mcmc_resume\full_mcmc_gate_evidence.json `
+  --gsplat-lock upstream\cloudstudio_trainer.lock.json
+
 # 重投影验证(全项目最高优先级检查点):
 # 把解算点云投影回原始鱼眼图,输出多种坐标约定的叠加图供目视比对
 python tools/reproject_check.py `
