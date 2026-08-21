@@ -9,6 +9,26 @@
   },
   "evidence_type": "cloudstudio_full_mcmc_runtime_registration",
   "execution_evidence": {
+    "full_state_resume": {
+      "atol": 5e-06,
+      "compared_state": [
+        "parameters_and_gaussian_order",
+        "optimizer_state",
+        "MCMC_strategy_state",
+        "sampler_state",
+        "training_telemetry",
+        "auxiliary_state",
+        "CPU_and_CUDA_RNG_state"
+      ],
+      "continuous_run_manifest_sha256": "ed65035703f2012ac41e71027544780901dece607e252781a6a2c7e7ccbdfeaa",
+      "controlled_stop_step": 40,
+      "max_abs_error": 1.1324882507324219e-06,
+      "mismatch_count": 0,
+      "note": "controlled-stop full-state comparison; complements the kill-based process-level interruption evidence",
+      "resumed_run_manifest_sha256": "efda074dadda5987c965c6f252ec6f147b3cf6a99edfc4b26005800bce0732e6",
+      "rtol": 1e-06,
+      "status": "PASS"
+    },
     "interrupted_resume": {
       "evidence_sha256": "b63cc5bad3479e8757e99c48dc0a8c63c644aaabbffc168c9998526ac880e337",
       "gaussian_count_equal": true,
@@ -96,6 +116,6 @@
     "source_kind": "clean_vcs",
     "version": "1.5.3"
   },
-  "runtime_evidence_sha256": "36e567f8c415d25d56fa408a6a42f6c964e5c93baa21dcafb332c4fd94ed6142",
+  "runtime_evidence_sha256": "5512adc082d6d357a99cf59500cd3463c4f3cc7b6d9cc8c21bbd854e56197cd1",
   "schema_version": 1
 }
