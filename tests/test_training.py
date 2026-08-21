@@ -610,6 +610,82 @@ class TorchTrainingContractTests(unittest.TestCase):
         self.assertTrue(torch.equal(sampler_state, generator.get_state()))
         self.assertEqual(training_state["best_loss"], 0.5)
 
+    def test_evaluation_saves_adjusted_lidar_supervision_not_source_cache(self) -> None:
+        import torch
+
+        from cloudstudio_3dgs.data.depth_cache import load_sparse_depth
+        from cloudstudio_3dgs.training.dataset import TrainingSample
+        from cloudstudio_3dgs.training.trainer import _save_evaluation_artifacts
+
+        sample = TrainingSample(
+            image_id="factor_adjusted",
+            rig_frame_id="rig",
+            camera_id="left",
+            image=np.full((2, 3, 3), 64, dtype=np.uint8),
+            rgb_mask=np.array([[True, True, False], [True, True, True]]),
+            depth_range_m=np.array([[1.0, 2.0, 3.0], [4.0, np.nan, 6.0]], dtype=np.float32),
+            depth_confidence=np.array([[1.0, 0.5, 0.0], [0.7, 0.8, 1.0]], dtype=np.float32),
+            depth_mask=np.array([[True, False, True], [True, True, True]]),
+            depth_cache_path=Path("source-cache-must-not-be-copied.npz"),
+            c2w=np.eye(4, dtype=np.float32),
+            K=np.eye(3, dtype=np.float32),
+            radial_coeffs=np.zeros(4, dtype=np.float32),
+            width=3,
+            height=2,
+        )
+
+        class Dataset:
+            def __len__(self) -> int:
+                return 1
+
+            def __getitem__(self, index: int) -> TrainingSample:
+                self.assert_index(index)
+                return sample
+
+            @staticmethod
+            def assert_index(index: int) -> None:
+                if index != 0:
+                    raise IndexError(index)
+
+        class Backend:
+            def __init__(self) -> None:
+                self.torch = torch
+
+            @staticmethod
+            def render(params, current_sample, *, with_range):
+                assert params is None and current_sample is sample and with_range
+                return (
+                    torch.zeros((2, 3, 3), dtype=torch.float32),
+                    torch.ones((2, 3), dtype=torch.float32),
+                    None,
+                    None,
+                )
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            first = root / "first"
+            second = root / "second"
+            frames = _save_evaluation_artifacts(
+                backend=Backend(), params=None, dataset=Dataset(), output_dir=first
+            )
+            _save_evaluation_artifacts(
+                backend=Backend(), params=None, dataset=Dataset(), output_dir=second
+            )
+            relative = Path(frames[0]["lidar_depth_cache_path"])
+            adjusted = load_sparse_depth(first / relative)
+            self.assertEqual(adjusted.shape, (2, 3))
+            np.testing.assert_array_equal(adjusted.pixel_index, np.array([0, 3, 5]))
+            np.testing.assert_allclose(adjusted.range_m, np.array([1.0, 4.0, 6.0]))
+            np.testing.assert_allclose(adjusted.confidence, np.array([1.0, 0.7, 1.0]))
+            np.testing.assert_array_equal(adjusted.source_index, np.full(3, -1))
+            np.testing.assert_array_equal(adjusted.support_count, np.zeros(3))
+            self.assertEqual(frames[0]["lidar_depth_valid_pixels"], 3)
+            self.assertEqual(
+                frames[0]["lidar_depth_cache_semantics"],
+                "factor_crop_mask_adjusted_euclidean_ray_range_m",
+            )
+            self.assertEqual((first / relative).read_bytes(), (second / relative).read_bytes())
+
 
 @unittest.skipUnless(HAS_TORCH, "torch is an optional training dependency")
 class RenderScaleContractTests(unittest.TestCase):

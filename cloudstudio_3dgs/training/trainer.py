@@ -5,7 +5,6 @@ from __future__ import annotations
 import hashlib
 import json
 import os
-import shutil
 import tempfile
 import time
 from dataclasses import dataclass, field
@@ -505,6 +504,10 @@ def _save_evaluation_artifacts(
                         "rendered_depth_path": rendered_depth_path.relative_to(output_dir).as_posix(),
                         "rendered_depth_semantics": "euclidean_ray_range_m",
                         "lidar_depth_cache_path": lidar_path.relative_to(output_dir).as_posix(),
+                        "lidar_depth_cache_semantics": (
+                            "factor_crop_mask_adjusted_euclidean_ray_range_m"
+                        ),
+                        "lidar_depth_valid_pixels": int(len(flat_index)),
                     }
                 )
             frames.append(frame)

@@ -743,3 +743,25 @@ Machine-B 已推送的 `5822147` 修复了 renderer 的 log-scale/linear-scale �
 签名证据 SHA256 为 `6e88d380c15889707950da680fc5f5b53a50b4b5e9179b4e918a05d128f31aa7`，runtime 为干净锁定源码。covariance forward/backward、rasterization forward/backward、fused position perturb、实际 MCMC noise、relocation、sample add、米制 scale rasterization 和中断恢复八类检查全部通过：80/80 步进入 noise，实际非零 position 探针通过，relocate `1`、add `5`、Gaussian `24→29`，四个 0.1 m Gaussian 的 footprint 为 `368 px`，最终状态 finite；连续/恢复 checkpoint 的 parameters、optimizer、MCMC、sampler、telemetry 与 CPU/CUDA RNG 比较为 `0` 失配，最大绝对漂移 `1.9073486328125e-6`，低于有 CUDA 原子噪底依据的 `5e-6` 容差。
 
 当前状态为 **PASS（Gate 1 执行与恢复证据）**。这不升级为真实场景画质验收：修复前全部渲染数值继续作废，Machine-B 的 30k 真实训练在产物和签名推送前保持外部进行中/未验收。本次合成运行的 position-noise 最大位移为 `2.755 m`，说明固定上游噪声对米制大场景可能过强；Gate 2 第一优先项因此是把 means LR、noise LR 与场景尺度/初始化间距绑定，并用一次一变量的真实数据短跑验证，不能直接沿用合成配置。
+
+## 22. 当前阶段记录：factor 后 LiDAR 评估产物对齐
+
+### 问题现象
+
+Machine-B 的真实 UK 训练首次运行到质量报告时发现：训练与渲染使用 `factor=4` 后的 728×728 图像和 LiDAR supervision，但 `_save_evaluation_artifacts` 仍把 2912×2912 原始 depth cache 原样复制到运行目录。质量报告按设计要求 RGB mask、rendered range 和 LiDAR target 空间尺寸完全一致，因此真实运行在这里 fail-closed；历史 factor=1 合成 fixture 让这个错误潜伏。
+
+### 修改文件
+
+- `cloudstudio_3dgs/training/trainer.py`
+- `tests/test_training.py`
+- `docs/IMPLEMENTATION_PLAN.zh-CN.md`
+
+### 修改内容
+
+- 吸收 Machine-B 提交 `62dabe6`：评估产物不再复制 full-resolution 源 cache，而是从 Dataset 已完成 factor、crop、base/person/depth-valid mask 合成后的 `depth_range_m`、`depth_confidence` 和 `depth_mask` 重建确定性稀疏 NPZ。
+- 运行 Manifest 的逐帧记录新增 `lidar_depth_cache_semantics=factor_crop_mask_adjusted_euclidean_ray_range_m` 和有效像素数，明确该产物是评估视图监督，不伪装成保留原始 point provenance 的投影 cache；重采样后不再成立的 `source_index/support_count` 使用 `-1/0` 哨兵，质量指标只消费 range、confidence 与 valid pixel。
+- 新增 CPU 回归：源 cache 路径故意不存在，证明实现不能退回复制；同时断言输出 shape、被 mask/NaN/零 confidence 排除后的精确 pixel index、range/confidence、provenance 哨兵和两次输出字节确定性。
+
+### 验证方式与当前状态
+
+该修复只校正质量评估输入，不改变训练 loss、checkpoint 或 Gaussian 参数。新增定向测试 `1/1` 通过；全仓 `126` 项为 `125 PASS + 1 SKIPPED`，唯一跳过仍是默认环境未指向 clean locked gsplat 的真实 CUDA footprint，本轮 Gate 1 签名证据已在隔离 runtime 中实际覆盖该项。当前状态为 **PASS（源码/CPU 契约）**；Machine-B 当前 30k 运行若在 `62dabe6` 之前启动，旧进程不会自动获得修复，必须以其实际代码 commit 与最终 run Manifest 判断能否直接生成质量报告，不能仅凭“训练完成”升级画质 Gate。
