@@ -101,6 +101,8 @@ class GsplatBackend:
         if noise_stop != 0:
             require_full_mcmc_runtime(operator_report)
 
+    SH_C0 = 0.28209479177387814
+
     def initialize(
         self,
         xyz: Any,
@@ -109,8 +111,16 @@ class GsplatBackend:
         init_scale_m: float | None = None,
         init_scales_m: Any | None = None,
         learning_rates: dict[str, float],
+        color_model: str = "rgb_sigmoid",
+        sh_degree: int = 2,
     ) -> tuple[Any, dict[str, Any], Any]:
         torch = self.torch
+        if color_model not in ("rgb_sigmoid", "sh"):
+            raise ValueError("color_model must be 'rgb_sigmoid' or 'sh'")
+        if color_model == "sh" and not 0 <= int(sh_degree) <= 3:
+            raise ValueError("sh_degree must be within [0, 3]")
+        self.color_model = color_model
+        self.sh_degree = int(sh_degree)
         points = torch.as_tensor(xyz, dtype=torch.float32, device=self.device)
         colors = torch.as_tensor(rgb, dtype=torch.float32, device=self.device) / 255.0
         if len(points) < 4:
@@ -135,19 +145,31 @@ class GsplatBackend:
                 raise ValueError("init_scales_m must be finite and positive")
         quaternions = torch.zeros((len(points), 4), device=self.device)
         quaternions[:, 0] = 1.0
-        params = torch.nn.ParameterDict(
-            {
-                "means": torch.nn.Parameter(points),
-                "scales": torch.nn.Parameter(
-                    scales_m.log()
-                ),
-                "quats": torch.nn.Parameter(quaternions),
-                "opacities": torch.nn.Parameter(
-                    torch.full((len(points),), 0.1, device=self.device).logit()
-                ),
-                "colors": torch.nn.Parameter(colors.clamp(1e-4, 1.0 - 1e-4).logit()),
-            }
-        )
+        entries = {
+            "means": torch.nn.Parameter(points),
+            "scales": torch.nn.Parameter(scales_m.log()),
+            "quats": torch.nn.Parameter(quaternions),
+            "opacities": torch.nn.Parameter(
+                torch.full((len(points),), 0.1, device=self.device).logit()
+            ),
+        }
+        if color_model == "sh":
+            # Standard spherical-harmonics color: the DC coefficient carries the
+            # point color ((c - 0.5) / C0) and the view-dependent bands start at
+            # zero. Rasterization converts SH to RGB when sh_degree is passed.
+            coefficient_count = (self.sh_degree + 1) ** 2
+            sh0 = ((colors - 0.5) / self.SH_C0)[:, None, :]
+            entries["sh0"] = torch.nn.Parameter(sh0)
+            entries["shN"] = torch.nn.Parameter(
+                torch.zeros(
+                    (len(points), coefficient_count - 1, 3), device=self.device
+                )
+            )
+        else:
+            entries["colors"] = torch.nn.Parameter(
+                colors.clamp(1e-4, 1.0 - 1e-4).logit()
+            )
+        params = torch.nn.ParameterDict(entries)
         optimizers = {
             name: torch.optim.Adam(
                 [{"params": [parameter], "lr": float(learning_rates[name]), "name": name}],
@@ -186,7 +208,14 @@ class GsplatBackend:
             # fixture still "converged" and hid the bug.
             scales=torch.exp(params["scales"]),
             opacities=torch.sigmoid(params["opacities"]),
-            colors=torch.sigmoid(params["colors"]),
+            **(
+                {
+                    "colors": torch.cat([params["sh0"], params["shN"]], dim=1),
+                    "sh_degree": self.sh_degree,
+                }
+                if getattr(self, "color_model", "rgb_sigmoid") == "sh"
+                else {"colors": torch.sigmoid(params["colors"])}
+            ),
             viewmats=torch.linalg.inv(c2w),
             Ks=K,
             width=sample.width,

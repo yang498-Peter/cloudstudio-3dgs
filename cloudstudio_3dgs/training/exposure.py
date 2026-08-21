@@ -1,0 +1,111 @@
+"""Per-frame scalar exposure compensation for auto-exposure fisheye captures.
+
+The S1 rig runs both fisheye cameras on independent auto exposure, so the same
+static surface is observed at different brightness from frame to frame. Without
+compensation the trainer averages the contradiction into washed-out texture and
+absorbs shading differences into fake geometry. This module owns one
+differentiable log-gain per TRAINING image, applied to the rendered RGB before
+the photometric losses only; validation always renders at gain 1.0 so metrics
+stay honest, and a strong zero-pull prior keeps the gains from re-encoding real
+scene appearance.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from typing import Any, Iterable
+
+
+@dataclass(frozen=True)
+class ExposureCompensationConfig:
+    enabled: bool = False
+    learning_rate: float = 5e-3
+    regularization_weight: float = 1e-2
+    max_abs_log_gain: float = 0.6931471805599453  # ln(2): gain clamped to [0.5, 2]
+
+    def validate(self) -> None:
+        if self.learning_rate <= 0.0:
+            raise ValueError("exposure learning_rate must be positive")
+        if self.regularization_weight < 0.0:
+            raise ValueError("exposure regularization_weight must be non-negative")
+        if self.max_abs_log_gain <= 0.0:
+            raise ValueError("exposure max_abs_log_gain must be positive")
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "enabled": self.enabled,
+            "learning_rate": self.learning_rate,
+            "regularization_weight": self.regularization_weight,
+            "max_abs_log_gain": self.max_abs_log_gain,
+        }
+
+
+class ExposureCompensator:
+    """Own one clamped scalar log-gain per training image."""
+
+    def __init__(
+        self,
+        image_ids: Iterable[str],
+        *,
+        config: ExposureCompensationConfig,
+        device: str,
+    ) -> None:
+        import torch
+
+        config.validate()
+        if not config.enabled:
+            raise ValueError(
+                "ExposureCompensator cannot be constructed when compensation is disabled"
+            )
+        ordered = sorted(set(str(image_id) for image_id in image_ids))
+        if not ordered:
+            raise ValueError("exposure compensation requires at least one training image")
+        self.config = config
+        self.device = device
+        self.index = {image_id: position for position, image_id in enumerate(ordered)}
+        self.log_gains = torch.nn.Parameter(
+            torch.zeros(len(ordered), dtype=torch.float32, device=device)
+        )
+
+    def make_optimizer(self) -> Any:
+        import torch
+
+        return torch.optim.Adam(
+            [{"params": [self.log_gains], "lr": self.config.learning_rate, "name": "exposure"}],
+            eps=1e-15,
+        )
+
+    def gain(self, image_id: str) -> Any:
+        import torch
+
+        position = self.index.get(str(image_id))
+        if position is None:
+            raise KeyError(f"exposure compensation has no gain for image {image_id!r}")
+        bound = self.config.max_abs_log_gain
+        return torch.exp(torch.clamp(self.log_gains[position], -bound, bound))
+
+    def prior_loss(self) -> Any:
+        return self.config.regularization_weight * (self.log_gains**2).mean()
+
+    def report(self) -> dict[str, Any]:
+        import torch
+
+        with torch.no_grad():
+            bound = self.config.max_abs_log_gain
+            clamped = torch.clamp(self.log_gains.detach(), -bound, bound)
+            gains = torch.exp(clamped)
+            absolute = torch.abs(clamped)
+            quantiles = torch.quantile(
+                absolute, torch.tensor([0.5, 0.95], device=absolute.device)
+            )
+        return {
+            "image_count": int(self.log_gains.shape[0]),
+            "abs_log_gain_p50": float(quantiles[0]),
+            "abs_log_gain_p95": float(quantiles[1]),
+            "abs_log_gain_max": float(absolute.max()),
+            "gain_min": float(gains.min()),
+            "gain_max": float(gains.max()),
+            "saturated_fraction": float(
+                (absolute >= bound - 1e-6).float().mean()
+            ),
+        }

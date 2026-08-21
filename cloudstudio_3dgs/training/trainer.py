@@ -29,6 +29,10 @@ from cloudstudio_3dgs.training.losses import (
     masked_rgb_l1,
     masked_rgb_ssim_loss,
 )
+from cloudstudio_3dgs.training.exposure import (
+    ExposureCompensationConfig,
+    ExposureCompensator,
+)
 from cloudstudio_3dgs.training.scale_calibration import (
     MetricScaleCalibrationConfig,
     build_metric_scale_calibration,
@@ -95,6 +99,8 @@ class TrainerConfig:
     ssim_min_valid_fraction: float = 0.8
     lidar_range_loss_mode: str = "robust_log_huber"
     lidar_log_range_huber_delta: float = 0.05
+    color_model: str = "rgb_sigmoid"
+    sh_degree: int = 2
     mcmc_refine_start_iter: int = 500
     mcmc_refine_stop_iter: int = 25_000
     mcmc_refine_every: int = 100
@@ -102,6 +108,9 @@ class TrainerConfig:
     mcmc_noise_lr: float = 500_000.0
     rig_pose_refinement: RigPoseRefinementConfig = field(
         default_factory=RigPoseRefinementConfig
+    )
+    exposure_compensation: ExposureCompensationConfig = field(
+        default_factory=ExposureCompensationConfig
     )
     learning_rates: dict[str, float] = field(
         default_factory=lambda: {
@@ -139,6 +148,10 @@ class TrainerConfig:
         if not isinstance(pose_value, dict):
             raise ValueError("rig_pose_refinement must be an object")
         pose_refinement = RigPoseRefinementConfig(**pose_value)
+        exposure_value = value.get("exposure_compensation", {})
+        if not isinstance(exposure_value, dict):
+            raise ValueError("exposure_compensation must be an object")
+        exposure = ExposureCompensationConfig(**exposure_value)
         scale_value = value.get("metric_scale_calibration", {})
         if not isinstance(scale_value, dict):
             raise ValueError("metric_scale_calibration must be an object")
@@ -162,6 +175,8 @@ class TrainerConfig:
                 "ssim_min_valid_fraction",
                 "lidar_range_loss_mode",
                 "lidar_log_range_huber_delta",
+                "color_model",
+                "sh_degree",
                 "mcmc_refine_start_iter",
                 "mcmc_refine_stop_iter",
                 "mcmc_refine_every",
@@ -176,6 +191,7 @@ class TrainerConfig:
             crop=crop,
             rig_pose_refinement=pose_refinement,
             metric_scale_calibration=scale_calibration,
+            exposure_compensation=exposure,
             **paths,
             **options,
         )
@@ -192,6 +208,10 @@ class TrainerConfig:
         if self.init_scale_m <= 0.0:
             raise ValueError("init_scale_m must be positive")
         self.metric_scale_calibration.validate()
+        if self.color_model not in ("rgb_sigmoid", "sh"):
+            raise ValueError("color_model must be 'rgb_sigmoid' or 'sh'")
+        if not 0 <= self.sh_degree <= 3:
+            raise ValueError("sh_degree must be within [0, 3]")
         weights = (self.rgb_l1_weight, self.rgb_ssim_weight, self.lidar_range_weight)
         if any(weight < 0.0 for weight in weights):
             raise ValueError("loss weights must be non-negative")
@@ -219,6 +239,7 @@ class TrainerConfig:
         if self.mcmc_noise_injection_stop_iter < -1:
             raise ValueError("MCMC noise stop must be -1 or non-negative")
         self.rig_pose_refinement.validate()
+        self.exposure_compensation.validate()
         if (self.depth_manifest is None) != (self.depth_root is None):
             raise ValueError("depth_manifest and depth_root must be provided together")
         if (self.person_mask_manifest is None) != (self.person_mask_root is None):
@@ -273,6 +294,10 @@ class TrainerConfig:
                 "rgb_ssim": self.rgb_ssim_weight,
                 "lidar_range": self.lidar_range_weight,
             },
+            "color_model": {
+                "mode": self.color_model,
+                "sh_degree": self.sh_degree if self.color_model == "sh" else None,
+            },
             "loss_contract": {
                 "rgb_ssim": {
                     "mode": "mask_aware_local_gaussian",
@@ -318,6 +343,7 @@ class TrainerConfig:
                 "noise_std_fraction": self.metric_scale_calibration.noise_std_fraction,
             },
             "rig_pose_refinement": self.rig_pose_refinement.to_dict(),
+            "exposure_compensation": self.exposure_compensation.to_dict(),
             "viewer": False,
         }
 
@@ -412,6 +438,7 @@ def _render_supervision_loss(
     tensors: dict[str, Any],
     config: TrainerConfig,
     c2w_override: Any | None = None,
+    rgb_gain: Any | None = None,
 ) -> tuple[Any, Any, Any, Any, dict[str, Any]]:
     has_range = "range_m" in tensors and config.lidar_range_weight > 0.0
     rendered, rendered_range, _, info = backend.render(
@@ -420,6 +447,11 @@ def _render_supervision_loss(
         with_range=has_range,
         c2w_override=c2w_override,
     )
+    if rgb_gain is not None:
+        # Per-frame auto-exposure compensation: scale the render toward the
+        # frame's brightness for the photometric losses only. Geometry (range)
+        # and validation renders stay at gain 1.0.
+        rendered = rendered * rgb_gain
     l1 = masked_rgb_l1(rendered, tensors["rgb"], tensors["rgb_mask"])
     ssim = (
         masked_rgb_ssim_loss(
@@ -663,6 +695,12 @@ def train(
     )
     effective_learning_rates = dict(config.learning_rates)
     effective_learning_rates["means"] = float(scale_calibration["effective_means_lr_m"])
+    if config.color_model == "sh":
+        # Upstream convention: the DC band trains at the color LR and the
+        # view-dependent bands one twentieth of it.
+        color_lr = float(effective_learning_rates.pop("colors"))
+        effective_learning_rates["sh0"] = color_lr
+        effective_learning_rates["shN"] = color_lr / 20.0
     backend = backend_factory(
         device=config.device,
         cap_max=config.cap_max,
@@ -697,6 +735,8 @@ def train(
         rgb,
         init_scales_m=initial_scales_m,
         learning_rates=effective_learning_rates,
+        color_model=config.color_model,
+        sh_degree=config.sh_degree,
     )
     pose_refiner = None
     pose_optimizer = None
@@ -712,6 +752,17 @@ def train(
         pose_optimizer = pose_refiner.make_optimizer()
         auxiliary_params["rig_pose_deltas"] = pose_refiner.deltas
         auxiliary_optimizers["rig_pose_deltas"] = pose_optimizer
+    exposure = None
+    exposure_optimizer = None
+    if config.exposure_compensation.enabled:
+        exposure = ExposureCompensator(
+            trainset.image_ids,
+            config=config.exposure_compensation,
+            device=config.device,
+        )
+        exposure_optimizer = exposure.make_optimizer()
+        auxiliary_params["exposure_log_gains"] = exposure.log_gains
+        auxiliary_optimizers["exposure_log_gains"] = exposure_optimizer
     completed_steps = 0
     last_metrics: dict[str, Any] = {}
     initial_loss: float | None = None
@@ -763,11 +814,14 @@ def train(
             tensors=tensors,
             config=config,
             c2w_override=c2w_override,
+            rgb_gain=None if exposure is None else exposure.gain(sample.image_id),
         )
         pose_prior = None
         if pose_refiner is not None:
             pose_prior = pose_refiner.prior_loss()
             loss = loss + pose_prior
+        if exposure is not None:
+            loss = loss + exposure.prior_loss()
         require_finite_training_tensors(
             params=params,
             loss=loss,
@@ -798,6 +852,9 @@ def train(
         if pose_optimizer is not None:
             pose_optimizer.step()
             pose_optimizer.zero_grad(set_to_none=True)
+        if exposure_optimizer is not None:
+            exposure_optimizer.step()
+            exposure_optimizer.zero_grad(set_to_none=True)
         mcmc_event = backend.strategy_post_step(
             params,
             optimizers,
@@ -911,6 +968,7 @@ def train(
                 "best_loss": best_loss,
                 "mcmc_telemetry": mcmc_telemetry,
                 "rig_pose_refinement": pose_report,
+                "exposure_compensation": None if exposure is None else exposure.report(),
             },
             auxiliary_params=auxiliary_params,
             auxiliary_optimizers=auxiliary_optimizers,
@@ -937,6 +995,7 @@ def train(
             "initialization_ply_sha256": initialization_sha256,
             "metric_scale_calibration": scale_calibration,
             "rig_pose_refinement": pose_report,
+            "exposure_compensation": None if exposure is None else exposure.report(),
             "frames": frames,
             "training": {
                 "status": "COMPLETE",
