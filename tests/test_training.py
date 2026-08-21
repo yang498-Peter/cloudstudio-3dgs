@@ -613,3 +613,69 @@ class TorchTrainingContractTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+@unittest.skipUnless(HAS_TORCH, "torch is an optional training dependency")
+class RenderScaleContractTests(unittest.TestCase):
+    def test_rendered_footprint_matches_linear_metric_scale(self) -> None:
+        """The rasterizer must receive LINEAR metric scales, not the stored logs.
+
+        Four opaque 0.1 m Gaussians at z=2 m under f=100 px must each cover a
+        footprint of roughly f*s/z = 5 px sigma. If the log-domain parameters
+        leak through (the bug that collapsed every real scene into mush while
+        the small synthetic fixture kept converging), |log 0.1| = 2.3 m blobs
+        cover essentially the whole 128x128 frame and this test fails.
+        """
+        import torch
+
+        if not torch.cuda.is_available():
+            self.skipTest("requires a CUDA device")
+        from cloudstudio_3dgs.training.backend import GsplatBackend
+        from cloudstudio_3dgs.training.dataset import TrainingSample
+
+        backend = GsplatBackend(
+            device="cuda:0",
+            cap_max=64,
+            lock_path=ROOT / "upstream" / "cloudstudio_trainer.lock.json",
+            mcmc_config={"noise_injection_stop_iter": 0},
+        )
+        xyz = np.asarray(
+            [[-0.6, -0.6, 2.0], [0.6, -0.6, 2.0], [-0.6, 0.6, 2.0], [0.6, 0.6, 2.0]],
+            dtype=np.float32,
+        )
+        rgb = np.full((4, 3), 255, dtype=np.uint8)
+        params, _, _ = backend.initialize(
+            xyz,
+            rgb,
+            init_scale_m=0.1,
+            learning_rates={n: 1e-4 for n in ("means", "scales", "quats", "opacities", "colors")},
+        )
+        params["opacities"].data.fill_(
+            torch.tensor(0.999, device=backend.device).logit()
+        )
+        sample = TrainingSample(
+            image_id="scale_contract",
+            rig_frame_id="rig",
+            camera_id="left",
+            image=np.zeros((128, 128, 3), dtype=np.uint8),
+            rgb_mask=np.ones((128, 128), dtype=bool),
+            depth_range_m=None,
+            depth_confidence=None,
+            depth_mask=None,
+            depth_cache_path=None,
+            c2w=np.eye(4, dtype=np.float32),
+            K=np.asarray(
+                [[100.0, 0.0, 63.5], [0.0, 100.0, 63.5], [0.0, 0.0, 1.0]],
+                dtype=np.float32,
+            ),
+            radial_coeffs=np.zeros(4, dtype=np.float32),
+            width=128,
+            height=128,
+        )
+        with torch.no_grad():
+            _, _, alpha, _ = backend.render(params, sample, with_range=False)
+        covered = int((alpha.squeeze() > 0.5).sum().item())
+        # Correct linear scales: 4 blobs of ~5 px sigma; generous upper bound
+        # is still two orders of magnitude below the log-leak full-frame wash.
+        self.assertGreater(covered, 40)
+        self.assertLess(covered, 4000)
