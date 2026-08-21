@@ -199,6 +199,17 @@ class GsplatBackend:
             if refine
             else None
         )
+        noise_scheduled = (
+            self.strategy.noise_injection_stop_iter < 0
+            or step < self.strategy.noise_injection_stop_iter
+        )
+        noise_probe_before = None
+        noise_probe_observed = bool(
+            state.get("_cloudstudio_noise_probe_observed", False)
+        )
+        if noise_scheduled and not refine and not noise_probe_observed:
+            probe_count = min(len(params["means"]), 256)
+            noise_probe_before = params["means"][:probe_count].detach().clone()
         self.strategy.step_post_backward(
             params=params,
             optimizers=optimizers,
@@ -207,6 +218,14 @@ class GsplatBackend:
             info=info,
             lr=optimizers["means"].param_groups[0]["lr"],
         )
+        noise_position_delta_max_m = None
+        if noise_probe_before is not None:
+            probe_after = params["means"][: len(noise_probe_before)].detach()
+            noise_position_delta_max_m = float(
+                (probe_after - noise_probe_before).abs().max().cpu()
+            )
+            if noise_position_delta_max_m > 0.0:
+                state["_cloudstudio_noise_probe_observed"] = True
         after = (
             snapshot_gaussians(params, min_opacity=self.strategy.min_opacity)
             if refine
@@ -220,4 +239,5 @@ class GsplatBackend:
             refine_stop_iter=self.strategy.refine_stop_iter,
             refine_every=self.strategy.refine_every,
             noise_injection_stop_iter=self.strategy.noise_injection_stop_iter,
+            noise_position_delta_max_m=noise_position_delta_max_m,
         )

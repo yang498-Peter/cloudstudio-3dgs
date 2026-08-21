@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import platform
 import sys
 from pathlib import Path
 
@@ -27,6 +28,8 @@ from cloudstudio_3dgs.training.checkpoint import compare_checkpoint_payloads
 from cloudstudio_3dgs.training.dataset import TrainingSample
 from cloudstudio_3dgs.training.runtime_evidence import (
     execute_mcmc_native_kernel_smoke,
+    sign_full_mcmc_gate_evidence,
+    verify_full_mcmc_gate_evidence,
 )
 from cloudstudio_3dgs.training.trainer import (
     ControlledTrainingInterruption,
@@ -56,12 +59,12 @@ def _camera(side: str) -> dict:
 
 
 class FullMCMCAcceptanceBackend(GsplatBackend):
-    """Force one known dead Gaussian so relocation is an observed gate."""
+    """Keep one unambiguously dead Gaussian until the first relocation window."""
 
     def initialize(self, *args, **kwargs):
         params, optimizers, state = super().initialize(*args, **kwargs)
         params["opacities"].data[0] = self.torch.tensor(
-            0.001, device=self.device
+            1e-8, device=self.device
         ).logit()
         return params, optimizers, state
 
@@ -432,6 +435,7 @@ def main() -> int:
     improvement = float(training["loss_improvement_fraction"])
     acceptance = {
         "schema_version": 1,
+        "steps": args.steps,
         "run_manifest_sha256": manifest["run_manifest_sha256"],
         "mcmc_mode": "full_noise_and_refine" if args.full_mcmc else "noise_disabled",
         "initial_loss": training["initial_loss"],
@@ -446,11 +450,29 @@ def main() -> int:
     if args.full_mcmc:
         telemetry = training["mcmc_telemetry"]
         operator_report = training["mcmc_operator_report"]
+        count_curve = [
+            {"step": 0, **telemetry["initial_snapshot"]},
+            *[
+                {"step": int(event["step"]) + 1, **event["after"]}
+                for event in telemetry["events"]
+            ],
+        ]
+        if count_curve[-1]["step"] != args.steps:
+            count_curve.append({"step": args.steps, **telemetry["last_snapshot"]})
         acceptance["initial_gaussian_count"] = init_count
         acceptance["native_kernel_smoke"] = native_kernel_smoke
         acceptance["mcmc_operator_registration"] = operator_report["status"]
         acceptance["mcmc_noise_step_count"] = telemetry[
             "noise_injection_step_count"
+        ]
+        acceptance["mcmc_noise_probe_step_count"] = telemetry[
+            "noise_probe_step_count"
+        ]
+        acceptance["mcmc_noise_nonzero_step_count"] = telemetry[
+            "noise_nonzero_step_count"
+        ]
+        acceptance["mcmc_noise_max_abs_delta_m"] = telemetry[
+            "noise_max_abs_delta_m"
         ]
         acceptance["mcmc_refine_event_count"] = telemetry["refine_event_count"]
         acceptance["mcmc_relocated_count"] = telemetry["total_relocated"]
@@ -462,12 +484,16 @@ def main() -> int:
             int(training["gaussian_count"]) > init_count
             and int(telemetry["total_added"]) > 0
         )
+        acceptance["gaussian_count_curve"] = count_curve
+        acceptance["mcmc_refine_events"] = telemetry["events"]
         acceptance["converged"] = bool(
             acceptance["converged"]
             and native_kernel_smoke is not None
             and native_kernel_smoke["status"] == "PASS"
             and acceptance["mcmc_operator_registration"] == "PASS_REGISTERED"
             and acceptance["mcmc_noise_step_count"] == args.steps
+            and acceptance["mcmc_noise_nonzero_step_count"] > 0
+            and acceptance["mcmc_noise_max_abs_delta_m"] > 0.0
             and acceptance["mcmc_refine_event_count"] > 0
             and acceptance["mcmc_relocated_count"] > 0
             and acceptance["mcmc_densification_ran"]
@@ -478,12 +504,113 @@ def main() -> int:
         acceptance["converged"] = bool(
             acceptance["converged"] and resume_report["status"] == "PASS"
         )
+    if args.full_mcmc:
+        lock = json.loads(args.gsplat_lock.read_text(encoding="utf-8"))
+        runtime = {
+            key: backend.runtime[key]
+            for key in (
+                "package",
+                "version",
+                "locked_commit",
+                "source_kind",
+                "commit",
+                "clean",
+            )
+            if key in backend.runtime
+        }
+        execution_gates = {
+            "covariance_forward_backward": "PASS"
+            if native_kernel_smoke is not None
+            and native_kernel_smoke["status"] == "PASS"
+            and native_kernel_smoke["covariance_forward_finite"]
+            and native_kernel_smoke["covariance_backward_finite"]
+            else "FAIL",
+            "mcmc_noise_nonzero": "PASS"
+            if acceptance["mcmc_noise_nonzero_step_count"] > 0
+            and acceptance["mcmc_noise_max_abs_delta_m"] > 0.0
+            else "FAIL",
+            "relocation_occurred": "PASS"
+            if acceptance["mcmc_relocated_count"] > 0
+            else "FAIL",
+            "sample_add_occurred": "PASS"
+            if acceptance["mcmc_added_count"] > 0
+            else "FAIL",
+            "rasterization_forward_backward": "PASS"
+            if training["status"] == "COMPLETE"
+            and training["completed_steps"] == args.steps
+            else "FAIL",
+            "interrupted_resume_equivalence": "PASS"
+            if resume_report is not None and resume_report["status"] == "PASS"
+            else "NOT_RUN" if resume_report is None else "FAIL",
+        }
+        gate_passed = acceptance["converged"] and all(
+            status == "PASS" for status in execution_gates.values()
+        )
+        acceptance["gate_status"] = "PASS" if gate_passed else "FAIL"
+        gate_evidence = sign_full_mcmc_gate_evidence(
+            {
+                "schema_version": 1,
+                "evidence_type": "cloudstudio_full_mcmc_gate",
+                "gate_status": acceptance["gate_status"],
+                "environment": {
+                    "platform": platform.platform(),
+                    "python": platform.python_version(),
+                    "torch": backend.torch.__version__,
+                    "torch_cuda": backend.torch.version.cuda,
+                    "cuda_available": backend.torch.cuda.is_available(),
+                    "gpu": backend.torch.cuda.get_device_name(0),
+                },
+                "lock": {
+                    key: lock.get(key)
+                    for key in (
+                        "package",
+                        "version",
+                        "commit",
+                        "python",
+                        "torch",
+                        "cuda",
+                        "cuda_arch_list",
+                        "patch",
+                        "source_policy",
+                    )
+                },
+                "runtime": runtime,
+                "execution_gates": execution_gates,
+                "native_kernel_smoke": native_kernel_smoke,
+                "training": {
+                    key: value
+                    for key, value in acceptance.items()
+                    if key not in {"schema_version", "gate_status"}
+                },
+            }
+        )
+        verification = verify_full_mcmc_gate_evidence(
+            gate_evidence, expected_lock_commit=str(lock["commit"])
+        )
+        if gate_passed and verification["status"] != "PASS":
+            raise RuntimeError(
+                "generated full-MCMC gate evidence failed self-verification: "
+                + "; ".join(verification["errors"])
+            )
+        gate_evidence_path = args.output / "full_mcmc_gate_evidence.json"
+        gate_evidence_path.write_text(
+            json.dumps(gate_evidence, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+        acceptance["gate_evidence_sha256"] = gate_evidence[
+            "gate_evidence_sha256"
+        ]
+        acceptance["gate_evidence_verification"] = verification
+    else:
+        acceptance["gate_status"] = (
+            "PASS_COMPATIBILITY" if acceptance["converged"] else "FAIL"
+        )
     acceptance_path = args.output / "synthetic_acceptance.json"
     acceptance_path.write_text(
         json.dumps(acceptance, indent=2, sort_keys=True) + "\n", encoding="utf-8"
     )
     print(json.dumps(acceptance, indent=2, sort_keys=True))
-    return 0 if acceptance["converged"] else 2
+    return 0 if acceptance["gate_status"].startswith("PASS") else 2
 
 
 if __name__ == "__main__":

@@ -634,3 +634,32 @@ Stage 2 模型 SHA `64282ec6...1c04` 的全部 1,114 张训练图完成流式审
 ### 验证方式与当前状态
 
 先加入缺少 `compare_checkpoint_payloads` 的红测试，旧代码按预期无法导入；实现后 Gate 1/Trainer/Rig pose 定向测试 `26/26`、完整测试集 `118/118` 通过，CLI、Python 编译与当前阶段 diff/UTF-8 检查通过。提交前以 `--execute-kernels` 重跑本机严格审计，结果仍为 `FAIL`：native smoke 明确记为 `NOT_RUN_INCOMPLETE_RUNTIME`，证据 SHA256 为 `10a5180a...0379`。本机 gsplat checkout 仍含共享未提交构建改动且已加载扩展缺关键算子，所以没有绕过 clean-lock 运行新的 GPU 合成验收；`relocation` 与 `resume_equivalence` 保持 `NOT_RUN`。下一次澳洲机器同步当前分支后，应运行 README 的 `--full-mcmc --resume-equivalence` 命令并提交签名 JSON，只有全部条件通过才能关闭 Gate 1。
+
+## 18. 当前阶段记录：Gate 1D 实际噪声与签名 Exit Gate 证据
+
+### 问题现象
+
+现有 telemetry 的 `noise_injection_step_count` 只证明配置使 MCMC noise 分支被调用，不能证明训练中的 Gaussian position 发生过非零位移；旧的 `synthetic_acceptance.json` 也没有把运行时来源、kernel smoke、refine 分布、resume 比较和每项 Exit Gate 绑定成一个可独立校验的签名证据。另一台 GPU 机器即使终端显示训练成功，仍可能因零幅度 noise、漏跑 resume 或 JSON 被修改而被误升级为 Gate 1 PASS。
+
+### 修改文件
+
+- `cloudstudio_3dgs/training/runtime_evidence.py`
+- `cloudstudio_3dgs/training/backend.py`
+- `tools/run_synthetic_training_acceptance.py`
+- `tools/verify_full_mcmc_gate.py`
+- `tests/test_mcmc_runtime.py`
+- `README.md`
+
+### 修改内容
+
+- MCMC strategy 调用前后只对最多 256 个 Gaussian 做一次轻量 position 探针；探针位于 optimizer step 之后且避开 refine 边界，因此测得的非零 delta 来自实际 noise 路径，而不是 Adam、relocation 或 add。首次观察到非零位移后停止复制，避免在生产点数上逐步增加显存和同步成本。
+- 探针完成标记写入 MCMC strategy state，而不是仅存在 Backend 内存中；checkpoint 会保存和恢复该标记，防止中断恢复后重复探测造成 telemetry 与 uninterrupted 参考不一致。
+- full-MCMC acceptance 新增实际 noise probe 次数、非零次数、最大位移、完整 refine event、Gaussian count curve、总 steps 和明确 `gate_status`。仅配置调用 noise 但实际 delta 为零时，Gate 必须失败。
+- 验收后端的已知 dead Gaussian 从 opacity `0.001` 调低到 `1e-8`，使其在首次 refine 前不会被 opacity 梯度抬过 `min_opacity`；Machine-B 若仍未观察到 relocation，签名 Gate 必须失败而不是把“调用过 relocation 分支但零个对象”当作 PASS。
+- 新增 `cloudstudio_full_mcmc_gate` 签名 schema，把 GPU/Torch/CUDA、锁定 gsplat commit、clean runtime、native covariance/fused perturb smoke、真实训练、relocate/add、分布曲线和 checkpoint 全状态恢复比较绑定到一个 canonical SHA256。
+- 新增独立验证 CLI。验证器要求六项 execution gate 全为 PASS、runtime 与 repo lock 完全一致、loss 至少改善 20%、Gaussian 数量与 add 计数一致、noise 实际非零、relocation 非零、最终状态有限、曲线单调一致，以及连续/恢复 step 和 Gaussian identity/count 无 mismatch。任何字段篡改都会先触发签名失败。
+- checked-in baseline 测试兼容当前 fail-closed registration schema 和未来 Machine-B 提交的完整 PASS schema；在完整签名证据通过验证前，现有 FAIL baseline 不会被自动覆盖。
+
+### 验证方式与当前状态
+
+先加入缺少签名/验证函数的红测试，旧代码按预期 ImportError；实现后 Gate 1/Trainer 定向测试 `24/24`、完整测试集 `121/121` 通过。测试覆盖签名 PASS、字段篡改、配置 noise 但实际零位移、Backend 真实 position delta 探针、只探测一次，以及既有 checkpoint/Trainer 契约；Python 编译、两个 CLI help、当前阶段 diff 与 UTF-8 乱码检查均通过。当前本机没有完整 CUDA runtime，因此本阶段只实现并验证证据契约，没有启动合成或真实 3DGS 训练；Gate 1 仍等待 Machine-B 生成 `full_mcmc_gate_evidence.json` 并通过独立 CLI，不能由 CPU 单元测试关闭。

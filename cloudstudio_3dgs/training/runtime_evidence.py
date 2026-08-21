@@ -2,7 +2,12 @@
 
 from __future__ import annotations
 
+import copy
+import hashlib
+import math
 from typing import Any, Iterable, Mapping
+
+from cloudstudio_3dgs.data.manifest import canonical_json_bytes
 
 
 REQUIRED_MCMC_BUILD_FEATURES = ("3dgs", "3dgut", "reloc")
@@ -14,6 +19,216 @@ REQUIRED_MCMC_NATIVE_OPS = (
     "rasterize_to_pixels_from_world_3dgs",
     "relocation",
 )
+FULL_MCMC_GATE_HASH_FIELD = "gate_evidence_sha256"
+FULL_MCMC_EXECUTION_GATES = (
+    "covariance_forward_backward",
+    "mcmc_noise_nonzero",
+    "relocation_occurred",
+    "sample_add_occurred",
+    "rasterization_forward_backward",
+    "interrupted_resume_equivalence",
+)
+
+
+def sign_full_mcmc_gate_evidence(evidence: Mapping[str, Any]) -> dict[str, Any]:
+    """Return a detached canonical evidence payload with a tamper checksum."""
+    if FULL_MCMC_GATE_HASH_FIELD in evidence:
+        raise ValueError("full-MCMC gate evidence is already signed")
+    signed = copy.deepcopy(dict(evidence))
+    signed[FULL_MCMC_GATE_HASH_FIELD] = hashlib.sha256(
+        canonical_json_bytes(signed)
+    ).hexdigest()
+    return signed
+
+
+def _finite_number(value: Any) -> bool:
+    return (
+        not isinstance(value, bool)
+        and isinstance(value, (int, float))
+        and math.isfinite(float(value))
+    )
+
+
+def verify_full_mcmc_gate_evidence(
+    evidence: Mapping[str, Any], *, expected_lock_commit: str | None = None
+) -> dict[str, Any]:
+    """Fail closed unless one signed payload proves every Gate 1 exit condition."""
+    errors: list[str] = []
+    unsigned = copy.deepcopy(dict(evidence))
+    expected_signature = unsigned.pop(FULL_MCMC_GATE_HASH_FIELD, None)
+    actual_signature = hashlib.sha256(canonical_json_bytes(unsigned)).hexdigest()
+    signature_valid = expected_signature == actual_signature
+    if not signature_valid:
+        errors.append("gate evidence signature mismatch")
+    if unsigned.get("schema_version") != 1:
+        errors.append("unsupported gate evidence schema")
+    if unsigned.get("evidence_type") != "cloudstudio_full_mcmc_gate":
+        errors.append("unexpected gate evidence type")
+    if unsigned.get("gate_status") != "PASS":
+        errors.append("gate status is not PASS")
+
+    environment = unsigned.get("environment")
+    if (
+        not isinstance(environment, dict)
+        or environment.get("cuda_available") is not True
+    ):
+        errors.append("CUDA environment evidence is missing")
+    else:
+        for field in ("gpu", "python", "torch", "torch_cuda"):
+            if not isinstance(environment.get(field), str) or not environment[field]:
+                errors.append(f"environment.{field} is missing")
+
+    lock = unsigned.get("lock")
+    runtime = unsigned.get("runtime")
+    lock_commit = lock.get("commit") if isinstance(lock, dict) else None
+    if not isinstance(lock_commit, str) or len(lock_commit) != 40:
+        errors.append("locked gsplat commit is invalid")
+    if expected_lock_commit is not None and lock_commit != expected_lock_commit:
+        errors.append("gate evidence does not match the expected gsplat lock")
+    if not isinstance(runtime, dict) or runtime.get("clean") is not True:
+        errors.append("gsplat runtime is not a clean checkout")
+    elif (
+        runtime.get("locked_commit") != lock_commit
+        or runtime.get("commit") != lock_commit
+    ):
+        errors.append("gsplat runtime commit does not match the lock")
+
+    execution_gates = unsigned.get("execution_gates")
+    if not isinstance(execution_gates, dict):
+        errors.append("execution gate report is missing")
+    else:
+        for name in FULL_MCMC_EXECUTION_GATES:
+            if execution_gates.get(name) != "PASS":
+                errors.append(f"execution gate {name} is not PASS")
+
+    smoke = unsigned.get("native_kernel_smoke")
+    if not isinstance(smoke, dict) or smoke.get("status") != "PASS":
+        errors.append("native kernel smoke did not pass")
+    else:
+        for field in (
+            "covariance_forward_finite",
+            "covariance_backward_finite",
+            "fused_perturb_finite",
+        ):
+            if smoke.get(field) is not True:
+                errors.append(f"native kernel smoke {field} is not true")
+        perturb_delta = smoke.get("fused_perturb_max_abs_delta")
+        if not _finite_number(perturb_delta) or float(perturb_delta) <= 0.0:
+            errors.append("native fused perturbation did not move positions")
+
+    training = unsigned.get("training")
+    if not isinstance(training, dict):
+        errors.append("training acceptance evidence is missing")
+    else:
+        steps = training.get("steps")
+        steps_valid = (
+            isinstance(steps, int) and not isinstance(steps, bool) and steps > 0
+        )
+        if not steps_valid:
+            errors.append("training step count is invalid")
+        run_hash = training.get("run_manifest_sha256")
+        if not isinstance(run_hash, str) or len(run_hash) != 64:
+            errors.append("run manifest hash is invalid")
+        if training.get("mcmc_operator_registration") != "PASS_REGISTERED":
+            errors.append("MCMC operator registration did not pass")
+        initial_loss = training.get("initial_loss")
+        final_loss = training.get("final_loss")
+        improvement = training.get("loss_improvement_fraction")
+        if not all(
+            _finite_number(value)
+            for value in (initial_loss, final_loss, improvement)
+        ):
+            errors.append("training loss evidence is not finite")
+        elif float(final_loss) >= float(initial_loss) or float(improvement) < 0.20:
+            errors.append("synthetic full-MCMC training did not converge")
+
+        initial_count = training.get("initial_gaussian_count")
+        final_count = training.get("gaussian_count")
+        added_count = training.get("mcmc_added_count")
+        if not all(
+            isinstance(value, int) and not isinstance(value, bool)
+            for value in (initial_count, final_count, added_count)
+        ):
+            errors.append("Gaussian count evidence is invalid")
+        elif (
+            initial_count <= 0
+            or added_count <= 0
+            or final_count != initial_count + added_count
+        ):
+            errors.append("Gaussian add/count evidence is inconsistent")
+
+        noise_steps = training.get("mcmc_noise_step_count")
+        nonzero_noise_steps = training.get("mcmc_noise_nonzero_step_count")
+        noise_delta = training.get("mcmc_noise_max_abs_delta_m")
+        if steps_valid and noise_steps != steps:
+            errors.append("MCMC noise was not invoked on every configured step")
+        if (
+            not isinstance(nonzero_noise_steps, int)
+            or isinstance(nonzero_noise_steps, bool)
+            or nonzero_noise_steps <= 0
+            or not _finite_number(noise_delta)
+            or float(noise_delta) <= 0.0
+        ):
+            errors.append("training did not observe nonzero MCMC position noise")
+        refine_count = training.get("mcmc_refine_event_count")
+        relocated_count = training.get("mcmc_relocated_count")
+        if not isinstance(refine_count, int) or refine_count <= 0:
+            errors.append("MCMC refine window did not execute")
+        if not isinstance(relocated_count, int) or relocated_count <= 0:
+            errors.append("MCMC relocation did not occur")
+        if training.get("mcmc_final_state_finite") is not True:
+            errors.append("final Gaussian state is not finite")
+
+        curve = training.get("gaussian_count_curve")
+        if not isinstance(curve, list) or len(curve) < 2:
+            errors.append("Gaussian count curve is incomplete")
+        else:
+            curve_steps = [
+                item.get("step") for item in curve if isinstance(item, dict)
+            ]
+            curve_counts = [
+                item.get("gaussian_count") for item in curve if isinstance(item, dict)
+            ]
+            curve_valid = (
+                len(curve_steps) == len(curve)
+                and all(isinstance(value, int) for value in curve_steps + curve_counts)
+                and all(
+                    left < right
+                    for left, right in zip(curve_steps, curve_steps[1:])
+                )
+                and all(
+                    left <= right
+                    for left, right in zip(curve_counts, curve_counts[1:])
+                )
+                and curve_counts[0] == initial_count
+                and curve_counts[-1] == final_count
+            )
+            if not curve_valid:
+                errors.append("Gaussian count curve is inconsistent")
+
+        resume = training.get("resume_equivalence")
+        if not isinstance(resume, dict) or resume.get("status") != "PASS":
+            errors.append("interrupted resume equivalence did not pass")
+        else:
+            if resume.get("mismatch_count") != 0:
+                errors.append("resumed checkpoint has state mismatches")
+            if steps_valid and (
+                resume.get("reference_step") != steps
+                or resume.get("resumed_step") != steps
+            ):
+                errors.append("resumed checkpoint step does not match the reference")
+            if (
+                resume.get("reference_gaussian_count") != final_count
+                or resume.get("resumed_gaussian_count") != final_count
+            ):
+                errors.append("resumed Gaussian identity/count does not match")
+
+    return {
+        "schema_version": 1,
+        "status": "PASS" if not errors else "FAIL",
+        "signature_valid": signature_valid,
+        "errors": errors,
+    }
 
 
 def build_mcmc_runtime_report(
@@ -257,6 +472,7 @@ def build_mcmc_step_event(
     refine_stop_iter: int,
     refine_every: int,
     noise_injection_stop_iter: int,
+    noise_position_delta_max_m: float | None = None,
 ) -> dict[str, Any]:
     """Describe one completed strategy call without overstating visual quality."""
     refine = _refine_triggered(
@@ -270,6 +486,14 @@ def build_mcmc_step_event(
     if not refine and (before is not None or after is not None):
         raise ValueError("non-refine telemetry must not carry distribution snapshots")
     noise = noise_injection_stop_iter < 0 or step < noise_injection_stop_iter
+    if noise_position_delta_max_m is not None:
+        noise_position_delta_max_m = float(noise_position_delta_max_m)
+        if (
+            not noise
+            or not math.isfinite(noise_position_delta_max_m)
+            or noise_position_delta_max_m < 0.0
+        ):
+            raise ValueError("noise position delta requires a finite active-noise step")
     relocated = 0
     added = 0
     if refine:
@@ -284,6 +508,7 @@ def build_mcmc_step_event(
         "noise_injection_invoked": noise,
         "relocated_count": relocated,
         "new_gaussian_count": added,
+        "noise_position_delta_max_m": noise_position_delta_max_m,
         "before": before,
         "after": after,
     }
@@ -296,6 +521,9 @@ def initialize_mcmc_telemetry(initial: Mapping[str, Any]) -> dict[str, Any]:
         "last_snapshot": dict(initial),
         "refine_event_count": 0,
         "noise_injection_step_count": 0,
+        "noise_probe_step_count": 0,
+        "noise_nonzero_step_count": 0,
+        "noise_max_abs_delta_m": 0.0,
         "total_relocated": 0,
         "total_added": 0,
         "events": [],
@@ -308,6 +536,14 @@ def append_mcmc_telemetry(
     """Append only refine-boundary detail while keeping noise evidence compact."""
     if event.get("noise_injection_invoked"):
         telemetry["noise_injection_step_count"] += 1
+    noise_delta = event.get("noise_position_delta_max_m")
+    if noise_delta is not None:
+        telemetry["noise_probe_step_count"] += 1
+        telemetry["noise_max_abs_delta_m"] = max(
+            float(telemetry["noise_max_abs_delta_m"]), float(noise_delta)
+        )
+        if float(noise_delta) > 0.0:
+            telemetry["noise_nonzero_step_count"] += 1
     if not event.get("refine_triggered"):
         return
     telemetry["refine_event_count"] += 1
