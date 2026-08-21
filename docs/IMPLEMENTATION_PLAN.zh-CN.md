@@ -799,3 +799,31 @@ Machine-B 的真实 UK 训练首次运行到质量报告时发现：训练与渲
 真实 PR-04 初始化 PLY `66fbe620...42df` 的 376,906 点完成两份独立文件重放：两份 per-point scale 字节完全相同，报告 SHA 均为 `fcce9850d0683e29194aff76f3229a6663cf720004c59c272a2a2c35d4fc73d4`。定标耗时约 0.35 秒；reference/p50 为 `0.097916096 m`，p95 `0.132621631 m`，959 点（约 0.254%）被钳制；effective means LR 为 `0.0003133315`，effective noise LR 为 `8148.5784`，名义 noise 为 `0.024479024 m`。全仓 `130` 项为 `129 PASS + 1 SKIPPED`；唯一跳过是默认环境的 clean-runtime CUDA footprint，Gate 1 已有独立签名实跑覆盖。
 
 当前状态为 **PASS（Gate 2A 源码、CPU 契约、真实点云定标）**，但真实 GPU 短 A/B 与画质仍为 `NOT_RUN`。下一项继续按 Work Package 推进 SH、local masked SSIM、robust log-range、opacity/scale regularization、周期 golden eval 和 best checkpoint；在这些质量地基完成前，不启动新的正式长训练。
+
+## 24. 当前阶段记录：Gate 2B 局部 SSIM 与 robust log-range
+
+### 问题现象
+
+旧 `masked_rgb_ssim_loss` 把整张有效鱼眼区域压成每通道一组均值、方差和协方差，不能表达 11×11 邻域内的边缘、纹理和小结构；person/FoV mask 边缘也没有窗口覆盖率门。旧 LiDAR loss 直接优化 `confidence × |pred-target|` 米制绝对误差，远距离同等相对误差天然更大，深度边缘离群点保持线性影响。这两项都会让正式长训练把容量用于全局颜色统计或少量远距异常点。
+
+### 修改文件
+
+- `cloudstudio_3dgs/training/losses.py`
+- `cloudstudio_3dgs/training/trainer.py`
+- `tools/run_synthetic_training_acceptance.py`
+- `tools/run_mcmc_resume_equivalence.py`
+- `tests/test_training.py`
+- `README.md`
+- `docs/IMPLEMENTATION_PLAN.zh-CN.md`
+
+### 修改内容
+
+- 生产默认 RGB 结构项改为 mask-aware Gaussian-window SSIM：窗口默认 11×11、sigma 1.5，只在中心像素有效且加权有效覆盖率至少 0.8 时计入；卷积前用 `where` 把 mask 外值归零，再按有效 support 归一化局部一阶/二阶矩，避免 NaN 或黑边污染。无任何合格窗口时 fail-closed。原全局 masked SSIM 保留为 `global_masked_rgb_ssim_loss`，只作诊断。
+- 生产默认 LiDAR 项改为 confidence-weighted log-range smooth L1/Huber，delta 默认 0.05；预测/目标继续要求正、有限且通过同一 depth/person mask。log residual 让等比例近/远误差同权，Huber 在大残差区保持有界梯度。配置可显式选择 `linear_l1` 兼容模式。
+- Trainer contract schema v2 记录窗口、sigma、覆盖率、range 模式和 delta；step telemetry 区分 `lidar_range_loss` 与其 mode，不再把无量纲 log loss误写成米制 L1。两个 Gate 1 fixture 显式锁为 `linear_l1`，保留历史 `final_lidar_range_l1_m` 和签名证据语义。
+
+### 验证方式与当前状态
+
+红测试首先因新 local/log loss 不存在而 ImportError。实现后验证：mask 外预测即使写成 100 也不会改变 local SSIM；局部边缘平移会产生非零结构损失；有效覆盖不足时明确失败；预测和目标同时放大 10 倍时 log-range Huber 逐值相同，2× 比例误差符合解析 smooth-L1 值。Trainer/Gate 1 定向测试通过，全仓 `132` 项为 `131 PASS + 1 SKIPPED`，唯一跳过仍是默认环境的 clean-runtime CUDA footprint，已有 Gate 1 隔离实跑证据覆盖。
+
+当前状态为 **PASS（Gate 2B 数学、mask 与配置契约）**。没有启动真实 GPU 训练，因此不能声称 PSNR/SSIM/深度或清晰度已经提升；后续受控 A/B 必须单独比较旧 global+linear 与新 local+log，且保持同一 person Manifest、split、位姿、初始化 PLY、步数和随机种子。

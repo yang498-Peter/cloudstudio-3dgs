@@ -27,6 +27,8 @@ from cloudstudio_3dgs.training.contracts import (
 from cloudstudio_3dgs.training.dataset import S1TrainingDataset
 from cloudstudio_3dgs.training.losses import (
     confidence_weighted_range_l1,
+    confidence_weighted_log_range_huber,
+    global_masked_rgb_ssim_loss,
     masked_rgb_l1,
     masked_rgb_ssim_loss,
 )
@@ -543,6 +545,14 @@ class TrainingContractTests(unittest.TestCase):
         self.assertEqual(contract["initialization"]["mode"], "knn")
         self.assertEqual(contract["optimizer"]["means_step_fraction"], 0.0032)
         self.assertEqual(contract["strategy"]["noise_std_fraction"], 0.25)
+        self.assertEqual(
+            contract["loss_contract"]["rgb_ssim"]["mode"],
+            "mask_aware_local_gaussian",
+        )
+        self.assertEqual(
+            contract["loss_contract"]["lidar_range"]["mode"],
+            "robust_log_huber",
+        )
         self.assertFalse(contract["rig_pose_refinement"]["enabled"])
         self.assertFalse(contract["dynamic_person_mask"]["required"])
         self.assertFalse(contract["viewer"])
@@ -647,7 +657,11 @@ class TorchTrainingContractTests(unittest.TestCase):
         prediction[0, 0] = 1.0
         mask = torch.tensor([[False, True], [True, True]])
         self.assertEqual(float(masked_rgb_l1(prediction, target, mask)), 0.0)
-        self.assertAlmostEqual(float(masked_rgb_ssim_loss(target, target, mask)), 0.0, places=6)
+        self.assertAlmostEqual(
+            float(masked_rgb_ssim_loss(target, target, mask, window_size=1)),
+            0.0,
+            places=6,
+        )
         predicted_range = torch.tensor([[2.5, 7.0], [4.0, 1.0]])
         target_range = torch.tensor([[2.0, 3.0], [4.0, 5.0]])
         confidence = torch.tensor([[1.0, 0.0], [0.5, 1.0]])
@@ -657,6 +671,69 @@ class TorchTrainingContractTests(unittest.TestCase):
             1.0 / 3.0,
             places=6,
         )
+
+    def test_local_masked_ssim_uses_windows_and_ignores_invalid_pixels(self) -> None:
+        import torch
+
+        target = torch.zeros((15, 15, 3), dtype=torch.float32)
+        target[:, 7:, :] = 1.0
+        prediction = target.clone()
+        mask = torch.ones((15, 15), dtype=torch.bool)
+        mask[:3, :] = False
+        prediction[:3, :, :] = 100.0
+        self.assertAlmostEqual(
+            float(
+                masked_rgb_ssim_loss(
+                    prediction,
+                    target,
+                    mask,
+                    window_size=5,
+                    sigma=1.0,
+                    min_valid_fraction=0.6,
+                )
+            ),
+            0.0,
+            places=6,
+        )
+        shifted = target.roll(shifts=2, dims=1)
+        local = masked_rgb_ssim_loss(
+            shifted,
+            target,
+            mask,
+            window_size=5,
+            sigma=1.0,
+            min_valid_fraction=0.6,
+        )
+        self.assertGreater(float(local), 0.01)
+        self.assertGreater(float(global_masked_rgb_ssim_loss(shifted, target, mask)), 0.0)
+        sparse_mask = torch.zeros_like(mask)
+        sparse_mask[7, 7] = True
+        with self.assertRaisesRegex(ValueError, "no valid local windows"):
+            masked_rgb_ssim_loss(
+                target,
+                target,
+                sparse_mask,
+                window_size=5,
+                sigma=1.0,
+                min_valid_fraction=0.8,
+            )
+
+    def test_log_range_huber_is_scale_invariant_and_robust(self) -> None:
+        import math
+        import torch
+
+        target = torch.tensor([[1.0, 10.0]], dtype=torch.float32)
+        prediction = target * 2.0
+        confidence = torch.ones_like(target)
+        mask = torch.ones_like(target, dtype=torch.bool)
+        base = confidence_weighted_log_range_huber(
+            prediction, target, confidence, mask, delta=0.1
+        )
+        scaled = confidence_weighted_log_range_huber(
+            prediction * 10.0, target * 10.0, confidence, mask, delta=0.1
+        )
+        self.assertAlmostEqual(float(base), float(scaled), places=6)
+        self.assertAlmostEqual(float(base), math.log(2.0) - 0.05, places=6)
 
     def test_checkpoint_resume_restores_state_and_rejects_identity_change(self) -> None:
         import torch

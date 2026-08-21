@@ -24,6 +24,7 @@ from cloudstudio_3dgs.training.checkpoint import load_checkpoint, save_checkpoin
 from cloudstudio_3dgs.training.contracts import build_coordinate_transform_manifest
 from cloudstudio_3dgs.training.dataset import S1TrainingDataset, TrainingSample
 from cloudstudio_3dgs.training.losses import (
+    confidence_weighted_log_range_huber,
     confidence_weighted_range_l1,
     masked_rgb_l1,
     masked_rgb_ssim_loss,
@@ -89,6 +90,11 @@ class TrainerConfig:
     rgb_l1_weight: float = 0.8
     rgb_ssim_weight: float = 0.2
     lidar_range_weight: float = 0.05
+    ssim_window_size: int = 11
+    ssim_sigma: float = 1.5
+    ssim_min_valid_fraction: float = 0.8
+    lidar_range_loss_mode: str = "robust_log_huber"
+    lidar_log_range_huber_delta: float = 0.05
     mcmc_refine_start_iter: int = 500
     mcmc_refine_stop_iter: int = 25_000
     mcmc_refine_every: int = 100
@@ -151,6 +157,11 @@ class TrainerConfig:
                 "rgb_l1_weight",
                 "rgb_ssim_weight",
                 "lidar_range_weight",
+                "ssim_window_size",
+                "ssim_sigma",
+                "ssim_min_valid_fraction",
+                "lidar_range_loss_mode",
+                "lidar_log_range_huber_delta",
                 "mcmc_refine_start_iter",
                 "mcmc_refine_stop_iter",
                 "mcmc_refine_every",
@@ -186,6 +197,14 @@ class TrainerConfig:
             raise ValueError("loss weights must be non-negative")
         if self.rgb_l1_weight + self.rgb_ssim_weight <= 0.0:
             raise ValueError("at least one RGB loss weight must be positive")
+        if self.ssim_window_size <= 0 or self.ssim_window_size % 2 == 0:
+            raise ValueError("ssim_window_size must be a positive odd integer")
+        if self.ssim_sigma <= 0.0 or not 0.0 < self.ssim_min_valid_fraction <= 1.0:
+            raise ValueError("SSIM sigma/valid fraction are outside the supported range")
+        if self.lidar_range_loss_mode not in {"linear_l1", "robust_log_huber"}:
+            raise ValueError("lidar_range_loss_mode must be linear_l1 or robust_log_huber")
+        if self.lidar_log_range_huber_delta <= 0.0:
+            raise ValueError("lidar_log_range_huber_delta must be positive")
         expected_lrs = {"means", "scales", "quats", "opacities", "colors"}
         if set(self.learning_rates) != expected_lrs:
             raise ValueError(f"learning_rates must contain exactly {sorted(expected_lrs)}")
@@ -253,6 +272,21 @@ class TrainerConfig:
                 "rgb_l1": self.rgb_l1_weight,
                 "rgb_ssim": self.rgb_ssim_weight,
                 "lidar_range": self.lidar_range_weight,
+            },
+            "loss_contract": {
+                "rgb_ssim": {
+                    "mode": "mask_aware_local_gaussian",
+                    "window_size": self.ssim_window_size,
+                    "sigma": self.ssim_sigma,
+                    "minimum_valid_fraction": self.ssim_min_valid_fraction,
+                    "global_masked_ssim": "diagnostic_only",
+                },
+                "lidar_range": {
+                    "mode": self.lidar_range_loss_mode,
+                    "semantics": "euclidean_ray_range_m",
+                    "log_huber_delta": self.lidar_log_range_huber_delta,
+                    "confidence_weighted": True,
+                },
             },
             "dynamic_person_mask": {
                 "required": self.require_person_masks,
@@ -387,17 +421,37 @@ def _render_supervision_loss(
         c2w_override=c2w_override,
     )
     l1 = masked_rgb_l1(rendered, tensors["rgb"], tensors["rgb_mask"])
-    ssim = masked_rgb_ssim_loss(rendered, tensors["rgb"], tensors["rgb_mask"])
+    ssim = (
+        masked_rgb_ssim_loss(
+            rendered,
+            tensors["rgb"],
+            tensors["rgb_mask"],
+            window_size=config.ssim_window_size,
+            sigma=config.ssim_sigma,
+            min_valid_fraction=config.ssim_min_valid_fraction,
+        )
+        if config.rgb_ssim_weight > 0.0
+        else rendered.new_zeros(())
+    )
     loss = config.rgb_l1_weight * l1 + config.rgb_ssim_weight * ssim
     range_loss = None
     if has_range:
         assert rendered_range is not None
-        range_loss = confidence_weighted_range_l1(
-            rendered_range,
-            tensors["range_m"],
-            tensors["confidence"],
-            tensors["depth_mask"],
-        )
+        if config.lidar_range_loss_mode == "linear_l1":
+            range_loss = confidence_weighted_range_l1(
+                rendered_range,
+                tensors["range_m"],
+                tensors["confidence"],
+                tensors["depth_mask"],
+            )
+        else:
+            range_loss = confidence_weighted_log_range_huber(
+                rendered_range,
+                tensors["range_m"],
+                tensors["confidence"],
+                tensors["depth_mask"],
+                delta=config.lidar_log_range_huber_delta,
+            )
         loss = loss + config.lidar_range_weight * range_loss
     return loss, l1, ssim, range_loss, info
 
@@ -763,8 +817,13 @@ def train(
             "loss": float(loss.detach().cpu()),
             "rgb_l1": float(l1.detach().cpu()),
             "rgb_ssim_loss": float(ssim.detach().cpu()),
-            "lidar_range_l1_m": None
+            "rgb_local_ssim_loss": float(ssim.detach().cpu()),
+            "lidar_range_loss": None
             if range_loss is None
+            else float(range_loss.detach().cpu()),
+            "lidar_range_loss_mode": config.lidar_range_loss_mode,
+            "lidar_range_l1_m": None
+            if range_loss is None or config.lidar_range_loss_mode != "linear_l1"
             else float(range_loss.detach().cpu()),
             "rig_pose_prior": None
             if pose_prior is None

@@ -380,6 +380,7 @@ def main() -> int:
             rgb_l1_weight=1.0,
             rgb_ssim_weight=0.0,
             lidar_range_weight=0.01,
+            lidar_range_loss_mode="linear_l1",
             **(
                 {
                     "mcmc_refine_start_iter": mcmc_config["refine_start_iter"],
