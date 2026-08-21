@@ -136,7 +136,15 @@ class MCMCRuntimeReportTests(unittest.TestCase):
                 "relocation_occurred": "PASS",
                 "sample_add_occurred": "PASS",
                 "rasterization_forward_backward": "PASS",
+                "metric_scale_rasterization": "PASS",
                 "interrupted_resume_equivalence": "PASS",
+            },
+            "render_scale_contract": {
+                "status": "PASS",
+                "covered_pixels": 512,
+                "minimum_covered_pixels": 40,
+                "maximum_covered_pixels": 4000,
+                "alpha_finite": True,
             },
             "native_kernel_smoke": {
                 "status": "PASS",
@@ -203,6 +211,17 @@ class MCMCRuntimeReportTests(unittest.TestCase):
         self.assertIn(
             "training did not observe nonzero MCMC position noise", report["errors"]
         )
+
+    def test_full_gate_requires_metric_scale_rasterization_smoke(self) -> None:
+        evidence = self._passing_gate_evidence()
+        evidence.pop("render_scale_contract")
+        evidence["execution_gates"]["metric_scale_rasterization"] = "NOT_RUN"
+        signed = sign_full_mcmc_gate_evidence(evidence)
+        report = verify_full_mcmc_gate_evidence(
+            signed, expected_lock_commit="a" * 40
+        )
+        self.assertEqual(report["status"], "FAIL")
+        self.assertIn("metric scale rasterization smoke did not pass", report["errors"])
 
 
 @unittest.skipUnless(torch is not None, "torch is an optional training dependency")

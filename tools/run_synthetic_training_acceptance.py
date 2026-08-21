@@ -28,6 +28,7 @@ from cloudstudio_3dgs.training.checkpoint import compare_checkpoint_payloads
 from cloudstudio_3dgs.training.dataset import TrainingSample
 from cloudstudio_3dgs.training.runtime_evidence import (
     execute_mcmc_native_kernel_smoke,
+    execute_render_scale_contract_smoke,
     sign_full_mcmc_gate_evidence,
     verify_full_mcmc_gate_evidence,
 )
@@ -320,6 +321,9 @@ def main() -> int:
     native_kernel_smoke = (
         execute_mcmc_native_kernel_smoke() if args.full_mcmc else None
     )
+    render_scale_contract = (
+        execute_render_scale_contract_smoke(backend) if args.full_mcmc else None
+    )
     (
         _,
         dataset_path,
@@ -470,6 +474,7 @@ def main() -> int:
             count_curve.append({"step": args.steps, **telemetry["last_snapshot"]})
         acceptance["initial_gaussian_count"] = init_count
         acceptance["native_kernel_smoke"] = native_kernel_smoke
+        acceptance["render_scale_contract"] = render_scale_contract
         acceptance["mcmc_operator_registration"] = operator_report["status"]
         acceptance["mcmc_noise_step_count"] = telemetry[
             "noise_injection_step_count"
@@ -499,6 +504,8 @@ def main() -> int:
             acceptance["converged"]
             and native_kernel_smoke is not None
             and native_kernel_smoke["status"] == "PASS"
+            and render_scale_contract is not None
+            and render_scale_contract["status"] == "PASS"
             and acceptance["mcmc_operator_registration"] == "PASS_REGISTERED"
             and acceptance["mcmc_noise_step_count"] == args.steps
             and acceptance["mcmc_noise_nonzero_step_count"] > 0
@@ -548,6 +555,10 @@ def main() -> int:
             if training["status"] == "COMPLETE"
             and training["completed_steps"] == args.steps
             else "FAIL",
+            "metric_scale_rasterization": "PASS"
+            if render_scale_contract is not None
+            and render_scale_contract["status"] == "PASS"
+            else "FAIL",
             "interrupted_resume_equivalence": "PASS"
             if resume_report is not None and resume_report["status"] == "PASS"
             else "NOT_RUN" if resume_report is None else "FAIL",
@@ -586,6 +597,7 @@ def main() -> int:
                 "runtime": runtime,
                 "execution_gates": execution_gates,
                 "native_kernel_smoke": native_kernel_smoke,
+                "render_scale_contract": render_scale_contract,
                 "training": {
                     key: value
                     for key, value in acceptance.items()

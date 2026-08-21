@@ -300,7 +300,7 @@ PR-11 新 Trainer 使用独立的 `upstream/cloudstudio_trainer.lock.json`：只
 - [x] 路线 PR-10:训练集匹配图、锁定 ALIKED/LightGlue/HLoc、固定 Rig + POS 先验分阶段 BA 与回退报告；真实 1114 图/6787 对已三角化为 765,590 点，Stage 2 BA 通过并选用，Stage 3 因越权改变 k3/k4 被 fail-closed 拒绝
 - [x] 路线 PR-11(源码/合成 CUDA):自有 raw-fisheye Dataset/Trainer、3DGUT、逐图 mask/crop、LiDAR ray-range、显式 split、checkpoint、坐标 Manifest、masked evaluation 和 peak VRAM；真实 gs2 同配置回归、完整 MCMC Windows 算子和中断式 GPU resume 仍为 `NOT_RUN`
 - [x] 路线 PR-12(源码/CPU 合成):每个训练 Rig Frame 一个共享 6DoF 增量、Rig 中心枢轴、平移/旋转先验、checkpoint 恢复、固定基线与无改善/越界自动回退；真实 gs2 训练消融仍为 `NOT_RUN`（训练暂缓）
-- [ ] Gate 1 完整 MCMC：已加入 clean-lock/build-feature/native-op fail-closed 审计、实际 position-noise 探针、refine/relocate/add/opacity/scale 遥测、NaN/Inf 守卫、连续/恢复 checkpoint 全状态比较及签名 Exit Gate 验证器。澳洲 RTX 5070 Ti 已证明完整算子注册、native smoke、`24→29` add、全状态 resume 与 3000 步 runtime，但旧证据 `total_relocated=0` 且未记录实际 position delta；因此 baseline 已纠正为 `FAIL`，待按新统一契约重跑 relocation/noise 后才能关闭总门
+- [ ] Gate 1 完整 MCMC：已加入 clean-lock/build-feature/native-op fail-closed 审计、实际 position-noise 探针、米制 scale GPU footprint、refine/relocate/add/opacity/scale 遥测、NaN/Inf 守卫、连续/恢复 checkpoint 全状态比较及签名 Exit Gate 验证器。澳洲 RTX 5070 Ti 已证明完整算子注册、native smoke、`24→29` add、全状态 resume 与 3000 步 runtime，但旧证据 `total_relocated=0` 且未记录实际 position delta；因此 baseline 已纠正为 `FAIL`，待按新统一契约重跑 relocation/noise/metric-scale smoke 后才能关闭总门
 - [x] Phase 1(前置):重投影验证初步通过(gs2 场景目视贴合,约定=c2w_gl),
       正式 Gate 需再覆盖 2–3 场景 + 逐点误差统计
 - [x] Phase 1(前置):COLMAP 数据集导出实测通过(gs2_keyframes:174 图/2 相机/101 万点,

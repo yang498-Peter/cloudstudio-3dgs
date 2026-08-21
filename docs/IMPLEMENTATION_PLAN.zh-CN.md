@@ -677,8 +677,12 @@ Machine-B 首次真实 1044 图训练的全部验证视图呈无结构灰糊；�
 ### 修改文件
 
 - `cloudstudio_3dgs/training/backend.py`
+- `cloudstudio_3dgs/training/runtime_evidence.py`
 - `tests/test_training.py`
+- `tests/test_mcmc_runtime.py`
+- `tools/run_synthetic_training_acceptance.py`
 - `baselines/full_mcmc_runtime.baseline.json`
+- `README.md`
 - `docs/IMPLEMENTATION_PLAN.zh-CN.md`
 
 ### 修改内容
@@ -687,7 +691,8 @@ Machine-B 首次真实 1044 图训练的全部验证视图呈无结构灰糊；�
 - 增加不依赖 gsplat/CUDA 的 CPU 合约测试，用捕获 rasterization 参数的 fake backend 明确断言存储的 `log(0.1)` 到边界变为 `0.1`；另保留真实 CUDA footprint 测试，四个 z=2 m、scale=0.1 m、f=100 px 的 Gaussian 覆盖像素必须落在有限区间，防止 log-scale 再次洗满整帧。
 - Machine-B 在修复后重新运行 80 步 full-MCMC：loss 改善从旧错误路径的 `87.40%` 修正为 `35.88%`，Gaussian 仍为 `24→29`，full-state resume `mismatch_count=0`、最大绝对漂移约 `1.91e-6`。baseline 保存新 run SHA 和 render-scale 根因，但总门继续因实际 noise delta 未探测、relocation 为零而保持 `FAIL`。
 - 修复前 3000 步真实运行仍只保留为 GPU runtime/资源证据；其渲染质量、历史 smoke PSNR 和任何清晰度结论全部作废，不能作为 Gate 2 或真实 A/B 基线。
+- 将同一个真实 GPU footprint smoke 接入 `run_synthetic_training_acceptance.py` 和签名 `cloudstudio_full_mcmc_gate`：四个已知米制 Gaussian 的 alpha 必须有限，且覆盖像素落在 `40..4000`。独立 verifier 新增 `metric_scale_rasterization` 必过项；仅 loss 收敛、算子注册或源码测试通过，都不能代替 renderer 的实际尺度契约。
 
 ### 验证方式与当前状态
 
-`tests.test_training` 共 `16/16` 执行，其中 15 通过；真实 CUDA footprint 因本机 gsplat checkout 非干净锁定 runtime 明确 `SKIPPED`，不能据此声称本机 GPU 验收。全仓 `123` 项测试为 `122 PASS + 1 SKIPPED`，CPU renderer 合约、Gate 1 签名/恢复、BA、mask、depth、Rig 和既有训练契约均通过。Machine-B 已用完整 runtime 生成修复后的合成运行证据，但仍需同步最新 dead-Gaussian/noise-probe/签名 schema 再跑一次，才具备关闭 Gate 1 的条件。
+`tests.test_training` 共 `16/16` 执行，其中 15 通过；真实 CUDA footprint 因本机 gsplat checkout 非干净锁定 runtime 明确 `SKIPPED`，不能据此声称本机 GPU 验收。签名 verifier 另有红/绿测试证明缺少 `metric_scale_rasterization` 时旧实现会误 PASS、新实现会拒绝。全仓 `124` 项测试为 `123 PASS + 1 SKIPPED`，CPU renderer 合约、Gate 1 签名/恢复、BA、mask、depth、Rig 和既有训练契约均通过。Machine-B 已用完整 runtime 生成修复后的合成运行证据，但仍需同步最新 dead-Gaussian/noise-probe/metric-scale/签名 schema 再跑一次，才具备关闭 Gate 1 的条件。

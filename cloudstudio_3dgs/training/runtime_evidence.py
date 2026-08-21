@@ -26,6 +26,7 @@ FULL_MCMC_EXECUTION_GATES = (
     "relocation_occurred",
     "sample_add_occurred",
     "rasterization_forward_backward",
+    "metric_scale_rasterization",
     "interrupted_resume_equivalence",
 )
 
@@ -115,6 +116,23 @@ def verify_full_mcmc_gate_evidence(
         perturb_delta = smoke.get("fused_perturb_max_abs_delta")
         if not _finite_number(perturb_delta) or float(perturb_delta) <= 0.0:
             errors.append("native fused perturbation did not move positions")
+
+    scale_smoke = unsigned.get("render_scale_contract")
+    if not isinstance(scale_smoke, dict) or scale_smoke.get("status") != "PASS":
+        errors.append("metric scale rasterization smoke did not pass")
+    else:
+        covered = scale_smoke.get("covered_pixels")
+        minimum = scale_smoke.get("minimum_covered_pixels")
+        maximum = scale_smoke.get("maximum_covered_pixels")
+        if (
+            scale_smoke.get("alpha_finite") is not True
+            or not all(
+                isinstance(value, int) and not isinstance(value, bool)
+                for value in (covered, minimum, maximum)
+            )
+            or not minimum <= covered <= maximum
+        ):
+            errors.append("metric scale rasterization footprint is invalid")
 
     training = unsigned.get("training")
     if not isinstance(training, dict):
@@ -402,6 +420,77 @@ def execute_mcmc_native_kernel_smoke(device: str = "cuda:0") -> dict[str, Any]:
         "covariance_backward_finite": covariance_backward_finite,
         "fused_perturb_finite": perturb_finite,
         "fused_perturb_max_abs_delta": perturb_max_abs_delta,
+    }
+
+
+def execute_render_scale_contract_smoke(backend: Any) -> dict[str, Any]:
+    """Render a bounded metric-scale footprint with the real backend."""
+    import numpy as np
+    import torch
+
+    from cloudstudio_3dgs.training.dataset import TrainingSample
+
+    expected_scale_m = 0.1
+    xyz = np.asarray(
+        [
+            [-0.6, -0.6, 2.0],
+            [0.6, -0.6, 2.0],
+            [-0.6, 0.6, 2.0],
+            [0.6, 0.6, 2.0],
+        ],
+        dtype=np.float32,
+    )
+    rgb = np.full((4, 3), 255, dtype=np.uint8)
+    params, _, _ = backend.initialize(
+        xyz,
+        rgb,
+        init_scale_m=expected_scale_m,
+        learning_rates={
+            name: 1e-4
+            for name in ("means", "scales", "quats", "opacities", "colors")
+        },
+    )
+    params["opacities"].data.fill_(
+        torch.tensor(0.999, device=backend.device).logit()
+    )
+    sample = TrainingSample(
+        image_id="metric_scale_rasterization_smoke",
+        rig_frame_id="metric_scale_rasterization_smoke",
+        camera_id="left",
+        image=np.zeros((128, 128, 3), dtype=np.uint8),
+        rgb_mask=np.ones((128, 128), dtype=bool),
+        depth_range_m=None,
+        depth_confidence=None,
+        depth_mask=None,
+        depth_cache_path=None,
+        c2w=np.eye(4, dtype=np.float32),
+        K=np.asarray(
+            [
+                [100.0, 0.0, 63.5],
+                [0.0, 100.0, 63.5],
+                [0.0, 0.0, 1.0],
+            ],
+            dtype=np.float32,
+        ),
+        radial_coeffs=np.zeros(4, dtype=np.float32),
+        width=128,
+        height=128,
+    )
+    with torch.no_grad():
+        _, _, alpha, _ = backend.render(params, sample, with_range=False)
+    alpha_finite = bool(torch.isfinite(alpha).all().item())
+    covered = int((alpha.squeeze() > 0.5).sum().item())
+    minimum = 40
+    maximum = 4000
+    passed = alpha_finite and minimum <= covered <= maximum
+    return {
+        "schema_version": 1,
+        "status": "PASS" if passed else "FAIL",
+        "expected_linear_scale_m": expected_scale_m,
+        "covered_pixels": covered,
+        "minimum_covered_pixels": minimum,
+        "maximum_covered_pixels": maximum,
+        "alpha_finite": alpha_finite,
     }
 
 

@@ -673,7 +673,9 @@ class RenderScaleContractTests(unittest.TestCase):
         if not torch.cuda.is_available():
             self.skipTest("requires a CUDA device")
         from cloudstudio_3dgs.training.backend import GsplatBackend
-        from cloudstudio_3dgs.training.dataset import TrainingSample
+        from cloudstudio_3dgs.training.runtime_evidence import (
+            execute_render_scale_contract_smoke,
+        )
 
         try:
             backend = GsplatBackend(
@@ -684,58 +686,8 @@ class RenderScaleContractTests(unittest.TestCase):
             )
         except RuntimeError as exc:
             self.skipTest(f"requires the clean locked gsplat runtime: {exc}")
-        xyz = np.asarray(
-            [
-                [-0.6, -0.6, 2.0],
-                [0.6, -0.6, 2.0],
-                [-0.6, 0.6, 2.0],
-                [0.6, 0.6, 2.0],
-            ],
-            dtype=np.float32,
-        )
-        rgb = np.full((4, 3), 255, dtype=np.uint8)
-        params, _, _ = backend.initialize(
-            xyz,
-            rgb,
-            init_scale_m=0.1,
-            learning_rates={
-                name: 1e-4
-                for name in ("means", "scales", "quats", "opacities", "colors")
-            },
-        )
-        params["opacities"].data.fill_(
-            torch.tensor(0.999, device=backend.device).logit()
-        )
-        sample = TrainingSample(
-            image_id="scale_contract",
-            rig_frame_id="rig",
-            camera_id="left",
-            image=np.zeros((128, 128, 3), dtype=np.uint8),
-            rgb_mask=np.ones((128, 128), dtype=bool),
-            depth_range_m=None,
-            depth_confidence=None,
-            depth_mask=None,
-            depth_cache_path=None,
-            c2w=np.eye(4, dtype=np.float32),
-            K=np.asarray(
-                [
-                    [100.0, 0.0, 63.5],
-                    [0.0, 100.0, 63.5],
-                    [0.0, 0.0, 1.0],
-                ],
-                dtype=np.float32,
-            ),
-            radial_coeffs=np.zeros(4, dtype=np.float32),
-            width=128,
-            height=128,
-        )
-        with torch.no_grad():
-            _, _, alpha, _ = backend.render(params, sample, with_range=False)
-        covered = int((alpha.squeeze() > 0.5).sum().item())
-        # Correct linear scales: 4 blobs of ~5 px sigma; generous upper bound
-        # is still two orders of magnitude below the log-leak full-frame wash.
-        self.assertGreater(covered, 40)
-        self.assertLess(covered, 4000)
+        report = execute_render_scale_contract_smoke(backend)
+        self.assertEqual(report["status"], "PASS", report)
 
 
 if __name__ == "__main__":
