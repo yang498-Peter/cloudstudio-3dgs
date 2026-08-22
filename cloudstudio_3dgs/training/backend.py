@@ -257,7 +257,17 @@ class GsplatBackend:
             width=sample.width,
             height=sample.height,
             packed=False,
-            render_mode="RGB-Ed" if with_range else "RGB",
+            # Fisheye+eval3d "RGB-Ed" is expected HIT DISTANCE (Euclidean ray
+            # range, the supervision semantics). The classic pinhole path only
+            # offers Gaussian z-depth ("RGB+ED"); the per-face
+            # depth_to_range_scale factor converts it at the loss. Earlier
+            # face runs rendered RGB-Ed hit distance AND applied the factor -
+            # a double scaling of the depth supervision, fixed by this split.
+            render_mode=(
+                ("RGB-Ed" if camera_model == "fisheye" else "RGB+ED")
+                if with_range
+                else "RGB"
+            ),
             camera_model=camera_model,
             **({} if radial is None else {"radial_coeffs": radial}),
             # The KB4 fisheye needs the 3DGUT unscented path; pinhole faces
