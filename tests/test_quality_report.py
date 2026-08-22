@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hashlib
+import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -8,7 +10,9 @@ import numpy as np
 from PIL import Image
 
 from cloudstudio_3dgs.data.depth_cache import sparse_depth_npz_bytes
+from cloudstudio_3dgs.data.manifest import canonical_json_bytes
 from cloudstudio_3dgs.evaluation.quality_report import (
+    _golden_checkpoint_selection,
     _safe_path,
     build_quality_report,
     sign_run_manifest,
@@ -17,6 +21,7 @@ from cloudstudio_3dgs.evaluation.quality_report import (
 )
 from cloudstudio_3dgs.evaluation.splits import SplitConfig, build_split_manifest
 from cloudstudio_3dgs.geometry.lidar_projection import SparseDepthMap
+from cloudstudio_3dgs.training.golden_eval import GoldenEvaluationConfig
 from tests.test_splits import dataset_fixture
 
 
@@ -124,13 +129,72 @@ class QualityReportTests(unittest.TestCase):
         self.assertEqual(html_a, html_b)
         self.assertEqual(assets_a, assets_b)
         self.assertEqual(first["status"], "PARTIAL")
-        self.assertEqual(first["warnings"], ["image_metrics.lpips:NOT_RUN"])
+        self.assertEqual(
+            first["warnings"],
+            ["golden_evaluation:NOT_RUN", "image_metrics.lpips:NOT_RUN"],
+        )
+        self.assertEqual(first["golden_checkpoint_selection"]["status"], "NOT_RUN")
         self.assertEqual(first["summary"]["frame_count"], 2)
         self.assertEqual(len(first["golden_views"]), 2)
         self.assertGreater(first["summary"]["image_metrics"]["psnr_db"]["mean"], 30.0)
         self.assertLess(first["summary"]["depth_metrics"]["mae_m"]["mean"], 0.2)
         self.assertEqual(first["resources"]["gaussian_count"]["value"], 5)
         self.assertEqual(first["resources"]["model_size_bytes"]["value"], 15)
+
+    def test_golden_checkpoint_history_is_verified_before_quality_use(self) -> None:
+        config = GoldenEvaluationConfig()
+        record = {
+            "schema_version": 1,
+            "algorithm_version": "golden_validation_v1",
+            "completed_steps": 1000,
+            "split_manifest_sha256": "split-sha",
+            "image_ids": ["golden-left"],
+            "frames": [],
+            "summary": {
+                "selection_metric": "masked_rgb_psnr_db_mean",
+                "psnr_db_mean": 24.0,
+                "perfect_psnr_frame_count": 0,
+                "ssim_mean": 0.7,
+                "depth_mae_m_mean": None,
+            },
+        }
+        record["golden_evaluation_sha256"] = hashlib.sha256(
+            canonical_json_bytes(record)
+        ).hexdigest()
+        history = {
+            "schema_version": 1,
+            "configuration": config.to_dict(),
+            "history": [record],
+            "best": record,
+        }
+        history["golden_history_sha256"] = hashlib.sha256(
+            canonical_json_bytes(history)
+        ).hexdigest()
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            history_path = root / "evaluation" / "golden_history.json"
+            history_path.parent.mkdir()
+            history_path.write_text(json.dumps(history), encoding="utf-8")
+            checkpoint_path = root / "checkpoints" / "best_golden.pt"
+            checkpoint_path.parent.mkdir()
+            checkpoint_path.write_bytes(b"checkpoint")
+            run = {
+                "golden_evaluation": {
+                    "configuration": config.to_dict(),
+                    "history_path": "evaluation/golden_history.json",
+                    "history_sha256": history["golden_history_sha256"],
+                    "evaluation_count": 1,
+                    "best": record,
+                    "best_checkpoint_path": "checkpoints/best_golden.pt",
+                }
+            }
+            selection, warnings = _golden_checkpoint_selection(run, root)
+            self.assertEqual(selection["status"], "VERIFIED")
+            self.assertEqual(warnings, [])
+            history["history"][0]["summary"]["psnr_db_mean"] = 99.0
+            history_path.write_text(json.dumps(history), encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "SHA256 mismatch"):
+                _golden_checkpoint_selection(run, root)
 
     def test_run_split_mismatch_fails_before_reporting(self) -> None:
         dataset = dataset_fixture(2)

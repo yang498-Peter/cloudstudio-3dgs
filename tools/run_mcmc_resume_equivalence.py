@@ -30,6 +30,7 @@ from cloudstudio_3dgs.data.manifest import canonical_json_bytes
 from cloudstudio_3dgs.data.point_cloud import write_binary_ply
 from cloudstudio_3dgs.training.backend import GsplatBackend
 from cloudstudio_3dgs.training.scale_calibration import MetricScaleCalibrationConfig
+from cloudstudio_3dgs.training.regularization import GeometryRegularizationConfig
 from cloudstudio_3dgs.training.trainer import (
     TrainerConfig,
     load_initialization_ply,
@@ -79,6 +80,7 @@ def _trainer_config(paths: dict, run_dir: Path, *, max_steps: int, resume: Path 
             means_step_fraction=None,
             noise_std_fraction=None,
         ),
+        geometry_regularization=GeometryRegularizationConfig(enabled=False),
         rgb_l1_weight=1.0,
         rgb_ssim_weight=0.0,
         lidar_range_weight=0.01,

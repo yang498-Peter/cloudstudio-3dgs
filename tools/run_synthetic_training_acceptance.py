@@ -32,6 +32,7 @@ from cloudstudio_3dgs.training.runtime_evidence import (
     sign_full_mcmc_gate_evidence,
     verify_full_mcmc_gate_evidence,
 )
+from cloudstudio_3dgs.training.regularization import GeometryRegularizationConfig
 from cloudstudio_3dgs.training.scale_calibration import MetricScaleCalibrationConfig
 from cloudstudio_3dgs.training.trainer import (
     ControlledTrainingInterruption,
@@ -377,6 +378,7 @@ def main() -> int:
                 means_step_fraction=None,
                 noise_std_fraction=None,
             ),
+            geometry_regularization=GeometryRegularizationConfig(enabled=False),
             rgb_l1_weight=1.0,
             rgb_ssim_weight=0.0,
             lidar_range_weight=0.01,

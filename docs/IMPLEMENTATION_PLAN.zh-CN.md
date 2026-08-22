@@ -827,3 +827,66 @@ Machine-B 的真实 UK 训练首次运行到质量报告时发现：训练与渲
 红测试首先因新 local/log loss 不存在而 ImportError。实现后验证：mask 外预测即使写成 100 也不会改变 local SSIM；局部边缘平移会产生非零结构损失；有效覆盖不足时明确失败；预测和目标同时放大 10 倍时 log-range Huber 逐值相同，2× 比例误差符合解析 smooth-L1 值。Trainer/Gate 1 定向测试通过，全仓 `132` 项为 `131 PASS + 1 SKIPPED`，唯一跳过仍是默认环境的 clean-runtime CUDA footprint，已有 Gate 1 隔离实跑证据覆盖。
 
 当前状态为 **PASS（Gate 2B 数学、mask 与配置契约）**。没有启动真实 GPU 训练，因此不能声称 PSNR/SSIM/深度或清晰度已经提升；后续受控 A/B 必须单独比较旧 global+linear 与新 local+log，且保持同一 person Manifest、split、位姿、初始化 PLY、步数和随机种子。
+
+## 25. 当前阶段记录：吸收澳洲 UK 质量分支（优先实现）
+
+### 同步结论
+
+GitHub 重新联网后发现 `origin/machine-b/uk-quality` 已在共同祖先 `9651013` 之上完成 UK 场景的 Trainer 质量实验。按协作决策，该分支的当前 `backend.py` 与 `trainer.py` 为优先实现；本地此前独立的 SH 包装不再保留在生产路径，避免出现两套外观配置和两种训练语义。
+
+### 吸收内容
+
+- 每张训练图一个受限 log-gain 的 exposure compensation，只作用于 RGB loss；validation 固定 gain=1，checkpoint 通过 auxiliary parameter/optimizer 保存，避免用曝光补偿伪造验证指标。
+- 上游风格 SH：DC 由点色初始化、其余系数零初始化并以 `colors_lr/20` 学习；step 纯函数按 1000 步逐阶解锁，means LR 以指数方式衰减到指定 final factor。调度不依赖独立 scheduler 状态，因此中断恢复从 step 可重算。
+- 训练/验证均可使用显式背景合成。UK 实验定位默认黑底与过曝天空的 alpha 渗漏；白背景 P5 在同一 106 张 validation 上为 PSNR `16.21`、SSIM `0.5589`、PSNR P10 `15.78`，相对 P4 黑背景 PSNR `15.59` 提升 `0.62 dB`。
+- 单视角“看起来更锐”的 `lidar_range_weight=0.15` 被完整 validation 否决：P4b PSNR `14.25` / SSIM `0.5308` / 深度 MAE `3.93 m`，P4 为 `15.59` / `0.5528` / `4.01 m`。因此保持 `0.05`，不能以约 2% 深度收益换取 `1.34 dB` 外观损失。
+
+### 记录修复与验证
+
+同步时发现 `experiments/runs.csv` 的旧表头 16 列而所有数据行为 12 列，属于不能直接用于筛选 preset 的证据记录缺陷。已改成列数固定的结构：明确写入可由 handoff 证实的全量指标，并将原来语义无法可靠还原的 6 个字段以 `legacy_unlabeled_values` 原样保留。新增 CPU 契约覆盖 progressive SH 边界、means decay、SH coefficient/renderer 参数、alpha 背景合成和 exposure clamp；原有 evaluation fake backend 因新 optional 参数不兼容的回归已修复。
+
+当前状态为 **PASS（澳洲实现已吸收，源码/CPU 契约）**。这些 UK 指标是该机器的已签名实验输入，不自动升级为本机或原始 POS/Stage 2 POS 的画质结论；本机 clean locked CUDA 复验和之后的受控 A/B 仍为 `NOT_RUN`。
+
+## 26. 当前阶段记录：Gate 2D 米制 geometry regularization
+
+### 问题现象
+
+MCMC 的 relocate/add 能控制低 opacity 对象的数量，但不会阻止 RGB loss 借助半透明雾、远大于局部 LiDAR 间距的 splat 或极端针状 scale 比例降低图像误差。此前该项目只有 strategy 的 prune 阈值，没有把这些退化模式作为可审计训练 loss。
+
+### 修改内容
+
+- 新增 `GeometryRegularizationConfig`，生产默认启用三项弱约束：mean opacity sparsity（引导无支持的低 opacity 雾进入既有 MCMC prune 路径）、相对 KNN reference scale 的上界 soft barrier（默认 `8×`）和 axis-ratio soft barrier（默认 `10×`）。正常尺度、正常各向异性区域的后两项为零，避免把真实梁柱或薄构件强行各向同性化。
+- 每项在米制 `exp(log_scale)` 空间计算；配置、阈值和权重写入签名 trainer contract，step telemetry 保存 unweighted 三项与 total。Gate 1 synthetic/kill-resume 工具显式 `enabled=false`，保持已签名历史证据的 loss 语义。
+- 单元测试构造正常、巨型和针状 Gaussian：正常 scale 不触发 upper/anisotropy，巨型和针状项非零，并验证两组参数梯度有限；disabled 配置严格返回零。
+
+### 当前状态
+
+**PASS（Gate 2D 源码/CPU 契约）**。未把任一真实质量提升归因于该正则；下一项是周期 golden eval 与 best checkpoint，并在本机 clean runtime 复验后才进行受控 A/B。
+
+## 27. 当前阶段记录：Gate 2E 周期黄金视角评估与最佳检查点
+
+### 问题现象
+
+此前 Trainer 只按训练 batch loss 保存 `latest.pt`，结束后才全量生成 validation 渲染与质量报告。训练 loss 与未见视角质量并不等价：MCMC、曝光补偿、背景和正则可能让最后一步 batch 更低，却让固定 validation 视角更差；一旦训练超调，也没有可复核的“最佳模型”可用于正式质量评估。
+
+### 修改文件
+
+- `cloudstudio_3dgs/training/golden_eval.py`
+- `cloudstudio_3dgs/training/trainer.py`
+- `tests/test_golden_eval.py`
+- `README.md`
+- `docs/IMPLEMENTATION_PLAN.zh-CN.md`
+
+### 修改内容
+
+- 新增独立 `GoldenEvaluationConfig`：生产默认每 `1000` 步评估一次，选择指标固定为 masked RGB PSNR 的黄金视角均值，提升至少 `0.001 dB` 才 promotion。该配置进入 trainer contract 和 checkpoint identity；禁用、间隔或阈值改变都不能与旧 checkpoint 静默混用。
+- 黄金图像不从文件名、随机采样或训练集推断，而是按已签名 split Manifest 的 `golden_views`、Rig Frame 和左右相机顺序读取；若图像不在 validation 或重复出现，立即失败。评估使用同一 RGB/person mask、同一渲染背景；同步记录 masked PSNR、SSIM 与可用时的 confidence-weighted LiDAR range MAE。
+- 每次评估产出 `evaluation/golden_history.json`，其中含 canonical SHA256；训练状态把完整历史与当前最佳记录写进 `latest.pt`，中断恢复不会丢失 checkpoint 选择依据。只有客观提升才原子写入 `checkpoints/best_golden.pt`，不会用最后一个训练 batch 覆盖它。
+- `run_manifest.json` 绑定 golden history SHA、次数、最佳评估记录和最佳 checkpoint 相对路径。黄金评估只是训练中选择器，不替代结束后覆盖完整 validation 的正式 `evaluate_run.py`。
+- 正式质量报告读取该 history 时重新校验外层 SHA、每次评估 SHA、严格递增步号、配置和 promotion 规则，并核对 run Manifest 声明、评估次数、best record 与最佳 checkpoint 文件；任何已声明历史的篡改、丢失或替换均 fail-closed。旧 run 没有该层会明确标记 `golden_evaluation:NOT_RUN`，不会冒充完成过中程选择。
+
+### 验证方式与当前状态
+
+新增 CPU 回归构造顺序被打乱的 validation Dataset，断言仍严格按 signed golden 顺序评估、背景参数确实传到 renderer、PSNR 选择阈值不允许同分或不足 `0.001 dB` 的 checkpoint 覆盖最佳模型；同时验证非法黄金视图和零间隔 fail-closed。质量报告回归再篡改 history 中的 PSNR，验证签名立即失败。定向 `34` 项为 `33 PASS + 1 SKIPPED`，尚未启动新的真实 GPU 训练。
+
+当前状态为 **PASS（Gate 2E 源码/CPU 契约）**。下一步是以合入的澳洲质量实现，在干净锁定 CUDA runtime 上跑短程真实基线，检查 golden history、best checkpoint、全量 validation 质量报告与 GPU 资源证据，再决定原始 POS / Stage 2 POS 的受控 A/B 是否可以启动。

@@ -33,6 +33,11 @@ from cloudstudio_3dgs.training.exposure import (
     ExposureCompensationConfig,
     ExposureCompensator,
 )
+from cloudstudio_3dgs.training.golden_eval import (
+    GoldenEvaluationConfig,
+    evaluate_golden_views,
+    is_golden_improvement,
+)
 from cloudstudio_3dgs.training.scale_calibration import (
     MetricScaleCalibrationConfig,
     build_metric_scale_calibration,
@@ -42,6 +47,10 @@ from cloudstudio_3dgs.training.rig_pose import (
     RigPoseRefiner,
     build_pose_refinement_report,
     disabled_pose_refinement_report,
+)
+from cloudstudio_3dgs.training.regularization import (
+    GeometryRegularizationConfig,
+    geometry_regularization_terms,
 )
 from cloudstudio_3dgs.training.runtime_evidence import (
     append_mcmc_telemetry,
@@ -115,6 +124,12 @@ class TrainerConfig:
     exposure_compensation: ExposureCompensationConfig = field(
         default_factory=ExposureCompensationConfig
     )
+    geometry_regularization: GeometryRegularizationConfig = field(
+        default_factory=GeometryRegularizationConfig
+    )
+    golden_evaluation: GoldenEvaluationConfig = field(
+        default_factory=GoldenEvaluationConfig
+    )
     learning_rates: dict[str, float] = field(
         default_factory=lambda: {
             "means": 1.6e-4,
@@ -155,6 +170,14 @@ class TrainerConfig:
         if not isinstance(exposure_value, dict):
             raise ValueError("exposure_compensation must be an object")
         exposure = ExposureCompensationConfig(**exposure_value)
+        regularization_value = value.get("geometry_regularization", {})
+        if not isinstance(regularization_value, dict):
+            raise ValueError("geometry_regularization must be an object")
+        regularization = GeometryRegularizationConfig(**regularization_value)
+        golden_evaluation_value = value.get("golden_evaluation", {})
+        if not isinstance(golden_evaluation_value, dict):
+            raise ValueError("golden_evaluation must be an object")
+        golden_evaluation = GoldenEvaluationConfig(**golden_evaluation_value)
         scale_value = value.get("metric_scale_calibration", {})
         if not isinstance(scale_value, dict):
             raise ValueError("metric_scale_calibration must be an object")
@@ -198,6 +221,8 @@ class TrainerConfig:
             rig_pose_refinement=pose_refinement,
             metric_scale_calibration=scale_calibration,
             exposure_compensation=exposure,
+            geometry_regularization=regularization,
+            golden_evaluation=golden_evaluation,
             **paths,
             **options,
         )
@@ -254,6 +279,8 @@ class TrainerConfig:
             raise ValueError("MCMC noise stop must be -1 or non-negative")
         self.rig_pose_refinement.validate()
         self.exposure_compensation.validate()
+        self.geometry_regularization.validate()
+        self.golden_evaluation.validate()
         if (self.depth_manifest is None) != (self.depth_root is None):
             raise ValueError("depth_manifest and depth_root must be provided together")
         if (self.person_mask_manifest is None) != (self.person_mask_root is None):
@@ -370,6 +397,8 @@ class TrainerConfig:
             },
             "rig_pose_refinement": self.rig_pose_refinement.to_dict(),
             "exposure_compensation": self.exposure_compensation.to_dict(),
+            "geometry_regularization": self.geometry_regularization.to_dict(),
+            "golden_evaluation": self.golden_evaluation.to_dict(),
             "viewer": False,
         }
 
@@ -432,12 +461,71 @@ def _atomic_json(path: Path, value: dict[str, Any]) -> None:
         raise
 
 
+def _write_golden_history(
+    path: Path,
+    *,
+    config: GoldenEvaluationConfig,
+    history: list[dict[str, Any]],
+    best: dict[str, Any] | None,
+) -> dict[str, Any]:
+    """Persist signed checkpoint-selection evidence independently of the model."""
+    payload: dict[str, Any] = {
+        "schema_version": 1,
+        "configuration": config.to_dict(),
+        "history": history,
+        "best": best,
+    }
+    payload["golden_history_sha256"] = hashlib.sha256(
+        canonical_json_bytes(payload)
+    ).hexdigest()
+    _atomic_json(path, payload)
+    return payload
+
+
 def _sha256_file(path: Path) -> str:
     digest = hashlib.sha256()
     with Path(path).open("rb") as stream:
         for chunk in iter(lambda: stream.read(4 * 1024 * 1024), b""):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def means_lr_for_step(
+    base_learning_rate: float,
+    final_factor: float,
+    *,
+    step: int,
+    max_steps: int,
+) -> float:
+    """Australian parity schedule as a pure function for resume equivalence."""
+    if base_learning_rate <= 0.0:
+        raise ValueError("base means learning rate must be positive")
+    if not 0.0 < final_factor <= 1.0:
+        raise ValueError("means LR final factor must be in (0, 1]")
+    if step < 0 or max_steps <= 0:
+        raise ValueError("means LR schedule requires non-negative step and max_steps")
+    return float(base_learning_rate * (final_factor ** (step / max(1, max_steps))))
+
+
+def active_sh_degree_for_step(config: TrainerConfig, step: int) -> int | None:
+    """Australian progressive-SH schedule, derived solely from the step."""
+    if step < 0:
+        raise ValueError("SH schedule step must be non-negative")
+    if config.color_model != "sh" or config.sh_degree_interval == 0:
+        return None
+    return min(config.sh_degree, step // config.sh_degree_interval)
+
+
+def appearance_learning_rates(
+    config: TrainerConfig, learning_rates: dict[str, float]
+) -> dict[str, float]:
+    """Map the configured RGB rate to Australian SH DC/rest optimizer rates."""
+    effective = dict(learning_rates)
+    if config.color_model == "sh":
+        color_lr = float(effective.pop("colors"))
+        effective["sh0"] = color_lr
+        effective["shN"] = color_lr / 20.0
+    return effective
 
 
 def _tensor_sample(sample: TrainingSample, torch: Any, device: str) -> dict[str, Any]:
@@ -578,7 +666,12 @@ def _save_evaluation_artifacts(
         for index in range(len(dataset)):
             sample = dataset[index]
             has_range = sample.depth_range_m is not None
-            rendered, rendered_range, _, _ = backend.render(params, sample, with_range=has_range, background_rgb=background_rgb)
+            render_options = {"with_range": has_range}
+            if background_rgb is not None:
+                render_options["background_rgb"] = background_rgb
+            rendered, rendered_range, _, _ = backend.render(
+                params, sample, **render_options
+            )
             prefix = artifact_root / sample.image_id
             reference_path = prefix.with_name(f"{sample.image_id}_reference.png")
             render_path = prefix.with_name(f"{sample.image_id}_rendered.png")
@@ -723,14 +816,11 @@ def train(
         configured_means_lr=float(config.learning_rates["means"]),
         configured_noise_lr=config.mcmc_noise_lr,
     )
-    effective_learning_rates = dict(config.learning_rates)
+    effective_learning_rates = appearance_learning_rates(
+        config, config.learning_rates
+    )
+    reference_scale_m = float(scale_calibration["reference_scale_m"])
     effective_learning_rates["means"] = float(scale_calibration["effective_means_lr_m"])
-    if config.color_model == "sh":
-        # Upstream convention: the DC band trains at the color LR and the
-        # view-dependent bands one twentieth of it.
-        color_lr = float(effective_learning_rates.pop("colors"))
-        effective_learning_rates["sh0"] = color_lr
-        effective_learning_rates["shN"] = color_lr / 20.0
     backend = backend_factory(
         device=config.device,
         cap_max=config.cap_max,
@@ -798,6 +888,8 @@ def train(
     initial_loss: float | None = None
     best_loss = float("inf")
     mcmc_telemetry: dict[str, Any] | None = None
+    golden_history: list[dict[str, Any]] = []
+    best_golden: dict[str, Any] | None = None
     if config.resume_checkpoint is not None:
         completed_steps, strategy_state, sampler_state, training_state = load_checkpoint(
             config.resume_checkpoint,
@@ -812,6 +904,17 @@ def train(
         last_metrics = dict(training_state["last_metrics"])
         initial_loss = float(training_state["initial_loss"])
         best_loss = float(training_state["best_loss"])
+        restored_golden = training_state.get("golden_evaluation", {})
+        if not isinstance(restored_golden, dict):
+            raise ValueError("checkpoint golden evaluation state is invalid")
+        restored_history = restored_golden.get("history", [])
+        if not isinstance(restored_history, list):
+            raise ValueError("checkpoint golden evaluation history is invalid")
+        golden_history = [dict(record) for record in restored_history]
+        restored_best = restored_golden.get("best")
+        if restored_best is not None and not isinstance(restored_best, dict):
+            raise ValueError("checkpoint golden evaluation best record is invalid")
+        best_golden = None if restored_best is None else dict(restored_best)
         restored_telemetry = training_state.get("mcmc_telemetry")
         if restored_telemetry is None and config.mcmc_noise_injection_stop_iter != 0:
             raise ValueError("full-MCMC checkpoint has no MCMC telemetry state")
@@ -828,6 +931,21 @@ def train(
     torch.cuda.reset_peak_memory_stats(config.device)
     started = time.perf_counter()
     checkpoint_path = output_dir / "checkpoints" / "latest.pt"
+    best_checkpoint_path = output_dir / "checkpoints" / "best_golden.pt"
+    golden_history_path = output_dir / "evaluation" / "golden_history.json"
+
+    def checkpoint_training_state() -> dict[str, Any]:
+        return {
+            "last_metrics": last_metrics,
+            "initial_loss": initial_loss,
+            "best_loss": best_loss,
+            "mcmc_telemetry": mcmc_telemetry,
+            "golden_evaluation": {
+                "history": golden_history,
+                "best": best_golden,
+            },
+        }
+
     for step in range(completed_steps, config.max_steps):
         index = int(torch.randint(len(trainset), (1,), generator=sampler).item())
         sample = trainset[index]
@@ -840,17 +958,15 @@ def train(
         if config.means_lr_final_factor < 1.0:
             # Deterministic function of the step (no scheduler state), so an
             # interrupted resume lands on exactly the same learning rate.
-            decayed = float(
-                effective_learning_rates["means"]
-                * (config.means_lr_final_factor ** (step / max(1, config.max_steps)))
+            decayed = means_lr_for_step(
+                effective_learning_rates["means"],
+                config.means_lr_final_factor,
+                step=step,
+                max_steps=config.max_steps,
             )
             for group in optimizers["means"].param_groups:
                 group["lr"] = decayed
-        active_sh_degree = None
-        if config.color_model == "sh" and config.sh_degree_interval > 0:
-            active_sh_degree = min(
-                config.sh_degree, step // config.sh_degree_interval
-            )
+        active_sh_degree = active_sh_degree_for_step(config, step)
         loss, l1, ssim, range_loss, info = _render_supervision_loss(
             backend=backend,
             params=params,
@@ -867,6 +983,12 @@ def train(
             loss = loss + pose_prior
         if exposure is not None:
             loss = loss + exposure.prior_loss()
+        regularization = geometry_regularization_terms(
+            params,
+            reference_scale_m=reference_scale_m,
+            config=config.geometry_regularization,
+        )
+        loss = loss + regularization["total"]
         require_finite_training_tensors(
             params=params,
             loss=loss,
@@ -930,15 +1052,48 @@ def train(
             "rig_pose_prior": None
             if pose_prior is None
             else float(pose_prior.detach().cpu()),
+            "geometry_regularization": float(regularization["total"].detach().cpu()),
+            "opacity_sparsity": float(regularization["opacity_sparsity"].detach().cpu()),
+            "scale_upper": float(regularization["scale_upper"].detach().cpu()),
+            "anisotropy": float(regularization["anisotropy"].detach().cpu()),
         }
         if initial_loss is None:
             initial_loss = last_metrics["loss"]
         best_loss = min(best_loss, last_metrics["loss"])
         completed = step + 1
+        golden_due = config.golden_evaluation.enabled and (
+            completed % config.golden_evaluation.every == 0
+            or completed == config.max_steps
+        )
+        golden_promoted = False
+        if golden_due:
+            golden_result = evaluate_golden_views(
+                backend=backend,
+                params=params,
+                dataset=valset,
+                split_manifest=valset.split_manifest,
+                completed_steps=completed,
+                background_rgb=config.background_color,
+            )
+            golden_history.append(golden_result)
+            golden_promoted = is_golden_improvement(
+                golden_result,
+                best_golden,
+                min_psnr_improvement_db=config.golden_evaluation.min_psnr_improvement_db,
+            )
+            if golden_promoted:
+                best_golden = golden_result
+            _write_golden_history(
+                golden_history_path,
+                config=config.golden_evaluation,
+                history=golden_history,
+                best=best_golden,
+            )
         checkpoint_due = (
             completed % config.checkpoint_every == 0
             or completed == config.max_steps
             or completed == controlled_stop_after_steps
+            or golden_due
         )
         if checkpoint_due:
             mcmc_telemetry["last_snapshot"] = snapshot_gaussians(
@@ -958,15 +1113,23 @@ def train(
                 optimizers=optimizers,
                 strategy_state=strategy_state,
                 sampler_state=sampler.get_state(),
-                training_state={
-                    "last_metrics": last_metrics,
-                    "initial_loss": initial_loss,
-                    "best_loss": best_loss,
-                    "mcmc_telemetry": mcmc_telemetry,
-                },
+                training_state=checkpoint_training_state(),
                 auxiliary_params=auxiliary_params,
                 auxiliary_optimizers=auxiliary_optimizers,
             )
+            if golden_promoted:
+                save_checkpoint(
+                    best_checkpoint_path,
+                    step=completed,
+                    identity=checkpoint_identity,
+                    params=params,
+                    optimizers=optimizers,
+                    strategy_state=strategy_state,
+                    sampler_state=sampler.get_state(),
+                    training_state=checkpoint_training_state(),
+                    auxiliary_params=auxiliary_params,
+                    auxiliary_optimizers=auxiliary_optimizers,
+                )
         if completed == controlled_stop_after_steps:
             torch.cuda.synchronize(config.device)
             raise ControlledTrainingInterruption(
@@ -999,6 +1162,11 @@ def train(
         pose_report["comparison"]["evaluated_images"] = evaluated_images
         if not pose_report["candidate_accepted"]:
             pose_refiner.zero_()
+        final_training_state = checkpoint_training_state()
+        final_training_state["rig_pose_refinement"] = pose_report
+        final_training_state["exposure_compensation"] = (
+            None if exposure is None else exposure.report()
+        )
         save_checkpoint(
             checkpoint_path,
             step=config.max_steps,
@@ -1007,17 +1175,16 @@ def train(
             optimizers=optimizers,
             strategy_state=strategy_state,
             sampler_state=sampler.get_state(),
-            training_state={
-                "last_metrics": last_metrics,
-                "initial_loss": initial_loss,
-                "best_loss": best_loss,
-                "mcmc_telemetry": mcmc_telemetry,
-                "rig_pose_refinement": pose_report,
-                "exposure_compensation": None if exposure is None else exposure.report(),
-            },
+            training_state=final_training_state,
             auxiliary_params=auxiliary_params,
             auxiliary_optimizers=auxiliary_optimizers,
         )
+    golden_history_artifact = _write_golden_history(
+        golden_history_path,
+        config=config.golden_evaluation,
+        history=golden_history,
+        best=best_golden,
+    )
     frames = _save_evaluation_artifacts(
         backend=backend,
         params=params,
@@ -1042,6 +1209,16 @@ def train(
             "metric_scale_calibration": scale_calibration,
             "rig_pose_refinement": pose_report,
             "exposure_compensation": None if exposure is None else exposure.report(),
+            "golden_evaluation": {
+                "configuration": config.golden_evaluation.to_dict(),
+                "history_path": golden_history_path.relative_to(output_dir).as_posix(),
+                "history_sha256": golden_history_artifact["golden_history_sha256"],
+                "evaluation_count": len(golden_history),
+                "best": best_golden,
+                "best_checkpoint_path": None
+                if best_golden is None
+                else best_checkpoint_path.relative_to(output_dir).as_posix(),
+            },
             "frames": frames,
             "training": {
                 "status": "COMPLETE",

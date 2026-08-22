@@ -25,6 +25,10 @@ from cloudstudio_3dgs.training.contracts import (
     verify_coordinate_transform_manifest,
 )
 from cloudstudio_3dgs.training.dataset import S1TrainingDataset
+from cloudstudio_3dgs.training.exposure import (
+    ExposureCompensationConfig,
+    ExposureCompensator,
+)
 from cloudstudio_3dgs.training.losses import (
     confidence_weighted_range_l1,
     confidence_weighted_log_range_huber,
@@ -37,7 +41,17 @@ from cloudstudio_3dgs.training.scale_calibration import (
     build_metric_scale_calibration,
     verify_metric_scale_calibration_report,
 )
-from cloudstudio_3dgs.training.trainer import TrainerConfig, load_initialization_ply
+from cloudstudio_3dgs.training.regularization import (
+    GeometryRegularizationConfig,
+    geometry_regularization_terms,
+)
+from cloudstudio_3dgs.training.trainer import (
+    TrainerConfig,
+    active_sh_degree_for_step,
+    appearance_learning_rates,
+    load_initialization_ply,
+    means_lr_for_step,
+)
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -863,6 +877,178 @@ class TorchTrainingContractTests(unittest.TestCase):
 
 @unittest.skipUnless(HAS_TORCH, "torch is an optional training dependency")
 class RenderScaleContractTests(unittest.TestCase):
+    def test_australian_sh_schedule_and_means_decay_are_pure(self) -> None:
+        config = TrainerConfig(
+            run_id="schedule",
+            dataset_manifest=Path("dataset.json"),
+            recording_root=Path("recording"),
+            mask_manifest=Path("masks.json"),
+            mask_root=Path("masks"),
+            split_manifest=Path("split.json"),
+            initialization_ply=Path("init.ply"),
+            output_dir=Path("output"),
+            gsplat_lock=Path("lock.json"),
+            require_person_masks=False,
+            lidar_range_weight=0.0,
+            color_model="sh",
+            sh_degree=3,
+            sh_degree_interval=1000,
+            means_lr_final_factor=0.01,
+            background_color=(1.0, 1.0, 1.0),
+            exposure_compensation=ExposureCompensationConfig(enabled=True),
+        )
+        config.validate()
+        self.assertEqual(active_sh_degree_for_step(config, 0), 0)
+        self.assertEqual(active_sh_degree_for_step(config, 999), 0)
+        self.assertEqual(active_sh_degree_for_step(config, 1000), 1)
+        self.assertEqual(active_sh_degree_for_step(config, 2999), 2)
+        self.assertEqual(active_sh_degree_for_step(config, 3000), 3)
+        self.assertEqual(active_sh_degree_for_step(config, 30_000), 3)
+        self.assertEqual(means_lr_for_step(1e-3, 0.01, step=0, max_steps=100), 1e-3)
+        self.assertAlmostEqual(
+            means_lr_for_step(1e-3, 0.01, step=100, max_steps=100), 1e-5
+        )
+        appearance_rates = appearance_learning_rates(
+            config,
+            {"means": 1e-4, "scales": 1e-3, "quats": 1e-3, "opacities": 1e-2, "colors": 2e-3},
+        )
+        self.assertNotIn("colors", appearance_rates)
+        self.assertEqual(appearance_rates["sh0"], 2e-3)
+        self.assertEqual(appearance_rates["shN"], 1e-4)
+        contract = config.contract_dict()
+        self.assertEqual(contract["color_model"]["mode"], "sh")
+        self.assertEqual(contract["background_compositing"]["color"], [1.0, 1.0, 1.0])
+
+    def test_australian_sh_and_background_reach_renderer(self) -> None:
+        import torch
+
+        from cloudstudio_3dgs.training.backend import GsplatBackend
+        from cloudstudio_3dgs.training.dataset import TrainingSample
+
+        captured = {}
+
+        def rasterization(**kwargs):
+            captured.update(kwargs)
+            return (
+                torch.zeros((1, 2, 2, 3)),
+                torch.full((1, 2, 2, 1), 0.25),
+                {},
+            )
+
+        class Strategy:
+            @staticmethod
+            def check_sanity(params, optimizers) -> None:
+                if set(params) != set(optimizers):
+                    raise AssertionError("parameter/optimizer key mismatch")
+
+            @staticmethod
+            def initialize_state():
+                return {}
+
+        backend = object.__new__(GsplatBackend)
+        backend.torch = torch
+        backend.device = "cpu"
+        backend.strategy = Strategy()
+        backend.rasterization = rasterization
+        params, optimizers, _ = backend.initialize(
+            np.eye(4, 3, dtype=np.float32),
+            np.asarray(
+                [[255, 0, 0], [0, 255, 0], [0, 0, 255], [128, 128, 128]],
+                dtype=np.uint8,
+            ),
+            init_scale_m=0.05,
+            learning_rates={
+                name: 1e-4
+                for name in ("means", "scales", "quats", "opacities", "sh0", "shN")
+            },
+            color_model="sh",
+            sh_degree=3,
+        )
+        self.assertEqual(params["sh0"].shape, (4, 1, 3))
+        self.assertEqual(params["shN"].shape, (4, 15, 3))
+        self.assertAlmostEqual(
+            optimizers["shN"].param_groups[0]["lr"],
+            optimizers["sh0"].param_groups[0]["lr"],
+        )
+        sample = TrainingSample(
+            image_id="sh_background",
+            rig_frame_id="rig",
+            camera_id="left",
+            image=np.zeros((2, 2, 3), dtype=np.uint8),
+            rgb_mask=np.ones((2, 2), dtype=bool),
+            depth_range_m=None,
+            depth_confidence=None,
+            depth_mask=None,
+            depth_cache_path=None,
+            c2w=np.eye(4, dtype=np.float32),
+            K=np.eye(3, dtype=np.float32),
+            radial_coeffs=np.zeros(4, dtype=np.float32),
+            width=2,
+            height=2,
+        )
+        rgb, _, _, _ = backend.render(
+            params,
+            sample,
+            with_range=False,
+            active_sh_degree=2,
+            background_rgb=(1.0, 0.5, 0.0),
+        )
+        self.assertEqual(captured["sh_degree"], 2)
+        torch.testing.assert_close(
+            captured["colors"], torch.cat((params["sh0"], params["shN"]), dim=1)
+        )
+        torch.testing.assert_close(
+            rgb, torch.tensor([0.75, 0.375, 0.0]).expand_as(rgb)
+        )
+
+    def test_exposure_compensator_is_bounded_and_stable(self) -> None:
+        import torch
+
+        exposure = ExposureCompensator(
+            ["right", "left", "left"],
+            config=ExposureCompensationConfig(enabled=True),
+            device="cpu",
+        )
+        with torch.no_grad():
+            exposure.log_gains.copy_(torch.tensor([0.0, 2.0]))
+        self.assertEqual(list(exposure.index), ["left", "right"])
+        self.assertAlmostEqual(float(exposure.gain("left").detach()), 1.0)
+        self.assertAlmostEqual(float(exposure.gain("right").detach()), 2.0)
+        self.assertGreater(float(exposure.prior_loss().detach()), 0.0)
+
+    def test_metric_geometry_regularization_only_hits_bad_geometry(self) -> None:
+        import torch
+
+        config = GeometryRegularizationConfig(
+            opacity_sparsity_weight=1.0,
+            scale_upper_weight=1.0,
+            anisotropy_weight=1.0,
+            max_scale_ratio_to_reference=8.0,
+            max_anisotropy=10.0,
+        )
+        params = {
+            "opacities": torch.zeros(2, requires_grad=True),
+            "scales": torch.tensor(
+                [[0.1, 0.1, 0.1], [1.6, 0.01, 0.01]],
+                dtype=torch.float32,
+            ).log().requires_grad_(),
+        }
+        terms = geometry_regularization_terms(
+            params, reference_scale_m=0.1, config=config
+        )
+        self.assertAlmostEqual(float(terms["opacity_sparsity"].detach()), 0.5)
+        self.assertGreater(float(terms["scale_upper"].detach()), 0.0)
+        self.assertGreater(float(terms["anisotropy"].detach()), 0.0)
+        terms["total"].backward()
+        self.assertTrue(torch.isfinite(params["opacities"].grad).all())
+        self.assertTrue(torch.isfinite(params["scales"].grad).all())
+        disabled = geometry_regularization_terms(
+            params,
+            reference_scale_m=0.1,
+            config=GeometryRegularizationConfig(enabled=False),
+        )
+        self.assertEqual(float(disabled["total"]), 0.0)
+
     def test_backend_initializes_per_point_metric_knn_scales(self) -> None:
         import torch
 

@@ -23,6 +23,7 @@ from cloudstudio_3dgs.evaluation.image_metrics import (
     masked_ssim,
 )
 from cloudstudio_3dgs.evaluation.splits import verify_split_manifest
+from cloudstudio_3dgs.training.golden_eval import verify_golden_history
 
 
 def _safe_path(root: Path, value: str) -> Path:
@@ -124,6 +125,54 @@ def _finite_summary(values: list[float]) -> dict[str, float | int | None]:
         "min": float(np.min(finite)) if len(finite) else None,
         "max": float(np.max(finite)) if len(finite) else None,
     }
+
+
+def _golden_checkpoint_selection(
+    run: dict[str, Any], run_root: Path
+) -> tuple[dict[str, Any], list[str]]:
+    """Bind formal quality output to the trainer's persisted model selection."""
+    declaration = run.get("golden_evaluation")
+    if declaration is None:
+        return {"status": "NOT_RUN"}, ["golden_evaluation:NOT_RUN"]
+    if not isinstance(declaration, dict):
+        raise ValueError("run manifest golden evaluation declaration is invalid")
+    history_value = declaration.get("history_path")
+    if not isinstance(history_value, str):
+        raise ValueError("run manifest golden evaluation has no history path")
+    history_path = _safe_path(run_root, history_value)
+    if not history_path.is_file():
+        raise FileNotFoundError(f"missing golden evaluation history: {history_path}")
+    history = json.loads(history_path.read_text(encoding="utf-8"))
+    if not isinstance(history, dict):
+        raise ValueError("golden evaluation history must be an object")
+    history_sha = verify_golden_history(history)
+    if history_sha != declaration.get("history_sha256"):
+        raise ValueError("golden evaluation history does not match run manifest")
+    if declaration.get("configuration") != history.get("configuration"):
+        raise ValueError("golden evaluation configuration does not match history")
+    records = history["history"]
+    if int(declaration.get("evaluation_count", -1)) != len(records):
+        raise ValueError("golden evaluation count does not match history")
+    if declaration.get("best") != history.get("best"):
+        raise ValueError("golden evaluation best record does not match history")
+    best = history.get("best")
+    checkpoint_value = declaration.get("best_checkpoint_path")
+    if best is None:
+        if checkpoint_value is not None:
+            raise ValueError("golden evaluation has a checkpoint without a best record")
+    else:
+        if not isinstance(checkpoint_value, str):
+            raise ValueError("golden evaluation best checkpoint path is missing")
+        checkpoint = _safe_path(run_root, checkpoint_value)
+        if not checkpoint.is_file():
+            raise FileNotFoundError(f"missing golden best checkpoint: {checkpoint}")
+    return {
+        "status": "VERIFIED",
+        "history_sha256": history_sha,
+        "evaluation_count": len(records),
+        "best_completed_steps": None if best is None else best["completed_steps"],
+        "best_psnr_db_mean": None if best is None else best["summary"]["psnr_db_mean"],
+    }, []
 
 
 def _resource_metrics(run: dict[str, Any], run_root: Path) -> tuple[dict[str, Any], list[str]]:
@@ -404,6 +453,10 @@ def build_quality_report(
             )
             golden_reports.append({"image_id": image_id, "asset": asset_relative})
 
+    golden_selection, golden_warnings = _golden_checkpoint_selection(
+        run, Path(run_root)
+    )
+    warnings.extend(golden_warnings)
     resources, resource_warnings = _resource_metrics(run, Path(run_root))
     warnings.extend(resource_warnings)
     if not run_lpips_metric:
@@ -424,6 +477,7 @@ def build_quality_report(
         "status": status,
         "warnings": warnings,
         "resources": resources,
+        "golden_checkpoint_selection": golden_selection,
         "frames": frame_reports,
         "golden_views": golden_reports,
         "summary": {
