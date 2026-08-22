@@ -1093,4 +1093,12 @@ GitHub 重新联网后，澳洲 `machine-b/uk-quality` 从 `2113134` 推进到 `
 
 当前 CPU 全仓为 `183 PASS + 22 SKIPPED + 3 subtests PASS`；跳过项仍是需要预加载锁定 CUDA 扩展的运行测试。所有短 probe 都绑定相同真实 factor4 输入、person/depth mask、初始化 PLY、seed 42 和 1M cap，质量报告分别签名保存。
 
-当前为 **PASS（单变量短探针与候选固化）/ NOT_RUN（8000 步正式深度平衡候选）**。下一步先精确提交并推送本轮源码/记录，再以命名 preset 执行 8000 步；只有完整 124 图 PSNR、SSIM、LPIPS、depth、coverage、最佳 checkpoint 和周期 full validation 同时满足零回归门，才允许替代澳洲 P5 或进入后续 POS A/B。
+### 正式 8000 步结果
+
+- 命名候选在 RTX 5070 Laptop 上完成 8000 步，耗时 `3269.10 s`、峰值额外显存 `1,932,662,272 bytes`、最终 1M Gaussian、无 NaN；内部签名 run Manifest SHA256 为 `085ca8e0900f8dc4cea96edcc05a2376c2aba539cb093174c41494f6ab2f8661`。
+- golden PSNR 从 step 1000 到 6000 按 `16.3869 → 17.6076 → 18.6600 → 19.1409 → 19.3240 → 19.5010 dB` 提升，step 7000/8000 回落到 `19.4583 / 19.3989 dB`，因此正确选择 step 6000；step 5000 的 golden depth MAE `4.917 m` 最低，step 6000 回退到 `5.024 m`，明确暴露外观选择与米制几何并非同一目标。
+- 124 图 selected-model 正式报告为 `COMPLETE`：PSNR `19.452818 dB`、SSIM `0.568499`、LPIPS-Alex `0.501412`、depth MAE `5.042365 m`、depth coverage min `0.979954`；内部签名 quality report SHA256 为 `04d33bfe8dde895361c7418a45a11134750f6c68c263f80507c8eaad33999209`。
+- 相对澳洲 P5，深度改善 `1.513156 m`，但 PSNR 下降 `1.067622 dB`、SSIM 下降 `0.026992`、LPIPS 恶化 `0.022062`；相对 legacy，PSNR 仍提升 `1.618024 dB`、SSIM 提升 `0.101420`、LPIPS 改善 `0.091118`，但 depth MAE 仍恶化 `1.037031 m`。结论仍为 **MIXED / Gate 2 FAIL**，不能替代澳洲 P5，也不能进入 POS A/B。
+- 尺度尸检表明该辅助项没有根治巨型 splat：selected step 6000 的 scale p50/p95/p99/p999/max 为 `0.1308/0.4445/1.2527/4.9981/42.7079 m`，大于 `1 m` 有 `14,246` 个、大于 `10 m` 有 `270` 个。最大值虽比 P5 的 `142.2038 m` 小，但大于 `1 m` 的数量比 P5 的 `8,442` 个更多；抽检同一验证视角也确认建筑结构仍可辨，但前景和图像边缘继续存在明显模糊，不能仅凭平均指标升级。
+
+当前为 **PASS（正式证据完整）/ FAIL（深度零回归门）**。澳洲 `gate2_quality_australian_p5_v1` 继续作为优先外观基线，`0.01` 只保留为已验证的 Pareto 点。下一步仍以澳洲 P5 为基础，只提高同一线性辅助权重做一个短探针；若无法在保持高于 legacy 外观的同时把深度逼近 `4.005 m`，则停止沿 loss 权重蛮力搜索，转向显式 scale/visibility 约束和多目标 checkpoint 选择。
