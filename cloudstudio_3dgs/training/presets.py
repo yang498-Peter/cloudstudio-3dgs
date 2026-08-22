@@ -11,6 +11,7 @@ _EXPOSURE_DISABLED = {
     "learning_rate": 5e-3,
     "regularization_weight": 1e-2,
     "max_abs_log_gain": 0.6931471805599453,
+    "zero_mean_projection": False,
 }
 
 _EXPOSURE_ENABLED = {**_EXPOSURE_DISABLED, "enabled": True}
@@ -22,6 +23,11 @@ _REGULARIZATION_DISABLED = {
     "anisotropy_weight": 1e-4,
     "max_scale_ratio_to_reference": 8.0,
     "max_anisotropy": 10.0,
+    "screen_clip_enabled": False,
+    "max_screen_fraction": 0.15,
+    "screen_clip_hardness": 1.5,
+    "screen_clip_opacity_bump": 3.0,
+    "max_world_size_m": None,
 }
 
 _REGULARIZATION_ENABLED = {**_REGULARIZATION_DISABLED, "enabled": True}
@@ -55,6 +61,8 @@ TRAINER_PRESETS: dict[str, dict[str, Any]] = {
         "sh_degree": 2,
         "sh_degree_interval": 0,
         "rgb_ssim_mode": "global_moments",
+        "decoupled_ssim": False,
+        "sh_regularization_weight": 0.0,
         "lidar_range_loss_mode": "linear_l1",
         "means_lr_final_factor": 1.0,
         "background_color": None,
@@ -68,6 +76,8 @@ TRAINER_PRESETS: dict[str, dict[str, Any]] = {
         "sh_degree": 2,
         "sh_degree_interval": 0,
         "rgb_ssim_mode": "global_moments",
+        "decoupled_ssim": False,
+        "sh_regularization_weight": 0.0,
         "lidar_range_loss_mode": "linear_l1",
         "means_lr_final_factor": 1.0,
         "background_color": None,
@@ -80,6 +90,8 @@ TRAINER_PRESETS: dict[str, dict[str, Any]] = {
         "sh_degree": 3,
         "sh_degree_interval": 1_000,
         "rgb_ssim_mode": "global_moments",
+        "decoupled_ssim": False,
+        "sh_regularization_weight": 0.0,
         "lidar_range_loss_mode": "linear_l1",
         "means_lr_final_factor": 1.0,
         "background_color": None,
@@ -92,6 +104,8 @@ TRAINER_PRESETS: dict[str, dict[str, Any]] = {
         "sh_degree": 2,
         "sh_degree_interval": 0,
         "rgb_ssim_mode": "local_gaussian",
+        "decoupled_ssim": False,
+        "sh_regularization_weight": 0.0,
         "lidar_range_loss_mode": "linear_l1",
         "means_lr_final_factor": 1.0,
         "background_color": None,
@@ -106,6 +120,8 @@ TRAINER_PRESETS: dict[str, dict[str, Any]] = {
         "sh_degree": 3,
         "sh_degree_interval": 1_000,
         "rgb_ssim_mode": "local_gaussian",
+        "decoupled_ssim": False,
+        "sh_regularization_weight": 0.0,
         "lidar_range_loss_mode": "robust_log_huber",
         "means_lr_final_factor": 0.01,
         "background_color": [1.0, 1.0, 1.0],

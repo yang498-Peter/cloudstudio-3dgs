@@ -45,6 +45,8 @@ _PRESET_FIELDS = {
     "sh_degree",
     "sh_degree_interval",
     "rgb_ssim_mode",
+    "decoupled_ssim",
+    "sh_regularization_weight",
     "lidar_range_loss_mode",
     "means_lr_final_factor",
     "background_color",

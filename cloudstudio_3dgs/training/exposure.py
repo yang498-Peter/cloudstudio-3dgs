@@ -22,6 +22,7 @@ class ExposureCompensationConfig:
     learning_rate: float = 5e-3
     regularization_weight: float = 1e-2
     max_abs_log_gain: float = 0.6931471805599453  # ln(2): gain clamped to [0.5, 2]
+    zero_mean_projection: bool = False
 
     def validate(self) -> None:
         if self.learning_rate <= 0.0:
@@ -37,6 +38,7 @@ class ExposureCompensationConfig:
             "learning_rate": self.learning_rate,
             "regularization_weight": self.regularization_weight,
             "max_abs_log_gain": self.max_abs_log_gain,
+            "zero_mean_projection": self.zero_mean_projection,
         }
 
 
@@ -49,6 +51,7 @@ class ExposureCompensator:
         *,
         config: ExposureCompensationConfig,
         device: str,
+        group_by_image: dict[str, str] | None = None,
     ) -> None:
         import torch
 
@@ -66,6 +69,22 @@ class ExposureCompensator:
         self.log_gains = torch.nn.Parameter(
             torch.zeros(len(ordered), dtype=torch.float32, device=device)
         )
+        # Anchor groups: with independent auto-exposure per physical camera, a
+        # single global anchor lets the two cameras drift in opposite
+        # directions and still sum to zero, so each camera group is projected
+        # to zero mean on its own.
+        self.group_members: dict[str, list[int]] = {}
+        if group_by_image is not None:
+            missing = [image_id for image_id in ordered if image_id not in group_by_image]
+            if missing:
+                raise ValueError(
+                    f"exposure groups missing for {len(missing)} images, e.g. {missing[0]!r}"
+                )
+            for image_id in ordered:
+                key = str(group_by_image[image_id])
+                self.group_members.setdefault(key, []).append(self.index[image_id])
+        else:
+            self.group_members["all"] = list(range(len(ordered)))
 
     def make_optimizer(self) -> Any:
         import torch
@@ -87,6 +106,25 @@ class ExposureCompensator:
     def prior_loss(self) -> Any:
         return self.config.regularization_weight * (self.log_gains**2).mean()
 
+    def project_zero_mean(self) -> None:
+        """Remove the dataset-mean log gain after an optimizer step.
+
+        Per-image gains and global model brightness are jointly unobservable
+        from the photometric loss alone; over a long run the gains drift bright
+        while the model itself darkens, and validation (always gain 1.0) pays
+        the bill. Projecting the gains onto the zero-mean subspace pins the
+        global-brightness degree of freedom inside the model where validation
+        can see it, while per-image differences remain free.
+        """
+        import torch
+
+        if not self.config.zero_mean_projection:
+            return
+        with torch.no_grad():
+            for members in self.group_members.values():
+                subset = self.log_gains[members]
+                self.log_gains[members] = subset - subset.mean()
+
     def report(self) -> dict[str, Any]:
         import torch
 
@@ -100,6 +138,11 @@ class ExposureCompensator:
             )
         return {
             "image_count": int(self.log_gains.shape[0]),
+            "mean_log_gain": float(self.log_gains.detach().mean()),
+            "mean_log_gain_by_group": {
+                key: float(self.log_gains.detach()[members].mean())
+                for key, members in sorted(self.group_members.items())
+            },
             "abs_log_gain_p50": float(quantiles[0]),
             "abs_log_gain_p95": float(quantiles[1]),
             "abs_log_gain_max": float(absolute.max()),

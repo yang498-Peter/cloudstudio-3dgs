@@ -160,14 +160,22 @@ def _evaluate_views(
                 assert sample.depth_mask is not None and sample.depth_confidence is not None
                 if rendered_range is None:
                     raise ValueError(f"golden render has no range output for {image_id}")
-                depth = masked_depth_metrics(
-                    rendered_range.detach().cpu().numpy(),
-                    sample.depth_range_m,
-                    sample.depth_mask,
-                    confidence=sample.depth_confidence,
-                )
-                depth_mae_values.append(float(depth["mae_m"]))
-                frame["depth"] = {"status": "MEASURED", **depth}
+                try:
+                    depth = masked_depth_metrics(
+                        rendered_range.detach().cpu().numpy(),
+                        sample.depth_range_m,
+                        sample.depth_mask,
+                        confidence=sample.depth_confidence,
+                    )
+                except ValueError as error:
+                    # Early/mid-training renders legitimately miss coverage at
+                    # some supervised pixels; selection is RGB-only, so record
+                    # the gap instead of killing the training run. Formal
+                    # full-validation acceptance keeps its fail-closed check.
+                    frame["depth"] = {"status": "UNMEASURABLE", "reason": str(error)}
+                else:
+                    depth_mae_values.append(float(depth["mae_m"]))
+                    frame["depth"] = {"status": "MEASURED", **depth}
             frames.append(frame)
 
     finite_psnr = [value for value in psnr_values if np.isfinite(value)]

@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import importlib.util
 import json
+import math
 import tempfile
 import unittest
 from pathlib import Path
@@ -43,6 +44,7 @@ from cloudstudio_3dgs.training.scale_calibration import (
 )
 from cloudstudio_3dgs.training.regularization import (
     GeometryRegularizationConfig,
+    clip_oversized_gaussians,
     geometry_regularization_terms,
 )
 from cloudstudio_3dgs.training.trainer import (
@@ -1015,6 +1017,124 @@ class RenderScaleContractTests(unittest.TestCase):
         self.assertAlmostEqual(float(exposure.gain("left").detach()), 1.0)
         self.assertAlmostEqual(float(exposure.gain("right").detach()), 2.0)
         self.assertGreater(float(exposure.prior_loss().detach()), 0.0)
+
+    def test_exposure_zero_mean_projection_removes_brightness_degeneracy(self) -> None:
+        import torch
+
+        anchored = ExposureCompensator(
+            ["a", "b", "c", "d"],
+            config=ExposureCompensationConfig(enabled=True, zero_mean_projection=True),
+            device="cpu",
+            group_by_image={"a": "left", "b": "left", "c": "right", "d": "right"},
+        )
+        with torch.no_grad():
+            # Left group drifts bright, right group drifts dark: a single
+            # global anchor would accept this (sum is zero-ish) even though
+            # each physical camera has absorbed real scene brightness.
+            anchored.log_gains.copy_(torch.tensor([0.3, 0.1, -0.25, -0.15]))
+        anchored.project_zero_mean()
+        gains = anchored.log_gains.detach()
+        # Each camera group is centered independently; offsets inside stay.
+        torch.testing.assert_close(
+            gains, torch.tensor([0.1, -0.1, -0.05, 0.05]), atol=1e-6, rtol=0.0
+        )
+        report = anchored.report()
+        self.assertAlmostEqual(report["mean_log_gain"], 0.0, places=6)
+        for value in report["mean_log_gain_by_group"].values():
+            self.assertAlmostEqual(value, 0.0, places=6)
+        self.assertEqual(
+            sorted(report["mean_log_gain_by_group"]), ["left", "right"]
+        )
+
+        # Default (off) leaves the gains untouched for run comparability.
+        legacy = ExposureCompensator(
+            ["a", "b"],
+            config=ExposureCompensationConfig(enabled=True),
+            device="cpu",
+        )
+        with torch.no_grad():
+            legacy.log_gains.copy_(torch.tensor([0.4, 0.2]))
+        legacy.project_zero_mean()
+        torch.testing.assert_close(
+            legacy.log_gains.detach(), torch.tensor([0.4, 0.2])
+        )
+
+    def test_decoupled_ssim_gain_moves_brightness_but_not_structure(self) -> None:
+        import torch
+
+        torch.manual_seed(7)
+        target = torch.rand(24, 24, 3)
+        mask = torch.ones(24, 24, dtype=torch.bool)
+        dim_prediction = 0.5 * target
+
+        coupled = masked_rgb_ssim_loss(dim_prediction, target, mask)
+        gain = torch.tensor(2.0, requires_grad=True)
+        decoupled = masked_rgb_ssim_loss(
+            dim_prediction, target, mask, luminance_gain=gain
+        )
+        # The gain repairs the luminance mismatch entirely, so the decoupled
+        # loss must beat the coupled one on a pure brightness error...
+        self.assertLess(float(decoupled.detach()), float(coupled.detach()))
+        decoupled.backward()
+        self.assertIsNotNone(gain.grad)
+
+        # ...but no gain can repair a structural error: shuffled content stays
+        # bad regardless of the luminance scale.
+        shuffled = target.flatten(0, 1)[torch.randperm(24 * 24)].reshape(24, 24, 3)
+        for gain_value in (0.5, 1.0, 2.0):
+            broken = masked_rgb_ssim_loss(
+                shuffled, target, mask, luminance_gain=torch.tensor(gain_value)
+            )
+            self.assertGreater(float(broken.detach()), 0.5)
+
+        # Without a gain the refactored luminance*cs form is the original SSIM.
+        baseline = masked_rgb_ssim_loss(dim_prediction, target, mask, luminance_gain=None)
+        torch.testing.assert_close(baseline, coupled)
+
+    def test_clip_oversized_gaussians_shrinks_and_bumps_only_offenders(self) -> None:
+        import torch
+
+        config = GeometryRegularizationConfig(
+            screen_clip_enabled=True,
+            max_screen_fraction=0.15,
+            screen_clip_hardness=1.5,
+            screen_clip_opacity_bump=3.0,
+            max_world_size_m=1.0,
+        )
+        params = {
+            "scales": torch.tensor(
+                [[-3.0, -3.0, -3.0], [1.0, 0.5, 0.0], [-2.0, -2.0, 9.0]]
+            ),
+            "opacities": torch.tensor([0.0, -2.0, 0.0]),
+        }
+        # image short side 100 px, threshold 15 px: only the second splat (60
+        # px radius) is oversized; hardness caps the shrink at log(1.5).
+        report = clip_oversized_gaussians(
+            params,
+            radii_px=torch.tensor([[4.0, 3.0], [60.0, 10.0], [1.0, 1.0]]),
+            image_size_px=100,
+            config=config,
+        )
+        self.assertEqual(report["clipped_count"], 1)
+        shrink = math.log(1.5)
+        # Screen clip shrinks by log(hardness), then the 1 m world fuse
+        # (ln 1 = 0) clamps whatever still exceeds it, on any splat.
+        torch.testing.assert_close(
+            params["scales"][1], torch.tensor([0.0, 0.0, -shrink])
+        )
+        torch.testing.assert_close(params["scales"][0], torch.tensor([-3.0, -3.0, -3.0]))
+        self.assertAlmostEqual(float(params["opacities"][1]), -2.0 + 3.0 * shrink, places=5)
+        # World fuse fires for splats 1 (post-shrink axes above 0) and 2 (e^9 m).
+        self.assertEqual(report["world_clamped_count"], 2)
+        self.assertAlmostEqual(float(params["scales"][2].max()), 0.0)
+        # Disabled config is a no-op.
+        noop = clip_oversized_gaussians(
+            params,
+            radii_px=torch.tensor([[60.0, 60.0], [60.0, 60.0], [60.0, 60.0]]),
+            image_size_px=100,
+            config=GeometryRegularizationConfig(enabled=False, screen_clip_enabled=True),
+        )
+        self.assertEqual(noop["clipped_count"], 0)
 
     def test_metric_geometry_regularization_only_hits_bad_geometry(self) -> None:
         import torch

@@ -56,6 +56,7 @@ def masked_rgb_ssim_loss(
     window_size: int = 11,
     sigma: float = 1.5,
     min_valid_fraction: float = 0.8,
+    luminance_gain: Any | None = None,
 ) -> Any:
     """Mask-aware local Gaussian-window SSIM.
 
@@ -63,6 +64,13 @@ def masked_rgb_ssim_loss(
     moments are divided by the valid kernel support. A window contributes only
     when its center is valid and its weighted valid coverage reaches the
     configured threshold.
+
+    With ``luminance_gain`` the SSIM is decoupled for exposure compensation:
+    only the luminance term sees the gain-corrected prediction while the
+    contrast/structure term compares the raw prediction against the target, so
+    the exposure parameters can move brightness but can never mask structural
+    error. For a scalar gain g the corrected local moments are exactly
+    mean*g / var*g^2 / cov*g, so no second convolution pass is needed.
     """
 
     _validate_masked_pair(prediction, target, mask, "RGB")
@@ -109,14 +117,17 @@ def masked_rgb_ssim_loss(
     covariance = cross - mean_prediction * mean_target
     c1 = 0.01**2
     c2 = 0.03**2
-    ssim = (
-        (2.0 * mean_prediction * mean_target + c1)
-        * (2.0 * covariance + c2)
-        / (
-            (mean_prediction.square() + mean_target.square() + c1)
-            * (variance_prediction + variance_target + c2)
-        )
-    ).mean(dim=1)[0]
+    if luminance_gain is None:
+        luminance_mean = mean_prediction
+    else:
+        luminance_mean = mean_prediction * luminance_gain
+    luminance = (2.0 * luminance_mean * mean_target + c1) / (
+        luminance_mean.square() + mean_target.square() + c1
+    )
+    contrast_structure = (2.0 * covariance + c2) / (
+        variance_prediction + variance_target + c2
+    )
+    ssim = (luminance * contrast_structure).mean(dim=1)[0]
     valid_windows = mask & (support[0, 0] >= min_valid_fraction)
     if not bool(valid_windows.any().item()):
         raise ValueError("SSIM mask has no valid local windows at the configured coverage")

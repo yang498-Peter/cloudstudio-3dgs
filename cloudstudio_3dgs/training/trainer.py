@@ -56,6 +56,7 @@ from cloudstudio_3dgs.training.rig_pose import (
 )
 from cloudstudio_3dgs.training.regularization import (
     GeometryRegularizationConfig,
+    clip_oversized_gaussians,
     geometry_regularization_terms,
 )
 from cloudstudio_3dgs.training.runtime_evidence import (
@@ -116,6 +117,8 @@ class TrainerConfig:
     ssim_min_valid_fraction: float = 0.8
     lidar_range_loss_mode: str = "robust_log_huber"
     lidar_log_range_huber_delta: float = 0.05
+    decoupled_ssim: bool = False
+    sh_regularization_weight: float = 0.0
     color_model: str = "rgb_sigmoid"
     sh_degree: int = 2
     background_color: tuple[float, float, float] | None = None
@@ -211,6 +214,8 @@ class TrainerConfig:
                 "ssim_min_valid_fraction",
                 "lidar_range_loss_mode",
                 "lidar_log_range_huber_delta",
+                "decoupled_ssim",
+                "sh_regularization_weight",
                 "color_model",
                 "sh_degree",
                 "background_color",
@@ -277,6 +282,8 @@ class TrainerConfig:
             raise ValueError("lidar_range_loss_mode must be linear_l1 or robust_log_huber")
         if self.lidar_log_range_huber_delta <= 0.0:
             raise ValueError("lidar_log_range_huber_delta must be positive")
+        if self.sh_regularization_weight < 0.0:
+            raise ValueError("sh_regularization_weight must be non-negative")
         expected_lrs = {"means", "scales", "quats", "opacities", "colors"}
         if set(self.learning_rates) != expected_lrs:
             raise ValueError(f"learning_rates must contain exactly {sorted(expected_lrs)}")
@@ -302,6 +309,8 @@ class TrainerConfig:
                 "sh_degree": self.sh_degree,
                 "sh_degree_interval": self.sh_degree_interval,
                 "rgb_ssim_mode": self.rgb_ssim_mode,
+                "decoupled_ssim": self.decoupled_ssim,
+                "sh_regularization_weight": self.sh_regularization_weight,
                 "lidar_range_loss_mode": self.lidar_range_loss_mode,
                 "means_lr_final_factor": self.means_lr_final_factor,
                 "background_color": None
@@ -394,6 +403,11 @@ class TrainerConfig:
                     "global_masked_ssim": "active"
                     if self.rgb_ssim_mode == "global_moments"
                     else "diagnostic_only",
+                    "decoupled_exposure": self.decoupled_ssim,
+                },
+                "sh_regularization": {
+                    "mode": "shN_l2",
+                    "weight": self.sh_regularization_weight,
                 },
                 "lidar_range": {
                     "mode": self.lidar_range_loss_mode,
@@ -616,6 +630,7 @@ def _render_supervision_loss(
         active_sh_degree=active_sh_degree,
         background_rgb=config.background_color,
     )
+    raw_rendered = rendered
     if rgb_gain is not None:
         # Per-frame auto-exposure compensation: scale the render toward the
         # frame's brightness for the photometric losses only. Geometry (range)
@@ -625,13 +640,17 @@ def _render_supervision_loss(
     if config.rgb_ssim_weight <= 0.0:
         ssim = rendered.new_zeros(())
     elif config.rgb_ssim_mode == "local_gaussian":
+        decouple = config.decoupled_ssim and rgb_gain is not None
         ssim = masked_rgb_ssim_loss(
-            rendered,
+            # Decoupled: structure/contrast compares the RAW render so the
+            # exposure gain can move brightness but never mask structure.
+            raw_rendered if decouple else rendered,
             tensors["rgb"],
             tensors["rgb_mask"],
             window_size=config.ssim_window_size,
             sigma=config.ssim_sigma,
             min_valid_fraction=config.ssim_min_valid_fraction,
+            luminance_gain=rgb_gain if decouple else None,
         )
     else:
         ssim = global_masked_rgb_ssim_loss(
@@ -934,11 +953,14 @@ def train(
             trainset.image_ids,
             config=config.exposure_compensation,
             device=config.device,
+            group_by_image=trainset.camera_id_by_image,
         )
         exposure_optimizer = exposure.make_optimizer()
         auxiliary_params["exposure_log_gains"] = exposure.log_gains
         auxiliary_optimizers["exposure_log_gains"] = exposure_optimizer
     completed_steps = 0
+    screen_clip_total = 0
+    world_clamp_total = 0
     last_metrics: dict[str, Any] = {}
     initial_loss: float | None = None
     best_loss = float("inf")
@@ -1047,6 +1069,12 @@ def train(
             loss = loss + pose_prior
         if exposure is not None:
             loss = loss + exposure.prior_loss()
+        if config.sh_regularization_weight > 0.0 and "shN" in params:
+            # Weak pull on the view-dependent SH bands: the 30k diagnosis
+            # measured shN energy doubling over long training while validation
+            # preferred lower degrees, i.e. the bands memorize per-view
+            # residuals faster than they explain real view dependence.
+            loss = loss + config.sh_regularization_weight * params["shN"].square().mean()
         regularization = geometry_regularization_terms(
             params,
             reference_scale_m=reference_scale_m,
@@ -1086,6 +1114,17 @@ def train(
         if exposure_optimizer is not None:
             exposure_optimizer.step()
             exposure_optimizer.zero_grad(set_to_none=True)
+            exposure.project_zero_mean()
+        # Before strategy_post_step: relocation/add would desynchronize this
+        # step's projected radii from the gaussian count.
+        clip_report = clip_oversized_gaussians(
+            params,
+            radii_px=info.get("radii"),
+            image_size_px=min(sample.width, sample.height),
+            config=config.geometry_regularization,
+        )
+        screen_clip_total += clip_report["clipped_count"]
+        world_clamp_total += clip_report["world_clamped_count"]
         mcmc_event = backend.strategy_post_step(
             params,
             optimizers,
@@ -1376,6 +1415,8 @@ def train(
                 "selected_checkpoint_last_metrics": selected_checkpoint_training_state.get(
                     "last_metrics"
                 ),
+                "screen_clip_events": screen_clip_total,
+                "world_clamp_events": world_clamp_total,
                 "last_metrics": last_metrics,
                 "initial_loss": initial_loss,
                 "best_loss": best_loss,
