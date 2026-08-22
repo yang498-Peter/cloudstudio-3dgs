@@ -1247,6 +1247,12 @@ def train(
             "geometry_regularization": float(regularization["total"].detach().cpu()),
             "opacity_sparsity": float(regularization["opacity_sparsity"].detach().cpu()),
             "scale_upper": float(regularization["scale_upper"].detach().cpu()),
+            "scale_over_limit_fraction": float(
+                regularization["scale_over_limit_fraction"].detach().cpu()
+            ),
+            "scale_upper_tail_count": int(
+                regularization["scale_upper_tail_count"]
+            ),
             "anisotropy": float(regularization["anisotropy"].detach().cpu()),
         }
         if initial_loss is None:
@@ -1278,6 +1284,7 @@ def train(
                 golden_result,
                 best_golden,
                 min_psnr_improvement_db=config.golden_evaluation.min_psnr_improvement_db,
+                max_depth_regression_m=config.golden_evaluation.max_depth_regression_m,
             )
             if golden_promoted:
                 best_golden = golden_result

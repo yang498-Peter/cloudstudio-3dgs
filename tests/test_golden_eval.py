@@ -1,3 +1,4 @@
+import hashlib
 import importlib.util
 import tempfile
 import unittest
@@ -5,6 +6,7 @@ from pathlib import Path
 
 import numpy as np
 
+from cloudstudio_3dgs.data.manifest import canonical_json_bytes
 from cloudstudio_3dgs.training.dataset import TrainingSample
 from cloudstudio_3dgs.training.golden_eval import (
     GoldenEvaluationConfig,
@@ -12,6 +14,7 @@ from cloudstudio_3dgs.training.golden_eval import (
     evaluate_golden_views,
     golden_image_ids,
     is_golden_improvement,
+    verify_golden_history,
 )
 
 
@@ -263,3 +266,97 @@ class GoldenEvaluationTests(unittest.TestCase):
             )
         with self.assertRaisesRegex(ValueError, "interval"):
             GoldenEvaluationConfig(every=0).validate()
+        with self.assertRaisesRegex(ValueError, "depth regression"):
+            GoldenEvaluationConfig(max_depth_regression_m=-0.01).validate()
+
+    def test_golden_depth_guard_rejects_geometry_regression_and_missing_depth(self) -> None:
+        def record(psnr: float, depth: float | None, status: str = "MEASURED") -> dict:
+            return {
+                "frames": [{"depth": {"status": status}}],
+                "summary": {
+                    "psnr_db_mean": psnr,
+                    "depth_mae_m_mean": depth,
+                },
+            }
+
+        best = record(20.0, 4.9)
+        small_regression = record(20.2, 4.94)
+        large_regression = record(20.3, 5.02)
+        self.assertTrue(
+            is_golden_improvement(
+                small_regression,
+                best,
+                min_psnr_improvement_db=0.001,
+                max_depth_regression_m=0.05,
+            )
+        )
+        self.assertFalse(
+            is_golden_improvement(
+                large_regression,
+                best,
+                min_psnr_improvement_db=0.001,
+                max_depth_regression_m=0.05,
+            )
+        )
+        self.assertTrue(
+            is_golden_improvement(
+                large_regression,
+                best,
+                min_psnr_improvement_db=0.001,
+            )
+        )
+        self.assertFalse(
+            is_golden_improvement(
+                record(20.4, None, status="UNMEASURABLE"),
+                best,
+                min_psnr_improvement_db=0.001,
+                max_depth_regression_m=0.05,
+            )
+        )
+        config = GoldenEvaluationConfig(max_depth_regression_m=0.05)
+        self.assertEqual(config.to_dict()["max_depth_regression_m"], 0.05)
+        self.assertNotIn("max_depth_regression_m", GoldenEvaluationConfig().to_dict())
+
+    def test_signed_history_replays_depth_guard_selection(self) -> None:
+        config = GoldenEvaluationConfig(max_depth_regression_m=0.05)
+
+        def signed_record(step: int, psnr: float, depth: float) -> dict:
+            record = {
+                "schema_version": 1,
+                "algorithm_version": "golden_validation_v3",
+                "evaluation_kind": "golden",
+                "completed_steps": step,
+                "split_manifest_sha256": "split-sha",
+                "image_ids": ["golden"],
+                "frames": [
+                    {
+                        "image_id": "golden",
+                        "depth": {"status": "MEASURED", "mae_m": depth},
+                    }
+                ],
+                "summary": {
+                    "selection_metric": "masked_rgb_psnr_db_mean",
+                    "psnr_db_mean": psnr,
+                    "depth_mae_m_mean": depth,
+                },
+            }
+            record["golden_evaluation_sha256"] = hashlib.sha256(
+                canonical_json_bytes(record)
+            ).hexdigest()
+            return record
+
+        accepted = signed_record(1000, 20.0, 4.9)
+        rejected = signed_record(2000, 20.2, 5.1)
+        history = {
+            "schema_version": 1,
+            "configuration": config.to_dict(),
+            "history": [accepted, rejected],
+            "best": accepted,
+        }
+        history["golden_history_sha256"] = hashlib.sha256(
+            canonical_json_bytes(history)
+        ).hexdigest()
+        self.assertEqual(
+            verify_golden_history(history),
+            history["golden_history_sha256"],
+        )

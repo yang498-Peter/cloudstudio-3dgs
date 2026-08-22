@@ -1211,6 +1211,8 @@ class RenderScaleContractTests(unittest.TestCase):
         )
         self.assertAlmostEqual(float(terms["opacity_sparsity"].detach()), 0.5)
         self.assertGreater(float(terms["scale_upper"].detach()), 0.0)
+        self.assertAlmostEqual(float(terms["scale_over_limit_fraction"]), 0.5)
+        self.assertEqual(terms["scale_upper_tail_count"], 2)
         self.assertGreater(float(terms["anisotropy"].detach()), 0.0)
         terms["total"].backward()
         self.assertTrue(torch.isfinite(params["opacities"].grad).all())
@@ -1221,6 +1223,49 @@ class RenderScaleContractTests(unittest.TestCase):
             config=GeometryRegularizationConfig(enabled=False),
         )
         self.assertEqual(float(disabled["total"]), 0.0)
+
+    def test_scale_upper_tail_reduction_focuses_on_giant_population(self) -> None:
+        import torch
+
+        params = {
+            "opacities": torch.zeros(4, requires_grad=True),
+            "scales": torch.tensor(
+                [[0.1, 0.1, 0.1], [0.2, 0.2, 0.2], [1.0, 1.0, 1.0], [1.6, 1.6, 1.6]],
+                dtype=torch.float32,
+            ).log().requires_grad_(),
+        }
+        mean_terms = geometry_regularization_terms(
+            params,
+            reference_scale_m=0.1,
+            config=GeometryRegularizationConfig(scale_upper_weight=1.0),
+        )
+        tail_config = GeometryRegularizationConfig(
+            scale_upper_weight=1.0,
+            scale_upper_tail_fraction=0.25,
+        )
+        tail_terms = geometry_regularization_terms(
+            params,
+            reference_scale_m=0.1,
+            config=tail_config,
+        )
+        self.assertGreater(
+            float(tail_terms["scale_upper"].detach()),
+            float(mean_terms["scale_upper"].detach()),
+        )
+        self.assertEqual(tail_terms["scale_upper_tail_count"], 1)
+        self.assertAlmostEqual(float(tail_terms["scale_over_limit_fraction"]), 0.5)
+        self.assertNotIn(
+            "scale_upper_tail_fraction",
+            GeometryRegularizationConfig().to_dict(),
+        )
+        self.assertEqual(
+            tail_config.to_dict()["scale_upper_tail_fraction"],
+            0.25,
+        )
+        tail_terms["total"].backward()
+        self.assertTrue(torch.isfinite(params["scales"].grad).all())
+        with self.assertRaisesRegex(ValueError, "tail_fraction"):
+            GeometryRegularizationConfig(scale_upper_tail_fraction=0.0).validate()
 
     def test_backend_initializes_per_point_metric_knn_scales(self) -> None:
         import torch

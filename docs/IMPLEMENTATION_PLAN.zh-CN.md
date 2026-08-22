@@ -1103,3 +1103,34 @@ GitHub 重新联网后，澳洲 `machine-b/uk-quality` 从 `2113134` 推进到 `
 - 按预定停止条件追加的 `0.02` 单变量 1000 步探针耗时 `478.92 s`、峰值额外显存 `959,450,112 bytes`，内部签名 run Manifest SHA256 为 `a646ceb3332178ce226d5673430e9ae22dce372e6ff6266ea1dacdaeed5222e8`。step 1000 full history 为 PSNR `15.584667 dB`、SSIM `0.503213`、depth MAE `5.072061 m`、p10 `15.230879 dB`；随后 selected-model 质量报告在逐帧重算时检测到最低 depth coverage `0.8994976 < 0.9` 并 fail-closed，未生成 `COMPLETE` LPIPS 报告。该权重既继续大幅损伤外观，又跨过覆盖硬门，明确拒绝扩大到 8000 步。
 
 当前为 **PASS（正式证据完整）/ FAIL（深度零回归门）**。澳洲 `gate2_quality_australian_p5_v1` 继续作为优先外观基线，`0.01` 只保留为已验证的 Pareto 点；线性辅助权重蛮力搜索在 `0.02` 按预定条件终止。下一步转向显式 scale/visibility 约束和多目标 checkpoint 选择，重点处理“最大 scale 下降但大于 1 m 的数量反而增加”以及 30k 在 20k 处离散断崖，而不是继续增大深度 loss。
+
+## 35. 当前阶段记录：尺度尾部风险与深度护栏 checkpoint 选择
+
+### 问题现象
+
+正式 P5 尸检显示 1M Gaussian 中只有少数严重超限点，但现有 `scale_upper` 对全部 Gaussian 的 barrier 取均值，再乘 `1e-4`；正常点的海量零值会稀释最坏尾部。`0.01` 深度平衡正式运行又出现 step 5000 depth MAE `4.917 m` 最低、step 6000 PSNR 更高但 depth 回退到 `5.024 m`，旧选择器仍覆盖 `best_golden.pt`。澳洲 30k 运行在 20k 发生离散断崖并依靠早期 best checkpoint 免疫，进一步证明 checkpoint promotion 不能只看单一外观均值。
+
+### 修改文件
+
+- `cloudstudio_3dgs/training/regularization.py`
+- `cloudstudio_3dgs/training/golden_eval.py`
+- `cloudstudio_3dgs/training/trainer.py`
+- `tests/test_training.py`
+- `tests/test_golden_eval.py`
+- `README.md`
+- `docs/IMPLEMENTATION_PLAN.zh-CN.md`
+
+### 修改内容
+
+- `GeometryRegularizationConfig` 新增 opt-in `scale_upper_tail_fraction`。默认 `1.0` 时继续执行原始 `.mean()`，并从序列化 contract 省略该兼容值，保证澳洲 P5 的配置身份与数值语义不变；小于 `1.0` 时只对 barrier 最大的 `ceil(N*fraction)` 个 Gaussian 求均值，使同一弱权重集中约束最坏尺度尾部，不使用会直接破坏外观的硬 world fuse。
+- 新增训练 telemetry：`scale_over_limit_fraction` 和 `scale_upper_tail_count`，使短 A/B 能同时检查损失、超限比例和实际参与风险聚合的数量，而不是只看最大值。
+- `GoldenEvaluationConfig` 新增 opt-in `max_depth_regression_m`。默认省略并保持 PSNR-only 澳洲 P5 兼容；启用后，候选必须先满足原 PSNR 提升门，同时所有带深度的 golden 帧均为 `MEASURED`，且 depth MAE 不得比当前最佳 checkpoint 回退超过指定米数。深度不可测、NaN 或超限均拒绝 promotion。
+- history verifier 使用签名配置重放同一多目标规则；不能通过手改 `best` 或恢复时退化为 PSNR-only 绕过深度护栏。旧 history 不含新字段时仍按原规则验证，不破坏已完成证据。
+
+### 验证方式与当前状态
+
+- tail-risk 单测构造 4 个 Gaussian、其中 2 个超过 `8×` 参考尺度：默认均值保持原值，`tail_fraction=0.25` 只选最坏 1 个并产生更强 penalty；超限比例精确为 `0.5`，反向梯度 finite，非法 `0` 比例 fail-closed。
+- checkpoint 单测证明 `+0.2 dB / +0.04 m` 在 `0.05 m` 护栏内可晋级，`+0.3 dB / +0.12 m` 被拒绝，深度 `UNMEASURABLE` 也被拒绝；签名 history 含一个外观更高但深度超限的候选时，verifier 重放后仍认定前一个 checkpoint 为 best。
+- 修改后全仓 CPU 套件共运行 `209` 项，为 `208 PASS + 1 SKIPPED`；唯一跳过仍是需要预加载锁定 CUDA 扩展的物理足迹测试。
+
+当前为 **PASS（源码、CPU 契约与旧配置兼容）/ NOT_RUN（真实 tail-risk 单变量 A/B）**。下一步以相同 factor4 数据、seed 42、澳洲 P5、1M cap 和全部 mask 做 1000 步 probe，只启用 `scale_upper_tail_fraction=0.01`；深度 checkpoint 护栏单独作为选择策略验证，不把两项混成一个优化归因结论。

@@ -206,6 +206,9 @@ python tools/audit_metric_scale_calibration.py `
 # "ssim_window_size": 11, "ssim_sigma": 1.5, "ssim_min_valid_fraction": 0.8,
 # "lidar_range_loss_mode": "robust_log_huber", "lidar_log_range_huber_delta": 0.05,
 # "lidar_linear_aux_weight": 0.0  # P5 深度平衡候选固定为 0.01；其余外观旋钮不变
+# 仅在独立 A/B 中启用以下质量护栏；省略字段时保持澳洲 P5 原语义：
+# "geometry_regularization": { ..., "scale_upper_tail_fraction": 0.01 },
+# "golden_evaluation": { ..., "max_depth_regression_m": 0.05 }
 
 # Gate 2 受控 A/B：先复制并只修改示例中的输入路径；算法字段由 preset 固定，
 # builder 会拒绝把背景、SH、KNN、SSIM 等 arm-specific 字段塞进共享 base。

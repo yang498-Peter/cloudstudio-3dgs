@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import math
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -30,15 +31,21 @@ class GoldenEvaluationConfig:
     full_every: int = 4_000
     artifact_every: int = 1_000
     min_psnr_improvement_db: float = 0.001
+    max_depth_regression_m: float | None = None
 
     def validate(self) -> None:
         if self.every <= 0 or self.full_every <= 0 or self.artifact_every <= 0:
             raise ValueError("golden/full/artifact evaluation intervals must be positive")
         if self.min_psnr_improvement_db < 0.0:
             raise ValueError("golden PSNR improvement threshold must be non-negative")
+        if self.max_depth_regression_m is not None and (
+            not math.isfinite(self.max_depth_regression_m)
+            or self.max_depth_regression_m < 0.0
+        ):
+            raise ValueError("golden depth regression guard must be finite and non-negative")
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        result = {
             "enabled": self.enabled,
             "every": self.every,
             "full_every": self.full_every,
@@ -46,6 +53,11 @@ class GoldenEvaluationConfig:
             "selection_metric": "masked_rgb_psnr_db_mean",
             "min_psnr_improvement_db": self.min_psnr_improvement_db,
         }
+        # Preserve the existing PSNR-only contract unless the geometry guard is
+        # explicitly requested.
+        if self.max_depth_regression_m is not None:
+            result["max_depth_regression_m"] = self.max_depth_regression_m
+        return result
 
 
 def golden_image_ids(split_manifest: dict[str, Any]) -> tuple[str, ...]:
@@ -284,14 +296,49 @@ def is_golden_improvement(
     best: dict[str, Any] | None,
     *,
     min_psnr_improvement_db: float,
+    max_depth_regression_m: float | None = None,
 ) -> bool:
-    """Return whether a finite candidate clears the configured promotion bar."""
+    """Return whether a candidate clears appearance and optional depth bars."""
     candidate_score = candidate["summary"]["psnr_db_mean"]
     if candidate_score is None:
         return False
+    candidate_depth = None
+    if max_depth_regression_m is not None:
+        depth_frames = [
+            frame.get("depth", {})
+            for frame in candidate.get("frames", [])
+            if frame.get("depth", {}).get("status") != "NOT_RUN"
+        ]
+        if not depth_frames or any(
+            frame.get("status") != "MEASURED" for frame in depth_frames
+        ):
+            return False
+        value = candidate["summary"].get("depth_mae_m_mean")
+        if value is None or not math.isfinite(float(value)):
+            return False
+        candidate_depth = float(value)
     if best is None or best["summary"]["psnr_db_mean"] is None:
         return True
-    return float(candidate_score) >= float(best["summary"]["psnr_db_mean"]) + min_psnr_improvement_db
+    if float(candidate_score) < (
+        float(best["summary"]["psnr_db_mean"]) + min_psnr_improvement_db
+    ):
+        return False
+    if max_depth_regression_m is None:
+        return True
+    best_depth_frames = [
+        frame.get("depth", {})
+        for frame in best.get("frames", [])
+        if frame.get("depth", {}).get("status") != "NOT_RUN"
+    ]
+    if not best_depth_frames or any(
+        frame.get("status") != "MEASURED" for frame in best_depth_frames
+    ):
+        return False
+    best_depth_value = best["summary"].get("depth_mae_m_mean")
+    if best_depth_value is None or not math.isfinite(float(best_depth_value)):
+        return False
+    assert candidate_depth is not None
+    return candidate_depth <= float(best_depth_value) + max_depth_regression_m
 
 
 def verify_golden_history(payload: dict[str, Any]) -> str:
@@ -319,6 +366,11 @@ def verify_golden_history(payload: dict[str, Any]) -> str:
         min_psnr_improvement_db=float(
             configuration.get("min_psnr_improvement_db", -1.0)
         ),
+        max_depth_regression_m=(
+            None
+            if configuration.get("max_depth_regression_m") is None
+            else float(configuration["max_depth_regression_m"])
+        ),
     )
     config.validate()
     if configuration != config.to_dict():
@@ -344,6 +396,7 @@ def verify_golden_history(payload: dict[str, Any]) -> str:
             record,
             best,
             min_psnr_improvement_db=config.min_psnr_improvement_db,
+            max_depth_regression_m=config.max_depth_regression_m,
         ):
             best = record
     if not config.enabled and history:
