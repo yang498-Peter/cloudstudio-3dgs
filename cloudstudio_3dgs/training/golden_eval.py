@@ -159,3 +159,61 @@ def is_golden_improvement(
     if best is None or best["summary"]["psnr_db_mean"] is None:
         return True
     return float(candidate_score) >= float(best["summary"]["psnr_db_mean"]) + min_psnr_improvement_db
+
+
+def verify_golden_history(payload: dict[str, Any]) -> str:
+    """Verify the persisted checkpoint-selection evidence before quality use."""
+    expected = str(payload.get("golden_history_sha256", ""))
+    if not expected:
+        raise ValueError("golden history has no SHA256")
+    unsigned = dict(payload)
+    unsigned.pop("golden_history_sha256", None)
+    actual = hashlib.sha256(canonical_json_bytes(unsigned)).hexdigest()
+    if actual != expected:
+        raise ValueError(
+            f"golden history SHA256 mismatch: expected {expected}, computed {actual}"
+        )
+    if payload.get("schema_version") != 1:
+        raise ValueError("unsupported golden history schema")
+    configuration = payload.get("configuration")
+    if not isinstance(configuration, dict):
+        raise ValueError("golden history has no configuration")
+    config = GoldenEvaluationConfig(
+        enabled=bool(configuration.get("enabled")),
+        every=int(configuration.get("every", 0)),
+        min_psnr_improvement_db=float(
+            configuration.get("min_psnr_improvement_db", -1.0)
+        ),
+    )
+    config.validate()
+    if configuration != config.to_dict():
+        raise ValueError("golden history configuration is not canonical")
+    history = payload.get("history")
+    if not isinstance(history, list):
+        raise ValueError("golden history records are invalid")
+    best: dict[str, Any] | None = None
+    previous_step = 0
+    for record in history:
+        if not isinstance(record, dict):
+            raise ValueError("golden history contains a non-object record")
+        record_sha = str(record.get("golden_evaluation_sha256", ""))
+        unsigned_record = dict(record)
+        unsigned_record.pop("golden_evaluation_sha256", None)
+        if not record_sha or hashlib.sha256(canonical_json_bytes(unsigned_record)).hexdigest() != record_sha:
+            raise ValueError("golden history record SHA256 mismatch")
+        step = int(record.get("completed_steps", 0))
+        if step <= previous_step:
+            raise ValueError("golden history steps are not strictly increasing")
+        previous_step = step
+        if is_golden_improvement(
+            record,
+            best,
+            min_psnr_improvement_db=config.min_psnr_improvement_db,
+        ):
+            best = record
+    if not config.enabled and history:
+        raise ValueError("disabled golden evaluation has history records")
+    recorded_best = payload.get("best")
+    if recorded_best != best:
+        raise ValueError("golden history best record does not match promotion rule")
+    return actual

@@ -883,9 +883,10 @@ MCMC 的 relocate/add 能控制低 opacity 对象的数量，但不会阻止 RGB
 - 黄金图像不从文件名、随机采样或训练集推断，而是按已签名 split Manifest 的 `golden_views`、Rig Frame 和左右相机顺序读取；若图像不在 validation 或重复出现，立即失败。评估使用同一 RGB/person mask、同一渲染背景；同步记录 masked PSNR、SSIM 与可用时的 confidence-weighted LiDAR range MAE。
 - 每次评估产出 `evaluation/golden_history.json`，其中含 canonical SHA256；训练状态把完整历史与当前最佳记录写进 `latest.pt`，中断恢复不会丢失 checkpoint 选择依据。只有客观提升才原子写入 `checkpoints/best_golden.pt`，不会用最后一个训练 batch 覆盖它。
 - `run_manifest.json` 绑定 golden history SHA、次数、最佳评估记录和最佳 checkpoint 相对路径。黄金评估只是训练中选择器，不替代结束后覆盖完整 validation 的正式 `evaluate_run.py`。
+- 正式质量报告读取该 history 时重新校验外层 SHA、每次评估 SHA、严格递增步号、配置和 promotion 规则，并核对 run Manifest 声明、评估次数、best record 与最佳 checkpoint 文件；任何已声明历史的篡改、丢失或替换均 fail-closed。旧 run 没有该层会明确标记 `golden_evaluation:NOT_RUN`，不会冒充完成过中程选择。
 
 ### 验证方式与当前状态
 
-新增 CPU 回归构造顺序被打乱的 validation Dataset，断言仍严格按 signed golden 顺序评估、背景参数确实传到 renderer、PSNR 选择阈值不允许同分或不足 `0.001 dB` 的 checkpoint 覆盖最佳模型；同时验证非法黄金视图和零间隔 fail-closed。定向 `29` 项为 `28 PASS + 1 SKIPPED`，尚未启动新的真实 GPU 训练。
+新增 CPU 回归构造顺序被打乱的 validation Dataset，断言仍严格按 signed golden 顺序评估、背景参数确实传到 renderer、PSNR 选择阈值不允许同分或不足 `0.001 dB` 的 checkpoint 覆盖最佳模型；同时验证非法黄金视图和零间隔 fail-closed。质量报告回归再篡改 history 中的 PSNR，验证签名立即失败。定向 `34` 项为 `33 PASS + 1 SKIPPED`，尚未启动新的真实 GPU 训练。
 
 当前状态为 **PASS（Gate 2E 源码/CPU 契约）**。下一步是以合入的澳洲质量实现，在干净锁定 CUDA runtime 上跑短程真实基线，检查 golden history、best checkpoint、全量 validation 质量报告与 GPU 资源证据，再决定原始 POS / Stage 2 POS 的受控 A/B 是否可以启动。
