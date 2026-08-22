@@ -1046,6 +1046,26 @@ class RenderScaleContractTests(unittest.TestCase):
             sorted(report["mean_log_gain_by_group"]), ["left", "right"]
         )
 
+        # Soft mean anchor: penalizes the group mean, not the offsets.
+        soft = ExposureCompensator(
+            ["a", "b"],
+            config=ExposureCompensationConfig(
+                enabled=True,
+                regularization_weight=0.0,
+                mean_anchor_weight=1.0,
+                mean_anchor_beta=0.1,
+            ),
+            device="cpu",
+        )
+        with torch.no_grad():
+            soft.log_gains.copy_(torch.tensor([0.1, -0.1]))
+        self.assertAlmostEqual(float(soft.prior_loss().detach()), 0.0, places=6)
+        with torch.no_grad():
+            soft.log_gains.copy_(torch.tensor([0.3, 0.1]))
+        # mean=0.2 > beta: smooth-L1 linear region = 0.2 - 0.05.
+        self.assertAlmostEqual(float(soft.prior_loss().detach()), 0.15, places=5)
+        self.assertGreater(float(torch.autograd.grad(soft.prior_loss(), soft.log_gains)[0].abs().sum()), 0.0)
+
         # Default (off) leaves the gains untouched for run comparability.
         legacy = ExposureCompensator(
             ["a", "b"],
