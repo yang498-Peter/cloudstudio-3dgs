@@ -72,6 +72,9 @@ def verify_gsplat_runtime(lock_path: Path) -> dict[str, Any]:
 class GsplatBackend:
     """Small adapter whose only renderer dependency is the public gsplat API."""
 
+    # Default for instances constructed without __init__ in contract tests.
+    error_score_state: Any = None
+
     def __init__(
         self,
         *,
@@ -79,18 +82,35 @@ class GsplatBackend:
         cap_max: int,
         lock_path: Path,
         mcmc_config: dict[str, Any] | None = None,
+        error_score_config: Any | None = None,
     ) -> None:
         self.runtime = verify_gsplat_runtime(lock_path)
         import torch
         from gsplat import rasterization
-        from gsplat.strategy import MCMCStrategy
+
+        from cloudstudio_3dgs.training.error_weighted_mcmc import (
+            ErrorScoreConfig,
+            ErrorScoreState,
+            ErrorWeightedMCMCStrategy,
+        )
 
         self.torch = torch
         self.rasterization = rasterization
         self.device = device
-        self.strategy = MCMCStrategy(
+        if error_score_config is None:
+            error_score_config = ErrorScoreConfig()
+        # Gaussian count is unknown until initialize(); the state starts empty
+        # and the strategy falls back to pure-opacity sampling until resized.
+        self.error_score_state = (
+            ErrorScoreState(0, error_score_config, device=device)
+            if error_score_config.enabled
+            else None
+        )
+        self.strategy = ErrorWeightedMCMCStrategy(
             cap_max=cap_max,
             verbose=False,
+            score_state=self.error_score_state,
+            error_config=error_score_config,
             **({} if mcmc_config is None else mcmc_config),
         )
         operator_report = audit_loaded_mcmc_runtime(self.runtime)
@@ -170,6 +190,8 @@ class GsplatBackend:
                 colors.clamp(1e-4, 1.0 - 1e-4).logit()
             )
         params = torch.nn.ParameterDict(entries)
+        if self.error_score_state is not None:
+            self.error_score_state.resize(len(points))
         optimizers = {
             name: torch.optim.Adam(
                 [{"params": [parameter], "lr": float(learning_rates[name]), "name": name}],
