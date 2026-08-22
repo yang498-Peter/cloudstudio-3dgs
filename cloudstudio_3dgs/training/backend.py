@@ -266,7 +266,8 @@ class GsplatBackend:
             # 3DGUT path explicitly rejects.
             with_ut=camera_model == "fisheye",
             with_eval3d=camera_model == "fisheye",
-            global_z_order=False,
+            # gsplat requires standard global depth sorting whenever UT is off.
+            global_z_order=camera_model != "fisheye",
             rasterize_mode="classic"
             if camera_model == "fisheye"
             else getattr(self, "pinhole_rasterize_mode", "classic"),
