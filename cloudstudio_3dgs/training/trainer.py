@@ -54,7 +54,7 @@ from cloudstudio_3dgs.training.rig_pose import (
     build_pose_refinement_report,
     disabled_pose_refinement_report,
 )
-from cloudstudio_3dgs.training.error_weighted_mcmc import ErrorScoreConfig
+from cloudstudio_3dgs.training.error_weighted_config import ErrorScoreConfig
 from cloudstudio_3dgs.training.regularization import (
     GeometryRegularizationConfig,
     clip_oversized_gaussians,
@@ -1014,6 +1014,17 @@ def train(
             raise ValueError("full-MCMC checkpoint has no MCMC telemetry state")
         if restored_telemetry is not None:
             mcmc_telemetry = dict(restored_telemetry)
+        error_score_state = getattr(backend, "error_score_state", None)
+        restored_error_scores = training_state.get("error_weighted_sampling")
+        if error_score_state is not None:
+            if restored_error_scores is None:
+                raise ValueError(
+                    "error-weighted checkpoint has no resumable sampling state"
+                )
+            error_score_state.restore_checkpoint_state(
+                restored_error_scores,
+                expected_count=len(params["means"]),
+            )
         if completed_steps >= config.max_steps:
             raise ValueError("checkpoint already reached or exceeded max_steps")
 
@@ -1032,6 +1043,7 @@ def train(
     )
 
     def checkpoint_training_state() -> dict[str, Any]:
+        error_score_state = getattr(backend, "error_score_state", None)
         return {
             "last_metrics": last_metrics,
             "initial_loss": initial_loss,
@@ -1042,6 +1054,11 @@ def train(
                 "best": best_golden,
                 "full_history": full_evaluation_history,
             },
+            "error_weighted_sampling": (
+                None
+                if error_score_state is None
+                else error_score_state.checkpoint_state()
+            ),
         }
 
     for step in range(completed_steps, config.max_steps):

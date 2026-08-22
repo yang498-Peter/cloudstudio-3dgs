@@ -1014,3 +1014,29 @@ CPU 回归覆盖 preset 固定/冲突/冒名拒绝、legacy global SSIM 实际�
 - 定向回归 `14/14 PASS`：严格默认仍拒绝缺口，显式低门测试只在超过门限时测量，低于门限/全零预测仍 `UNMEASURABLE`。完整 CPU 套件为 `182 PASS + 1 SKIPPED + 3 subtests PASS`；唯一跳过是需要锁定 CUDA 扩展的物理足迹测试，本轮真实 600 步 GPU 运行和第 29 节签名尺度证据已分别覆盖运行链与足迹链。
 
 当前为 **PASS（真实输入、短训练链、RGB 与深度评估可测性）**，但 Gate 2 仍未关闭：LPIPS、至少两次周期完整验证、legacy/KNN/SH/local-SSIM/P5 五臂正式 A/B 均未完成；澳洲 P10 已确认 P5，30k-gold 最终结果仍待同步。下一步先推送本修复与澳洲最新合并，再用新 `v3` 评估契约启动正式受控运行。
+
+## 32. 当前阶段记录：澳洲误差加权 MCMC 吸收与恢复状态门禁
+
+### 问题现象
+
+GitHub 重新联网后，澳洲 `machine-b/uk-quality` 从 `2113134` 推进到 `aaf25b8`，新增按 `opacity * error_score^0.4` 为 relocation 和 densification 选择落点的误差加权 MCMC。实现默认关闭并带 CPU 算法测试，但首次审计发现两个门禁缺口：其一，每个 Gaussian 的误差 EMA 只保存在运行期 `ErrorScoreState`，checkpoint 没有保存该层；启用后若中断恢复，下一次 refine 可能走不同 multinomial 分支。其二，Trainer 为读取轻量配置在模块顶层导入完整 CUDA 策略，使本来不依赖 gsplat 的 CPU preset/A-B 测试在收集阶段尝试 JIT，默认关闭也无法保持轻量导入契约。
+
+### 修改文件
+
+- 澳洲原提交：`cloudstudio_3dgs/training/error_weighted_mcmc.py`、`cloudstudio_3dgs/training/backend.py`、`cloudstudio_3dgs/training/trainer.py`、`tests/test_error_weighted_mcmc.py`
+- 本机恢复补强：`cloudstudio_3dgs/training/error_weighted_config.py`、`cloudstudio_3dgs/training/error_weighted_mcmc.py`、`cloudstudio_3dgs/training/trainer.py`、`tools/run_synthetic_training_acceptance.py`、`tests/test_error_weighted_mcmc.py`
+- `docs/IMPLEMENTATION_PLAN.zh-CN.md`
+
+### 修改内容
+
+- 以澳洲 `aaf25b8` 为当前优先代码主线；算法保持默认关闭，不能在未声明的旧 P5/legacy 配置中改变采样语义。
+- `ErrorScoreState` 新增版本化 checkpoint payload，保存完整 EMA tensor；恢复时严格检查 schema、维度、Gaussian 数和 finite 值，再复制到当前 device/dtype。启用算法但 checkpoint 缺少该层时 fail-closed，不允许静默退化为 uniform/opacity-only 采样。
+- Trainer 的 `training_state` 同步持久化该状态；载入模型和 optimizer 后按恢复后的 Gaussian 数校验并恢复 EMA，使全状态比较器能够逐元素覆盖它。默认关闭时写入 `null`，旧的默认关闭 checkpoint 仍可读取。
+- 将 `ErrorScoreConfig` 拆到不导入 torch/gsplat 的轻量模块；Trainer、配置解析和合成验收只依赖该模块。真正构造 `GsplatBackend` 时才导入 CUDA 策略，恢复默认关闭与纯 CPU 工具的模块边界。
+- 合成验收工具新增 `--error-weighted-sampling`，只允许与完整 MCMC 同时使用；可与 `--resume-equivalence` 组合，专门执行启用新算法后的连续训练与受控中断恢复比较，而不是用“默认关闭”结果代替新路径证据。
+
+### 验证方式与当前状态
+
+- 新增 checkpoint round-trip 回归，验证 EMA scores 精确恢复且不共享存储；缺失/错误 schema、数量不符和 NaN 均明确拒绝。
+- 通过锁定的 prebuilt gsplat bootstrap 执行 `tests/test_error_weighted_mcmc.py`，结果为 `21 PASS + 4 subtests PASS`；Python 编译检查通过。全仓 CPU 套件在隐藏 CUDA 后为 `182 PASS + 22 SKIPPED + 3 subtests PASS`，新增跳过项是明确需要已加载 gsplat 的澳洲策略测试，不再发生 preset/A-B 收集期 JIT 或权限错误。
+- 启用误差加权采样的真实 CUDA 80 步完整 MCMC 中断恢复验收尚待当前正式 P5 训练释放 GPU 后执行，因此本节当前为 **PARTIAL**，不能把澳洲新算法升级为默认，也不能宣称其画质优于 P5。正式短 A/B 还必须使用相同输入、seed、预算、mask 与 `v3` 深度覆盖门。
