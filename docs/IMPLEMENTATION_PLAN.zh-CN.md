@@ -925,4 +925,38 @@ Gate 2E 虽然能生成 `best_golden.pt`，但旧 Trainer 没有可执行的兼�
 
 ### 验证方式与当前状态
 
-CPU 回归覆盖 preset 固定/冲突/冒名拒绝、legacy global SSIM 实际执行、单变量 contract diff、matrix/config/input SHA 篡改、周期 golden PNG、完整 validation 顺序与 P10、history/checkpoint/model SHA 以及结果分类/报告绑定。CLI help 和 Python 编译通过。当前仅证明 **源码与 CPU 契约 PASS**；本机干净 CUDA 合成重放、factor4 五臂 A/B、LPIPS、真实质量候选 Gate 均保持 `NOT_RUN`，因此 Gate 2 尚未关闭。
+CPU 回归覆盖 preset 固定/冲突/冒名拒绝、legacy global SSIM 实际执行、单变量 contract diff、matrix/config/input SHA 篡改、周期 golden PNG、完整 validation 顺序与 P10、history/checkpoint/model SHA 以及结果分类/报告绑定。CLI help 和 Python 编译通过。当前源码/CPU 契约已 PASS，本机锁定 CUDA 合成重放随后由第 29 节关闭；factor4 五臂 A/B、LPIPS 和真实质量候选 Gate 仍保持 `NOT_RUN`，因此 Gate 2 尚未关闭。
+
+## 29. 当前阶段记录：Windows CUDA 可复现入口与周期评估恢复等价闭环
+
+### 问题现象
+
+澳洲优先代码合并后，本机首次 JIT 构建曾成功输出 `GSPLAT_READY`，但普通 PowerShell/`cmd` 进程同时继承大小写不同的 `Path`/`PATH`；交互式 `where cl` 可通过，Python 启动的 NVCC 子进程却取到不含 MSVC 的另一份 PATH。另一次运行少带 `/FI...msvc_clzll.h`，PyTorch 因编译参数签名变化清空了已完成缓存。固定环境后 42 个对象全部编译成功，但 G: 上旧 `.ninja_log` 在记录 90 分钟大对象时返回 `Invalid argument`，导致最终链接未执行。直接链接并进入 80 步 GPU 验收后，参数/优化器/MCMC/RNG 最大差在容差内，但新增 golden/full evaluation 记录因 CUDA 原子累加带来的约 `1e-7` 指标微差产生不同自签名 SHA，旧比较器把 3 个有效签名差异误判为恢复状态不等价。
+
+### 修改文件
+
+- `train/run_gate2_synthetic_acceptance_local.ps1`
+- `tools/run_with_prebuilt_gsplat.py`
+- `cloudstudio_3dgs/training/checkpoint.py`
+- `tests/test_mcmc_runtime.py`
+- `README.md`
+- `docs/IMPLEMENTATION_PLAN.zh-CN.md`
+
+### 修改内容
+
+- 新增 PowerShell 7 入口，从脚本位置解析仓库根目录，从 `vcvars64.bat` 重建大小写不敏感的环境字典，清空子进程继承环境后只写入一个 `Path`；显式固定 Python、CUDA 12.8、MSVC、Ninja、sm_120、JIT cache、`NVCC_FLAGS`、`INCLUDE` 和 `LINK`。每次先在真实 Python 子进程断言 `cl`/`ninja`/`nvcc` 可解析且只有一个 PATH key，构建与训练共享同一环境。巨量编译输出写入 `external/runtime-logs` 的 UTF-8 日志，终端只显示尾部和退出码。
+- 对已完成 42 个对象但 Ninja 日志不可写的恢复场景，入口严格读取 `build.ninja` 的 link rule，要求 42 个对象全部存在后才允许显式 `-LinkExistingObjects`；直接调用同一 MSVC linker 生成 `gsplat_cuda.pyd`。两个 trainer 不调用的 world-space batch 符号仍按澳洲 Windows 运行边界以 `/FORCE:UNRESOLVED` 留下明确告警，实际单视图 3DGUT、MCMC、covariance 与尺度渲染路径由运行验收覆盖。
+- 新增 prebuilt bootstrap，以编译名 `gsplat_cuda` 加载 `.pyd` 并显式注入 `gsplat.csrc`，使后续 probe/训练不再读取不可靠的 Ninja 日志；不存在扩展、脚本或对象时均 fail-closed。
+- checkpoint comparator 不宽松忽略 SHA。它先对 golden/full evaluation 记录重新计算自签名；任一伪造签名立即 FAIL。只有连续/恢复两边自签名均有效时，才跳过自签名字节串本身，并继续用既有 `atol/rtol` 比较记录内全部浮点、结构和身份字段。数据集、mask、split、初始化、模型与其他身份 SHA 仍严格逐字节比较，报告列出被语义归一的精确路径。
+
+### 验证方式
+
+- 子环境 probe：`CL`、`NINJA`、`NVCC` 均解析到锁定工具链，`PATH_KEYS=['PATH']`。
+- 直接链接扩展 `gsplat_cuda.pyd` 为 `107,542,528` bytes，文件 SHA256 `2d7ce65600808f3cf9f281e72773e589f13ed4d3e7d3614f551a921444e4adce`；bootstrap 输出 `GSPLAT_READY 1.5.3`。
+- `run_synthetic_training_acceptance.py --steps 80 --full-mcmc --resume-equivalence` 在真实 RTX 5070 Laptop/CUDA 上完成：原生 covariance forward/backward 与 fused perturb 均 finite；render scale contract 以 `0.1 m` 线性尺度覆盖 `368` 像素并 PASS；24 个初始 Gaussian 经 5 次 refine 变为 29 个，add=5、relocation=1，80/80 步均调用 noise；loss 从 `0.0354085` 降至 `0.0227030`，改善 `35.88%`，无 NaN。
+- 连续 80 步与 step 40 受控中断恢复到 80 步：Gaussian 数均为 29，参数/优化器/MCMC/sampler/telemetry/auxiliary/CPU+CUDA RNG 和 signed evaluation semantics 共 `0 mismatch`，`max_abs_error=1.9073486328125e-6 < atol 5e-6`；3 个 evaluation 自签名先验证有效后按语义比较。签名 evidence 内部 SHA 为 `c86f94163a1135b5cd260c466c8c2a821e17c9eaf037df34bd4b2006ece83189`，证据文件 SHA256 为 `51426f21c640e8ea2dcbab7f5f0bf67b87c84e7cc5c0d4f43c5b06a040215306`。
+- 独立 `verify_full_mcmc_gate.py` 返回 `status=PASS`、`signature_valid=true`、`errors=[]`。新增回归同时证明容差内重新签名的 evaluation 记录可通过语义等价比较，而篡改自签名仍 FAIL。
+
+### 当前状态
+
+当前为 **PASS（锁定 Windows CUDA 运行时、完整 MCMC、物理尺度渲染与中断恢复等价）**。这关闭了合并澳洲最新代码后的本机短程 GPU 复验，不等于真实场景画质或 Gate 2 正式退出；下一步仍需重建真实 gs2 的签名 person/depth/split/PLY 输入，并执行同一 factor4 数据上的 legacy、KNN-only、SH-only、local-SSIM-only 与澳洲 P5 质量候选五臂 A/B，且至少产生两次完整 validation 和 LPIPS 后才能判定 Gate 2。
