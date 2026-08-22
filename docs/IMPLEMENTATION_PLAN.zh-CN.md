@@ -862,3 +862,30 @@ MCMC 的 relocate/add 能控制低 opacity 对象的数量，但不会阻止 RGB
 ### 当前状态
 
 **PASS（Gate 2D 源码/CPU 契约）**。未把任一真实质量提升归因于该正则；下一项是周期 golden eval 与 best checkpoint，并在本机 clean runtime 复验后才进行受控 A/B。
+
+## 27. 当前阶段记录：Gate 2E 周期黄金视角评估与最佳检查点
+
+### 问题现象
+
+此前 Trainer 只按训练 batch loss 保存 `latest.pt`，结束后才全量生成 validation 渲染与质量报告。训练 loss 与未见视角质量并不等价：MCMC、曝光补偿、背景和正则可能让最后一步 batch 更低，却让固定 validation 视角更差；一旦训练超调，也没有可复核的“最佳模型”可用于正式质量评估。
+
+### 修改文件
+
+- `cloudstudio_3dgs/training/golden_eval.py`
+- `cloudstudio_3dgs/training/trainer.py`
+- `tests/test_golden_eval.py`
+- `README.md`
+- `docs/IMPLEMENTATION_PLAN.zh-CN.md`
+
+### 修改内容
+
+- 新增独立 `GoldenEvaluationConfig`：生产默认每 `1000` 步评估一次，选择指标固定为 masked RGB PSNR 的黄金视角均值，提升至少 `0.001 dB` 才 promotion。该配置进入 trainer contract 和 checkpoint identity；禁用、间隔或阈值改变都不能与旧 checkpoint 静默混用。
+- 黄金图像不从文件名、随机采样或训练集推断，而是按已签名 split Manifest 的 `golden_views`、Rig Frame 和左右相机顺序读取；若图像不在 validation 或重复出现，立即失败。评估使用同一 RGB/person mask、同一渲染背景；同步记录 masked PSNR、SSIM 与可用时的 confidence-weighted LiDAR range MAE。
+- 每次评估产出 `evaluation/golden_history.json`，其中含 canonical SHA256；训练状态把完整历史与当前最佳记录写进 `latest.pt`，中断恢复不会丢失 checkpoint 选择依据。只有客观提升才原子写入 `checkpoints/best_golden.pt`，不会用最后一个训练 batch 覆盖它。
+- `run_manifest.json` 绑定 golden history SHA、次数、最佳评估记录和最佳 checkpoint 相对路径。黄金评估只是训练中选择器，不替代结束后覆盖完整 validation 的正式 `evaluate_run.py`。
+
+### 验证方式与当前状态
+
+新增 CPU 回归构造顺序被打乱的 validation Dataset，断言仍严格按 signed golden 顺序评估、背景参数确实传到 renderer、PSNR 选择阈值不允许同分或不足 `0.001 dB` 的 checkpoint 覆盖最佳模型；同时验证非法黄金视图和零间隔 fail-closed。定向 `29` 项为 `28 PASS + 1 SKIPPED`，尚未启动新的真实 GPU 训练。
+
+当前状态为 **PASS（Gate 2E 源码/CPU 契约）**。下一步是以合入的澳洲质量实现，在干净锁定 CUDA runtime 上跑短程真实基线，检查 golden history、best checkpoint、全量 validation 质量报告与 GPU 资源证据，再决定原始 POS / Stage 2 POS 的受控 A/B 是否可以启动。
