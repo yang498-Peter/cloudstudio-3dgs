@@ -19,6 +19,10 @@ from cloudstudio_3dgs.data.point_cloud import write_binary_ply
 from cloudstudio_3dgs.evaluation.splits import SplitConfig, build_split_manifest, write_split_manifest
 from cloudstudio_3dgs.geometry.lidar_projection import SparseDepthMap
 from cloudstudio_3dgs.training.backend import verify_gsplat_runtime
+from cloudstudio_3dgs.training.appearance import (
+    AppearanceConfig,
+    verify_appearance_resume_state,
+)
 from cloudstudio_3dgs.training.checkpoint import load_checkpoint, save_checkpoint
 from cloudstudio_3dgs.training.contracts import (
     build_coordinate_transform_manifest,
@@ -553,6 +557,9 @@ class TrainingContractTests(unittest.TestCase):
             contract["loss_contract"]["lidar_range"]["mode"],
             "robust_log_huber",
         )
+        self.assertEqual(contract["appearance"]["mode"], "sh")
+        self.assertEqual(contract["appearance"]["maximum_degree"], 3)
+        self.assertEqual(contract["appearance"]["degree_interval"], 1000)
         self.assertFalse(contract["rig_pose_refinement"]["enabled"])
         self.assertFalse(contract["dynamic_person_mask"]["required"])
         self.assertFalse(contract["viewer"])
@@ -863,6 +870,108 @@ class TorchTrainingContractTests(unittest.TestCase):
 
 @unittest.skipUnless(HAS_TORCH, "torch is an optional training dependency")
 class RenderScaleContractTests(unittest.TestCase):
+    def test_sh_degree_schedule_is_deterministic(self) -> None:
+        config = AppearanceConfig(mode="sh", maximum_degree=3, degree_interval=1000)
+        self.assertEqual(config.degree_for_step(0), 0)
+        self.assertEqual(config.degree_for_step(999), 0)
+        self.assertEqual(config.degree_for_step(1000), 1)
+        self.assertEqual(config.degree_for_step(2999), 2)
+        self.assertEqual(config.degree_for_step(3000), 3)
+        self.assertEqual(config.degree_for_step(30_000), 3)
+        self.assertEqual(
+            verify_appearance_resume_state(
+                config,
+                completed_steps=2000,
+                restored={"mode": "sh", "maximum_degree": 3, "active_degree": 2},
+            )["active_degree"],
+            2,
+        )
+        with self.assertRaisesRegex(ValueError, "appearance stage"):
+            verify_appearance_resume_state(
+                config,
+                completed_steps=2000,
+                restored={"mode": "sh", "maximum_degree": 3, "active_degree": 1},
+            )
+
+    def test_backend_initializes_and_renders_scheduled_sh(self) -> None:
+        import torch
+
+        from cloudstudio_3dgs.training.backend import GsplatBackend
+        from cloudstudio_3dgs.training.dataset import TrainingSample
+
+        captured = {}
+
+        def rasterization(**kwargs):
+            captured.update(kwargs)
+            return (
+                torch.zeros((1, 8, 8, 3)),
+                torch.zeros((1, 8, 8, 1)),
+                {},
+            )
+
+        class Strategy:
+            @staticmethod
+            def check_sanity(params, optimizers) -> None:
+                if set(params) != set(optimizers):
+                    raise AssertionError("parameter/optimizer key mismatch")
+
+            @staticmethod
+            def initialize_state():
+                return {}
+
+        backend = object.__new__(GsplatBackend)
+        backend.torch = torch
+        backend.device = "cpu"
+        backend.strategy = Strategy()
+        backend.rasterization = rasterization
+        backend.appearance_mode = "sh"
+        backend.maximum_sh_degree = 3
+        backend.active_sh_degree = 0
+        backend.sh_rest_lr_scale = 0.05
+        xyz = np.eye(4, 3, dtype=np.float32)
+        rgb = np.asarray(
+            [[255, 0, 0], [0, 255, 0], [0, 0, 255], [128, 128, 128]],
+            dtype=np.uint8,
+        )
+        params, optimizers, _ = backend.initialize(
+            xyz,
+            rgb,
+            init_scale_m=0.05,
+            learning_rates={
+                name: 1e-4
+                for name in ("means", "scales", "quats", "opacities", "colors")
+            },
+        )
+        self.assertNotIn("colors", params)
+        self.assertEqual(params["sh0"].shape, (4, 1, 3))
+        self.assertEqual(params["shN"].shape, (4, 15, 3))
+        self.assertAlmostEqual(
+            optimizers["shN"].param_groups[0]["lr"],
+            optimizers["sh0"].param_groups[0]["lr"] * 0.05,
+        )
+        backend.set_training_step(2000, interval=1000)
+        sample = TrainingSample(
+            image_id="sh",
+            rig_frame_id="rig",
+            camera_id="left",
+            image=np.zeros((8, 8, 3), dtype=np.uint8),
+            rgb_mask=np.ones((8, 8), dtype=bool),
+            depth_range_m=None,
+            depth_confidence=None,
+            depth_mask=None,
+            depth_cache_path=None,
+            c2w=np.eye(4, dtype=np.float32),
+            K=np.eye(3, dtype=np.float32),
+            radial_coeffs=np.zeros(4, dtype=np.float32),
+            width=8,
+            height=8,
+        )
+        backend.render(params, sample, with_range=False)
+        self.assertEqual(captured["sh_degree"], 2)
+        torch.testing.assert_close(
+            captured["colors"], torch.cat((params["sh0"], params["shN"]), dim=1)
+        )
+
     def test_backend_initializes_per_point_metric_knn_scales(self) -> None:
         import torch
 

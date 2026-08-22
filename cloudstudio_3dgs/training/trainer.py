@@ -20,6 +20,10 @@ from cloudstudio_3dgs.data.manifest import canonical_json_bytes
 from cloudstudio_3dgs.geometry.lidar_projection import SparseDepthMap
 from cloudstudio_3dgs.evaluation.quality_report import sign_run_manifest
 from cloudstudio_3dgs.training.backend import GsplatBackend
+from cloudstudio_3dgs.training.appearance import (
+    AppearanceConfig,
+    verify_appearance_resume_state,
+)
 from cloudstudio_3dgs.training.checkpoint import load_checkpoint, save_checkpoint
 from cloudstudio_3dgs.training.contracts import build_coordinate_transform_manifest
 from cloudstudio_3dgs.training.dataset import S1TrainingDataset, TrainingSample
@@ -87,6 +91,7 @@ class TrainerConfig:
     metric_scale_calibration: MetricScaleCalibrationConfig = field(
         default_factory=MetricScaleCalibrationConfig
     )
+    appearance: AppearanceConfig = field(default_factory=AppearanceConfig)
     rgb_l1_weight: float = 0.8
     rgb_ssim_weight: float = 0.2
     lidar_range_weight: float = 0.05
@@ -143,6 +148,10 @@ class TrainerConfig:
         if not isinstance(scale_value, dict):
             raise ValueError("metric_scale_calibration must be an object")
         scale_calibration = MetricScaleCalibrationConfig(**scale_value)
+        appearance_value = value.get("appearance", {})
+        if not isinstance(appearance_value, dict):
+            raise ValueError("appearance must be an object")
+        appearance = AppearanceConfig(**appearance_value)
         options = {
             key: value[key]
             for key in (
@@ -176,6 +185,7 @@ class TrainerConfig:
             crop=crop,
             rig_pose_refinement=pose_refinement,
             metric_scale_calibration=scale_calibration,
+            appearance=appearance,
             **paths,
             **options,
         )
@@ -192,6 +202,7 @@ class TrainerConfig:
         if self.init_scale_m <= 0.0:
             raise ValueError("init_scale_m must be positive")
         self.metric_scale_calibration.validate()
+        self.appearance.validate()
         weights = (self.rgb_l1_weight, self.rgb_ssim_weight, self.lidar_range_weight)
         if any(weight < 0.0 for weight in weights):
             raise ValueError("loss weights must be non-negative")
@@ -249,8 +260,8 @@ class TrainerConfig:
 
     def contract_dict(self) -> dict[str, Any]:
         return {
-            "schema_version": 2,
-            "algorithm_version": "cloudstudio_gsplat_trainer_v3",
+            "schema_version": 3,
+            "algorithm_version": "cloudstudio_gsplat_trainer_v4",
             "seed": self.seed,
             "max_steps": self.max_steps,
             "factor": self.factor,
@@ -268,6 +279,7 @@ class TrainerConfig:
                 "fixed_scale_m": self.init_scale_m,
                 **self.metric_scale_calibration.to_dict(),
             },
+            "appearance": self.appearance.to_dict(),
             "loss_weights": {
                 "rgb_l1": self.rgb_l1_weight,
                 "rgb_ssim": self.rgb_ssim_weight,
@@ -674,6 +686,9 @@ def train(
             "noise_injection_stop_iter": config.mcmc_noise_injection_stop_iter,
             "noise_lr": float(scale_calibration["effective_noise_lr"]),
         },
+        appearance_mode=config.appearance.mode,
+        maximum_sh_degree=config.appearance.maximum_degree,
+        sh_rest_lr_scale=config.appearance.rest_lr_scale,
     )
     runtime_contract = {
         key: backend.runtime.get(key)
@@ -736,8 +751,21 @@ def train(
             raise ValueError("full-MCMC checkpoint has no MCMC telemetry state")
         if restored_telemetry is not None:
             mcmc_telemetry = dict(restored_telemetry)
+        restored_appearance = training_state.get("appearance")
+        backend.set_training_step(
+            completed_steps, interval=config.appearance.degree_interval
+        )
+        verify_appearance_resume_state(
+            config.appearance,
+            completed_steps=completed_steps,
+            restored=restored_appearance,
+        )
         if completed_steps >= config.max_steps:
             raise ValueError("checkpoint already reached or exceeded max_steps")
+
+    backend.set_training_step(
+        completed_steps, interval=config.appearance.degree_interval
+    )
 
     if mcmc_telemetry is None:
         mcmc_telemetry = initialize_mcmc_telemetry(
@@ -748,6 +776,9 @@ def train(
     started = time.perf_counter()
     checkpoint_path = output_dir / "checkpoints" / "latest.pt"
     for step in range(completed_steps, config.max_steps):
+        active_appearance_degree = backend.set_training_step(
+            step, interval=config.appearance.degree_interval
+        )
         index = int(torch.randint(len(trainset), (1,), generator=sampler).item())
         sample = trainset[index]
         tensors = _tensor_sample(sample, torch, config.device)
@@ -828,11 +859,16 @@ def train(
             "rig_pose_prior": None
             if pose_prior is None
             else float(pose_prior.detach().cpu()),
+            "appearance_mode": config.appearance.mode,
+            "active_sh_degree": active_appearance_degree,
         }
         if initial_loss is None:
             initial_loss = last_metrics["loss"]
         best_loss = min(best_loss, last_metrics["loss"])
         completed = step + 1
+        backend.set_training_step(
+            completed, interval=config.appearance.degree_interval
+        )
         checkpoint_due = (
             completed % config.checkpoint_every == 0
             or completed == config.max_steps
@@ -861,6 +897,7 @@ def train(
                     "initial_loss": initial_loss,
                     "best_loss": best_loss,
                     "mcmc_telemetry": mcmc_telemetry,
+                    "appearance": backend.appearance_state(),
                 },
                 auxiliary_params=auxiliary_params,
                 auxiliary_optimizers=auxiliary_optimizers,
@@ -936,6 +973,7 @@ def train(
             "gsplat_runtime": backend.runtime,
             "initialization_ply_sha256": initialization_sha256,
             "metric_scale_calibration": scale_calibration,
+            "appearance": backend.appearance_state(),
             "rig_pose_refinement": pose_report,
             "frames": frames,
             "training": {

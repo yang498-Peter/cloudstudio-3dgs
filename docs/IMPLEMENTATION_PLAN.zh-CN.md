@@ -827,3 +827,33 @@ Machine-B 的真实 UK 训练首次运行到质量报告时发现：训练与渲
 红测试首先因新 local/log loss 不存在而 ImportError。实现后验证：mask 外预测即使写成 100 也不会改变 local SSIM；局部边缘平移会产生非零结构损失；有效覆盖不足时明确失败；预测和目标同时放大 10 倍时 log-range Huber 逐值相同，2× 比例误差符合解析 smooth-L1 值。Trainer/Gate 1 定向测试通过，全仓 `132` 项为 `131 PASS + 1 SKIPPED`，唯一跳过仍是默认环境的 clean-runtime CUDA footprint，已有 Gate 1 隔离实跑证据覆盖。
 
 当前状态为 **PASS（Gate 2B 数学、mask 与配置契约）**。没有启动真实 GPU 训练，因此不能声称 PSNR/SSIM/深度或清晰度已经提升；后续受控 A/B 必须单独比较旧 global+linear 与新 local+log，且保持同一 person Manifest、split、位姿、初始化 PLY、步数和随机种子。
+
+## 25. 当前阶段记录：Gate 2C SH 外观与确定性 degree 调度
+
+### 问题现象
+
+旧 Trainer 每个 Gaussian 只有一个 sigmoid RGB，无法随观察方向表达镜面、木构高光和鱼眼两侧的视角相关外观；继续用 RGB 参数延长训练会把外观差异错误压进 opacity、scale 或几何。直接切到最高阶 SH 也会在几何尚未稳定时过早增加自由度，并使中断恢复若未保存阶段就产生不同训练轨迹。
+
+### 修改文件
+
+- `cloudstudio_3dgs/training/appearance.py`
+- `cloudstudio_3dgs/training/backend.py`
+- `cloudstudio_3dgs/training/trainer.py`
+- `tools/run_synthetic_training_acceptance.py`
+- `tools/run_mcmc_resume_equivalence.py`
+- `tests/test_training.py`
+- `README.md`
+- `docs/IMPLEMENTATION_PLAN.zh-CN.md`
+
+### 修改内容
+
+- 生产默认外观改为 degree 3 SH：`sh0` 用 `(RGB-0.5)/C0` 初始化，`shN` 从零开始；DC 学习率沿用原 colors LR，其余系数使用 `0.05×`。参数与 optimizer 同名，符合 upstream MCMC 对任意附加 Gaussian 属性进行 relocate/add 的契约。RGB sigmoid 模式继续保留作 compatibility preset。
+- SH schedule 由 step 纯函数决定：step 0–999 使用 degree 0，1000–1999 使用 degree 1，2000–2999 使用 degree 2，3000 起使用 degree 3；renderer 只传当前允许阶数，但 checkpoint 始终保存完整 SH0/SHN 参数和 optimizer。
+- checkpoint training state 保存 `{mode, maximum_degree, active_degree}`；恢复时用 completed steps 独立重算并逐字段核对，缺失或错 degree 直接失败。trainer contract 升级为 schema 3 / algorithm v4，签名身份包含完整 appearance policy。
+- Gate 1 合成与 kill/resume 工具显式锁为 `mode=rgb, maximum_degree=0`，因此旧 Gate 1 的参数名、优化器和数值证据不会被生产默认 SH 改写。
+
+### 验证方式与当前状态
+
+红测试先因 appearance 模块不存在而失败；实现后验证 degree 边界 `0/999/1000/2999/3000`、错阶段恢复拒绝、SH0/SHN shape `1+15`、SHN LR 比例、renderer 的 `sh_degree=2` 与完整 coefficient tensor。训练定向测试通过；真实 CUDA SH rasterization 与真实场景画质 A/B 尚未运行，不能由 CPU 参数捕获测试替代。
+
+当前状态为 **PASS（Gate 2C 源码、CPU、schedule 与 checkpoint 契约）**，GPU/画质为 `NOT_RUN`。下一步实现 opacity/scale regularization、means LR decay 和逐项 telemetry，再进入周期 golden eval/best checkpoint；完成这些前置后才安排小预算 factor4 受控 A/B。
