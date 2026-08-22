@@ -41,6 +41,10 @@ from cloudstudio_3dgs.training.scale_calibration import (
     build_metric_scale_calibration,
     verify_metric_scale_calibration_report,
 )
+from cloudstudio_3dgs.training.regularization import (
+    GeometryRegularizationConfig,
+    geometry_regularization_terms,
+)
 from cloudstudio_3dgs.training.trainer import (
     TrainerConfig,
     active_sh_degree_for_step,
@@ -1011,6 +1015,39 @@ class RenderScaleContractTests(unittest.TestCase):
         self.assertAlmostEqual(float(exposure.gain("left").detach()), 1.0)
         self.assertAlmostEqual(float(exposure.gain("right").detach()), 2.0)
         self.assertGreater(float(exposure.prior_loss().detach()), 0.0)
+
+    def test_metric_geometry_regularization_only_hits_bad_geometry(self) -> None:
+        import torch
+
+        config = GeometryRegularizationConfig(
+            opacity_sparsity_weight=1.0,
+            scale_upper_weight=1.0,
+            anisotropy_weight=1.0,
+            max_scale_ratio_to_reference=8.0,
+            max_anisotropy=10.0,
+        )
+        params = {
+            "opacities": torch.zeros(2, requires_grad=True),
+            "scales": torch.tensor(
+                [[0.1, 0.1, 0.1], [1.6, 0.01, 0.01]],
+                dtype=torch.float32,
+            ).log().requires_grad_(),
+        }
+        terms = geometry_regularization_terms(
+            params, reference_scale_m=0.1, config=config
+        )
+        self.assertAlmostEqual(float(terms["opacity_sparsity"].detach()), 0.5)
+        self.assertGreater(float(terms["scale_upper"].detach()), 0.0)
+        self.assertGreater(float(terms["anisotropy"].detach()), 0.0)
+        terms["total"].backward()
+        self.assertTrue(torch.isfinite(params["opacities"].grad).all())
+        self.assertTrue(torch.isfinite(params["scales"].grad).all())
+        disabled = geometry_regularization_terms(
+            params,
+            reference_scale_m=0.1,
+            config=GeometryRegularizationConfig(enabled=False),
+        )
+        self.assertEqual(float(disabled["total"]), 0.0)
 
     def test_backend_initializes_per_point_metric_knn_scales(self) -> None:
         import torch

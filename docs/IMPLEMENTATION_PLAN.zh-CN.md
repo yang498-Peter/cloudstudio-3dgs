@@ -846,3 +846,19 @@ GitHub 重新联网后发现 `origin/machine-b/uk-quality` 已在共同祖先 `9
 同步时发现 `experiments/runs.csv` 的旧表头 16 列而所有数据行为 12 列，属于不能直接用于筛选 preset 的证据记录缺陷。已改成列数固定的结构：明确写入可由 handoff 证实的全量指标，并将原来语义无法可靠还原的 6 个字段以 `legacy_unlabeled_values` 原样保留。新增 CPU 契约覆盖 progressive SH 边界、means decay、SH coefficient/renderer 参数、alpha 背景合成和 exposure clamp；原有 evaluation fake backend 因新 optional 参数不兼容的回归已修复。
 
 当前状态为 **PASS（澳洲实现已吸收，源码/CPU 契约）**。这些 UK 指标是该机器的已签名实验输入，不自动升级为本机或原始 POS/Stage 2 POS 的画质结论；本机 clean locked CUDA 复验和之后的受控 A/B 仍为 `NOT_RUN`。
+
+## 26. 当前阶段记录：Gate 2D 米制 geometry regularization
+
+### 问题现象
+
+MCMC 的 relocate/add 能控制低 opacity 对象的数量，但不会阻止 RGB loss 借助半透明雾、远大于局部 LiDAR 间距的 splat 或极端针状 scale 比例降低图像误差。此前该项目只有 strategy 的 prune 阈值，没有把这些退化模式作为可审计训练 loss。
+
+### 修改内容
+
+- 新增 `GeometryRegularizationConfig`，生产默认启用三项弱约束：mean opacity sparsity（引导无支持的低 opacity 雾进入既有 MCMC prune 路径）、相对 KNN reference scale 的上界 soft barrier（默认 `8×`）和 axis-ratio soft barrier（默认 `10×`）。正常尺度、正常各向异性区域的后两项为零，避免把真实梁柱或薄构件强行各向同性化。
+- 每项在米制 `exp(log_scale)` 空间计算；配置、阈值和权重写入签名 trainer contract，step telemetry 保存 unweighted 三项与 total。Gate 1 synthetic/kill-resume 工具显式 `enabled=false`，保持已签名历史证据的 loss 语义。
+- 单元测试构造正常、巨型和针状 Gaussian：正常 scale 不触发 upper/anisotropy，巨型和针状项非零，并验证两组参数梯度有限；disabled 配置严格返回零。
+
+### 当前状态
+
+**PASS（Gate 2D 源码/CPU 契约）**。未把任一真实质量提升归因于该正则；下一项是周期 golden eval 与 best checkpoint，并在本机 clean runtime 复验后才进行受控 A/B。

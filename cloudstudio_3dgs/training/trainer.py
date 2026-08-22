@@ -43,6 +43,10 @@ from cloudstudio_3dgs.training.rig_pose import (
     build_pose_refinement_report,
     disabled_pose_refinement_report,
 )
+from cloudstudio_3dgs.training.regularization import (
+    GeometryRegularizationConfig,
+    geometry_regularization_terms,
+)
 from cloudstudio_3dgs.training.runtime_evidence import (
     append_mcmc_telemetry,
     initialize_mcmc_telemetry,
@@ -115,6 +119,9 @@ class TrainerConfig:
     exposure_compensation: ExposureCompensationConfig = field(
         default_factory=ExposureCompensationConfig
     )
+    geometry_regularization: GeometryRegularizationConfig = field(
+        default_factory=GeometryRegularizationConfig
+    )
     learning_rates: dict[str, float] = field(
         default_factory=lambda: {
             "means": 1.6e-4,
@@ -155,6 +162,10 @@ class TrainerConfig:
         if not isinstance(exposure_value, dict):
             raise ValueError("exposure_compensation must be an object")
         exposure = ExposureCompensationConfig(**exposure_value)
+        regularization_value = value.get("geometry_regularization", {})
+        if not isinstance(regularization_value, dict):
+            raise ValueError("geometry_regularization must be an object")
+        regularization = GeometryRegularizationConfig(**regularization_value)
         scale_value = value.get("metric_scale_calibration", {})
         if not isinstance(scale_value, dict):
             raise ValueError("metric_scale_calibration must be an object")
@@ -198,6 +209,7 @@ class TrainerConfig:
             rig_pose_refinement=pose_refinement,
             metric_scale_calibration=scale_calibration,
             exposure_compensation=exposure,
+            geometry_regularization=regularization,
             **paths,
             **options,
         )
@@ -254,6 +266,7 @@ class TrainerConfig:
             raise ValueError("MCMC noise stop must be -1 or non-negative")
         self.rig_pose_refinement.validate()
         self.exposure_compensation.validate()
+        self.geometry_regularization.validate()
         if (self.depth_manifest is None) != (self.depth_root is None):
             raise ValueError("depth_manifest and depth_root must be provided together")
         if (self.person_mask_manifest is None) != (self.person_mask_root is None):
@@ -370,6 +383,7 @@ class TrainerConfig:
             },
             "rig_pose_refinement": self.rig_pose_refinement.to_dict(),
             "exposure_compensation": self.exposure_compensation.to_dict(),
+            "geometry_regularization": self.geometry_regularization.to_dict(),
             "viewer": False,
         }
 
@@ -769,6 +783,7 @@ def train(
     effective_learning_rates = appearance_learning_rates(
         config, config.learning_rates
     )
+    reference_scale_m = float(scale_calibration["reference_scale_m"])
     effective_learning_rates["means"] = float(scale_calibration["effective_means_lr_m"])
     backend = backend_factory(
         device=config.device,
@@ -904,6 +919,12 @@ def train(
             loss = loss + pose_prior
         if exposure is not None:
             loss = loss + exposure.prior_loss()
+        regularization = geometry_regularization_terms(
+            params,
+            reference_scale_m=reference_scale_m,
+            config=config.geometry_regularization,
+        )
+        loss = loss + regularization["total"]
         require_finite_training_tensors(
             params=params,
             loss=loss,
@@ -967,6 +988,10 @@ def train(
             "rig_pose_prior": None
             if pose_prior is None
             else float(pose_prior.detach().cpu()),
+            "geometry_regularization": float(regularization["total"].detach().cpu()),
+            "opacity_sparsity": float(regularization["opacity_sparsity"].detach().cpu()),
+            "scale_upper": float(regularization["scale_upper"].detach().cpu()),
+            "anisotropy": float(regularization["anisotropy"].detach().cpu()),
         }
         if initial_loss is None:
             initial_loss = last_metrics["loss"]
