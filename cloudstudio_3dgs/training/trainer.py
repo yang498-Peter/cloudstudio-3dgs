@@ -90,6 +90,8 @@ class TrainerConfig:
     depth_manifest: Path | None = None
     depth_root: Path | None = None
     resume_checkpoint: Path | None = None
+    face_cache_manifest: Path | None = None
+    face_cache_root: Path | None = None
     require_person_masks: bool = True
     device: str = "cuda:0"
     seed: int = 42
@@ -163,6 +165,8 @@ class TrainerConfig:
                 "depth_manifest",
                 "depth_root",
                 "resume_checkpoint",
+                "face_cache_manifest",
+                "face_cache_root",
             )
         }
         crop_value = value.get("crop")
@@ -297,6 +301,10 @@ class TrainerConfig:
         self.golden_evaluation.validate()
         if (self.depth_manifest is None) != (self.depth_root is None):
             raise ValueError("depth_manifest and depth_root must be provided together")
+        if (self.face_cache_manifest is None) != (self.face_cache_root is None):
+            raise ValueError(
+                "face_cache_manifest and face_cache_root must be provided together"
+            )
         if (self.person_mask_manifest is None) != (self.person_mask_root is None):
             raise ValueError(
                 "person_mask_manifest and person_mask_root must be provided together"
@@ -394,6 +402,11 @@ class TrainerConfig:
             "optimizer": {
                 "configured_learning_rates": dict(sorted(self.learning_rates.items())),
                 "means_step_fraction": self.metric_scale_calibration.means_step_fraction,
+            },
+            "face_split": {
+                "enabled": self.face_cache_manifest is not None,
+                "supervision": "pinhole_faces" if self.face_cache_manifest else "raw_fisheye",
+                "validation": "raw_fisheye",
             },
             "renderer": {
                 "camera_model": "fisheye",
@@ -804,20 +817,34 @@ def train(
         raise FileExistsError(f"training output is not empty: {output_dir}")
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    trainset = S1TrainingDataset(
-        dataset_manifest_path=config.dataset_manifest,
-        recording_root=config.recording_root,
-        mask_manifest_path=config.mask_manifest,
-        mask_root=config.mask_root,
-        split_manifest_path=config.split_manifest,
-        split="train",
-        person_mask_manifest_path=config.person_mask_manifest,
-        person_mask_root=config.person_mask_root,
-        depth_manifest_path=config.depth_manifest,
-        depth_root=config.depth_root,
-        factor=config.factor,
-        crop=config.crop,
-    )
+    if config.face_cache_manifest is not None:
+        # Fisheye face-split training: supervision comes from pre-warped
+        # zero-distortion pinhole faces at full source resolution, bypassing
+        # the wide-FoV batch-state ceiling. Validation stays on the raw
+        # fisheye path below so metrics remain comparable across presets.
+        from cloudstudio_3dgs.training.face_dataset import FaceCacheDataset
+
+        if config.face_cache_root is None:
+            raise ValueError("face_cache_root is required with face_cache_manifest")
+        trainset = FaceCacheDataset(
+            face_manifest_path=config.face_cache_manifest,
+            cache_root=config.face_cache_root,
+        )
+    else:
+        trainset = S1TrainingDataset(
+            dataset_manifest_path=config.dataset_manifest,
+            recording_root=config.recording_root,
+            mask_manifest_path=config.mask_manifest,
+            mask_root=config.mask_root,
+            split_manifest_path=config.split_manifest,
+            split="train",
+            person_mask_manifest_path=config.person_mask_manifest,
+            person_mask_root=config.person_mask_root,
+            depth_manifest_path=config.depth_manifest,
+            depth_root=config.depth_root,
+            factor=config.factor,
+            crop=config.crop,
+        )
     valset = S1TrainingDataset(
         dataset_manifest_path=config.dataset_manifest,
         recording_root=config.recording_root,
@@ -832,7 +859,8 @@ def train(
         factor=config.factor,
         crop=config.crop,
     )
-    if trainset.dataset_sha256 != valset.dataset_sha256:
+    train_dataset_sha = getattr(trainset, "dataset_sha256", None)
+    if train_dataset_sha is not None and train_dataset_sha != valset.dataset_sha256:
         raise ValueError("train and validation datasets have different identities")
     coordinate = build_coordinate_transform_manifest(trainset.dataset_sha256)
     _atomic_json(output_dir / "coordinate_transform_manifest.json", coordinate)
@@ -911,8 +939,10 @@ def train(
     exposure = None
     exposure_optimizer = None
     if config.exposure_compensation.enabled:
+        # Face samples ("base::face_id") share their base image's exposure:
+        # every face of one capture saw the same physical auto-exposure.
         exposure = ExposureCompensator(
-            trainset.image_ids,
+            getattr(trainset, "exposure_image_ids", trainset.image_ids),
             config=config.exposure_compensation,
             device=config.device,
             group_by_image=trainset.camera_id_by_image,
@@ -1013,7 +1043,9 @@ def train(
             tensors=tensors,
             config=config,
             c2w_override=c2w_override,
-            rgb_gain=None if exposure is None else exposure.gain(sample.image_id),
+            rgb_gain=None
+            if exposure is None
+            else exposure.gain(sample.image_id.split("::")[0]),
             active_sh_degree=active_sh_degree,
         )
         pose_prior = None
