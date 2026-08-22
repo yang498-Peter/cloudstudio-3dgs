@@ -24,6 +24,7 @@ from cloudstudio_3dgs.evaluation.image_metrics import (
 )
 from cloudstudio_3dgs.evaluation.splits import verify_split_manifest
 from cloudstudio_3dgs.training.golden_eval import (
+    MINIMUM_DEPTH_PREDICTION_COVERAGE,
     verify_full_evaluation_history,
     verify_golden_history,
 )
@@ -487,6 +488,7 @@ def build_quality_report(
     lpips_values: list[float] = []
     depth_mae: list[float] = []
     depth_rmse: list[float] = []
+    depth_coverage: list[float] = []
     golden_reports: list[dict[str, str]] = []
     warnings: list[str] = []
     lpips_model = (
@@ -551,10 +553,14 @@ def build_quality_report(
                 target_depth,
                 mask & target_valid,
                 confidence=confidence,
+                minimum_prediction_coverage=(
+                    MINIMUM_DEPTH_PREDICTION_COVERAGE
+                ),
             )
             depth_report = {"status": "MEASURED", **metrics}
             depth_mae.append(float(metrics["mae_m"]))
             depth_rmse.append(float(metrics["rmse_m"]))
+            depth_coverage.append(float(metrics["prediction_coverage_fraction"]))
         frame_report = {
             "image_id": image_id,
             "split": split,
@@ -620,6 +626,10 @@ def build_quality_report(
             "depth_metrics": {
                 "mae_m": _finite_summary(depth_mae),
                 "rmse_m": _finite_summary(depth_rmse),
+                "prediction_coverage_fraction": _finite_summary(depth_coverage),
+                "minimum_prediction_coverage_gate": (
+                    MINIMUM_DEPTH_PREDICTION_COVERAGE
+                ),
             }
             if depth_mae
             else {"status": "NOT_RUN"},

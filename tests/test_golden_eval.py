@@ -200,6 +200,59 @@ class GoldenEvaluationTests(unittest.TestCase):
         self.assertIsNone(report["summary"]["depth_mae_m_mean"])
         self.assertIsNotNone(report["summary"]["psnr_db_mean"])
 
+    def test_depth_metrics_measure_covered_pixels_above_the_coverage_gate(self) -> None:
+        import torch
+
+        class Dataset:
+            image_ids = ["golden-left", "golden-right"]
+
+            def __getitem__(self, index: int) -> TrainingSample:
+                image_id = self.image_ids[index]
+                return TrainingSample(
+                    image_id=image_id,
+                    rig_frame_id=image_id,
+                    camera_id="left",
+                    image=np.full((16, 16, 3), 60, dtype=np.uint8),
+                    rgb_mask=np.ones((16, 16), dtype=bool),
+                    depth_range_m=np.full((16, 16), 2.0, dtype=np.float32),
+                    depth_confidence=np.ones((16, 16), dtype=np.float32),
+                    depth_mask=np.ones((16, 16), dtype=bool),
+                    depth_cache_path=None,
+                    c2w=np.eye(4, dtype=np.float32),
+                    K=np.eye(3, dtype=np.float32),
+                    radial_coeffs=np.zeros(4, dtype=np.float32),
+                    width=16,
+                    height=16,
+                )
+
+        class Backend:
+            def __init__(self) -> None:
+                self.torch = torch
+
+            @staticmethod
+            def render(params, sample, *, with_range, background_rgb=None):
+                assert with_range
+                rendered_range = torch.full((16, 16), 2.2)
+                rendered_range[0, :] = 0.0
+                return torch.full((16, 16, 3), 0.25), rendered_range, None, None
+
+        report = evaluate_golden_views(
+            backend=Backend(),
+            params=None,
+            dataset=Dataset(),
+            split_manifest=_split_manifest(),
+            completed_steps=1000,
+        )
+        for frame in report["frames"]:
+            self.assertEqual(frame["depth"]["status"], "MEASURED")
+            self.assertAlmostEqual(
+                frame["depth"]["prediction_coverage_fraction"], 0.9375
+            )
+        self.assertAlmostEqual(
+            report["summary"]["depth_prediction_coverage_fraction_min"], 0.9375
+        )
+        self.assertAlmostEqual(report["summary"]["depth_mae_m_mean"], 0.2, places=6)
+
     def test_golden_contract_rejects_empty_or_non_validation_views(self) -> None:
         with self.assertRaisesRegex(ValueError, "not in the validation"):
             golden_image_ids(

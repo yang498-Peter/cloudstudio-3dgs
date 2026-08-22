@@ -53,8 +53,20 @@ class QualityMetricTests(unittest.TestCase):
         self.assertAlmostEqual(result["mae_m"], 0.12)
         self.assertAlmostEqual(result["rmse_m"], math.sqrt(0.05 / 2.5))
         prediction[0, 0] = 0.0
-        with self.assertRaisesRegex(ValueError, "missing or invalid"):
+        with self.assertRaisesRegex(ValueError, "coverage.*below the gate"):
             masked_depth_metrics(prediction, target, valid)
+
+        relaxed = masked_depth_metrics(
+            prediction,
+            target,
+            valid,
+            confidence=confidence,
+            minimum_prediction_coverage=0.6,
+        )
+        self.assertEqual(relaxed["valid_pixels"], 2)
+        self.assertEqual(relaxed["target_valid_pixels"], 3)
+        self.assertEqual(relaxed["missing_prediction_pixels"], 1)
+        self.assertAlmostEqual(relaxed["prediction_coverage_fraction"], 2.0 / 3.0)
 
 
 if __name__ == "__main__":

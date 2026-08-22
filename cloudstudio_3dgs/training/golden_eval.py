@@ -18,6 +18,9 @@ from cloudstudio_3dgs.evaluation.image_metrics import (
 )
 
 
+MINIMUM_DEPTH_PREDICTION_COVERAGE = 0.9
+
+
 @dataclass(frozen=True)
 class GoldenEvaluationConfig:
     """Small, repeatable validation set used to choose a training checkpoint."""
@@ -95,6 +98,7 @@ def _evaluate_views(
     psnr_values: list[float] = []
     ssim_values: list[float] = []
     depth_mae_values: list[float] = []
+    depth_coverage_values: list[float] = []
     frames: list[dict[str, Any]] = []
     with torch.no_grad():
         for image_id in ordered_ids:
@@ -166,6 +170,9 @@ def _evaluate_views(
                         sample.depth_range_m,
                         sample.depth_mask,
                         confidence=sample.depth_confidence,
+                        minimum_prediction_coverage=(
+                            MINIMUM_DEPTH_PREDICTION_COVERAGE
+                        ),
                     )
                 except ValueError as error:
                     # Early/mid-training renders legitimately miss coverage at
@@ -175,13 +182,16 @@ def _evaluate_views(
                     frame["depth"] = {"status": "UNMEASURABLE", "reason": str(error)}
                 else:
                     depth_mae_values.append(float(depth["mae_m"]))
+                    depth_coverage_values.append(
+                        float(depth["prediction_coverage_fraction"])
+                    )
                     frame["depth"] = {"status": "MEASURED", **depth}
             frames.append(frame)
 
     finite_psnr = [value for value in psnr_values if np.isfinite(value)]
     result: dict[str, Any] = {
         "schema_version": 1,
-        "algorithm_version": f"{evaluation_kind}_validation_v2",
+        "algorithm_version": f"{evaluation_kind}_validation_v3",
         "evaluation_kind": evaluation_kind,
         "completed_steps": int(completed_steps),
         "split_manifest_sha256": str(split_manifest["split_manifest_sha256"]),
@@ -198,6 +208,15 @@ def _evaluate_views(
             "depth_mae_m_mean": None
             if not depth_mae_values
             else float(np.mean(depth_mae_values)),
+            "depth_prediction_coverage_fraction_min": None
+            if not depth_coverage_values
+            else float(np.min(depth_coverage_values)),
+            "depth_prediction_coverage_fraction_mean": None
+            if not depth_coverage_values
+            else float(np.mean(depth_coverage_values)),
+            "minimum_depth_prediction_coverage_gate": (
+                MINIMUM_DEPTH_PREDICTION_COVERAGE
+            ),
         },
     }
     signature_key = (

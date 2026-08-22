@@ -5,6 +5,8 @@ param(
     [Parameter(Position = 0)]
     [string]$Output,
 
+    [string]$TrainerConfig,
+
     [switch]$ProbeOnly,
 
     [switch]$LinkExistingObjects
@@ -217,16 +219,32 @@ if ($exitCode -ne 0) {
 if ($ProbeOnly) {
     exit 0
 }
-if (-not $Output) {
-    throw "Output is required unless -ProbeOnly is used"
+if ($Output -and $TrainerConfig) {
+    throw "Output and TrainerConfig are mutually exclusive"
 }
-$outputPath = if ([IO.Path]::IsPathRooted($Output)) {
-    [IO.Path]::GetFullPath($Output)
+if (-not $Output -and -not $TrainerConfig) {
+    throw "Output or TrainerConfig is required unless -ProbeOnly is used"
+}
+$outputPath = $null
+$trainerConfigPath = $null
+if ($TrainerConfig) {
+    $trainerConfigPath = if ([IO.Path]::IsPathRooted($TrainerConfig)) {
+        [IO.Path]::GetFullPath($TrainerConfig)
+    } else {
+        [IO.Path]::GetFullPath((Join-Path $repoRoot $TrainerConfig))
+    }
+    if (-not (Test-Path -LiteralPath $trainerConfigPath -PathType Leaf)) {
+        throw "Trainer config is missing: $trainerConfigPath"
+    }
 } else {
-    [IO.Path]::GetFullPath((Join-Path $repoRoot $Output))
-}
-if (Test-Path -LiteralPath $outputPath) {
-    throw "Output already exists: $outputPath"
+    $outputPath = if ([IO.Path]::IsPathRooted($Output)) {
+        [IO.Path]::GetFullPath($Output)
+    } else {
+        [IO.Path]::GetFullPath((Join-Path $repoRoot $Output))
+    }
+    if (Test-Path -LiteralPath $outputPath) {
+        throw "Output already exists: $outputPath"
+    }
 }
 
 $extension = Join-Path $repoRoot "external\.torch-ext-gate1-local\gsplat_cuda\gsplat_cuda.pyd"
@@ -243,6 +261,16 @@ $exitCode = Invoke-ConfiguredProcess -FilePath $python -Arguments @(
     "--probe"
 )
 if ($exitCode -ne 0) {
+    exit $exitCode
+}
+
+if ($trainerConfigPath) {
+    $exitCode = Invoke-ConfiguredProcess -FilePath $python -Arguments @(
+        $bootstrap,
+        "--extension", $extension,
+        "tools\train_gsplat.py",
+        "--config", $trainerConfigPath
+    )
     exit $exitCode
 }
 

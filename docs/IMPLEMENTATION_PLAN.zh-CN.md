@@ -983,3 +983,34 @@ CPU 回归覆盖 preset 固定/冲突/冒名拒绝、legacy global SSIM 实际�
 ### 验证方式与当前状态
 
 合并后 `export_gaussian_ply.py --help` 通过；preset/A-B/soft anchor/PPISP 定向 `18` 项为 `17 PASS + 1 SKIPPED`，全仓 `182` 项为 `181 PASS + 1 SKIPPED`。澳洲 `21235e4` 已成为当前分支祖先。当前状态为 **PASS（澳洲代码吸收与 CPU 兼容）**，但 P9 明确是回归证据、P10 尚无结果；因此当前推荐基线仍是已验证的 P5，不会用 P8/P9 替换，也不会据此启动正式长训。
+
+## 31. 当前阶段记录：真实 factor4 P5 短基线与深度覆盖率评估修复
+
+### 问题现象
+
+重新联网确认澳洲 `machine-b/uk-quality@21235e4` 已完整成为当前分支祖先后，本机使用澳洲 P5 作为组合候选准备真实 Gate 2。完整输入逐文件预检通过，但 600 步短基线暴露出评估契约缺陷：训练 step telemetry 中 `lidar_range_loss=0.344568`，最终也保存了 728×728 rendered range；周期 golden 和完整 validation 却把 16/16 与 124/124 张深度全部标记为 `UNMEASURABLE`。抽查并统计 124 张产物后确认，预测在 LiDAR 监督像素的覆盖率实际为 min/p05/p50/mean `0.932899 / 0.964930 / 0.993464 / 0.989577`，旧指标因为每张图仅有少量未覆盖像素就否决整张图，掩盖了绝大多数可测深度。
+
+### 修改文件
+
+- `cloudstudio_3dgs/evaluation/image_metrics.py`
+- `cloudstudio_3dgs/training/golden_eval.py`
+- `cloudstudio_3dgs/evaluation/quality_report.py`
+- `tests/test_quality_metrics.py`
+- `tests/test_golden_eval.py`
+- `train/run_gate2_synthetic_acceptance_local.ps1`
+- `docs/IMPLEMENTATION_PLAN.zh-CN.md`
+
+### 修改内容
+
+- 深度指标继续以 target-valid LiDAR 像素为分母，同时显式统计预测正有限覆盖数、缺失数和覆盖率；默认 API 仍保持 `100%` 严格门，训练周期评估和正式质量报告采用固定 `90%` fail-closed 门。达到门限后只在正有限交集计算 confidence-weighted MAE/RMSE，并把 coverage 作为伴随指标写入逐帧与汇总证据；低于门限或完全无覆盖仍明确失败，不会用极少量命中像素伪造好指标。
+- golden/full evaluation 算法版本升级为 `v3`，签名记录新增 coverage min/mean 和门限；最终质量报告同时汇总 124 张 coverage 分布。
+- Windows 锁定 CUDA 启动器新增互斥的 `-TrainerConfig` 路径，复用同一个去重 PATH、MSVC/CUDA 环境和预编译 gsplat bootstrap 启动真实 Trainer；原 `Output` 合成验收入口保持不变。
+
+### 验证方式与当前状态
+
+- 真实输入：1238/1238 张、4952 个原图/base mask/person mask/depth 文件逐文件 SHA 与实际解码通过；内部签名为 dataset `54c01abe...`、mask `86ae782a...`、person `1eb2284f...`、depth `3c114dfd...`、split `dbb4cf46...`，初始化 PLY 为 `66fbe620...`。五臂 matrix 使用相同输入，SHA 为 `1382d7b7210ed7a4b328256106fea0c1c7bd88290a4f9d1bdc204885f05dd228`，组合候选明确为 `gate2_quality_australian_p5_v1`。
+- 真实 GPU：RTX 5070 Laptop 上 factor4 P5 完成 600 步，耗时 `316.99 s`、峰值额外 VRAM `866,290,688 bytes`、376,906 个 Gaussian、无 NaN；loss 从 `0.276763` 降至 `0.200898`，改善 `27.41%`。golden PSNR 在 step 200/400/600 为 `15.17 / 15.75 / 16.15 dB`，终点完整 124 图为 PSNR `16.1195 dB`、SSIM `0.502887`。签名 run Manifest SHA 为 `5146c877d3ccf4e9d00e5aea831960e1dc99f225af302d153ea12c85cb35e4d2`。
+- 修复后对同一签名 run 重新生成质量报告：124/124 张深度可测，coverage min/mean 为 `0.932899 / 0.989577`，depth MAE mean 为 `8.19595 m`；报告仅因 LPIPS 尚未运行而保持 `PARTIAL`。该 MAE 是 600 步短链结果，不能解释为正式质量通过。
+- 定向回归 `14/14 PASS`：严格默认仍拒绝缺口，显式低门测试只在超过门限时测量，低于门限/全零预测仍 `UNMEASURABLE`。完整 CPU 套件为 `182 PASS + 1 SKIPPED + 3 subtests PASS`；唯一跳过是需要锁定 CUDA 扩展的物理足迹测试，本轮真实 600 步 GPU 运行和第 29 节签名尺度证据已分别覆盖运行链与足迹链。
+
+当前为 **PASS（真实输入、短训练链、RGB 与深度评估可测性）**，但 Gate 2 仍未关闭：LPIPS、至少两次周期完整验证、legacy/KNN/SH/local-SSIM/P5 五臂正式 A/B 均未完成；澳洲 P10 结果也仍待同步。下一步先跑全仓回归并推送本修复，再用新 `v3` 评估契约启动正式受控运行。

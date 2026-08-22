@@ -240,6 +240,11 @@ python tools/run_synthetic_training_acceptance.py `
   --gsplat-lock upstream\cloudstudio_trainer.lock.json `
   --steps 80
 
+# Windows 本机已完成直接链接 gsplat 扩展时，可用同一锁定工具链启动真实 Trainer 配置；
+# -TrainerConfig 与合成入口的位置参数 Output 互斥，避免把两类证据写入同一目录。
+pwsh -File train\run_gate2_synthetic_acceptance_local.ps1 `
+  -TrainerConfig G:\3dgs-runs\gs2_factor4_short.json
+
 # Gate 1：先审计完整 MCMC 注册与锁定源码身份；FAIL/NOT_RUN 不得升级为通过
 python tools/audit_mcmc_runtime.py `
   --output G:\3dgs-runs\full_mcmc_runtime.json `
@@ -336,7 +341,7 @@ PR-11 新 Trainer 使用独立的 `upstream/cloudstudio_trainer.lock.json`：只
 - [x] 路线 PR-11(源码/合成 CUDA):自有 raw-fisheye Dataset/Trainer、3DGUT、逐图 mask/crop、LiDAR ray-range、显式 split、checkpoint、坐标 Manifest、masked evaluation 和 peak VRAM；完整 MCMC Windows 算子、非零位置噪声、relocate/add、米制 footprint 和中断式 GPU resume 已由 Gate 1 严格签名证据关闭，真实 gs2 同配置画质回归仍为 `NOT_RUN`
 - [x] 路线 PR-12(源码/CPU 合成):每个训练 Rig Frame 一个共享 6DoF 增量、Rig 中心枢轴、平移/旋转先验、checkpoint 恢复、固定基线与无改善/越界自动回退；真实 gs2 训练消融仍为 `NOT_RUN`（训练暂缓）
 - [x] Gate 1 完整 MCMC：本机 RTX 5070 Laptop 在干净锁定 gsplat `f2d1413` 上完成严格 80 步 full-MCMC 与中断恢复；签名证据 `6e88d380...f31aa7` 经独立 verifier 和原子 promotion 通过。covariance/rasterization 前后向、实际 position-noise、relocate `1`、add `5`、米制 footprint `368 px`、finite 守卫均为 `PASS`，恢复比较 `0` 失配、最大漂移 `1.907e-6`（`atol=5e-6`）。该结论只关闭执行与恢复 Gate，不代表真实场景画质；合成噪声最大位移 `2.755 m` 反而要求 Gate 2 优先完成米制场景尺度感知的 LR/噪声配对
-- [ ] Gate 2 训练器质量地基：KNN 每点尺度 + 米制 means LR/MCMC noise 联动、11×11 local masked SSIM、robust log-range Huber 与 metric opacity/scale/anisotropy regularization 的源码/CPU 契约已通过。以澳洲 `machine-b/uk-quality` 为优先实现，已吸收 exposure、SH3 progressive unlock、means LR decay 与显式白背景合成；旧 Trainer、KNN-only、SH-only、local-SSIM-only 与澳洲 P5 质量候选现有不可冒名 preset 和签名 A/B 矩阵。每 1000 步 golden 渲染、每 4000 步完整 validation、`best_golden.pt`、最终正式渲染绑定最佳 checkpoint 及结果汇总已完成源码/CPU 契约。本机锁定 gsplat 的 80 步真实 GPU 重放已 PASS：原生算子、完整 MCMC、真实 relocation/add、尺度足迹与中断恢复 0 mismatch；其 106 张 validation 的 P5 证据为 PSNR `16.21`、SSIM `0.5589`、P10 `15.78`。本机 factor4 五臂 A/B 与真实质量 Gate 仍为 `NOT_RUN`
+- [ ] Gate 2 训练器质量地基：KNN 每点尺度 + 米制 means LR/MCMC noise 联动、11×11 local masked SSIM、robust log-range Huber 与 metric opacity/scale/anisotropy regularization 的源码/CPU 契约已通过。以澳洲 `machine-b/uk-quality` 为优先实现，已吸收 exposure、SH3 progressive unlock、means LR decay 与显式白背景合成；旧 Trainer、KNN-only、SH-only、local-SSIM-only 与澳洲 P5 质量候选现有不可冒名 preset 和签名 A/B 矩阵。每 1000 步 golden 渲染、每 4000 步完整 validation、`best_golden.pt`、最终正式渲染绑定最佳 checkpoint 及结果汇总已完成源码/CPU 契约。本机 1238 张真实输入和 4952 个文件全量预检通过，factor4 澳洲 P5 的 600 步短基线完成（PSNR `16.12`、SSIM `0.5029`、loss 改善 `27.41%`）；由此发现并修复“少量未覆盖 LiDAR 像素导致整帧 depth 不可测”的评估缺陷，124 张预测覆盖率 min/mean `0.9329/0.9896`，90% fail-closed 门下深度可测。LPIPS、至少两次完整 validation 和正式五臂 A/B 仍为 `NOT_RUN`，因此真实质量 Gate 尚未通过
 - [x] Phase 1(前置):重投影验证初步通过(gs2 场景目视贴合,约定=c2w_gl),
       正式 Gate 需再覆盖 2–3 场景 + 逐点误差统计
 - [x] Phase 1(前置):COLMAP 数据集导出实测通过(gs2_keyframes:174 图/2 相机/101 万点,
