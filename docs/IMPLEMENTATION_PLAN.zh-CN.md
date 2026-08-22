@@ -1133,4 +1133,10 @@ GitHub 重新联网后，澳洲 `machine-b/uk-quality` 从 `2113134` 推进到 `
 - checkpoint 单测证明 `+0.2 dB / +0.04 m` 在 `0.05 m` 护栏内可晋级，`+0.3 dB / +0.12 m` 被拒绝，深度 `UNMEASURABLE` 也被拒绝；签名 history 含一个外观更高但深度超限的候选时，verifier 重放后仍认定前一个 checkpoint 为 best。
 - 修改后全仓 CPU 套件共运行 `209` 项，为 `208 PASS + 1 SKIPPED`；唯一跳过仍是需要预加载锁定 CUDA 扩展的物理足迹测试。
 
-当前为 **PASS（源码、CPU 契约与旧配置兼容）/ NOT_RUN（真实 tail-risk 单变量 A/B）**。下一步以相同 factor4 数据、seed 42、澳洲 P5、1M cap 和全部 mask 做 1000 步 probe，只启用 `scale_upper_tail_fraction=0.01`；深度 checkpoint 护栏单独作为选择策略验证，不把两项混成一个优化归因结论。
+### 真实 tail-risk successive-halving
+
+- `tail_fraction=0.01` 1000 步运行完成，内部 run Manifest SHA256 `c5a7c8bd95ecd904dfc71ae7ca3455f916991a9b37cc8e50854083aee5e43c275`；124 图报告 `COMPLETE`，PSNR `17.496205 dB`、SSIM `0.534071`、LPIPS `0.602686`、depth MAE `7.881738 m`、coverage min `0.933729`，报告 SHA256 `e28175f10eff990bc836c74f42823af505c0ca9256edec04239ad523562b5366`。但最终 max scale `26.3902 m`、大于 `1 m` 410 个；top 1% 约 4582 个仍远多于约 735 个实际超限点，barrier 被零值稀释，拒绝该比例。
+- 按 successive-halving 收紧到 `tail_fraction=0.001` 后，内部 run Manifest SHA256 `e5b7dcbb844220c284b5e3730f9dab5551b5588f4770f11b8768de9cf4326ccc`；124 图报告同为 `COMPLETE`，PSNR `17.383084 dB`、SSIM `0.533708`、LPIPS `0.601801`、depth MAE `7.771762 m`、coverage min `0.959218`，报告 SHA256 `06efbae6da83615d49729c4cce2dce304ac2010fd5f46938868b802a5c5ac89c`。
+- 与原澳洲 P5 的相同 seed、step 900 MCMC snapshot 比较，Gaussian 数同为 458129、p50/p95 同为约 `0.10/0.17 m`，但 max scale 从 P5 `11.82 m` 降到 `9.64 m`（约 `18.4%`）；相对 1% tail 的最终 checkpoint，p999 从 `0.9518` 降到 `0.8827 m`，大于 `1 m` 从 410 降到 324。同步 golden PSNR 相对 P5 仅约 `-0.07 dB`，depth 近似，属于小幅外观代价换取可测尺度尾部改善。
+
+当前为 **PASS（源码/CPU、真实 1000 步单变量与完整质量报告）/ NOT_RUN（8000 步 tail-risk + 深度护栏正式验证）**。`0.001` 通过短程 successive-halving，可进入正式 8000 步；训练优化只改变 tail-risk reduction，`max_depth_regression_m=0.05` 作为独立签名选择策略启用，防止外观提升覆盖几何回退。
