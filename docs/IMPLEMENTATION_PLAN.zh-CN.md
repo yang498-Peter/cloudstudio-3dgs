@@ -1182,3 +1182,20 @@ GitHub 重新联网后，澳洲 `machine-b/uk-quality` 从 `2113134` 推进到 `
 - 全仓 CPU 套件在显式隐藏 CUDA 后运行 `211` 项，为 `189 PASS + 22 SKIPPED`；跳过项均为需要 CUDA/锁定 gsplat runtime 的既有运行测试。未隐藏 CUDA 的首次运行中，210 个非足迹测试通过，唯一错误是受限环境不允许向用户 Torch 扩展缓存写文件，不是断言失败，也没有被记录为通过。
 
 当前为 **PASS（澳洲历史 contract 身份恢复）**。澳洲 P5 继续作为优先外观版本；KNN/SH/local-SSIM 正式臂必须继续使用这份原始签名矩阵，不能通过重建矩阵绕过已完成 reference/P5 的共同输入与单变量约束。
+
+## 37. 当前阶段记录：Gate 2 KNN-only 正式单变量臂
+
+### 受控变量与运行身份
+
+在第 36 节恢复原澳洲矩阵 SHA256 `7e6daf8ca6baecc915dda020610419b7f6313867b55b95e3d9c67f4adfd86593` 后，执行其中未完成的 `knn_only` 正式臂。该臂与 legacy reference 共用 1238 图数据、1114/124 train/validation split、person/depth mask、初始化 PLY、factor4、seed 42、8000 步、1M cap、RGB/LiDAR loss、MCMC 和 white background；contract 只允许 KNN 初始化及对应尺度感知 means/noise 步长字段变化，不能吸收 SH、local SSIM 或澳洲 P5 的其他变量。
+
+### 运行与验证结果
+
+- RTX 5070 Laptop 上完成 8000 步，耗时 `2927.32 s`、峰值额外显存 `998,101,504 bytes`、最终 1M Gaussian、状态 `COMPLETE`、无 NaN；run Manifest SHA256 为 `fe258a9951b0d828d6e6a1c4748bbabc8fda4da479fdb67311c323bdc49d3455`，Trainer contract SHA256 与矩阵记录一致为 `428089c26ebb159c1485cd1480c31434c1366cc5203064982cbd37d5311e612a`。
+- golden PSNR 在 step 1000–6000 为 `15.7943 / 17.3588 / 17.9150 / 17.9584 / 18.0678 / 18.1258 dB`，step 7000/8000 回落到 `18.0002 / 17.9926 dB`；选择器正确绑定 `best_golden@6000`，模型 SHA256 为 `e8c9b7b02491c3b473e11370b4135337961f7bed6b4e3d929a2fda2861aac803`。
+- step 4000 的首次 124 图 full validation 为 PSNR `17.96022 dB`、SSIM `0.476802`、depth MAE `4.05599 m`；step 8000 的第二次 full validation及最终 Manifest 均完成，满足正式臂至少两次全量验证的要求。
+- selected-model 的 124 图 LPIPS-Alex 报告为 `COMPLETE`：PSNR `18.093963 dB`、SSIM `0.479076`、LPIPS `0.587172`、depth MAE `4.094303 m`、depth coverage min `0.923022`；quality report SHA256 为 `6a6e20138afcb6258b428209373fc9a9f1911bd1313b1d11a3d1be16d95befd0`，run/quality 双签名验证通过，golden checkpoint 与 periodic full evidence 均为 `VERIFIED`。
+
+### 结论与下一步
+
+相对 legacy reference，KNN-only 提升 PSNR `0.259168 dB`、SSIM `0.011996`，LPIPS 降低 `0.005358`，最低深度覆盖提高 `0.004058`；但 depth MAE 恶化 `0.088968 m`。按 A/B 聚合器的严格零回归语义，该臂结论为 **MIXED**，不能写成全指标晋级；它证明 KNN 初始化是澳洲 P5 外观增益的有效组成部分，但不能单独关闭 Gate 2 深度门。相对澳洲 P5，KNN-only 的 depth 改善 `2.461218 m`，但 PSNR 低 `2.426477 dB`、SSIM 低 `0.116415`、LPIPS 恶化 `0.107822`，因此澳洲 `gate2_quality_australian_p5_v1` 仍是优先外观版本，不能被本臂替换。下一步按同一原矩阵继续 `sh_only`，再执行 `local_ssim_only`，完成三项独立归因后才能生成五臂正式聚合报告。
