@@ -22,7 +22,23 @@ from cloudstudio_3dgs.data.face_warp import (
 )
 
 try:  # pragma: no cover - depends on parallel agent's module landing
-    from cloudstudio_3dgs.geometry.fisheye_faces import FaceSpec
+    import math
+
+    from cloudstudio_3dgs.geometry.fisheye_faces import FaceSpec as _PlannerFaceSpec
+
+    def FaceSpec(*, face_id, R_face, K_face, width, height):
+        # Warp only reads the shared duck-typed fields; derive the planner's
+        # extra half_fov_deg from the intrinsics so real-class construction
+        # keeps exercising interface compatibility.
+        half_fov = math.degrees(math.atan((width / 2.0) / float(K_face[0, 0])))
+        return _PlannerFaceSpec(
+            face_id=face_id,
+            R_face=R_face,
+            K_face=K_face,
+            width=width,
+            height=height,
+            half_fov_deg=half_fov,
+        )
 except ImportError:
     from dataclasses import dataclass
 

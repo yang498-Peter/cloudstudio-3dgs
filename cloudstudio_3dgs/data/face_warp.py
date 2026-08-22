@@ -167,16 +167,21 @@ def build_face_warp_grid(
     if K_face.shape != (3, 3) or R_face.shape != (3, 3):
         raise ValueError("face.K_face and face.R_face must be 3x3 matrices")
 
-    jj, ii = np.meshgrid(np.arange(width, dtype=np.float64),
-                         np.arange(height, dtype=np.float64))
+    # The face planner and the gsplat rasterizer both place pixel centers at
+    # (i + 0.5, j + 0.5): sample the face at those centers and convert the
+    # projected source coordinate from the same center convention back to
+    # array-index space (u - 0.5) for the bilinear gather, so warped GT stays
+    # aligned with what gsplat renders through either camera model.
+    jj, ii = np.meshgrid(np.arange(width, dtype=np.float64) + 0.5,
+                         np.arange(height, dtype=np.float64) + 0.5)
     pix_h = np.stack([jj.ravel(), ii.ravel(), np.ones(width * height)], axis=1)
     dirs_face = pix_h @ np.linalg.inv(K_face).T
     dirs_cam = dirs_face @ R_face.T  # dir_cam = R_face @ dir_face, row-vector form
     uv, valid = kb4_project_dirs(dirs_cam, K, radial_coeffs, max_theta_rad=max_theta_rad)
     return FaceWarpGrid(
         face_id=getattr(face, "face_id", None),
-        u=uv[:, 0].reshape(height, width),
-        v=uv[:, 1].reshape(height, width),
+        u=uv[:, 0].reshape(height, width) - 0.5,
+        v=uv[:, 1].reshape(height, width) - 0.5,
         fov_valid=valid.reshape(height, width),
         max_theta_rad=float(max_theta_rad),
     )
@@ -327,7 +332,13 @@ def warp_sparse_depth_to_face(
     if ys.size == 0:
         return face_range, face_conf, face_valid
 
-    uv = np.stack([xs.astype(np.float64), ys.astype(np.float64)], axis=1)
+    # Array index (x, y) -> pixel-center coordinate (+0.5) before unprojecting,
+    # and the face-plane projection comes back in center coordinates, so the
+    # nearest array index is rint(coord - 0.5). Keeps the splat on the same
+    # pixel-center convention as the planner, the warp grid, and gsplat.
+    uv = np.stack(
+        [xs.astype(np.float64) + 0.5, ys.astype(np.float64) + 0.5], axis=1
+    )
     dirs_cam = kb4_unproject_pixels(uv, K, radial_coeffs)
     dirs_face = dirs_cam @ R_face  # dir_face = R_face.T @ dir_cam, row-vector form
     z = dirs_face[:, 2]
@@ -336,8 +347,8 @@ def warp_sparse_depth_to_face(
         return face_range, face_conf, face_valid
 
     fxf, fyf, cxf, cyf = _k_params(K_face)
-    uf = np.rint(fxf * dirs_face[front, 0] / z[front] + cxf).astype(np.int64)
-    vf = np.rint(fyf * dirs_face[front, 1] / z[front] + cyf).astype(np.int64)
+    uf = np.rint(fxf * dirs_face[front, 0] / z[front] + cxf - 0.5).astype(np.int64)
+    vf = np.rint(fyf * dirs_face[front, 1] / z[front] + cyf - 0.5).astype(np.int64)
     ranges = depth[ys[front], xs[front]]
     confs = conf[ys[front], xs[front]]
     inb = (uf >= 0) & (uf < width) & (vf >= 0) & (vf < height)
