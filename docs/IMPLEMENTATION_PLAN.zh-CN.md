@@ -960,3 +960,26 @@ CPU 回归覆盖 preset 固定/冲突/冒名拒绝、legacy global SSIM 实际�
 ### 当前状态
 
 当前为 **PASS（锁定 Windows CUDA 运行时、完整 MCMC、物理尺度渲染与中断恢复等价）**。这关闭了合并澳洲最新代码后的本机短程 GPU 复验，不等于真实场景画质或 Gate 2 正式退出；下一步仍需重建真实 gs2 的签名 person/depth/split/PLY 输入，并执行同一 factor4 数据上的 legacy、KNN-only、SH-only、local-SSIM-only 与澳洲 P5 质量候选五臂 A/B，且至少产生两次完整 validation 和 LPIPS 后才能判定 Gate 2。
+
+## 30. 当前阶段记录：澳洲 P8/P9 归因、软曝光锚与 PLY 导出吸收
+
+### 问题现象
+
+联网复核时澳洲 `machine-b/uk-quality` 从 `b5bcb30` 前进到 `21235e4`。P8 单变量证据表明 hard zero-mean exposure anchor 相对 P5 下降约 `0.8 dB`，geometry regularization 被排除为主因；P9 同时使用 soft anchor、decoupled SSIM、SH1 和 geometry regularization 后仍比 P5 低 `0.62 dB`，因此澳洲把怀疑转向 P5 后合并的 trainer 代码，并启动 P10 同配置 control。合并新配置后，旧命名 preset 未声明 `mean_anchor_weight/beta`，fail-closed 校验报 exposure contract 不匹配。全仓回归还暴露 PPISP 梯度测试使用未设种子的全局随机扰动，偶尔把 CRF 参数推入饱和区而产生零梯度，造成非确定性红灯。
+
+### 修改文件
+
+- 澳洲原提交：`cloudstudio_3dgs/training/exposure.py`、`experiments/runs.csv`、`tests/test_training.py`、`tools/export_gaussian_ply.py`
+- 本机兼容：`cloudstudio_3dgs/training/presets.py`、`tests/test_ppisp.py`
+- `docs/IMPLEMENTATION_PLAN.zh-CN.md`
+
+### 修改内容
+
+- 完整吸收澳洲 soft per-camera mean anchor：对每个物理相机组的 mean log-gain 使用 SmoothL1 软约束，保留 hard projection 但不把它提升为推荐 preset；P8/P9 回归结果按原记录保留，不把未通过实验的旋钮默认启用。
+- 合并标准 3DGS viewer PLY 导出器，支持从 checkpoint 输出 INRIA binary little-endian 字段布局，并明确保留 trainer 本地米制坐标与 coordinate transform 责任边界。
+- 所有命名 preset 显式冻结 `mean_anchor_weight=0.0`、`mean_anchor_beta=0.1`，使 P5、legacy 和三个单变量臂不会随 dataclass 新默认漂移，也不能被不匹配配置冒名。
+- PPISP 梯度夹具改用测试内部固定 `torch.Generator(seed=20260822)`；仍要求 exposure、vignetting、color 与 CRF 全部参数取得 finite 且非零梯度，没有放宽断言。
+
+### 验证方式与当前状态
+
+合并后 `export_gaussian_ply.py --help` 通过；preset/A-B/soft anchor/PPISP 定向 `18` 项为 `17 PASS + 1 SKIPPED`，全仓 `182` 项为 `181 PASS + 1 SKIPPED`。澳洲 `21235e4` 已成为当前分支祖先。当前状态为 **PASS（澳洲代码吸收与 CPU 兼容）**，但 P9 明确是回归证据、P10 尚无结果；因此当前推荐基线仍是已验证的 P5，不会用 P8/P9 替换，也不会据此启动正式长训。

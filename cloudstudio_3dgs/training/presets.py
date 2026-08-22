@@ -12,6 +12,8 @@ _EXPOSURE_DISABLED = {
     "regularization_weight": 1e-2,
     "max_abs_log_gain": 0.6931471805599453,
     "zero_mean_projection": False,
+    "mean_anchor_weight": 0.0,
+    "mean_anchor_beta": 0.1,
 }
 
 _EXPOSURE_ENABLED = {**_EXPOSURE_DISABLED, "enabled": True}
