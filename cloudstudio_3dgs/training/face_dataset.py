@@ -225,6 +225,20 @@ class FaceCacheDataset:
             "min_face_weight": self.manifest.get("min_face_weight"),
         }
 
+    @property
+    def dataset_sha256(self) -> str:
+        """The BASE dataset identity, carried through the face cache.
+
+        The trainer keys the coordinate transform manifest and the train/val
+        identity check on this value; faces are a resampling of the same
+        capture, so the base identity is the correct answer.
+        """
+        source = self.manifest.get("source_identity") or {}
+        value = source.get("dataset_manifest_sha256")
+        if not value:
+            raise ValueError("face manifest is missing the source dataset identity")
+        return str(value)
+
     # ---------------------------------------------------------------- access --
 
     def __len__(self) -> int:
