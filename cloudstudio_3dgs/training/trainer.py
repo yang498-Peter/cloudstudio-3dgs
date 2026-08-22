@@ -622,6 +622,20 @@ def _render_supervision_loss(
     )
     loss = config.rgb_l1_weight * l1 + config.rgb_ssim_weight * ssim
     range_loss = None
+    if has_range and getattr(sample, "camera_model", "fisheye") == "pinhole":
+        # A face legitimately may catch only a handful of LiDAR rays, and the
+        # edge-weight gate can empty the intersection entirely; skip the range
+        # term for such samples instead of tripping the fail-closed check that
+        # protects the dense fisheye path.
+        torch_mod = backend.torch
+        supervised = (
+            tensors["depth_mask"]
+            & torch_mod.isfinite(tensors["range_m"])
+            & (tensors["range_m"] > 0.0)
+            & (tensors["confidence"] > 0.0)
+        )
+        if not bool(supervised.any()):
+            has_range = False
     if has_range:
         assert rendered_range is not None
         depth_scale = getattr(sample, "depth_to_range_scale", None)
