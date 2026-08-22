@@ -54,6 +54,7 @@ from cloudstudio_3dgs.training.rig_pose import (
     build_pose_refinement_report,
     disabled_pose_refinement_report,
 )
+from cloudstudio_3dgs.training.error_weighted_mcmc import ErrorScoreConfig
 from cloudstudio_3dgs.training.regularization import (
     GeometryRegularizationConfig,
     clip_oversized_gaussians,
@@ -141,6 +142,7 @@ class TrainerConfig:
     golden_evaluation: GoldenEvaluationConfig = field(
         default_factory=GoldenEvaluationConfig
     )
+    error_weighted_sampling: ErrorScoreConfig = field(default_factory=ErrorScoreConfig)
     learning_rates: dict[str, float] = field(
         default_factory=lambda: {
             "means": 1.6e-4,
@@ -190,6 +192,10 @@ class TrainerConfig:
         if not isinstance(golden_evaluation_value, dict):
             raise ValueError("golden_evaluation must be an object")
         golden_evaluation = GoldenEvaluationConfig(**golden_evaluation_value)
+        error_sampling_value = value.get("error_weighted_sampling", {})
+        if not isinstance(error_sampling_value, dict):
+            raise ValueError("error_weighted_sampling must be an object")
+        error_weighted_sampling = ErrorScoreConfig(**error_sampling_value)
         scale_value = value.get("metric_scale_calibration", {})
         if not isinstance(scale_value, dict):
             raise ValueError("metric_scale_calibration must be an object")
@@ -239,6 +245,7 @@ class TrainerConfig:
             exposure_compensation=exposure,
             geometry_regularization=regularization,
             golden_evaluation=golden_evaluation,
+            error_weighted_sampling=error_weighted_sampling,
             **paths,
             **options,
         )
@@ -444,6 +451,7 @@ class TrainerConfig:
                 "noise_injection_stop_iter": self.mcmc_noise_injection_stop_iter,
                 "noise_lr": self.mcmc_noise_lr,
                 "noise_std_fraction": self.metric_scale_calibration.noise_std_fraction,
+                "error_weighted_sampling": self.error_weighted_sampling.to_dict(),
             },
             "rig_pose_refinement": self.rig_pose_refinement.to_dict(),
             "exposure_compensation": self.exposure_compensation.to_dict(),
@@ -676,6 +684,9 @@ def _render_supervision_loss(
                 delta=config.lidar_log_range_huber_delta,
             )
         loss = loss + config.lidar_range_weight * range_loss
+    # Stashed for the error-weighted MCMC score update; detached, so it never
+    # extends the autograd graph.
+    info["cloudstudio_rendered_rgb"] = rendered.detach()
     return loss, l1, ssim, range_loss, info
 
 
@@ -906,6 +917,7 @@ def train(
             "noise_injection_stop_iter": config.mcmc_noise_injection_stop_iter,
             "noise_lr": float(scale_calibration["effective_noise_lr"]),
         },
+        error_score_config=config.error_weighted_sampling,
     )
     runtime_contract = {
         key: backend.runtime.get(key)
@@ -1115,6 +1127,24 @@ def train(
             exposure_optimizer.step()
             exposure_optimizer.zero_grad(set_to_none=True)
             exposure.project_zero_mean()
+        if getattr(backend, "error_score_state", None) is not None:
+            # Feed the per-pixel residual of this step's view into the
+            # relocation/densification sampling scores while the projected
+            # centers still match the gaussian count.
+            error_map = (
+                (info["cloudstudio_rendered_rgb"] - tensors["rgb"]).abs().mean(dim=-1)
+            ) * tensors["rgb_mask"]
+            radii = info["radii"].detach()
+            radii = (
+                radii.reshape(-1, 2) if radii.shape[-1] == 2 else radii.reshape(-1)
+            )
+            backend.error_score_state.update(
+                info["means2d"].detach().reshape(-1, 2),
+                radii,
+                error_map,
+                sample.height,
+                sample.width,
+            )
         # Before strategy_post_step: relocation/add would desynchronize this
         # step's projected radii from the gaussian count.
         clip_report = clip_oversized_gaussians(
