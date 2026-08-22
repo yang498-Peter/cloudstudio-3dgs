@@ -79,9 +79,6 @@ class GsplatBackend:
         cap_max: int,
         lock_path: Path,
         mcmc_config: dict[str, Any] | None = None,
-        appearance_mode: str = "rgb",
-        maximum_sh_degree: int = 0,
-        sh_rest_lr_scale: float = 0.05,
     ) -> None:
         self.runtime = verify_gsplat_runtime(lock_path)
         import torch
@@ -91,18 +88,6 @@ class GsplatBackend:
         self.torch = torch
         self.rasterization = rasterization
         self.device = device
-        if appearance_mode not in {"rgb", "sh"}:
-            raise ValueError("appearance_mode must be rgb or sh")
-        if not 0 <= maximum_sh_degree <= 4:
-            raise ValueError("maximum_sh_degree must be in [0, 4]")
-        if appearance_mode == "rgb" and maximum_sh_degree != 0:
-            raise ValueError("RGB appearance must use maximum_sh_degree=0")
-        if sh_rest_lr_scale <= 0.0:
-            raise ValueError("sh_rest_lr_scale must be positive")
-        self.appearance_mode = appearance_mode
-        self.maximum_sh_degree = int(maximum_sh_degree)
-        self.active_sh_degree = 0
-        self.sh_rest_lr_scale = float(sh_rest_lr_scale)
         self.strategy = MCMCStrategy(
             cap_max=cap_max,
             verbose=False,
@@ -116,6 +101,8 @@ class GsplatBackend:
         if noise_stop != 0:
             require_full_mcmc_runtime(operator_report)
 
+    SH_C0 = 0.28209479177387814
+
     def initialize(
         self,
         xyz: Any,
@@ -124,8 +111,16 @@ class GsplatBackend:
         init_scale_m: float | None = None,
         init_scales_m: Any | None = None,
         learning_rates: dict[str, float],
+        color_model: str = "rgb_sigmoid",
+        sh_degree: int = 2,
     ) -> tuple[Any, dict[str, Any], Any]:
         torch = self.torch
+        if color_model not in ("rgb_sigmoid", "sh"):
+            raise ValueError("color_model must be 'rgb_sigmoid' or 'sh'")
+        if color_model == "sh" and not 0 <= int(sh_degree) <= 3:
+            raise ValueError("sh_degree must be within [0, 3]")
+        self.color_model = color_model
+        self.sh_degree = int(sh_degree)
         points = torch.as_tensor(xyz, dtype=torch.float32, device=self.device)
         colors = torch.as_tensor(rgb, dtype=torch.float32, device=self.device) / 255.0
         if len(points) < 4:
@@ -150,7 +145,7 @@ class GsplatBackend:
                 raise ValueError("init_scales_m must be finite and positive")
         quaternions = torch.zeros((len(points), 4), device=self.device)
         quaternions[:, 0] = 1.0
-        parameter_values = {
+        entries = {
             "means": torch.nn.Parameter(points),
             "scales": torch.nn.Parameter(scales_m.log()),
             "quats": torch.nn.Parameter(quaternions),
@@ -158,58 +153,32 @@ class GsplatBackend:
                 torch.full((len(points),), 0.1, device=self.device).logit()
             ),
         }
-        parameter_learning_rates = {
-            name: float(learning_rates[name])
-            for name in ("means", "scales", "quats", "opacities")
-        }
-        if getattr(self, "appearance_mode", "rgb") == "sh":
-            coefficient_count = (int(self.maximum_sh_degree) + 1) ** 2
-            sh0 = ((colors - 0.5) / 0.28209479177387814)[:, None, :]
-            parameter_values["sh0"] = torch.nn.Parameter(sh0)
-            parameter_values["shN"] = torch.nn.Parameter(
+        if color_model == "sh":
+            # Standard spherical-harmonics color: the DC coefficient carries the
+            # point color ((c - 0.5) / C0) and the view-dependent bands start at
+            # zero. Rasterization converts SH to RGB when sh_degree is passed.
+            coefficient_count = (self.sh_degree + 1) ** 2
+            sh0 = ((colors - 0.5) / self.SH_C0)[:, None, :]
+            entries["sh0"] = torch.nn.Parameter(sh0)
+            entries["shN"] = torch.nn.Parameter(
                 torch.zeros(
-                    (len(points), coefficient_count - 1, 3),
-                    dtype=torch.float32,
-                    device=self.device,
+                    (len(points), coefficient_count - 1, 3), device=self.device
                 )
             )
-            parameter_learning_rates["sh0"] = float(learning_rates["colors"])
-            parameter_learning_rates["shN"] = (
-                float(learning_rates["colors"]) * float(self.sh_rest_lr_scale)
-            )
         else:
-            parameter_values["colors"] = torch.nn.Parameter(
+            entries["colors"] = torch.nn.Parameter(
                 colors.clamp(1e-4, 1.0 - 1e-4).logit()
             )
-            parameter_learning_rates["colors"] = float(learning_rates["colors"])
-        params = torch.nn.ParameterDict(parameter_values)
+        params = torch.nn.ParameterDict(entries)
         optimizers = {
             name: torch.optim.Adam(
-                [{"params": [parameter], "lr": parameter_learning_rates[name], "name": name}],
+                [{"params": [parameter], "lr": float(learning_rates[name]), "name": name}],
                 eps=1e-15,
             )
             for name, parameter in params.items()
         }
         self.strategy.check_sanity(params, optimizers)
         return params, optimizers, self.strategy.initialize_state()
-
-    def set_training_step(self, step: int, *, interval: int) -> int:
-        if step < 0 or interval <= 0:
-            raise ValueError("appearance schedule step/interval is invalid")
-        if getattr(self, "appearance_mode", "rgb") == "sh":
-            self.active_sh_degree = min(
-                int(self.maximum_sh_degree), int(step) // int(interval)
-            )
-        else:
-            self.active_sh_degree = 0
-        return int(self.active_sh_degree)
-
-    def appearance_state(self) -> dict[str, Any]:
-        return {
-            "mode": getattr(self, "appearance_mode", "rgb"),
-            "maximum_degree": int(getattr(self, "maximum_sh_degree", 0)),
-            "active_degree": int(getattr(self, "active_sh_degree", 0)),
-        }
 
     def render(
         self,
@@ -218,6 +187,8 @@ class GsplatBackend:
         *,
         with_range: bool,
         c2w_override: Any | None = None,
+        active_sh_degree: int | None = None,
+        background_rgb: Any | None = None,
     ) -> tuple[Any, Any, Any, dict[str, Any]]:
         torch = self.torch
         c2w = torch.as_tensor(
@@ -227,13 +198,6 @@ class GsplatBackend:
         )[None]
         K = torch.as_tensor(sample.K, device=self.device)[None]
         radial = torch.as_tensor(sample.radial_coeffs, device=self.device)[None]
-        appearance_mode = getattr(self, "appearance_mode", "rgb")
-        if appearance_mode == "sh":
-            appearance = torch.cat((params["sh0"], params["shN"]), dim=1)
-            appearance_options = {"sh_degree": int(self.active_sh_degree)}
-        else:
-            appearance = torch.sigmoid(params["colors"])
-            appearance_options = {}
         render, alpha, info = self.rasterization(
             means=params["means"],
             quats=params["quats"],
@@ -246,7 +210,19 @@ class GsplatBackend:
             # fixture still "converged" and hid the bug.
             scales=torch.exp(params["scales"]),
             opacities=torch.sigmoid(params["opacities"]),
-            colors=appearance,
+            **(
+                {
+                    "colors": torch.cat([params["sh0"], params["shN"]], dim=1),
+                    # Progressive unlock: rasterization evaluates only the first
+                    # (active+1)^2 bands, so early training cannot fake geometry
+                    # with view-dependent color while poses/structure settle.
+                    "sh_degree": self.sh_degree
+                    if active_sh_degree is None
+                    else min(self.sh_degree, max(0, int(active_sh_degree))),
+                }
+                if getattr(self, "color_model", "rgb_sigmoid") == "sh"
+                else {"colors": torch.sigmoid(params["colors"])}
+            ),
             viewmats=torch.linalg.inv(c2w),
             Ks=K,
             width=sample.width,
@@ -259,9 +235,17 @@ class GsplatBackend:
             with_eval3d=True,
             global_z_order=False,
             rasterize_mode="classic",
-            **appearance_options,
         )
         rgb = render[0, ..., :3]
+        if background_rgb is not None:
+            # Composite un-saturated alpha onto an explicit background instead
+            # of the implicit black canvas: with a bright overcast sky the
+            # black bleed darkened 27% of the valid pixels by ~0.17 and the
+            # whole frame by ~0.12. Depth stays un-composited.
+            background = torch.as_tensor(
+                background_rgb, dtype=rgb.dtype, device=rgb.device
+            )
+            rgb = rgb + (1.0 - alpha[0]) * background
         range_m = render[0, ..., 3] if with_range else None
         return rgb, range_m, alpha[0, ..., 0], info
 

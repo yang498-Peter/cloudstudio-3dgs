@@ -828,32 +828,21 @@ Machine-B 的真实 UK 训练首次运行到质量报告时发现：训练与渲
 
 当前状态为 **PASS（Gate 2B 数学、mask 与配置契约）**。没有启动真实 GPU 训练，因此不能声称 PSNR/SSIM/深度或清晰度已经提升；后续受控 A/B 必须单独比较旧 global+linear 与新 local+log，且保持同一 person Manifest、split、位姿、初始化 PLY、步数和随机种子。
 
-## 25. 当前阶段记录：Gate 2C SH 外观与确定性 degree 调度
+## 25. 当前阶段记录：吸收澳洲 UK 质量分支（优先实现）
 
-### 问题现象
+### 同步结论
 
-旧 Trainer 每个 Gaussian 只有一个 sigmoid RGB，无法随观察方向表达镜面、木构高光和鱼眼两侧的视角相关外观；继续用 RGB 参数延长训练会把外观差异错误压进 opacity、scale 或几何。直接切到最高阶 SH 也会在几何尚未稳定时过早增加自由度，并使中断恢复若未保存阶段就产生不同训练轨迹。
+GitHub 重新联网后发现 `origin/machine-b/uk-quality` 已在共同祖先 `9651013` 之上完成 UK 场景的 Trainer 质量实验。按协作决策，该分支的当前 `backend.py` 与 `trainer.py` 为优先实现；本地此前独立的 SH 包装不再保留在生产路径，避免出现两套外观配置和两种训练语义。
 
-### 修改文件
+### 吸收内容
 
-- `cloudstudio_3dgs/training/appearance.py`
-- `cloudstudio_3dgs/training/backend.py`
-- `cloudstudio_3dgs/training/trainer.py`
-- `tools/run_synthetic_training_acceptance.py`
-- `tools/run_mcmc_resume_equivalence.py`
-- `tests/test_training.py`
-- `README.md`
-- `docs/IMPLEMENTATION_PLAN.zh-CN.md`
+- 每张训练图一个受限 log-gain 的 exposure compensation，只作用于 RGB loss；validation 固定 gain=1，checkpoint 通过 auxiliary parameter/optimizer 保存，避免用曝光补偿伪造验证指标。
+- 上游风格 SH：DC 由点色初始化、其余系数零初始化并以 `colors_lr/20` 学习；step 纯函数按 1000 步逐阶解锁，means LR 以指数方式衰减到指定 final factor。调度不依赖独立 scheduler 状态，因此中断恢复从 step 可重算。
+- 训练/验证均可使用显式背景合成。UK 实验定位默认黑底与过曝天空的 alpha 渗漏；白背景 P5 在同一 106 张 validation 上为 PSNR `16.21`、SSIM `0.5589`、PSNR P10 `15.78`，相对 P4 黑背景 PSNR `15.59` 提升 `0.62 dB`。
+- 单视角“看起来更锐”的 `lidar_range_weight=0.15` 被完整 validation 否决：P4b PSNR `14.25` / SSIM `0.5308` / 深度 MAE `3.93 m`，P4 为 `15.59` / `0.5528` / `4.01 m`。因此保持 `0.05`，不能以约 2% 深度收益换取 `1.34 dB` 外观损失。
 
-### 修改内容
+### 记录修复与验证
 
-- 生产默认外观改为 degree 3 SH：`sh0` 用 `(RGB-0.5)/C0` 初始化，`shN` 从零开始；DC 学习率沿用原 colors LR，其余系数使用 `0.05×`。参数与 optimizer 同名，符合 upstream MCMC 对任意附加 Gaussian 属性进行 relocate/add 的契约。RGB sigmoid 模式继续保留作 compatibility preset。
-- SH schedule 由 step 纯函数决定：step 0–999 使用 degree 0，1000–1999 使用 degree 1，2000–2999 使用 degree 2，3000 起使用 degree 3；renderer 只传当前允许阶数，但 checkpoint 始终保存完整 SH0/SHN 参数和 optimizer。
-- checkpoint training state 保存 `{mode, maximum_degree, active_degree}`；恢复时用 completed steps 独立重算并逐字段核对，缺失或错 degree 直接失败。trainer contract 升级为 schema 3 / algorithm v4，签名身份包含完整 appearance policy。
-- Gate 1 合成与 kill/resume 工具显式锁为 `mode=rgb, maximum_degree=0`，因此旧 Gate 1 的参数名、优化器和数值证据不会被生产默认 SH 改写。
+同步时发现 `experiments/runs.csv` 的旧表头 16 列而所有数据行为 12 列，属于不能直接用于筛选 preset 的证据记录缺陷。已改成列数固定的结构：明确写入可由 handoff 证实的全量指标，并将原来语义无法可靠还原的 6 个字段以 `legacy_unlabeled_values` 原样保留。新增 CPU 契约覆盖 progressive SH 边界、means decay、SH coefficient/renderer 参数、alpha 背景合成和 exposure clamp；原有 evaluation fake backend 因新 optional 参数不兼容的回归已修复。
 
-### 验证方式与当前状态
-
-红测试先因 appearance 模块不存在而失败；实现后验证 degree 边界 `0/999/1000/2999/3000`、错阶段恢复拒绝、SH0/SHN shape `1+15`、SHN LR 比例、renderer 的 `sh_degree=2` 与完整 coefficient tensor。训练定向测试通过；真实 CUDA SH rasterization 与真实场景画质 A/B 尚未运行，不能由 CPU 参数捕获测试替代。
-
-当前状态为 **PASS（Gate 2C 源码、CPU、schedule 与 checkpoint 契约）**，GPU/画质为 `NOT_RUN`。下一步实现 opacity/scale regularization、means LR decay 和逐项 telemetry，再进入周期 golden eval/best checkpoint；完成这些前置后才安排小预算 factor4 受控 A/B。
+当前状态为 **PASS（澳洲实现已吸收，源码/CPU 契约）**。这些 UK 指标是该机器的已签名实验输入，不自动升级为本机或原始 POS/Stage 2 POS 的画质结论；本机 clean locked CUDA 复验和之后的受控 A/B 仍为 `NOT_RUN`。

@@ -20,10 +20,6 @@ from cloudstudio_3dgs.data.manifest import canonical_json_bytes
 from cloudstudio_3dgs.geometry.lidar_projection import SparseDepthMap
 from cloudstudio_3dgs.evaluation.quality_report import sign_run_manifest
 from cloudstudio_3dgs.training.backend import GsplatBackend
-from cloudstudio_3dgs.training.appearance import (
-    AppearanceConfig,
-    verify_appearance_resume_state,
-)
 from cloudstudio_3dgs.training.checkpoint import load_checkpoint, save_checkpoint
 from cloudstudio_3dgs.training.contracts import build_coordinate_transform_manifest
 from cloudstudio_3dgs.training.dataset import S1TrainingDataset, TrainingSample
@@ -32,6 +28,10 @@ from cloudstudio_3dgs.training.losses import (
     confidence_weighted_range_l1,
     masked_rgb_l1,
     masked_rgb_ssim_loss,
+)
+from cloudstudio_3dgs.training.exposure import (
+    ExposureCompensationConfig,
+    ExposureCompensator,
 )
 from cloudstudio_3dgs.training.scale_calibration import (
     MetricScaleCalibrationConfig,
@@ -91,7 +91,6 @@ class TrainerConfig:
     metric_scale_calibration: MetricScaleCalibrationConfig = field(
         default_factory=MetricScaleCalibrationConfig
     )
-    appearance: AppearanceConfig = field(default_factory=AppearanceConfig)
     rgb_l1_weight: float = 0.8
     rgb_ssim_weight: float = 0.2
     lidar_range_weight: float = 0.05
@@ -100,6 +99,11 @@ class TrainerConfig:
     ssim_min_valid_fraction: float = 0.8
     lidar_range_loss_mode: str = "robust_log_huber"
     lidar_log_range_huber_delta: float = 0.05
+    color_model: str = "rgb_sigmoid"
+    sh_degree: int = 2
+    background_color: tuple[float, float, float] | None = None
+    sh_degree_interval: int = 1000
+    means_lr_final_factor: float = 1.0
     mcmc_refine_start_iter: int = 500
     mcmc_refine_stop_iter: int = 25_000
     mcmc_refine_every: int = 100
@@ -107,6 +111,9 @@ class TrainerConfig:
     mcmc_noise_lr: float = 500_000.0
     rig_pose_refinement: RigPoseRefinementConfig = field(
         default_factory=RigPoseRefinementConfig
+    )
+    exposure_compensation: ExposureCompensationConfig = field(
+        default_factory=ExposureCompensationConfig
     )
     learning_rates: dict[str, float] = field(
         default_factory=lambda: {
@@ -144,14 +151,14 @@ class TrainerConfig:
         if not isinstance(pose_value, dict):
             raise ValueError("rig_pose_refinement must be an object")
         pose_refinement = RigPoseRefinementConfig(**pose_value)
+        exposure_value = value.get("exposure_compensation", {})
+        if not isinstance(exposure_value, dict):
+            raise ValueError("exposure_compensation must be an object")
+        exposure = ExposureCompensationConfig(**exposure_value)
         scale_value = value.get("metric_scale_calibration", {})
         if not isinstance(scale_value, dict):
             raise ValueError("metric_scale_calibration must be an object")
         scale_calibration = MetricScaleCalibrationConfig(**scale_value)
-        appearance_value = value.get("appearance", {})
-        if not isinstance(appearance_value, dict):
-            raise ValueError("appearance must be an object")
-        appearance = AppearanceConfig(**appearance_value)
         options = {
             key: value[key]
             for key in (
@@ -171,6 +178,11 @@ class TrainerConfig:
                 "ssim_min_valid_fraction",
                 "lidar_range_loss_mode",
                 "lidar_log_range_huber_delta",
+                "color_model",
+                "sh_degree",
+                "background_color",
+                "sh_degree_interval",
+                "means_lr_final_factor",
                 "mcmc_refine_start_iter",
                 "mcmc_refine_stop_iter",
                 "mcmc_refine_every",
@@ -185,7 +197,7 @@ class TrainerConfig:
             crop=crop,
             rig_pose_refinement=pose_refinement,
             metric_scale_calibration=scale_calibration,
-            appearance=appearance,
+            exposure_compensation=exposure,
             **paths,
             **options,
         )
@@ -202,7 +214,18 @@ class TrainerConfig:
         if self.init_scale_m <= 0.0:
             raise ValueError("init_scale_m must be positive")
         self.metric_scale_calibration.validate()
-        self.appearance.validate()
+        if self.color_model not in ("rgb_sigmoid", "sh"):
+            raise ValueError("color_model must be 'rgb_sigmoid' or 'sh'")
+        if not 0 <= self.sh_degree <= 3:
+            raise ValueError("sh_degree must be within [0, 3]")
+        if self.background_color is not None:
+            values = tuple(float(v) for v in self.background_color)
+            if len(values) != 3 or any(not 0.0 <= v <= 1.0 for v in values):
+                raise ValueError("background_color must be three values in [0, 1]")
+        if self.sh_degree_interval < 0:
+            raise ValueError("sh_degree_interval must be non-negative")
+        if not 0.0 < self.means_lr_final_factor <= 1.0:
+            raise ValueError("means_lr_final_factor must be in (0, 1]")
         weights = (self.rgb_l1_weight, self.rgb_ssim_weight, self.lidar_range_weight)
         if any(weight < 0.0 for weight in weights):
             raise ValueError("loss weights must be non-negative")
@@ -230,6 +253,7 @@ class TrainerConfig:
         if self.mcmc_noise_injection_stop_iter < -1:
             raise ValueError("MCMC noise stop must be -1 or non-negative")
         self.rig_pose_refinement.validate()
+        self.exposure_compensation.validate()
         if (self.depth_manifest is None) != (self.depth_root is None):
             raise ValueError("depth_manifest and depth_root must be provided together")
         if (self.person_mask_manifest is None) != (self.person_mask_root is None):
@@ -260,8 +284,8 @@ class TrainerConfig:
 
     def contract_dict(self) -> dict[str, Any]:
         return {
-            "schema_version": 3,
-            "algorithm_version": "cloudstudio_gsplat_trainer_v4",
+            "schema_version": 2,
+            "algorithm_version": "cloudstudio_gsplat_trainer_v3",
             "seed": self.seed,
             "max_steps": self.max_steps,
             "factor": self.factor,
@@ -279,11 +303,26 @@ class TrainerConfig:
                 "fixed_scale_m": self.init_scale_m,
                 **self.metric_scale_calibration.to_dict(),
             },
-            "appearance": self.appearance.to_dict(),
             "loss_weights": {
                 "rgb_l1": self.rgb_l1_weight,
                 "rgb_ssim": self.rgb_ssim_weight,
                 "lidar_range": self.lidar_range_weight,
+            },
+            "color_model": {
+                "mode": self.color_model,
+                "sh_degree": self.sh_degree if self.color_model == "sh" else None,
+                "sh_degree_interval": self.sh_degree_interval
+                if self.color_model == "sh"
+                else None,
+            },
+            "background_compositing": {
+                "color": None
+                if self.background_color is None
+                else [float(v) for v in self.background_color],
+            },
+            "means_lr_schedule": {
+                "mode": "exponential_to_final_factor",
+                "final_factor": self.means_lr_final_factor,
             },
             "loss_contract": {
                 "rgb_ssim": {
@@ -330,6 +369,7 @@ class TrainerConfig:
                 "noise_std_fraction": self.metric_scale_calibration.noise_std_fraction,
             },
             "rig_pose_refinement": self.rig_pose_refinement.to_dict(),
+            "exposure_compensation": self.exposure_compensation.to_dict(),
             "viewer": False,
         }
 
@@ -400,6 +440,44 @@ def _sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 
+def means_lr_for_step(
+    base_learning_rate: float,
+    final_factor: float,
+    *,
+    step: int,
+    max_steps: int,
+) -> float:
+    """Australian parity schedule as a pure function for resume equivalence."""
+    if base_learning_rate <= 0.0:
+        raise ValueError("base means learning rate must be positive")
+    if not 0.0 < final_factor <= 1.0:
+        raise ValueError("means LR final factor must be in (0, 1]")
+    if step < 0 or max_steps <= 0:
+        raise ValueError("means LR schedule requires non-negative step and max_steps")
+    return float(base_learning_rate * (final_factor ** (step / max(1, max_steps))))
+
+
+def active_sh_degree_for_step(config: TrainerConfig, step: int) -> int | None:
+    """Australian progressive-SH schedule, derived solely from the step."""
+    if step < 0:
+        raise ValueError("SH schedule step must be non-negative")
+    if config.color_model != "sh" or config.sh_degree_interval == 0:
+        return None
+    return min(config.sh_degree, step // config.sh_degree_interval)
+
+
+def appearance_learning_rates(
+    config: TrainerConfig, learning_rates: dict[str, float]
+) -> dict[str, float]:
+    """Map the configured RGB rate to Australian SH DC/rest optimizer rates."""
+    effective = dict(learning_rates)
+    if config.color_model == "sh":
+        color_lr = float(effective.pop("colors"))
+        effective["sh0"] = color_lr
+        effective["shN"] = color_lr / 20.0
+    return effective
+
+
 def _tensor_sample(sample: TrainingSample, torch: Any, device: str) -> dict[str, Any]:
     result = {
         "rgb": torch.as_tensor(np.array(sample.image, copy=True), dtype=torch.float32, device=device) / 255.0,
@@ -424,6 +502,8 @@ def _render_supervision_loss(
     tensors: dict[str, Any],
     config: TrainerConfig,
     c2w_override: Any | None = None,
+    rgb_gain: Any | None = None,
+    active_sh_degree: int | None = None,
 ) -> tuple[Any, Any, Any, Any, dict[str, Any]]:
     has_range = "range_m" in tensors and config.lidar_range_weight > 0.0
     rendered, rendered_range, _, info = backend.render(
@@ -431,7 +511,14 @@ def _render_supervision_loss(
         sample,
         with_range=has_range,
         c2w_override=c2w_override,
+        active_sh_degree=active_sh_degree,
+        background_rgb=config.background_color,
     )
+    if rgb_gain is not None:
+        # Per-frame auto-exposure compensation: scale the render toward the
+        # frame's brightness for the photometric losses only. Geometry (range)
+        # and validation renders stay at gain 1.0.
+        rendered = rendered * rgb_gain
     l1 = masked_rgb_l1(rendered, tensors["rgb"], tensors["rgb_mask"])
     ssim = (
         masked_rgb_ssim_loss(
@@ -519,6 +606,7 @@ def _save_evaluation_artifacts(
     params: Any,
     dataset: S1TrainingDataset,
     output_dir: Path,
+    background_rgb: Any | None = None,
 ) -> list[dict[str, Any]]:
     torch = backend.torch
     frames: list[dict[str, Any]] = []
@@ -528,7 +616,12 @@ def _save_evaluation_artifacts(
         for index in range(len(dataset)):
             sample = dataset[index]
             has_range = sample.depth_range_m is not None
-            rendered, rendered_range, _, _ = backend.render(params, sample, with_range=has_range)
+            render_options = {"with_range": has_range}
+            if background_rgb is not None:
+                render_options["background_rgb"] = background_rgb
+            rendered, rendered_range, _, _ = backend.render(
+                params, sample, **render_options
+            )
             prefix = artifact_root / sample.image_id
             reference_path = prefix.with_name(f"{sample.image_id}_reference.png")
             render_path = prefix.with_name(f"{sample.image_id}_rendered.png")
@@ -673,7 +766,9 @@ def train(
         configured_means_lr=float(config.learning_rates["means"]),
         configured_noise_lr=config.mcmc_noise_lr,
     )
-    effective_learning_rates = dict(config.learning_rates)
+    effective_learning_rates = appearance_learning_rates(
+        config, config.learning_rates
+    )
     effective_learning_rates["means"] = float(scale_calibration["effective_means_lr_m"])
     backend = backend_factory(
         device=config.device,
@@ -686,9 +781,6 @@ def train(
             "noise_injection_stop_iter": config.mcmc_noise_injection_stop_iter,
             "noise_lr": float(scale_calibration["effective_noise_lr"]),
         },
-        appearance_mode=config.appearance.mode,
-        maximum_sh_degree=config.appearance.maximum_degree,
-        sh_rest_lr_scale=config.appearance.rest_lr_scale,
     )
     runtime_contract = {
         key: backend.runtime.get(key)
@@ -712,6 +804,8 @@ def train(
         rgb,
         init_scales_m=initial_scales_m,
         learning_rates=effective_learning_rates,
+        color_model=config.color_model,
+        sh_degree=config.sh_degree,
     )
     pose_refiner = None
     pose_optimizer = None
@@ -727,6 +821,17 @@ def train(
         pose_optimizer = pose_refiner.make_optimizer()
         auxiliary_params["rig_pose_deltas"] = pose_refiner.deltas
         auxiliary_optimizers["rig_pose_deltas"] = pose_optimizer
+    exposure = None
+    exposure_optimizer = None
+    if config.exposure_compensation.enabled:
+        exposure = ExposureCompensator(
+            trainset.image_ids,
+            config=config.exposure_compensation,
+            device=config.device,
+        )
+        exposure_optimizer = exposure.make_optimizer()
+        auxiliary_params["exposure_log_gains"] = exposure.log_gains
+        auxiliary_optimizers["exposure_log_gains"] = exposure_optimizer
     completed_steps = 0
     last_metrics: dict[str, Any] = {}
     initial_loss: float | None = None
@@ -751,21 +856,8 @@ def train(
             raise ValueError("full-MCMC checkpoint has no MCMC telemetry state")
         if restored_telemetry is not None:
             mcmc_telemetry = dict(restored_telemetry)
-        restored_appearance = training_state.get("appearance")
-        backend.set_training_step(
-            completed_steps, interval=config.appearance.degree_interval
-        )
-        verify_appearance_resume_state(
-            config.appearance,
-            completed_steps=completed_steps,
-            restored=restored_appearance,
-        )
         if completed_steps >= config.max_steps:
             raise ValueError("checkpoint already reached or exceeded max_steps")
-
-    backend.set_training_step(
-        completed_steps, interval=config.appearance.degree_interval
-    )
 
     if mcmc_telemetry is None:
         mcmc_telemetry = initialize_mcmc_telemetry(
@@ -776,9 +868,6 @@ def train(
     started = time.perf_counter()
     checkpoint_path = output_dir / "checkpoints" / "latest.pt"
     for step in range(completed_steps, config.max_steps):
-        active_appearance_degree = backend.set_training_step(
-            step, interval=config.appearance.degree_interval
-        )
         index = int(torch.randint(len(trainset), (1,), generator=sampler).item())
         sample = trainset[index]
         tensors = _tensor_sample(sample, torch, config.device)
@@ -787,6 +876,18 @@ def train(
             if pose_refiner is None
             else pose_refiner.apply(sample.rig_frame_id, sample.c2w)
         )
+        if config.means_lr_final_factor < 1.0:
+            # Deterministic function of the step (no scheduler state), so an
+            # interrupted resume lands on exactly the same learning rate.
+            decayed = means_lr_for_step(
+                effective_learning_rates["means"],
+                config.means_lr_final_factor,
+                step=step,
+                max_steps=config.max_steps,
+            )
+            for group in optimizers["means"].param_groups:
+                group["lr"] = decayed
+        active_sh_degree = active_sh_degree_for_step(config, step)
         loss, l1, ssim, range_loss, info = _render_supervision_loss(
             backend=backend,
             params=params,
@@ -794,11 +895,15 @@ def train(
             tensors=tensors,
             config=config,
             c2w_override=c2w_override,
+            rgb_gain=None if exposure is None else exposure.gain(sample.image_id),
+            active_sh_degree=active_sh_degree,
         )
         pose_prior = None
         if pose_refiner is not None:
             pose_prior = pose_refiner.prior_loss()
             loss = loss + pose_prior
+        if exposure is not None:
+            loss = loss + exposure.prior_loss()
         require_finite_training_tensors(
             params=params,
             loss=loss,
@@ -829,6 +934,9 @@ def train(
         if pose_optimizer is not None:
             pose_optimizer.step()
             pose_optimizer.zero_grad(set_to_none=True)
+        if exposure_optimizer is not None:
+            exposure_optimizer.step()
+            exposure_optimizer.zero_grad(set_to_none=True)
         mcmc_event = backend.strategy_post_step(
             params,
             optimizers,
@@ -859,16 +967,11 @@ def train(
             "rig_pose_prior": None
             if pose_prior is None
             else float(pose_prior.detach().cpu()),
-            "appearance_mode": config.appearance.mode,
-            "active_sh_degree": active_appearance_degree,
         }
         if initial_loss is None:
             initial_loss = last_metrics["loss"]
         best_loss = min(best_loss, last_metrics["loss"])
         completed = step + 1
-        backend.set_training_step(
-            completed, interval=config.appearance.degree_interval
-        )
         checkpoint_due = (
             completed % config.checkpoint_every == 0
             or completed == config.max_steps
@@ -897,7 +1000,6 @@ def train(
                     "initial_loss": initial_loss,
                     "best_loss": best_loss,
                     "mcmc_telemetry": mcmc_telemetry,
-                    "appearance": backend.appearance_state(),
                 },
                 auxiliary_params=auxiliary_params,
                 auxiliary_optimizers=auxiliary_optimizers,
@@ -948,6 +1050,7 @@ def train(
                 "best_loss": best_loss,
                 "mcmc_telemetry": mcmc_telemetry,
                 "rig_pose_refinement": pose_report,
+                "exposure_compensation": None if exposure is None else exposure.report(),
             },
             auxiliary_params=auxiliary_params,
             auxiliary_optimizers=auxiliary_optimizers,
@@ -957,6 +1060,7 @@ def train(
         params=params,
         dataset=valset,
         output_dir=output_dir,
+        background_rgb=config.background_color,
     )
     run_manifest = sign_run_manifest(
         {
@@ -973,8 +1077,8 @@ def train(
             "gsplat_runtime": backend.runtime,
             "initialization_ply_sha256": initialization_sha256,
             "metric_scale_calibration": scale_calibration,
-            "appearance": backend.appearance_state(),
             "rig_pose_refinement": pose_report,
+            "exposure_compensation": None if exposure is None else exposure.report(),
             "frames": frames,
             "training": {
                 "status": "COMPLETE",

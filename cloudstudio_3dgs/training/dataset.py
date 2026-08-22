@@ -250,6 +250,11 @@ class S1TrainingDataset:
         self.split = split
 
     @property
+    def image_ids(self) -> list[str]:
+        """Selected image IDs in split-manifest order."""
+        return [str(record[0]["image_id"]) for record in self._records]
+
+    @property
     def identity(self) -> dict[str, Any]:
         return {
             "dataset_manifest_sha256": self.dataset_sha256,

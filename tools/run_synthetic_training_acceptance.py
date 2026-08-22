@@ -24,7 +24,6 @@ from cloudstudio_3dgs.data.depth_cache import sparse_depth_npz_bytes
 from cloudstudio_3dgs.evaluation.splits import SplitConfig, build_split_manifest, write_split_manifest
 from cloudstudio_3dgs.geometry.lidar_projection import SparseDepthMap
 from cloudstudio_3dgs.training.backend import GsplatBackend
-from cloudstudio_3dgs.training.appearance import AppearanceConfig
 from cloudstudio_3dgs.training.checkpoint import compare_checkpoint_payloads
 from cloudstudio_3dgs.training.dataset import TrainingSample
 from cloudstudio_3dgs.training.runtime_evidence import (
@@ -378,7 +377,6 @@ def main() -> int:
                 means_step_fraction=None,
                 noise_std_fraction=None,
             ),
-            appearance=AppearanceConfig(mode="rgb", maximum_degree=0),
             rgb_l1_weight=1.0,
             rgb_ssim_weight=0.0,
             lidar_range_weight=0.01,
