@@ -13,6 +13,7 @@ from cloudstudio_3dgs.data.depth_cache import sparse_depth_npz_bytes
 from cloudstudio_3dgs.data.manifest import canonical_json_bytes
 from cloudstudio_3dgs.evaluation.quality_report import (
     _golden_checkpoint_selection,
+    _periodic_full_evaluation,
     _safe_path,
     build_quality_report,
     sign_run_manifest,
@@ -131,7 +132,11 @@ class QualityReportTests(unittest.TestCase):
         self.assertEqual(first["status"], "PARTIAL")
         self.assertEqual(
             first["warnings"],
-            ["golden_evaluation:NOT_RUN", "image_metrics.lpips:NOT_RUN"],
+            [
+                "golden_evaluation:NOT_RUN",
+                "periodic_full_evaluation:NOT_RUN",
+                "image_metrics.lpips:NOT_RUN",
+            ],
         )
         self.assertEqual(first["golden_checkpoint_selection"]["status"], "NOT_RUN")
         self.assertEqual(first["summary"]["frame_count"], 2)
@@ -143,13 +148,26 @@ class QualityReportTests(unittest.TestCase):
 
     def test_golden_checkpoint_history_is_verified_before_quality_use(self) -> None:
         config = GoldenEvaluationConfig()
+        artifact_sha = hashlib.sha256(b"artifact").hexdigest()
         record = {
             "schema_version": 1,
             "algorithm_version": "golden_validation_v1",
             "completed_steps": 1000,
             "split_manifest_sha256": "split-sha",
             "image_ids": ["golden-left"],
-            "frames": [],
+            "frames": [
+                {
+                    "image_id": "golden-left",
+                    "artifacts": {
+                        "rendered_path": "evaluation/golden_rendered.png",
+                        "rendered_sha256": artifact_sha,
+                        "reference_path": "evaluation/golden_reference.png",
+                        "reference_sha256": artifact_sha,
+                        "mask_path": "evaluation/golden_mask.png",
+                        "mask_sha256": artifact_sha,
+                    },
+                }
+            ],
             "summary": {
                 "selection_metric": "masked_rgb_psnr_db_mean",
                 "psnr_db_mean": 24.0,
@@ -175,10 +193,13 @@ class QualityReportTests(unittest.TestCase):
             history_path = root / "evaluation" / "golden_history.json"
             history_path.parent.mkdir()
             history_path.write_text(json.dumps(history), encoding="utf-8")
+            for name in ("golden_rendered.png", "golden_reference.png", "golden_mask.png"):
+                (history_path.parent / name).write_bytes(b"artifact")
             checkpoint_path = root / "checkpoints" / "best_golden.pt"
             checkpoint_path.parent.mkdir()
             checkpoint_path.write_bytes(b"checkpoint")
             run = {
+                "training": {"completed_steps": 1000},
                 "golden_evaluation": {
                     "configuration": config.to_dict(),
                     "history_path": "evaluation/golden_history.json",
@@ -186,6 +207,7 @@ class QualityReportTests(unittest.TestCase):
                     "evaluation_count": 1,
                     "best": record,
                     "best_checkpoint_path": "checkpoints/best_golden.pt",
+                    "best_checkpoint_sha256": hashlib.sha256(b"checkpoint").hexdigest(),
                 }
             }
             selection, warnings = _golden_checkpoint_selection(run, root)
@@ -195,6 +217,44 @@ class QualityReportTests(unittest.TestCase):
             history_path.write_text(json.dumps(history), encoding="utf-8")
             with self.assertRaisesRegex(ValueError, "SHA256 mismatch"):
                 _golden_checkpoint_selection(run, root)
+
+    def test_periodic_full_history_is_verified(self) -> None:
+        record = {
+            "schema_version": 1,
+            "algorithm_version": "full_validation_v2",
+            "evaluation_kind": "full",
+            "completed_steps": 4000,
+            "split_manifest_sha256": "split-sha",
+            "image_ids": ["val"],
+            "frames": [],
+            "summary": {"psnr_db_mean": 20.0},
+        }
+        record["full_evaluation_sha256"] = hashlib.sha256(
+            canonical_json_bytes(record)
+        ).hexdigest()
+        history = {"schema_version": 1, "history": [record]}
+        history["full_evaluation_history_sha256"] = hashlib.sha256(
+            canonical_json_bytes(history)
+        ).hexdigest()
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            path = root / "evaluation" / "full_evaluation_history.json"
+            path.parent.mkdir()
+            path.write_text(json.dumps(history), encoding="utf-8")
+            run = {
+                "training": {"completed_steps": 4000},
+                "golden_evaluation": {"configuration": GoldenEvaluationConfig().to_dict()},
+                "periodic_full_evaluation": {
+                    "history_path": "evaluation/full_evaluation_history.json",
+                    "history_sha256": history["full_evaluation_history_sha256"],
+                    "evaluation_count": 1,
+                    "latest": record,
+                }
+            }
+            report, warnings = _periodic_full_evaluation(run, root)
+            self.assertEqual(report["status"], "VERIFIED")
+            self.assertEqual(report["latest_completed_steps"], 4000)
+            self.assertEqual(warnings, [])
 
     def test_run_split_mismatch_fails_before_reporting(self) -> None:
         dataset = dataset_fixture(2)

@@ -1,11 +1,14 @@
 import importlib.util
+import tempfile
 import unittest
+from pathlib import Path
 
 import numpy as np
 
 from cloudstudio_3dgs.training.dataset import TrainingSample
 from cloudstudio_3dgs.training.golden_eval import (
     GoldenEvaluationConfig,
+    evaluate_full_validation,
     evaluate_golden_views,
     golden_image_ids,
     is_golden_improvement,
@@ -75,20 +78,71 @@ class GoldenEvaluationTests(unittest.TestCase):
                     raise AssertionError("fixture does not contain depth")
 
         backend = Backend()
-        report = evaluate_golden_views(
-            backend=backend,
-            params=None,
-            dataset=Dataset(),
-            split_manifest=_split_manifest(),
-            completed_steps=10,
-            background_rgb=(1.0, 1.0, 1.0),
-        )
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            report = evaluate_golden_views(
+                backend=backend,
+                params=None,
+                dataset=Dataset(),
+                split_manifest=_split_manifest(),
+                completed_steps=10,
+                background_rgb=(1.0, 1.0, 1.0),
+                artifact_output_dir=root,
+            )
+            for frame in report["frames"]:
+                for key in ("rendered_path", "reference_path", "mask_path"):
+                    self.assertTrue((root / frame["artifacts"][key]).is_file())
         self.assertEqual(report["image_ids"], ["golden-left", "golden-right"])
         self.assertEqual([frame["image_id"] for frame in report["frames"]], report["image_ids"])
         self.assertGreater(float(report["summary"]["psnr_db_mean"]), 20.0)
         self.assertEqual(backend.backgrounds, [(1.0, 1.0, 1.0)] * 2)
         self.assertTrue(is_golden_improvement(report, None, min_psnr_improvement_db=0.001))
         self.assertFalse(is_golden_improvement(report, report, min_psnr_improvement_db=0.001))
+
+    def test_full_validation_covers_signed_validation_order(self) -> None:
+        import torch
+
+        class Dataset:
+            image_ids = ["golden-left", "golden-right", "other-val"]
+
+            def __getitem__(self, index: int) -> TrainingSample:
+                image_id = self.image_ids[index]
+                return TrainingSample(
+                    image_id=image_id,
+                    rig_frame_id=image_id,
+                    camera_id="left",
+                    image=np.full((16, 16, 3), 64, dtype=np.uint8),
+                    rgb_mask=np.ones((16, 16), dtype=bool),
+                    depth_range_m=None,
+                    depth_confidence=None,
+                    depth_mask=None,
+                    depth_cache_path=None,
+                    c2w=np.eye(4, dtype=np.float32),
+                    K=np.eye(3, dtype=np.float32),
+                    radial_coeffs=np.zeros(4, dtype=np.float32),
+                    width=16,
+                    height=16,
+                )
+
+        class Backend:
+            def __init__(self) -> None:
+                self.torch = torch
+
+            @staticmethod
+            def render(params, sample, **kwargs):
+                return torch.full((16, 16, 3), 0.2), None, None, None
+
+        report = evaluate_full_validation(
+            backend=Backend(),
+            params=None,
+            dataset=Dataset(),
+            split_manifest=_split_manifest(),
+            completed_steps=4000,
+        )
+        self.assertEqual(report["evaluation_kind"], "full")
+        self.assertEqual(report["image_ids"], Dataset.image_ids)
+        self.assertEqual(len(report["frames"]), 3)
+        self.assertIn("psnr_db_p10", report["summary"])
 
     def test_golden_contract_rejects_empty_or_non_validation_views(self) -> None:
         with self.assertRaisesRegex(ValueError, "not in the validation"):

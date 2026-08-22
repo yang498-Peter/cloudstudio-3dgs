@@ -890,3 +890,39 @@ MCMC 的 relocate/add 能控制低 opacity 对象的数量，但不会阻止 RGB
 新增 CPU 回归构造顺序被打乱的 validation Dataset，断言仍严格按 signed golden 顺序评估、背景参数确实传到 renderer、PSNR 选择阈值不允许同分或不足 `0.001 dB` 的 checkpoint 覆盖最佳模型；同时验证非法黄金视图和零间隔 fail-closed。质量报告回归再篡改 history 中的 PSNR，验证签名立即失败。定向 `34` 项为 `33 PASS + 1 SKIPPED`，尚未启动新的真实 GPU 训练。
 
 当前状态为 **PASS（Gate 2E 源码/CPU 契约）**。下一步是以合入的澳洲质量实现，在干净锁定 CUDA runtime 上跑短程真实基线，检查 golden history、best checkpoint、全量 validation 质量报告与 GPU 资源证据，再决定原始 POS / Stage 2 POS 的受控 A/B 是否可以启动。
+
+## 28. 当前阶段记录：Gate 2F preset、周期完整验证与受控 A/B 证据链
+
+### 问题现象
+
+Gate 2E 虽然能生成 `best_golden.pt`，但旧 Trainer 没有可执行的兼容 preset，澳洲 P5 也仍靠手工配置；KNN、SH 和 local SSIM 无法保证只改变一个变量。周期评估只覆盖 golden views，正式完整 validation 仍只在终点渲染；更关键的是终点质量产物继续使用最后一步参数，`best_golden.pt` 并未真正成为被验收模型。因此仅凭“存在最佳 checkpoint”不能满足 Gate 2 Exit。
+
+### 修改文件
+
+- `cloudstudio_3dgs/training/presets.py`
+- `cloudstudio_3dgs/training/ab_matrix.py`
+- `cloudstudio_3dgs/training/ab_results.py`
+- `cloudstudio_3dgs/training/golden_eval.py`
+- `cloudstudio_3dgs/training/trainer.py`
+- `cloudstudio_3dgs/evaluation/quality_report.py`
+- `tools/build_trainer_ab_matrix.py`
+- `tools/summarize_trainer_ab.py`
+- `configs/trainer_gate2_ab_base.example.json`
+- `tests/test_training_presets.py`
+- `tests/test_ab_matrix.py`
+- `tests/test_golden_eval.py`
+- `tests/test_quality_report.py`
+- `README.md`
+- `docs/IMPLEMENTATION_PLAN.zh-CN.md`
+
+### 修改内容
+
+- 固化五个不可冒名 preset：`legacy_minimal_v1` 精确恢复 fixed-scale、RGB sigmoid、global masked moments、linear range、无 exposure/geometry regularization/means decay 的旧语义；三个单变量臂分别只启用 KNN、SH3 progressive 或 local SSIM；组合候选 `gate2_quality_australian_p5_v1` 以澳洲 P5 的 exposure、SH3、means decay `0.01`、白背景为优先外观基础，再叠加 KNN、local SSIM、robust log-range 和米制正则。preset 固定字段出现冲突时拒绝运行，直接构造 dataclass 也不能用不匹配参数冒充命名 preset。
+- `GoldenEvaluationConfig` 默认每 `1000` 步生成 signed golden PSNR/SSIM/depth 与 reference/render/mask PNG 哈希证据，每 `4000` 步对完整 validation 计算相同指标；两类 history 都按严格递增 step 签名并进入 checkpoint。最终若最佳步早于终点，Trainer 会原子读取 `best_golden.pt` 后再生成正式完整 validation 产物，run Manifest 同时区分 final 与 selected step/Gaussian 数并绑定 selected model SHA；`latest.pt` 仍保留最终训练状态。
+- 质量报告验证 golden/full history、每条记录、周期 PNG、最佳 checkpoint 和 selected model 的 SHA；缺失或篡改 fail-closed。旧 run 会明确产生 `golden_evaluation:NOT_RUN` / `periodic_full_evaluation:NOT_RUN`，不升级历史证据。
+- A/B builder 只接收共享数据/资源/训练预算字段，禁止 base 混入 arm-specific 算法项；生成五份配置和签名 matrix，逐项绑定 dataset、base/person/depth mask、split、初始化 PLY、gsplat lock、seed、factor、步数和 Trainer contract。verifier 重新计算 contract diff，确保 KNN/SH/local SSIM 三臂只有声明的变量组变化。
+- A/B 汇总器要求每臂训练完成、完整 validation、verified golden/best、至少两次 periodic full eval、相同输入身份、深度指标和默认 LPIPS；统一把“正值=更好”后报告单变量 IMPROVED/MIXED/REGRESSED，并对澳洲质量候选执行零容差、不低于 legacy reference 的 Gate 判定。工具只汇总真实产物，不启动训练，也不把缺失报告写成 PASS。
+
+### 验证方式与当前状态
+
+CPU 回归覆盖 preset 固定/冲突/冒名拒绝、legacy global SSIM 实际执行、单变量 contract diff、matrix/config/input SHA 篡改、周期 golden PNG、完整 validation 顺序与 P10、history/checkpoint/model SHA 以及结果分类/报告绑定。CLI help 和 Python 编译通过。当前仅证明 **源码与 CPU 契约 PASS**；本机干净 CUDA 合成重放、factor4 五臂 A/B、LPIPS、真实质量候选 Gate 均保持 `NOT_RUN`，因此 Gate 2 尚未关闭。
