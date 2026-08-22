@@ -965,7 +965,7 @@ CPU 回归覆盖 preset 固定/冲突/冒名拒绝、legacy global SSIM 实际�
 
 ### 问题现象
 
-联网复核时澳洲 `machine-b/uk-quality` 从 `b5bcb30` 前进到 `21235e4`。P8 单变量证据表明 hard zero-mean exposure anchor 相对 P5 下降约 `0.8 dB`，geometry regularization 被排除为主因；P9 同时使用 soft anchor、decoupled SSIM、SH1 和 geometry regularization 后仍比 P5 低 `0.62 dB`，因此澳洲把怀疑转向 P5 后合并的 trainer 代码，并启动 P10 同配置 control。合并新配置后，旧命名 preset 未声明 `mean_anchor_weight/beta`，fail-closed 校验报 exposure contract 不匹配。全仓回归还暴露 PPISP 梯度测试使用未设种子的全局随机扰动，偶尔把 CRF 参数推入饱和区而产生零梯度，造成非确定性红灯。
+联网复核时澳洲 `machine-b/uk-quality` 先从 `b5bcb30` 前进到 `21235e4`，随后 P10 完成并推进到 `2113134`。P8 单变量证据表明 hard zero-mean exposure anchor 相对 P5 下降约 `0.8 dB`，geometry regularization 被排除为主因；P9 同时使用 soft anchor、decoupled SSIM、SH1 和 geometry regularization 后仍比 P5 低 `0.62 dB`，因此澳洲用 P10 在当前代码上重跑完全相同的 P5 control。P10 得到 PSNR `16.45`、SSIM `0.5587`、P10 PSNR `16.01`、depth MAE `4.156 m`，高于旧 P5 的 `16.21 dB`，排除了“合并后 trainer 代码整体回归”，并确认 hard/soft exposure anchoring 都应拒绝。合并新配置后，旧命名 preset 未声明 `mean_anchor_weight/beta`，fail-closed 校验报 exposure contract 不匹配。全仓回归还暴露 PPISP 梯度测试使用未设种子的全局随机扰动，偶尔把 CRF 参数推入饱和区而产生零梯度，造成非确定性红灯。
 
 ### 修改文件
 
@@ -982,7 +982,7 @@ CPU 回归覆盖 preset 固定/冲突/冒名拒绝、legacy global SSIM 实际�
 
 ### 验证方式与当前状态
 
-合并后 `export_gaussian_ply.py --help` 通过；preset/A-B/soft anchor/PPISP 定向 `18` 项为 `17 PASS + 1 SKIPPED`，全仓 `182` 项为 `181 PASS + 1 SKIPPED`。澳洲 `21235e4` 已成为当前分支祖先。当前状态为 **PASS（澳洲代码吸收与 CPU 兼容）**，但 P9 明确是回归证据、P10 尚无结果；因此当前推荐基线仍是已验证的 P5，不会用 P8/P9 替换，也不会据此启动正式长训。
+合并后 `export_gaussian_ply.py --help` 通过；preset/A-B/soft anchor/PPISP 定向 `18` 项为 `17 PASS + 1 SKIPPED`，当时全仓 `182` 项为 `181 PASS + 1 SKIPPED`。澳洲最新 `2113134` 已成为当前分支祖先。当前状态为 **PASS（澳洲代码与 P10 结论已吸收）**：P10 证明当前代码下原始 P5 仍是赢家，P8/P9 的 hard/soft anchor 均被拒绝；澳洲已用该配置启动 30k-gold，最终结果仍待同步。
 
 ## 31. 当前阶段记录：真实 factor4 P5 短基线与深度覆盖率评估修复
 
@@ -1013,4 +1013,4 @@ CPU 回归覆盖 preset 固定/冲突/冒名拒绝、legacy global SSIM 实际�
 - 修复后对同一签名 run 重新生成质量报告：124/124 张深度可测，coverage min/mean 为 `0.932899 / 0.989577`，depth MAE mean 为 `8.19595 m`；报告仅因 LPIPS 尚未运行而保持 `PARTIAL`。该 MAE 是 600 步短链结果，不能解释为正式质量通过。
 - 定向回归 `14/14 PASS`：严格默认仍拒绝缺口，显式低门测试只在超过门限时测量，低于门限/全零预测仍 `UNMEASURABLE`。完整 CPU 套件为 `182 PASS + 1 SKIPPED + 3 subtests PASS`；唯一跳过是需要锁定 CUDA 扩展的物理足迹测试，本轮真实 600 步 GPU 运行和第 29 节签名尺度证据已分别覆盖运行链与足迹链。
 
-当前为 **PASS（真实输入、短训练链、RGB 与深度评估可测性）**，但 Gate 2 仍未关闭：LPIPS、至少两次周期完整验证、legacy/KNN/SH/local-SSIM/P5 五臂正式 A/B 均未完成；澳洲 P10 结果也仍待同步。下一步先跑全仓回归并推送本修复，再用新 `v3` 评估契约启动正式受控运行。
+当前为 **PASS（真实输入、短训练链、RGB 与深度评估可测性）**，但 Gate 2 仍未关闭：LPIPS、至少两次周期完整验证、legacy/KNN/SH/local-SSIM/P5 五臂正式 A/B 均未完成；澳洲 P10 已确认 P5，30k-gold 最终结果仍待同步。下一步先推送本修复与澳洲最新合并，再用新 `v3` 评估契约启动正式受控运行。
