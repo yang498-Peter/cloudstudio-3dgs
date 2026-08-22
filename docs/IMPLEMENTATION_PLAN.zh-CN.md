@@ -1156,3 +1156,29 @@ GitHub 重新联网后，澳洲 `machine-b/uk-quality` 从 `2113134` 推进到 `
 - selected step 1000 的 scale p50/p95/p99/p999/max 为 `0.1034/0.1816/0.2907/0.7788/5.7713 m`，大于 `1 m` 有 `262` 个；尺度尾部确实受控，证明该运行路径有效而非空配置，但 15% 足迹阈值在训练早期过度干预可见 Gaussian，外观代价远超晋级余量。因此该参数 **REJECTED**，不进入 8k；若再探索，只允许提高足迹阈值做单变量短探针，不能与 CVaR 同时开启。
 - 按停止计划只把 `max_screen_fraction` 从 `0.15` 放宽到 `0.30` 再做一次 1000 步探针。该运行耗时 `451.49 s`、峰值额外显存 `921,739,776 bytes`，screen clip 仍触发 `154,910` 次，run Manifest SHA256 为 `01e0c9d29d785dc0231576d4bf4d3a97a3c5f1a8cf9e62da591d264215847101`。124 图报告为 PSNR `16.324915 dB`、SSIM `0.532937`、LPIPS-Alex `0.588965`、depth MAE `7.771479 m`、coverage min `0.916894`，quality report SHA256 为 `320405626097313d8b3db29ca7444cf86978b7d133f8997ea1a41a20076bb158`。
 - 30% 相对 15% 只恢复 `0.076766 dB` PSNR，触发数也只减少 `2,234`；相对弱 tail 同步 1k，p999/max/大于 1 m 为 `0.8022/8.2444 m/266`，仍有可测尺度改善，LPIPS 改善 `0.012836`，但 PSNR 下降 `1.058170 dB`、最低覆盖下降 `0.042324`。因此问题不是 15% 阈值单点过紧，而是逐视角 no-grad 硬缩放与外观优化冲突；screen-footprint 路线在此关闭，不继续 45%/60% 搜索。
+
+## 36. 问题修复记录：澳洲 Gate 2 签名契约向后兼容
+
+### 问题现象
+
+准备按澳洲优先版本继续执行 KNN-only 正式臂时，`verify_trainer_ab_matrix` 对已签名五臂矩阵 fail-closed，报错 `A/B Trainer contract identity mismatch`。逐字段对照澳洲已完成 reference/P5 的 `run_manifest` 后确认，旧运行均绑定 `cloudstudio_gsplat_trainer_v4`，但后续代码把默认值为 `0` 的 `lidar_linear_aux_weight` 和默认关闭的 `error_weighted_sampling` 无条件写入 contract；即使训练数值语义未启用新功能，签名身份也被改变，导致澳洲原矩阵及两个已完成正式臂无法复核。
+
+### 修改文件
+
+- `cloudstudio_3dgs/training/trainer.py`
+- `tests/test_training.py`
+- `docs/IMPLEMENTATION_PLAN.zh-CN.md`
+
+### 修改内容
+
+- 默认 `lidar_linear_aux_weight=0` 时恢复精确 v4 contract：省略 `loss_weights.lidar_linear_aux` 与 `loss_contract.lidar_range.linear_aux_weight`；只有显式设置为正值时才输出这两个字段并使用 `cloudstudio_gsplat_trainer_v5`。
+- 默认 `error_weighted_sampling.enabled=false` 时从 `strategy` 省略该可选块；显式启用时仍完整签名 `enabled/ema_decay/score_power/min_score_floor`，不削弱新实验的可审计性。
+- 未修改旧矩阵、已完成运行或 verifier，也未把签名不符降级成警告；兼容行为通过 contract 构造恢复，而不是重签历史证据。
+
+### 验证方式与当前状态
+
+- 红灯先行：修复前默认配置断言实际得到 v5 而失败，复现了签名漂移；随后增加默认省略、线性辅助显式启用和误差加权显式启用三类定向回归。
+- 修复后定向 `3/3 PASS`；原澳洲矩阵在不改文件的条件下重新验证为原 SHA256 `7e6daf8ca6baecc915dda020610419b7f6313867b55b95e3d9c67f4adfd86593`。
+- 全仓 CPU 套件在显式隐藏 CUDA 后运行 `211` 项，为 `189 PASS + 22 SKIPPED`；跳过项均为需要 CUDA/锁定 gsplat runtime 的既有运行测试。未隐藏 CUDA 的首次运行中，210 个非足迹测试通过，唯一错误是受限环境不允许向用户 Torch 扩展缓存写文件，不是断言失败，也没有被记录为通过。
+
+当前为 **PASS（澳洲历史 contract 身份恢复）**。澳洲 P5 继续作为优先外观版本；KNN/SH/local-SSIM 正式臂必须继续使用这份原始签名矩阵，不能通过重建矩阵绕过已完成 reference/P5 的共同输入与单变量约束。

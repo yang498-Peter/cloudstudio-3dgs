@@ -555,6 +555,7 @@ class TrainingContractTests(unittest.TestCase):
         )
         config.validate()
         contract = config.contract_dict()
+        self.assertEqual(contract["algorithm_version"], "cloudstudio_gsplat_trainer_v4")
         self.assertEqual(contract["renderer"]["camera_model"], "fisheye")
         self.assertEqual(contract["renderer"]["range_mode"], "RGB-Ed")
         self.assertEqual(contract["strategy"]["name"], "MCMC")
@@ -569,10 +570,12 @@ class TrainingContractTests(unittest.TestCase):
             contract["loss_contract"]["lidar_range"]["mode"],
             "robust_log_huber",
         )
-        self.assertEqual(
-            contract["loss_contract"]["lidar_range"]["linear_aux_weight"],
-            0.0,
+        self.assertNotIn("lidar_linear_aux", contract["loss_weights"])
+        self.assertNotIn(
+            "linear_aux_weight",
+            contract["loss_contract"]["lidar_range"],
         )
+        self.assertNotIn("error_weighted_sampling", contract["strategy"])
         self.assertFalse(contract["rig_pose_refinement"]["enabled"])
         self.assertFalse(contract["dynamic_person_mask"]["required"])
         self.assertFalse(contract["viewer"])
@@ -580,6 +583,67 @@ class TrainingContractTests(unittest.TestCase):
         self.assertNotIn("S1_KEEP_FISHEYE", source)
         self.assertNotIn("simple_trainer", source)
         self.assertNotIn("examples.datasets", source)
+
+    def test_trainer_contract_v5_records_enabled_linear_lidar_auxiliary_loss(self) -> None:
+        config = TrainerConfig.from_dict(
+            {
+                "run_id": "linear-aux-contract",
+                "dataset_manifest": "dataset.json",
+                "recording_root": "recording",
+                "mask_manifest": "masks.json",
+                "mask_root": "masks",
+                "split_manifest": "split.json",
+                "initialization_ply": "sparse_pc.ply",
+                "depth_manifest": "depth.json",
+                "depth_root": "depth",
+                "output_dir": "run",
+                "gsplat_lock": "upstream/cloudstudio_trainer.lock.json",
+                "require_person_masks": False,
+                "lidar_range_weight": 0.2,
+                "lidar_linear_aux_weight": 0.05,
+            }
+        )
+        config.validate()
+        contract = config.contract_dict()
+        self.assertEqual(contract["algorithm_version"], "cloudstudio_gsplat_trainer_v5")
+        self.assertEqual(contract["loss_weights"]["lidar_linear_aux"], 0.05)
+        self.assertEqual(
+            contract["loss_contract"]["lidar_range"]["linear_aux_weight"],
+            0.05,
+        )
+
+    def test_trainer_contract_records_enabled_error_weighted_sampling(self) -> None:
+        config = TrainerConfig.from_dict(
+            {
+                "run_id": "error-sampling-contract",
+                "dataset_manifest": "dataset.json",
+                "recording_root": "recording",
+                "mask_manifest": "masks.json",
+                "mask_root": "masks",
+                "split_manifest": "split.json",
+                "initialization_ply": "sparse_pc.ply",
+                "output_dir": "run",
+                "gsplat_lock": "upstream/cloudstudio_trainer.lock.json",
+                "require_person_masks": False,
+                "lidar_range_weight": 0.0,
+                "error_weighted_sampling": {
+                    "enabled": True,
+                    "ema_decay": 0.8,
+                    "score_power": 0.5,
+                    "min_score_floor": 0.002,
+                },
+            }
+        )
+        config.validate()
+        self.assertEqual(
+            config.contract_dict()["strategy"]["error_weighted_sampling"],
+            {
+                "enabled": True,
+                "ema_decay": 0.8,
+                "score_power": 0.5,
+                "min_score_floor": 0.002,
+            },
+        )
 
     def test_rig_pose_refinement_contract_is_explicit_and_validated(self) -> None:
         config = TrainerConfig.from_dict(

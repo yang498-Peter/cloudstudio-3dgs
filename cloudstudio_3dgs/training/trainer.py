@@ -373,9 +373,40 @@ class TrainerConfig:
             raise ValueError(f"trainer config is missing paths: {', '.join(sorted(missing))}")
 
     def contract_dict(self) -> dict[str, Any]:
+        uses_lidar_linear_aux = self.lidar_linear_aux_weight > 0.0
+        loss_weights = {
+            "rgb_l1": self.rgb_l1_weight,
+            "rgb_ssim": self.rgb_ssim_weight,
+            "lidar_range": self.lidar_range_weight,
+        }
+        lidar_range_contract = {
+            "mode": self.lidar_range_loss_mode,
+            "semantics": "euclidean_ray_range_m",
+            "log_huber_delta": self.lidar_log_range_huber_delta,
+            "confidence_weighted": True,
+        }
+        if uses_lidar_linear_aux:
+            loss_weights["lidar_linear_aux"] = self.lidar_linear_aux_weight
+            lidar_range_contract["linear_aux_weight"] = self.lidar_linear_aux_weight
+        strategy_contract = {
+            "name": "MCMC",
+            "refine_start_iter": self.mcmc_refine_start_iter,
+            "refine_stop_iter": self.mcmc_refine_stop_iter,
+            "refine_every": self.mcmc_refine_every,
+            "noise_injection_stop_iter": self.mcmc_noise_injection_stop_iter,
+            "noise_lr": self.mcmc_noise_lr,
+            "noise_std_fraction": self.metric_scale_calibration.noise_std_fraction,
+        }
+        if self.error_weighted_sampling.enabled:
+            strategy_contract["error_weighted_sampling"] = (
+                self.error_weighted_sampling.to_dict()
+            )
+
         return {
             "schema_version": 2,
-            "algorithm_version": "cloudstudio_gsplat_trainer_v5",
+            "algorithm_version": "cloudstudio_gsplat_trainer_v5"
+            if uses_lidar_linear_aux
+            else "cloudstudio_gsplat_trainer_v4",
             "trainer_preset": self.trainer_preset,
             "seed": self.seed,
             "max_steps": self.max_steps,
@@ -394,12 +425,7 @@ class TrainerConfig:
                 "fixed_scale_m": self.init_scale_m,
                 **self.metric_scale_calibration.to_dict(),
             },
-            "loss_weights": {
-                "rgb_l1": self.rgb_l1_weight,
-                "rgb_ssim": self.rgb_ssim_weight,
-                "lidar_range": self.lidar_range_weight,
-                "lidar_linear_aux": self.lidar_linear_aux_weight,
-            },
+            "loss_weights": loss_weights,
             "color_model": {
                 "mode": self.color_model,
                 "sh_degree": self.sh_degree if self.color_model == "sh" else None,
@@ -434,13 +460,7 @@ class TrainerConfig:
                     "mode": "shN_l2",
                     "weight": self.sh_regularization_weight,
                 },
-                "lidar_range": {
-                    "mode": self.lidar_range_loss_mode,
-                    "semantics": "euclidean_ray_range_m",
-                    "log_huber_delta": self.lidar_log_range_huber_delta,
-                    "linear_aux_weight": self.lidar_linear_aux_weight,
-                    "confidence_weighted": True,
-                },
+                "lidar_range": lidar_range_contract,
             },
             "dynamic_person_mask": {
                 "required": self.require_person_masks,
@@ -462,16 +482,7 @@ class TrainerConfig:
                 "global_z_order": False,
                 "packed": False,
             },
-            "strategy": {
-                "name": "MCMC",
-                "refine_start_iter": self.mcmc_refine_start_iter,
-                "refine_stop_iter": self.mcmc_refine_stop_iter,
-                "refine_every": self.mcmc_refine_every,
-                "noise_injection_stop_iter": self.mcmc_noise_injection_stop_iter,
-                "noise_lr": self.mcmc_noise_lr,
-                "noise_std_fraction": self.metric_scale_calibration.noise_std_fraction,
-                "error_weighted_sampling": self.error_weighted_sampling.to_dict(),
-            },
+            "strategy": strategy_contract,
             "rig_pose_refinement": self.rig_pose_refinement.to_dict(),
             "exposure_compensation": self.exposure_compensation.to_dict(),
             "geometry_regularization": self.geometry_regularization.to_dict(),
