@@ -101,6 +101,7 @@ class TrainerConfig:
     lidar_log_range_huber_delta: float = 0.05
     color_model: str = "rgb_sigmoid"
     sh_degree: int = 2
+    background_color: tuple[float, float, float] | None = None
     sh_degree_interval: int = 1000
     means_lr_final_factor: float = 1.0
     mcmc_refine_start_iter: int = 500
@@ -179,6 +180,7 @@ class TrainerConfig:
                 "lidar_log_range_huber_delta",
                 "color_model",
                 "sh_degree",
+                "background_color",
                 "sh_degree_interval",
                 "means_lr_final_factor",
                 "mcmc_refine_start_iter",
@@ -216,6 +218,10 @@ class TrainerConfig:
             raise ValueError("color_model must be 'rgb_sigmoid' or 'sh'")
         if not 0 <= self.sh_degree <= 3:
             raise ValueError("sh_degree must be within [0, 3]")
+        if self.background_color is not None:
+            values = tuple(float(v) for v in self.background_color)
+            if len(values) != 3 or any(not 0.0 <= v <= 1.0 for v in values):
+                raise ValueError("background_color must be three values in [0, 1]")
         if self.sh_degree_interval < 0:
             raise ValueError("sh_degree_interval must be non-negative")
         if not 0.0 < self.means_lr_final_factor <= 1.0:
@@ -308,6 +314,11 @@ class TrainerConfig:
                 "sh_degree_interval": self.sh_degree_interval
                 if self.color_model == "sh"
                 else None,
+            },
+            "background_compositing": {
+                "color": None
+                if self.background_color is None
+                else [float(v) for v in self.background_color],
             },
             "means_lr_schedule": {
                 "mode": "exponential_to_final_factor",
@@ -463,6 +474,7 @@ def _render_supervision_loss(
         with_range=has_range,
         c2w_override=c2w_override,
         active_sh_degree=active_sh_degree,
+        background_rgb=config.background_color,
     )
     if rgb_gain is not None:
         # Per-frame auto-exposure compensation: scale the render toward the
@@ -556,6 +568,7 @@ def _save_evaluation_artifacts(
     params: Any,
     dataset: S1TrainingDataset,
     output_dir: Path,
+    background_rgb: Any | None = None,
 ) -> list[dict[str, Any]]:
     torch = backend.torch
     frames: list[dict[str, Any]] = []
@@ -565,7 +578,7 @@ def _save_evaluation_artifacts(
         for index in range(len(dataset)):
             sample = dataset[index]
             has_range = sample.depth_range_m is not None
-            rendered, rendered_range, _, _ = backend.render(params, sample, with_range=has_range)
+            rendered, rendered_range, _, _ = backend.render(params, sample, with_range=has_range, background_rgb=background_rgb)
             prefix = artifact_root / sample.image_id
             reference_path = prefix.with_name(f"{sample.image_id}_reference.png")
             render_path = prefix.with_name(f"{sample.image_id}_rendered.png")
@@ -1010,6 +1023,7 @@ def train(
         params=params,
         dataset=valset,
         output_dir=output_dir,
+        background_rgb=config.background_color,
     )
     run_manifest = sign_run_manifest(
         {

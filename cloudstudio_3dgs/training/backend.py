@@ -188,6 +188,7 @@ class GsplatBackend:
         with_range: bool,
         c2w_override: Any | None = None,
         active_sh_degree: int | None = None,
+        background_rgb: Any | None = None,
     ) -> tuple[Any, Any, Any, dict[str, Any]]:
         torch = self.torch
         c2w = torch.as_tensor(
@@ -236,6 +237,15 @@ class GsplatBackend:
             rasterize_mode="classic",
         )
         rgb = render[0, ..., :3]
+        if background_rgb is not None:
+            # Composite un-saturated alpha onto an explicit background instead
+            # of the implicit black canvas: with a bright overcast sky the
+            # black bleed darkened 27% of the valid pixels by ~0.17 and the
+            # whole frame by ~0.12. Depth stays un-composited.
+            background = torch.as_tensor(
+                background_rgb, dtype=rgb.dtype, device=rgb.device
+            )
+            rgb = rgb + (1.0 - alpha[0]) * background
         range_m = render[0, ..., 3] if with_range else None
         return rgb, range_m, alpha[0, ..., 0], info
 

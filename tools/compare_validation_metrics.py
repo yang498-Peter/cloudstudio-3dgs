@@ -17,8 +17,15 @@ if str(ROOT_DIR) not in sys.path:
 from cloudstudio_3dgs.evaluation.image_metrics import masked_psnr, masked_ssim
 from cloudstudio_3dgs.data.depth_cache import load_sparse_depth
 
-PROBES = ["p0_ref", "p4_parity", "p4b_parity_d015"]
-ROOT = Path(r"C:\Peter\3dgs-runs\probes")
+import argparse
+
+parser = argparse.ArgumentParser(description=__doc__)
+parser.add_argument("--runs-root", required=True, type=Path)
+parser.add_argument("--runs", nargs="+", required=True)
+parser.add_argument("--output", type=Path, default=None)
+args = parser.parse_args()
+PROBES = args.runs
+ROOT = args.runs_root
 
 results = {}
 for probe in PROBES:
@@ -67,7 +74,7 @@ for probe, r in results.items():
         f"{(r['depth_mae_mean_m'] or 0):6.3f} {(r['depth_rmse_mean_m'] or 0):6.3f} "
         f"{(r['depth_coverage_mean'] or 0):6.3f}"
     )
-Path(r"C:\Peter\3dgs-runs\probes\probe_metrics.json").write_text(
+(args.output or (ROOT / "validation_metrics_comparison.json")).write_text(
     json.dumps(results, indent=2, sort_keys=True) + "\n", encoding="utf-8"
 )
 print("saved comparison json")
