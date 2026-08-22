@@ -1139,4 +1139,12 @@ GitHub 重新联网后，澳洲 `machine-b/uk-quality` 从 `2113134` 推进到 `
 - 按 successive-halving 收紧到 `tail_fraction=0.001` 后，内部 run Manifest SHA256 `e5b7dcbb844220c284b5e3730f9dab5551b5588f4770f11b8768de9cf4326ccc`；124 图报告同为 `COMPLETE`，PSNR `17.383084 dB`、SSIM `0.533708`、LPIPS `0.601801`、depth MAE `7.771762 m`、coverage min `0.959218`，报告 SHA256 `06efbae6da83615d49729c4cce2dce304ac2010fd5f46938868b802a5c5ac89c`。
 - 与原澳洲 P5 的相同 seed、step 900 MCMC snapshot 比较，Gaussian 数同为 458129、p50/p95 同为约 `0.10/0.17 m`，但 max scale 从 P5 `11.82 m` 降到 `9.64 m`（约 `18.4%`）；相对 1% tail 的最终 checkpoint，p999 从 `0.9518` 降到 `0.8827 m`，大于 `1 m` 从 410 降到 324。同步 golden PSNR 相对 P5 仅约 `-0.07 dB`，depth 近似，属于小幅外观代价换取可测尺度尾部改善。
 
-当前为 **PASS（源码/CPU、真实 1000 步单变量与完整质量报告）/ NOT_RUN（8000 步 tail-risk + 深度护栏正式验证）**。`0.001` 通过短程 successive-halving，可进入正式 8000 步；训练优化只改变 tail-risk reduction，`max_depth_regression_m=0.05` 作为独立签名选择策略启用，防止外观提升覆盖几何回退。
+### 正式 8000 步结果
+
+- `tail_fraction=0.001` 与 `max_depth_regression_m=0.05` 在 RTX 5070 Laptop 上完成正式 8000 步，耗时 `3140.83 s`、峰值额外显存 `1,961,272,320 bytes`、最终 1M Gaussian、状态 `COMPLETE`；run Manifest SHA256 为 `417cedaf9d6c669471394796d6005baa7684585a2d41308704691243b9133f39`，签名验证通过。
+- golden 曲线在 step 1000/2000/3000/4000/5000/6000 达到 `17.4256/18.8812/19.7063/19.8385/20.1029/20.4991 dB`，step 7000/8000 回落到 `20.4816/20.3128 dB`，因此清单正确绑定 `best_golden@6000`，模型 SHA256 为 `e9109b911ca3f909b537192336feb3e02bcb314d97dead6e7ca45ab19217533e`。各次 PSNR 晋级时 depth 均改善或相对当前 best 回退不超过 `0.05 m`；本次没有出现需要真实拦截的超限候选，history verifier 仍按签名规则重放并通过。
+- 124 图 selected-model 报告为 PSNR `20.412882 dB`、SSIM `0.594863`、LPIPS-Alex `0.476925`、depth MAE `6.762314 m`、depth coverage min `0.999568`，quality report SHA256 为 `5c4e7079f6f74edfdadb8a1f3b0f0a81f8c266793e1b2b504f59a478d4828b81`，完整签名验证通过。
+- 相对澳洲 P5 正式基线，PSNR 下降 `0.107558 dB`、SSIM 下降 `0.000629`、depth MAE 恶化 `0.206793 m`，仅 LPIPS 改善 `0.002425`。这不是综合质量提升，不能替代澳洲 `gate2_quality_australian_p5_v1`。
+- selected step 6000 的 scale p50/p95/p99/p999/max 为 `0.1253/0.3492/0.9565/2.0031/154.8749 m`，大于 `1 m` 有 `9,223` 个；澳洲 P5 同为 step 6000 的对应值为 `0.1249/0.3375/0.8977/4.7247/142.2038 m`、大于 `1 m` 有 `8,442` 个。该方案只压低 p999 分位，没有改善 p95/p99、超限数量或单点最大值，证明弱 top-tail 均值仍允许极少数 Gaussian 逃逸。
+
+当前为 **PASS（实现、CPU 回归、真实 1000/8000 步、完整签名与 LPIPS 证据）/ FAIL（正式综合晋级）**。澳洲 P5 保持优先版本；`tail_fraction=0.001 + scale_upper_weight=1e-4` 记录为已拒绝 Pareto 点。后续若继续尺度治理，必须将分位 CVaR 与极值/屏幕足迹保险拆成单变量短探针，不得直接把这条配置升级为默认或混入 POS A/B。
