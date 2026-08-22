@@ -178,6 +178,7 @@ def compare_checkpoint_payloads(
             "MCMC_strategy_state",
             "sampler_state",
             "training_telemetry",
+            "error_weighted_sampling_EMA_state",
             "auxiliary_state",
             "CPU_and_CUDA_RNG_state",
             "signed_evaluation_history_semantics",

@@ -204,7 +204,8 @@ python tools/audit_metric_scale_calibration.py `
 #   "means_step_fraction": 0.0032, "noise_std_fraction": 0.25
 # }
 # "ssim_window_size": 11, "ssim_sigma": 1.5, "ssim_min_valid_fraction": 0.8,
-# "lidar_range_loss_mode": "robust_log_huber", "lidar_log_range_huber_delta": 0.05
+# "lidar_range_loss_mode": "robust_log_huber", "lidar_log_range_huber_delta": 0.05,
+# "lidar_linear_aux_weight": 0.0  # P5 深度平衡候选固定为 0.01；其余外观旋钮不变
 
 # Gate 2 受控 A/B：先复制并只修改示例中的输入路径；算法字段由 preset 固定，
 # builder 会拒绝把背景、SH、KNN、SSIM 等 arm-specific 字段塞进共享 base。
@@ -215,6 +216,8 @@ python tools/build_trainer_ab_matrix.py `
 
 # 五个 arm 使用相同 dataset/person/depth/split/初始化/seed/步数：
 # legacy reference、KNN-only、SH-only、local-SSIM-only、澳洲 P5 优先质量候选。
+# `gate2_quality_australian_p5_depth_balanced_v1` 是额外的澳洲 P5 单变量候选，
+# 只把 `lidar_linear_aux_weight` 从 0 调到 0.01，须独立通过完整画质/深度 Gate。
 # 每个 arm 训练后都要对其完整 validation 运行 --lpips，并写入 <run>/quality。
 # 全部产物齐备后汇总；默认要求 LPIPS、深度和至少两次周期 full validation。
 python tools/summarize_trainer_ab.py `
@@ -258,6 +261,11 @@ python tools/run_synthetic_training_acceptance.py `
   --steps 80 `
   --full-mcmc `
   --resume-equivalence
+
+# 澳洲误差加权 MCMC 仍是默认关闭的实验项；本地锁定入口可显式复验其恢复等价性。
+pwsh -File train\run_gate2_synthetic_acceptance_local.ps1 `
+  -Output G:\3dgs-runs\full_mcmc_error_weighted_resume `
+  -ErrorWeightedSampling
 
 # 只有签名证据通过独立验证后，才可替换 baselines/full_mcmc_runtime.baseline.json
 python tools/verify_full_mcmc_gate.py `

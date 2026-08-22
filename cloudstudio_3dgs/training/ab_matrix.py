@@ -48,6 +48,7 @@ _PRESET_FIELDS = {
     "decoupled_ssim",
     "sh_regularization_weight",
     "lidar_range_loss_mode",
+    "lidar_linear_aux_weight",
     "means_lr_final_factor",
     "background_color",
     "exposure_compensation",

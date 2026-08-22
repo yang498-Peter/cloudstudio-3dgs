@@ -6,6 +6,7 @@ import numpy as np
 from cloudstudio_3dgs.training.dataset import TrainingSample
 from cloudstudio_3dgs.training.losses import global_masked_rgb_ssim_loss
 from cloudstudio_3dgs.training.presets import (
+    TRAINER_PRESETS,
     available_trainer_presets,
     expand_trainer_preset,
 )
@@ -19,7 +20,7 @@ HAS_TORCH = importlib.util.find_spec("torch") is not None
 
 
 def _base_config(preset: str) -> dict:
-    return {
+    config = {
         "run_id": f"preset-{preset}",
         "trainer_preset": preset,
         "dataset_manifest": "dataset.json",
@@ -33,6 +34,10 @@ def _base_config(preset: str) -> dict:
         "require_person_masks": False,
         "lidar_range_weight": 0.0,
     }
+    if preset == "gate2_quality_australian_p5_depth_balanced_v1":
+        config["depth_manifest"] = "depth.json"
+        config["depth_root"] = "depth"
+    return config
 
 
 class TrainerPresetTests(unittest.TestCase):
@@ -42,6 +47,7 @@ class TrainerPresetTests(unittest.TestCase):
             (
                 "gate2_knn_only_v1",
                 "gate2_local_ssim_only_v1",
+                "gate2_quality_australian_p5_depth_balanced_v1",
                 "gate2_quality_australian_p5_v1",
                 "gate2_sh_only_v1",
                 "legacy_minimal_v1",
@@ -66,6 +72,26 @@ class TrainerPresetTests(unittest.TestCase):
         contradictory["background_color"] = None
         with self.assertRaisesRegex(ValueError, "fixes background_color"):
             expand_trainer_preset(contradictory)
+
+    def test_depth_balanced_candidate_changes_only_linear_aux_weight(self) -> None:
+        p5 = TRAINER_PRESETS["gate2_quality_australian_p5_v1"]
+        balanced = TRAINER_PRESETS[
+            "gate2_quality_australian_p5_depth_balanced_v1"
+        ]
+        self.assertEqual(set(p5), set(balanced))
+        differences = {
+            key: (p5[key], balanced[key])
+            for key in p5
+            if p5[key] != balanced[key]
+        }
+        self.assertEqual(differences, {"lidar_linear_aux_weight": (0.0, 0.01)})
+
+        config = TrainerConfig.from_dict(
+            _base_config("gate2_quality_australian_p5_depth_balanced_v1")
+        )
+        config.validate()
+        self.assertEqual(config.lidar_range_loss_mode, "robust_log_huber")
+        self.assertEqual(config.lidar_linear_aux_weight, 0.01)
 
     def test_direct_dataclass_cannot_mislabel_a_preset(self) -> None:
         config = TrainerConfig(

@@ -12,7 +12,8 @@ class ErrorScoreConfig:
 
     enabled: bool = False
     ema_decay: float = 0.9
-    # LichtFeld tempers the raw error with score**0.4 before weighting.
+    # Experimental tempering exponent; it is a CloudStudio probe parameter,
+    # not a value reproduced from the Improved-GS paper.
     score_power: float = 0.4
     # Floor keeps never-seen / zero-error Gaussians samplable (no zero weights).
     min_score_floor: float = 1e-3

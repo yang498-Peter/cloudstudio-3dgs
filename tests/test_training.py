@@ -569,6 +569,10 @@ class TrainingContractTests(unittest.TestCase):
             contract["loss_contract"]["lidar_range"]["mode"],
             "robust_log_huber",
         )
+        self.assertEqual(
+            contract["loss_contract"]["lidar_range"]["linear_aux_weight"],
+            0.0,
+        )
         self.assertFalse(contract["rig_pose_refinement"]["enabled"])
         self.assertFalse(contract["dynamic_person_mask"]["required"])
         self.assertFalse(contract["viewer"])
@@ -639,8 +643,37 @@ class TrainingContractTests(unittest.TestCase):
                 "lidar_range_weight": 0.05,
             }
         )
-        with self.assertRaisesRegex(ValueError, "positive lidar_range_weight requires"):
+        with self.assertRaisesRegex(ValueError, "positive LiDAR loss weight requires"):
             config.validate()
+
+    def test_linear_lidar_aux_requires_robust_primary_and_depth(self) -> None:
+        base = {
+            "run_id": "linear-aux",
+            "dataset_manifest": "dataset.json",
+            "recording_root": "recording",
+            "mask_manifest": "masks.json",
+            "mask_root": "masks",
+            "split_manifest": "split.json",
+            "initialization_ply": "sparse_pc.ply",
+            "output_dir": "run",
+            "gsplat_lock": "upstream/cloudstudio_trainer.lock.json",
+            "require_person_masks": False,
+            "lidar_range_weight": 0.0,
+            "lidar_linear_aux_weight": 0.0025,
+        }
+        missing_depth = TrainerConfig.from_dict(base)
+        with self.assertRaisesRegex(ValueError, "positive LiDAR loss weight requires"):
+            missing_depth.validate()
+        invalid_mode = TrainerConfig.from_dict(
+            {
+                **base,
+                "depth_manifest": "depth.json",
+                "depth_root": "depth",
+                "lidar_range_loss_mode": "linear_l1",
+            }
+        )
+        with self.assertRaisesRegex(ValueError, "only valid with robust_log_huber"):
+            invalid_mode.validate()
 
     def test_unpatched_lock_is_required_before_importing_runtime(self) -> None:
         lock = json.loads((ROOT / "upstream" / "cloudstudio_trainer.lock.json").read_text(encoding="utf-8"))

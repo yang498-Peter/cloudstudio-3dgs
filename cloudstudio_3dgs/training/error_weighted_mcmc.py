@@ -4,12 +4,16 @@
 # gsplat 1.5.3 (Apache-2.0) gsplat/strategy/ops.py (relocate / sample_add):
 # the only behavioural change is that the multinomial sampling distribution
 # is a caller-supplied ``probs`` tensor instead of the hard-coded opacities.
-"""Error-weighted MCMC relocation and densification.
+"""Experimental error-weighted MCMC relocation and densification.
 
-Implements the LichtFeld idea (arXiv:2508.12313): when the MCMC strategy
-teleports dead Gaussians or adds new ones, the landing spots are sampled
-proportionally to ``opacity * error_score**power`` instead of opacity alone,
-so refinement capacity flows to regions the current render gets wrong.
+This is a CloudStudio heuristic motivated by error/edge-aware densification:
+when MCMC teleports dead Gaussians or adds new ones, landing spots are sampled
+proportionally to ``opacity * error_score**power`` instead of opacity alone.
+It is not a reproduction of arXiv:2508.12313: that paper combines Laplacian
+edge weights, per-pixel Gaussian alpha contributions, and absolute coordinate
+gradients, while this implementation samples the RGB residual only at each
+Gaussian's projected center. The distinction is kept explicit until a real A/B
+establishes whether this cheaper proxy helps the S1 scene.
 
 The per-Gaussian error score is an EMA of the rendered-vs-reference pixel
 error sampled at each Gaussian's projected center (visible Gaussians only).

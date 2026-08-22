@@ -1030,6 +1030,7 @@ GitHub 重新联网后，澳洲 `machine-b/uk-quality` 从 `2113134` 推进到 `
 ### 修改内容
 
 - 以澳洲 `aaf25b8` 为当前优先代码主线；算法保持默认关闭，不能在未声明的旧 P5/legacy 配置中改变采样语义。
+- 对原提交引用的 arXiv:2508.12313 进行原文核对：论文的 EAS 使用 Laplacian 边缘权重、Gaussian 对像素的 alpha contribution，并以绝对坐标梯度筛选候选；当前 `opacity * center-RGB-residual^0.4` 没有实现这些量。因此保留澳洲功能代码，但明确改称 CloudStudio 实验启发式，不再冒充论文复现；`0.4` 也作为待 A/B 的本项目参数记录。
 - `ErrorScoreState` 新增版本化 checkpoint payload，保存完整 EMA tensor；恢复时严格检查 schema、维度、Gaussian 数和 finite 值，再复制到当前 device/dtype。启用算法但 checkpoint 缺少该层时 fail-closed，不允许静默退化为 uniform/opacity-only 采样。
 - Trainer 的 `training_state` 同步持久化该状态；载入模型和 optimizer 后按恢复后的 Gaussian 数校验并恢复 EMA，使全状态比较器能够逐元素覆盖它。默认关闭时写入 `null`，旧的默认关闭 checkpoint 仍可读取。
 - 将 `ErrorScoreConfig` 拆到不导入 torch/gsplat 的轻量模块；Trainer、配置解析和合成验收只依赖该模块。真正构造 `GsplatBackend` 时才导入 CUDA 策略，恢复默认关闭与纯 CPU 工具的模块边界。
@@ -1039,4 +1040,57 @@ GitHub 重新联网后，澳洲 `machine-b/uk-quality` 从 `2113134` 推进到 `
 
 - 新增 checkpoint round-trip 回归，验证 EMA scores 精确恢复且不共享存储；缺失/错误 schema、数量不符和 NaN 均明确拒绝。
 - 通过锁定的 prebuilt gsplat bootstrap 执行 `tests/test_error_weighted_mcmc.py`，结果为 `21 PASS + 4 subtests PASS`；Python 编译检查通过。全仓 CPU 套件在隐藏 CUDA 后为 `182 PASS + 22 SKIPPED + 3 subtests PASS`，新增跳过项是明确需要已加载 gsplat 的澳洲策略测试，不再发生 preset/A-B 收集期 JIT 或权限错误。
-- 启用误差加权采样的真实 CUDA 80 步完整 MCMC 中断恢复验收尚待当前正式 P5 训练释放 GPU 后执行，因此本节当前为 **PARTIAL**，不能把澳洲新算法升级为默认，也不能宣称其画质优于 P5。正式短 A/B 还必须使用相同输入、seed、预算、mask 与 `v3` 深度覆盖门。
+- 启用误差加权采样后，真实 CUDA 80 步完整 MCMC 连续训练与 step-40 受控中断恢复到 80 步均完成：Gaussian 数均为 29，恢复比较 `0 mismatch`、`max_abs_error=2.6226043701171875e-6 < atol 5e-6`；恢复 checkpoint 中 29 个 EMA score 全部 finite，范围 `0.411736–0.557433`，trainer contract 明确记录 `enabled=true`。签名 run Manifest 为 `d07e0e712b5cca0675c82ae5e721311d2cc03fd438fc32013394138757bcc5b2`，验收文件 SHA256 为 `5d6b19f173fd4dced1a29a9fa78cf95890ae8e13779ea2cbee58a197942080e4`。
+
+本节当前为 **PASS（澳洲误差加权采样的加载、真实执行与中断恢复状态门禁）**；这仍不证明画质提升，也不把它升级为默认。真实短 A/B 必须继续使用相同输入、seed、预算、mask 与 `v3` 深度覆盖门。
+
+## 33. 当前阶段记录：真实 Gate 2 legacy 与澳洲 P5 正式两臂结果
+
+### 问题现象
+
+600 步短链只能证明训练、mask 和深度评估可运行，不能回答长期外观、LPIPS、最佳 checkpoint 或巨型 Gaussian 的行为。为避免把澳洲 P5 的改进归因于不同输入，本机在同一个签名 matrix 下先完成 legacy reference 与 `gate2_quality_australian_p5_v1` 两个 8000 步正式臂；两者绑定相同 1238 图 dataset、1114/124 train/validation split、person/depth mask、初始化 PLY、factor4、seed 42、1M cap 和锁定 gsplat runtime。
+
+### 验证结果
+
+- Legacy reference：选择 step 6000，124 图 PSNR `17.834794`、SSIM `0.467080`、LPIPS-Alex `0.592530`、depth MAE `4.005335 m`，质量报告 SHA256 为 `edc604a1ecb9feb9d1cbd456d51678bd04f22607f7a351ef08f21675b81009b1`。
+- 澳洲 P5：8000 步耗时 `3275.30 s`、峰值额外 VRAM `1,961,667,584 bytes`、最终 1M Gaussian、无 NaN；golden PSNR 在 step 6000 达到 `20.5556 dB`，step 7000 回落到 `20.4886`，因此最终正确选择 step 6000。签名 run Manifest 为 `dc8293128cfca9da1cf032c63b23782971212ad482112d1dab7cdc6cead57a11`。
+- P5 选择模型的 124 图正式指标为 PSNR `20.520440`、SSIM `0.595492`、LPIPS-Alex `0.479350`、depth MAE `6.555521 m`、预测 coverage min `1.0`；质量报告 SHA256 为 `08fd4f3700ddc1b12cc0dbbaabd1747620791e85ae8eb76d5233f523084ed9bb`。
+- 相对 legacy，P5 提升 `+2.68565 dB` PSNR、`+0.12841` SSIM，LPIPS 降低 `0.11318`，但绝对深度 MAE 恶化 `+2.55019 m`（约 `63.7%`）。因此正式结论是 **MIXED / Gate 2 未通过**，不能用外观优势掩盖米制几何回归。
+- CPU 尸检同为 1M Gaussian 的最佳 checkpoint：legacy 的 scale p50/p95/p99/p999/max 为 `0.0693/0.2279/0.5536/1.8695/13.9442 m`，大于 10 m 的仅 13 个；P5 为 `0.1249/0.3375/0.8977/4.7247/142.2038 m`，大于 10 m 的有 396 个。P5 的 soft scale regularization 没有阻止极端巨型 splat，与前景/边缘模糊及深度回归方向一致，但仍属于待单变量验证的根因候选。
+
+### 当前状态
+
+当前为 **PASS（两臂正式证据完整）/ FAIL（澳洲组合候选的零回归 Gate）**。下一步不盲目加大所有正则，而是按同数据短臂分别验证：① P5 保持外观配置、只把 LiDAR loss 改回 `linear_l1`；② P5 保持 loss、只启用米制 world-scale fuse；③ 澳洲最新误差加权采样。只有单变量结果确定后才组合复验，并继续完成 KNN/SH/local-SSIM 三个正式臂。
+
+## 34. 当前阶段记录：P5 深度回归单变量探针与平衡候选
+
+### 问题现象
+
+澳洲 P5 已被正式证据确认是当前最强外观基础，但相对 legacy 的深度 MAE 恶化 `2.55019 m`。需要优先保留澳洲版本的 SH、KNN、local SSIM、曝光、背景与 means decay，不用多变量改动掩盖归因；短探针只允许改变一个深度或采样变量，再决定是否值得执行完整 8000 步。
+
+### 修改文件
+
+- `cloudstudio_3dgs/training/trainer.py`
+- `cloudstudio_3dgs/training/presets.py`
+- `cloudstudio_3dgs/training/ab_matrix.py`
+- `cloudstudio_3dgs/training/checkpoint.py`
+- `tests/test_training.py`
+- `tests/test_training_presets.py`
+- `train/run_gate2_synthetic_acceptance_local.ps1`
+- `README.md`
+- `docs/IMPLEMENTATION_PLAN.zh-CN.md`
+
+### 修改内容与探针结果
+
+- 澳洲误差加权 MCMC 在相同真实输入上的 1000 步 probe，正式 124 图为 PSNR `17.37595`、SSIM `0.53350`、LPIPS `0.60239`、depth MAE `7.73792 m`；相对默认关闭 P5 同步点外观轻微回归、深度不改善，因此保持默认关闭，不进入正式候选。
+- 将 P5 的 robust log-Huber 整体换成 `linear_l1` 后，golden step 1000 为 PSNR `14.1659`、SSIM `0.48135`、depth MAE `4.47748 m`，且完整验证存在 depth coverage `0.895791 < 0.9`。虽然深度回收明显，但外观损失过大并触发覆盖门，拒绝。
+- 只启用 `1.5 m` world-scale fuse 后，golden step 1000 为 PSNR `16.7026`、SSIM `0.53030`、depth MAE `7.63966 m`；仅改善约 `0.06 m` 深度却损失约 `0.77 dB`，拒绝把硬裁剪提升为候选。
+- 新增 `lidar_linear_aux_weight`：主损失仍为澳洲 P5 的 confidence-weighted robust log-Huber，仅叠加弱线性米制 L1；该权重进入签名 Trainer contract、preset/A-B 字段与逐步 telemetry，非 robust 主损失、负权重或缺少 depth 输入均 fail-closed，算法版本升级为 `cloudstudio_gsplat_trainer_v5`。
+- 三个同输入、同 seed、同 1000 步探针呈单调 Pareto：权重 `0.0025` 的完整 PSNR/SSIM/LPIPS/depth 为 `17.21927 / 0.52850 / 0.60563 / 6.99518 m`；`0.005` 为 `16.92767 / 0.52367 / 0.60939 / 6.37880 m`；`0.01` 为 `16.35399 / 0.51503 / 0.61603 / 5.80396 m`。`0.01` 相对原 P5 同步点约损失 `1.08 dB`，但改善约 `1.93 m` 深度，最可能利用 P5 正式 `+2.69 dB` 的外观余量关闭 legacy 深度门。
+- 因此新增命名候选 `gate2_quality_australian_p5_depth_balanced_v1`，与 `gate2_quality_australian_p5_v1` 的固定字段只允许 `lidar_linear_aux_weight: 0.0 → 0.01` 一处差异。它是待正式验证的澳洲优先候选，不是生产默认；测试会直接比较两个 preset，防止未来悄然漂移其他外观旋钮。
+
+### 验证方式与当前状态
+
+当前 CPU 全仓为 `183 PASS + 22 SKIPPED + 3 subtests PASS`；跳过项仍是需要预加载锁定 CUDA 扩展的运行测试。所有短 probe 都绑定相同真实 factor4 输入、person/depth mask、初始化 PLY、seed 42 和 1M cap，质量报告分别签名保存。
+
+当前为 **PASS（单变量短探针与候选固化）/ NOT_RUN（8000 步正式深度平衡候选）**。下一步先精确提交并推送本轮源码/记录，再以命名 preset 执行 8000 步；只有完整 124 图 PSNR、SSIM、LPIPS、depth、coverage、最佳 checkpoint 和周期 full validation 同时满足零回归门，才允许替代澳洲 P5 或进入后续 POS A/B。

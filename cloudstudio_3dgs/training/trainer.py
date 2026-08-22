@@ -118,6 +118,7 @@ class TrainerConfig:
     ssim_min_valid_fraction: float = 0.8
     lidar_range_loss_mode: str = "robust_log_huber"
     lidar_log_range_huber_delta: float = 0.05
+    lidar_linear_aux_weight: float = 0.0
     decoupled_ssim: bool = False
     sh_regularization_weight: float = 0.0
     color_model: str = "rgb_sigmoid"
@@ -220,6 +221,7 @@ class TrainerConfig:
                 "ssim_min_valid_fraction",
                 "lidar_range_loss_mode",
                 "lidar_log_range_huber_delta",
+                "lidar_linear_aux_weight",
                 "decoupled_ssim",
                 "sh_regularization_weight",
                 "color_model",
@@ -274,7 +276,12 @@ class TrainerConfig:
             raise ValueError("sh_degree_interval must be non-negative")
         if not 0.0 < self.means_lr_final_factor <= 1.0:
             raise ValueError("means_lr_final_factor must be in (0, 1]")
-        weights = (self.rgb_l1_weight, self.rgb_ssim_weight, self.lidar_range_weight)
+        weights = (
+            self.rgb_l1_weight,
+            self.rgb_ssim_weight,
+            self.lidar_range_weight,
+            self.lidar_linear_aux_weight,
+        )
         if any(weight < 0.0 for weight in weights):
             raise ValueError("loss weights must be non-negative")
         if self.rgb_l1_weight + self.rgb_ssim_weight <= 0.0:
@@ -289,6 +296,13 @@ class TrainerConfig:
             raise ValueError("lidar_range_loss_mode must be linear_l1 or robust_log_huber")
         if self.lidar_log_range_huber_delta <= 0.0:
             raise ValueError("lidar_log_range_huber_delta must be positive")
+        if (
+            self.lidar_linear_aux_weight > 0.0
+            and self.lidar_range_loss_mode != "robust_log_huber"
+        ):
+            raise ValueError(
+                "lidar_linear_aux_weight is only valid with robust_log_huber"
+            )
         if self.sh_regularization_weight < 0.0:
             raise ValueError("sh_regularization_weight must be non-negative")
         expected_lrs = {"means", "scales", "quats", "opacities", "colors"}
@@ -319,6 +333,7 @@ class TrainerConfig:
                 "decoupled_ssim": self.decoupled_ssim,
                 "sh_regularization_weight": self.sh_regularization_weight,
                 "lidar_range_loss_mode": self.lidar_range_loss_mode,
+                "lidar_linear_aux_weight": self.lidar_linear_aux_weight,
                 "means_lr_final_factor": self.means_lr_final_factor,
                 "background_color": None
                 if self.background_color is None
@@ -337,9 +352,11 @@ class TrainerConfig:
             raise ValueError(
                 "production 3DGS training requires person_mask_manifest and person_mask_root"
             )
-        if self.lidar_range_weight > 0.0 and self.depth_manifest is None:
+        if (
+            self.lidar_range_weight > 0.0 or self.lidar_linear_aux_weight > 0.0
+        ) and self.depth_manifest is None:
             raise ValueError(
-                "positive lidar_range_weight requires depth_manifest and depth_root"
+                "positive LiDAR loss weight requires depth_manifest and depth_root"
             )
         required_paths = {
             "dataset_manifest": self.dataset_manifest,
@@ -358,7 +375,7 @@ class TrainerConfig:
     def contract_dict(self) -> dict[str, Any]:
         return {
             "schema_version": 2,
-            "algorithm_version": "cloudstudio_gsplat_trainer_v4",
+            "algorithm_version": "cloudstudio_gsplat_trainer_v5",
             "trainer_preset": self.trainer_preset,
             "seed": self.seed,
             "max_steps": self.max_steps,
@@ -381,6 +398,7 @@ class TrainerConfig:
                 "rgb_l1": self.rgb_l1_weight,
                 "rgb_ssim": self.rgb_ssim_weight,
                 "lidar_range": self.lidar_range_weight,
+                "lidar_linear_aux": self.lidar_linear_aux_weight,
             },
             "color_model": {
                 "mode": self.color_model,
@@ -420,6 +438,7 @@ class TrainerConfig:
                     "mode": self.lidar_range_loss_mode,
                     "semantics": "euclidean_ray_range_m",
                     "log_huber_delta": self.lidar_log_range_huber_delta,
+                    "linear_aux_weight": self.lidar_linear_aux_weight,
                     "confidence_weighted": True,
                 },
             },
@@ -629,7 +648,9 @@ def _render_supervision_loss(
     rgb_gain: Any | None = None,
     active_sh_degree: int | None = None,
 ) -> tuple[Any, Any, Any, Any, dict[str, Any]]:
-    has_range = "range_m" in tensors and config.lidar_range_weight > 0.0
+    has_range = "range_m" in tensors and (
+        config.lidar_range_weight > 0.0 or config.lidar_linear_aux_weight > 0.0
+    )
     rendered, rendered_range, _, info = backend.render(
         params,
         sample,
@@ -666,6 +687,7 @@ def _render_supervision_loss(
         )
     loss = config.rgb_l1_weight * l1 + config.rgb_ssim_weight * ssim
     range_loss = None
+    linear_range_aux_loss = None
     if has_range:
         assert rendered_range is not None
         if config.lidar_range_loss_mode == "linear_l1":
@@ -684,6 +706,17 @@ def _render_supervision_loss(
                 delta=config.lidar_log_range_huber_delta,
             )
         loss = loss + config.lidar_range_weight * range_loss
+        if config.lidar_linear_aux_weight > 0.0:
+            linear_range_aux_loss = confidence_weighted_range_l1(
+                rendered_range,
+                tensors["range_m"],
+                tensors["confidence"],
+                tensors["depth_mask"],
+            )
+            loss = loss + config.lidar_linear_aux_weight * linear_range_aux_loss
+    info["cloudstudio_linear_range_aux_loss"] = (
+        None if linear_range_aux_loss is None else linear_range_aux_loss.detach()
+    )
     # Stashed for the error-weighted MCMC score update; detached, so it never
     # extends the autograd graph.
     info["cloudstudio_rendered_rgb"] = rendered.detach()
@@ -1205,6 +1238,9 @@ def train(
             "lidar_range_l1_m": None
             if range_loss is None or config.lidar_range_loss_mode != "linear_l1"
             else float(range_loss.detach().cpu()),
+            "lidar_linear_aux_l1_m": None
+            if info["cloudstudio_linear_range_aux_loss"] is None
+            else float(info["cloudstudio_linear_range_aux_loss"].cpu()),
             "rig_pose_prior": None
             if pose_prior is None
             else float(pose_prior.detach().cpu()),

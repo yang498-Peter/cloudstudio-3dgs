@@ -9,7 +9,9 @@ param(
 
     [switch]$ProbeOnly,
 
-    [switch]$LinkExistingObjects
+    [switch]$LinkExistingObjects,
+
+    [switch]$ErrorWeightedSampling
 )
 
 $ErrorActionPreference = "Stop"
@@ -222,6 +224,9 @@ if ($ProbeOnly) {
 if ($Output -and $TrainerConfig) {
     throw "Output and TrainerConfig are mutually exclusive"
 }
+if ($TrainerConfig -and $ErrorWeightedSampling) {
+    throw "ErrorWeightedSampling is only valid for the synthetic acceptance path"
+}
 if (-not $Output -and -not $TrainerConfig) {
     throw "Output or TrainerConfig is required unless -ProbeOnly is used"
 }
@@ -274,7 +279,7 @@ if ($trainerConfigPath) {
     exit $exitCode
 }
 
-$exitCode = Invoke-ConfiguredProcess -FilePath $python -Arguments @(
+$acceptanceArguments = @(
     $bootstrap,
     "--extension", $extension,
     "tools\run_synthetic_training_acceptance.py",
@@ -284,4 +289,8 @@ $exitCode = Invoke-ConfiguredProcess -FilePath $python -Arguments @(
     "--full-mcmc",
     "--resume-equivalence"
 )
+if ($ErrorWeightedSampling) {
+    $acceptanceArguments += "--error-weighted-sampling"
+}
+$exitCode = Invoke-ConfiguredProcess -FilePath $python -Arguments $acceptanceArguments
 exit $exitCode
