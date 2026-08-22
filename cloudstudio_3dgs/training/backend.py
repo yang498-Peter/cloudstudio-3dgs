@@ -219,7 +219,14 @@ class GsplatBackend:
             device=self.device,
         )[None]
         K = torch.as_tensor(sample.K, device=self.device)[None]
-        radial = torch.as_tensor(sample.radial_coeffs, device=self.device)[None]
+        camera_model = getattr(sample, "camera_model", "fisheye")
+        if camera_model not in ("fisheye", "pinhole"):
+            raise ValueError(f"unsupported sample camera_model {camera_model!r}")
+        radial = (
+            None
+            if camera_model == "pinhole"
+            else torch.as_tensor(sample.radial_coeffs, device=self.device)[None]
+        )
         render, alpha, info = self.rasterization(
             means=params["means"],
             quats=params["quats"],
@@ -251,8 +258,8 @@ class GsplatBackend:
             height=sample.height,
             packed=False,
             render_mode="RGB-Ed" if with_range else "RGB",
-            camera_model="fisheye",
-            radial_coeffs=radial,
+            camera_model=camera_model,
+            **({} if radial is None else {"radial_coeffs": radial}),
             with_ut=True,
             with_eval3d=True,
             global_z_order=False,

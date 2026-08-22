@@ -64,6 +64,13 @@ class TrainingSample:
     radial_coeffs: np.ndarray
     width: int
     height: int
+    # "fisheye" renders the raw KB4 image through 3DGUT; "pinhole" is a
+    # zero-distortion face from the fisheye face-split pipeline.
+    camera_model: str = "fisheye"
+    # Pinhole faces render z-depth while LiDAR supervision is Euclidean ray
+    # range; this per-pixel factor (||K^-1 [u,v,1]||) converts z to range.
+    # None means the renderer already outputs ray range (the fisheye path).
+    depth_to_range_scale: np.ndarray | None = None
 
 
 class S1TrainingDataset:

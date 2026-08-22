@@ -611,6 +611,13 @@ def _render_supervision_loss(
     range_loss = None
     if has_range:
         assert rendered_range is not None
+        depth_scale = getattr(sample, "depth_to_range_scale", None)
+        if depth_scale is not None:
+            # Pinhole faces render z-depth; LiDAR supervision is Euclidean
+            # ray range. The per-pixel ||K^-1 [u,v,1]|| factor converts.
+            rendered_range = rendered_range * backend.torch.as_tensor(
+                depth_scale, dtype=rendered_range.dtype, device=rendered_range.device
+            )
         if config.lidar_range_loss_mode == "linear_l1":
             range_loss = confidence_weighted_range_l1(
                 rendered_range,
