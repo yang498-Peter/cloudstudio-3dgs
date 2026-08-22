@@ -239,6 +239,28 @@ class FaceCacheDataset:
             raise ValueError("face manifest is missing the source dataset identity")
         return str(value)
 
+    def _source_sha(self, key: str) -> str | None:
+        source = self.manifest.get("source_identity") or {}
+        value = source.get(key)
+        return None if value is None else str(value)
+
+    # Identity passthroughs for the run-manifest fields the trainer records.
+    @property
+    def mask_sha256(self) -> str | None:
+        return self._source_sha("mask_manifest_sha256")
+
+    @property
+    def person_mask_sha256(self) -> str | None:
+        return self._source_sha("person_mask_manifest_sha256")
+
+    @property
+    def split_sha256(self) -> str | None:
+        return self._source_sha("split_manifest_sha256")
+
+    @property
+    def depth_sha256(self) -> str | None:
+        return self._source_sha("depth_manifest_sha256")
+
     # ---------------------------------------------------------------- access --
 
     def __len__(self) -> int:
