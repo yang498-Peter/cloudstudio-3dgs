@@ -1020,20 +1020,29 @@ class RenderScaleContractTests(unittest.TestCase):
         import torch
 
         anchored = ExposureCompensator(
-            ["a", "b", "c"],
+            ["a", "b", "c", "d"],
             config=ExposureCompensationConfig(enabled=True, zero_mean_projection=True),
             device="cpu",
+            group_by_image={"a": "left", "b": "left", "c": "right", "d": "right"},
         )
         with torch.no_grad():
-            anchored.log_gains.copy_(torch.tensor([0.3, 0.1, 0.2]))
+            # Left group drifts bright, right group drifts dark: a single
+            # global anchor would accept this (sum is zero-ish) even though
+            # each physical camera has absorbed real scene brightness.
+            anchored.log_gains.copy_(torch.tensor([0.3, 0.1, -0.25, -0.15]))
         anchored.project_zero_mean()
         gains = anchored.log_gains.detach()
-        # The dataset-mean brightness is projected out; per-image offsets stay.
-        self.assertAlmostEqual(float(gains.mean()), 0.0, places=6)
+        # Each camera group is centered independently; offsets inside stay.
         torch.testing.assert_close(
-            gains, torch.tensor([0.1, -0.1, 0.0]), atol=1e-6, rtol=0.0
+            gains, torch.tensor([0.1, -0.1, -0.05, 0.05]), atol=1e-6, rtol=0.0
         )
-        self.assertAlmostEqual(anchored.report()["mean_log_gain"], 0.0, places=6)
+        report = anchored.report()
+        self.assertAlmostEqual(report["mean_log_gain"], 0.0, places=6)
+        for value in report["mean_log_gain_by_group"].values():
+            self.assertAlmostEqual(value, 0.0, places=6)
+        self.assertEqual(
+            sorted(report["mean_log_gain_by_group"]), ["left", "right"]
+        )
 
         # Default (off) leaves the gains untouched for run comparability.
         legacy = ExposureCompensator(

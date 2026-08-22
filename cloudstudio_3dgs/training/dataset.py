@@ -255,6 +255,14 @@ class S1TrainingDataset:
         return [str(record[0]["image_id"]) for record in self._records]
 
     @property
+    def camera_id_by_image(self) -> dict[str, str]:
+        """Physical camera for each selected image (exposure gains group by it)."""
+        return {
+            str(record[0]["image_id"]): str(record[0]["camera_id"])
+            for record in self._records
+        }
+
+    @property
     def identity(self) -> dict[str, Any]:
         return {
             "dataset_manifest_sha256": self.dataset_sha256,

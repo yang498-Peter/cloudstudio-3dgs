@@ -879,6 +879,7 @@ def train(
             trainset.image_ids,
             config=config.exposure_compensation,
             device=config.device,
+            group_by_image=trainset.camera_id_by_image,
         )
         exposure_optimizer = exposure.make_optimizer()
         auxiliary_params["exposure_log_gains"] = exposure.log_gains
