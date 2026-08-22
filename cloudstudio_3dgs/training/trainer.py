@@ -114,6 +114,7 @@ class TrainerConfig:
     lidar_log_range_huber_delta: float = 0.05
     decoupled_ssim: bool = False
     sh_regularization_weight: float = 0.0
+    pinhole_rasterize_mode: str = "classic"
     color_model: str = "rgb_sigmoid"
     sh_degree: int = 2
     background_color: tuple[float, float, float] | None = None
@@ -216,6 +217,7 @@ class TrainerConfig:
                 "lidar_log_range_huber_delta",
                 "decoupled_ssim",
                 "sh_regularization_weight",
+                "pinhole_rasterize_mode",
                 "color_model",
                 "sh_degree",
                 "background_color",
@@ -282,6 +284,8 @@ class TrainerConfig:
             raise ValueError("lidar_log_range_huber_delta must be positive")
         if self.sh_regularization_weight < 0.0:
             raise ValueError("sh_regularization_weight must be non-negative")
+        if self.pinhole_rasterize_mode not in ("classic", "antialiased"):
+            raise ValueError("pinhole_rasterize_mode must be 'classic' or 'antialiased'")
         expected_lrs = {"means", "scales", "quats", "opacities", "colors"}
         if set(self.learning_rates) != expected_lrs:
             raise ValueError(f"learning_rates must contain exactly {sorted(expected_lrs)}")
@@ -407,6 +411,7 @@ class TrainerConfig:
                 "enabled": self.face_cache_manifest is not None,
                 "supervision": "pinhole_faces" if self.face_cache_manifest else "raw_fisheye",
                 "validation": "raw_fisheye",
+                "pinhole_rasterize_mode": self.pinhole_rasterize_mode,
             },
             "renderer": {
                 "camera_model": "fisheye",
@@ -911,6 +916,7 @@ def train(
         },
         error_score_config=config.error_weighted_sampling,
     )
+    backend.pinhole_rasterize_mode = config.pinhole_rasterize_mode
     runtime_contract = {
         key: backend.runtime.get(key)
         for key in ("package", "version", "locked_commit", "source_kind", "commit", "wheel_sha256")

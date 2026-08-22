@@ -260,10 +260,16 @@ class GsplatBackend:
             render_mode="RGB-Ed" if with_range else "RGB",
             camera_model=camera_model,
             **({} if radial is None else {"radial_coeffs": radial}),
-            with_ut=True,
-            with_eval3d=True,
+            # The KB4 fisheye needs the 3DGUT unscented path; pinhole faces
+            # are linear so UT adds nothing, and turning it off unlocks
+            # gsplat's Mip-Splatting antialiased compensation, which the
+            # 3DGUT path explicitly rejects.
+            with_ut=camera_model == "fisheye",
+            with_eval3d=camera_model == "fisheye",
             global_z_order=False,
-            rasterize_mode="classic",
+            rasterize_mode="classic"
+            if camera_model == "fisheye"
+            else getattr(self, "pinhole_rasterize_mode", "classic"),
         )
         rgb = render[0, ..., :3]
         if background_rgb is not None:
