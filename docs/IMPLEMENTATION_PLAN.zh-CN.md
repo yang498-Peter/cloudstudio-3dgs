@@ -1148,3 +1148,9 @@ GitHub 重新联网后，澳洲 `machine-b/uk-quality` 从 `2113134` 推进到 `
 - selected step 6000 的 scale p50/p95/p99/p999/max 为 `0.1253/0.3492/0.9565/2.0031/154.8749 m`，大于 `1 m` 有 `9,223` 个；澳洲 P5 同为 step 6000 的对应值为 `0.1249/0.3375/0.8977/4.7247/142.2038 m`、大于 `1 m` 有 `8,442` 个。该方案只压低 p999 分位，没有改善 p95/p99、超限数量或单点最大值，证明弱 top-tail 均值仍允许极少数 Gaussian 逃逸。
 
 当前为 **PASS（实现、CPU 回归、真实 1000/8000 步、完整签名与 LPIPS 证据）/ FAIL（正式综合晋级）**。澳洲 P5 保持优先版本；`tail_fraction=0.001 + scale_upper_weight=1e-4` 记录为已拒绝 Pareto 点。后续若继续尺度治理，必须将分位 CVaR 与极值/屏幕足迹保险拆成单变量短探针，不得直接把这条配置升级为默认或混入 POS A/B。
+
+### 屏幕足迹保险单变量探针
+
+- 为避免把两个机制混在一起，下一条 1000 步探针恢复澳洲 P5 的默认 `scale_upper_tail_fraction=1.0`，只将 `screen_clip_enabled` 从 `false` 改为 `true`；`max_screen_fraction=0.15`、hardness `1.5` 和 opacity bump `3.0` 保持已有默认参数。运行状态 `COMPLETE`，耗时 `477.91 s`、峰值额外显存 `922,298,880 bytes`，触发 `157,144` 次 screen clip、world clamp 为 `0`，run Manifest SHA256 为 `0f9a16a272f13c8cbf8bcbe8e8eaa51750261434ece5b079ca5a603233a09931`。
+- 124 图报告为 PSNR `16.248149 dB`、SSIM `0.532618`、LPIPS-Alex `0.594732`、depth MAE `7.655046 m`、depth coverage min `0.913219`，quality report SHA256 为 `1c91b28d317df09fa4973d69c3316f0f7477f73e99829779166cd076809aa119`。相对 `tail_fraction=0.001` 的同步 1k 报告，LPIPS 改善 `0.007069`、depth 改善 `0.116716 m`，但 PSNR 下降 `1.134935 dB`、SSIM 下降 `0.001091`、最低覆盖下降 `0.045999`。
+- selected step 1000 的 scale p50/p95/p99/p999/max 为 `0.1034/0.1816/0.2907/0.7788/5.7713 m`，大于 `1 m` 有 `262` 个；尺度尾部确实受控，证明该运行路径有效而非空配置，但 15% 足迹阈值在训练早期过度干预可见 Gaussian，外观代价远超晋级余量。因此该参数 **REJECTED**，不进入 8k；若再探索，只允许提高足迹阈值做单变量短探针，不能与 CVaR 同时开启。
