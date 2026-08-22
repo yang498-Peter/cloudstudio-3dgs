@@ -90,6 +90,63 @@ class GoldenEvaluationTests(unittest.TestCase):
         self.assertTrue(is_golden_improvement(report, None, min_psnr_improvement_db=0.001))
         self.assertFalse(is_golden_improvement(report, report, min_psnr_improvement_db=0.001))
 
+    def test_uncovered_depth_is_recorded_not_fatal(self) -> None:
+        import torch
+
+        def sample(image_id: str) -> TrainingSample:
+            return TrainingSample(
+                image_id=image_id,
+                rig_frame_id=image_id,
+                camera_id="left",
+                image=np.full((16, 16, 3), 60, dtype=np.uint8),
+                rgb_mask=np.ones((16, 16), dtype=bool),
+                depth_range_m=np.full((16, 16), 2.0, dtype=np.float32),
+                depth_confidence=np.ones((16, 16), dtype=np.float32),
+                depth_mask=np.ones((16, 16), dtype=bool),
+                depth_cache_path=None,
+                c2w=np.eye(4, dtype=np.float32),
+                K=np.eye(3, dtype=np.float32),
+                radial_coeffs=np.zeros(4, dtype=np.float32),
+                width=16,
+                height=16,
+            )
+
+        class Dataset:
+            image_ids = ["golden-right", "golden-left"]
+
+            def __init__(self) -> None:
+                self.samples = [sample("golden-right"), sample("golden-left")]
+
+            def __getitem__(self, index: int) -> TrainingSample:
+                return self.samples[index]
+
+        class Backend:
+            def __init__(self) -> None:
+                self.torch = torch
+
+            def render(self, params, current, *, with_range, background_rgb=None):
+                assert with_range
+                # Immature model: RGB renders but range is invalid everywhere,
+                # exactly what an early golden pass sees at supervised pixels.
+                return (
+                    torch.full((16, 16, 3), 0.25),
+                    torch.zeros((16, 16)),
+                    None,
+                    None,
+                )
+
+        report = evaluate_golden_views(
+            backend=Backend(),
+            params=None,
+            dataset=Dataset(),
+            split_manifest=_split_manifest(),
+            completed_steps=1000,
+        )
+        for frame in report["frames"]:
+            self.assertEqual(frame["depth"]["status"], "UNMEASURABLE")
+        self.assertIsNone(report["summary"]["depth_mae_m_mean"])
+        self.assertIsNotNone(report["summary"]["psnr_db_mean"])
+
     def test_golden_contract_rejects_empty_or_non_validation_views(self) -> None:
         with self.assertRaisesRegex(ValueError, "not in the validation"):
             golden_image_ids(

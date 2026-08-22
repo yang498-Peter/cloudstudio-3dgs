@@ -22,6 +22,7 @@ class ExposureCompensationConfig:
     learning_rate: float = 5e-3
     regularization_weight: float = 1e-2
     max_abs_log_gain: float = 0.6931471805599453  # ln(2): gain clamped to [0.5, 2]
+    zero_mean_projection: bool = False
 
     def validate(self) -> None:
         if self.learning_rate <= 0.0:
@@ -37,6 +38,7 @@ class ExposureCompensationConfig:
             "learning_rate": self.learning_rate,
             "regularization_weight": self.regularization_weight,
             "max_abs_log_gain": self.max_abs_log_gain,
+            "zero_mean_projection": self.zero_mean_projection,
         }
 
 
@@ -87,6 +89,23 @@ class ExposureCompensator:
     def prior_loss(self) -> Any:
         return self.config.regularization_weight * (self.log_gains**2).mean()
 
+    def project_zero_mean(self) -> None:
+        """Remove the dataset-mean log gain after an optimizer step.
+
+        Per-image gains and global model brightness are jointly unobservable
+        from the photometric loss alone; over a long run the gains drift bright
+        while the model itself darkens, and validation (always gain 1.0) pays
+        the bill. Projecting the gains onto the zero-mean subspace pins the
+        global-brightness degree of freedom inside the model where validation
+        can see it, while per-image differences remain free.
+        """
+        import torch
+
+        if not self.config.zero_mean_projection:
+            return
+        with torch.no_grad():
+            self.log_gains -= self.log_gains.mean()
+
     def report(self) -> dict[str, Any]:
         import torch
 
@@ -100,6 +119,7 @@ class ExposureCompensator:
             )
         return {
             "image_count": int(self.log_gains.shape[0]),
+            "mean_log_gain": float(self.log_gains.detach().mean()),
             "abs_log_gain_p50": float(quantiles[0]),
             "abs_log_gain_p95": float(quantiles[1]),
             "abs_log_gain_max": float(absolute.max()),

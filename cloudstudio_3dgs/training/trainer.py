@@ -1022,6 +1022,7 @@ def train(
         if exposure_optimizer is not None:
             exposure_optimizer.step()
             exposure_optimizer.zero_grad(set_to_none=True)
+            exposure.project_zero_mean()
         mcmc_event = backend.strategy_post_step(
             params,
             optimizers,

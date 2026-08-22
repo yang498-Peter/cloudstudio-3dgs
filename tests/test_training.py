@@ -1016,6 +1016,38 @@ class RenderScaleContractTests(unittest.TestCase):
         self.assertAlmostEqual(float(exposure.gain("right").detach()), 2.0)
         self.assertGreater(float(exposure.prior_loss().detach()), 0.0)
 
+    def test_exposure_zero_mean_projection_removes_brightness_degeneracy(self) -> None:
+        import torch
+
+        anchored = ExposureCompensator(
+            ["a", "b", "c"],
+            config=ExposureCompensationConfig(enabled=True, zero_mean_projection=True),
+            device="cpu",
+        )
+        with torch.no_grad():
+            anchored.log_gains.copy_(torch.tensor([0.3, 0.1, 0.2]))
+        anchored.project_zero_mean()
+        gains = anchored.log_gains.detach()
+        # The dataset-mean brightness is projected out; per-image offsets stay.
+        self.assertAlmostEqual(float(gains.mean()), 0.0, places=6)
+        torch.testing.assert_close(
+            gains, torch.tensor([0.1, -0.1, 0.0]), atol=1e-6, rtol=0.0
+        )
+        self.assertAlmostEqual(anchored.report()["mean_log_gain"], 0.0, places=6)
+
+        # Default (off) leaves the gains untouched for run comparability.
+        legacy = ExposureCompensator(
+            ["a", "b"],
+            config=ExposureCompensationConfig(enabled=True),
+            device="cpu",
+        )
+        with torch.no_grad():
+            legacy.log_gains.copy_(torch.tensor([0.4, 0.2]))
+        legacy.project_zero_mean()
+        torch.testing.assert_close(
+            legacy.log_gains.detach(), torch.tensor([0.4, 0.2])
+        )
+
     def test_metric_geometry_regularization_only_hits_bad_geometry(self) -> None:
         import torch
 
