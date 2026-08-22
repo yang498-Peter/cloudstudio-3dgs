@@ -23,6 +23,8 @@ class ExposureCompensationConfig:
     regularization_weight: float = 1e-2
     max_abs_log_gain: float = 0.6931471805599453  # ln(2): gain clamped to [0.5, 2]
     zero_mean_projection: bool = False
+    mean_anchor_weight: float = 0.0
+    mean_anchor_beta: float = 0.1
 
     def validate(self) -> None:
         if self.learning_rate <= 0.0:
@@ -31,6 +33,10 @@ class ExposureCompensationConfig:
             raise ValueError("exposure regularization_weight must be non-negative")
         if self.max_abs_log_gain <= 0.0:
             raise ValueError("exposure max_abs_log_gain must be positive")
+        if self.mean_anchor_weight < 0.0:
+            raise ValueError("exposure mean_anchor_weight must be non-negative")
+        if self.mean_anchor_beta <= 0.0:
+            raise ValueError("exposure mean_anchor_beta must be positive")
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -39,6 +45,8 @@ class ExposureCompensationConfig:
             "regularization_weight": self.regularization_weight,
             "max_abs_log_gain": self.max_abs_log_gain,
             "zero_mean_projection": self.zero_mean_projection,
+            "mean_anchor_weight": self.mean_anchor_weight,
+            "mean_anchor_beta": self.mean_anchor_beta,
         }
 
 
@@ -104,7 +112,28 @@ class ExposureCompensator:
         return torch.exp(torch.clamp(self.log_gains[position], -bound, bound))
 
     def prior_loss(self) -> Any:
-        return self.config.regularization_weight * (self.log_gains**2).mean()
+        import torch
+
+        loss = self.config.regularization_weight * (self.log_gains**2).mean()
+        if self.config.mean_anchor_weight > 0.0:
+            # Soft per-camera mean anchor (LichtFeld semantics): pull each
+            # group's MEAN log gain to zero with SmoothL1 while individual
+            # gains stay free. The P8 probe showed the hard zero-mean
+            # projection is too aggressive - the model cannot absorb the mean
+            # brightness fast enough and the unremovable residual corrupts the
+            # structural supervision; the soft prior lets the gains keep
+            # compensating short-term while draining the drift long-term.
+            beta = self.config.mean_anchor_beta
+            for members in self.group_members.values():
+                mean = self.log_gains[members].mean()
+                loss = (
+                    loss
+                    + self.config.mean_anchor_weight
+                    * torch.nn.functional.smooth_l1_loss(
+                        mean, mean.new_zeros(()), beta=beta
+                    )
+                )
+        return loss
 
     def project_zero_mean(self) -> None:
         """Remove the dataset-mean log gain after an optimizer step.
