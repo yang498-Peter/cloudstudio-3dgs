@@ -313,6 +313,36 @@ class GoldenEvaluationTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "floater guard"):
             GoldenEvaluationConfig(max_floater_growth_ratio=0.5).validate()
 
+        # Absolute budget: best appearance within a fixed geometry allowance,
+        # immune to the ratio form's dependence on an early, near-empty count.
+        self.assertTrue(
+            is_golden_improvement(
+                report(16.0, 900), best, min_psnr_improvement_db=0.001,
+                max_floater_count=1000,
+            )
+        )
+        self.assertFalse(
+            is_golden_improvement(
+                report(20.0, 1200), best, min_psnr_improvement_db=0.001,
+                max_floater_count=1000,
+            )
+        )
+        # Budget applies even with no incumbent, and fails closed without data.
+        self.assertFalse(
+            is_golden_improvement(
+                report(16.0, 1200), None, min_psnr_improvement_db=0.001,
+                max_floater_count=1000,
+            )
+        )
+        self.assertFalse(
+            is_golden_improvement(
+                {"summary": {"psnr_db_mean": 16.0}}, None,
+                min_psnr_improvement_db=0.001, max_floater_count=1000,
+            )
+        )
+        with self.assertRaisesRegex(ValueError, "floater budget"):
+            GoldenEvaluationConfig(max_floater_count=-1).validate()
+
     def test_golden_contract_rejects_empty_or_non_validation_views(self) -> None:
         with self.assertRaisesRegex(ValueError, "not in the validation"):
             golden_image_ids(

@@ -33,6 +33,7 @@ class GoldenEvaluationConfig:
     min_psnr_improvement_db: float = 0.001
     max_depth_regression_m: float | None = None
     max_floater_growth_ratio: float | None = None
+    max_floater_count: int | None = None
 
     def validate(self) -> None:
         if self.every <= 0 or self.full_every <= 0 or self.artifact_every <= 0:
@@ -49,6 +50,8 @@ class GoldenEvaluationConfig:
             or self.max_floater_growth_ratio < 1.0
         ):
             raise ValueError("golden floater guard ratio must be finite and at least one")
+        if self.max_floater_count is not None and self.max_floater_count < 0:
+            raise ValueError("golden floater budget must be non-negative")
 
     def to_dict(self) -> dict[str, Any]:
         result = {
@@ -65,6 +68,8 @@ class GoldenEvaluationConfig:
             result["max_depth_regression_m"] = self.max_depth_regression_m
         if self.max_floater_growth_ratio is not None:
             result["max_floater_growth_ratio"] = self.max_floater_growth_ratio
+        if self.max_floater_count is not None:
+            result["max_floater_count"] = self.max_floater_count
         return result
 
 
@@ -337,11 +342,26 @@ def is_golden_improvement(
     min_psnr_improvement_db: float,
     max_depth_regression_m: float | None = None,
     max_floater_growth_ratio: float | None = None,
+    max_floater_count: int | None = None,
 ) -> bool:
-    """Return whether a candidate clears appearance and optional geometry bars."""
+    """Return whether a candidate clears appearance and optional geometry bars.
+
+    ``max_floater_count`` is an absolute geometry budget: "give me the best
+    appearance among models with at most N floaters". Prefer it over
+    ``max_floater_growth_ratio`` for long runs - the ratio form anchors on
+    whatever the first evaluation happened to measure, and early checkpoints
+    have almost no floaters simply because densification has not run yet,
+    which locks selection onto a barely-trained model.
+    """
     candidate_score = candidate["summary"]["psnr_db_mean"]
     if candidate_score is None:
         return False
+    if max_floater_count is not None:
+        candidate_floaters = candidate["summary"].get("floater_count")
+        if candidate_floaters is None:
+            return False
+        if int(candidate_floaters) > int(max_floater_count):
+            return False
     candidate_depth = None
     if max_depth_regression_m is not None:
         depth_frames = [

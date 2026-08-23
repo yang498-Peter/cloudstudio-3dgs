@@ -1037,7 +1037,10 @@ def train(
     initialization_sha256 = _sha256_file(config.initialization_ply)
     xyz, rgb = load_initialization_ply(config.initialization_ply)
     geometry_tree = None
-    if config.golden_evaluation.max_floater_growth_ratio is not None:
+    if (
+        config.golden_evaluation.max_floater_growth_ratio is not None
+        or config.golden_evaluation.max_floater_count is not None
+    ):
         # Shared metric reference for the checkpoint-selection floater guard.
         from scipy.spatial import cKDTree
 
@@ -1461,6 +1464,7 @@ def train(
                 max_floater_growth_ratio=(
                     config.golden_evaluation.max_floater_growth_ratio
                 ),
+                max_floater_count=config.golden_evaluation.max_floater_count,
             )
             if golden_promoted:
                 best_golden = golden_result
