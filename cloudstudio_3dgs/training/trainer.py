@@ -56,6 +56,11 @@ from cloudstudio_3dgs.training.rig_pose import (
 )
 from cloudstudio_3dgs.training.error_weighted_mcmc import ErrorScoreConfig
 from cloudstudio_3dgs.training.ppisp import PpispConfig, PpispCorrector
+from cloudstudio_3dgs.training.lidar_normals import (
+    LidarNormalAnchors,
+    NormalAlignmentConfig,
+    build_normal_field,
+)
 from cloudstudio_3dgs.training.regularization import (
     GeometryRegularizationConfig,
     clip_oversized_gaussians,
@@ -149,6 +154,9 @@ class TrainerConfig:
     )
     error_weighted_sampling: ErrorScoreConfig = field(default_factory=ErrorScoreConfig)
     ppisp: PpispConfig = field(default_factory=PpispConfig)
+    lidar_normal_alignment: NormalAlignmentConfig = field(
+        default_factory=NormalAlignmentConfig
+    )
     learning_rates: dict[str, float] = field(
         default_factory=lambda: {
             "means": 1.6e-4,
@@ -208,6 +216,10 @@ class TrainerConfig:
         if not isinstance(ppisp_value, dict):
             raise ValueError("ppisp must be an object")
         ppisp = PpispConfig(**ppisp_value)
+        normal_value = value.get("lidar_normal_alignment", {})
+        if not isinstance(normal_value, dict):
+            raise ValueError("lidar_normal_alignment must be an object")
+        lidar_normal_alignment = NormalAlignmentConfig(**normal_value)
         scale_value = value.get("metric_scale_calibration", {})
         if not isinstance(scale_value, dict):
             raise ValueError("metric_scale_calibration must be an object")
@@ -261,6 +273,7 @@ class TrainerConfig:
             golden_evaluation=golden_evaluation,
             error_weighted_sampling=error_weighted_sampling,
             ppisp=ppisp,
+            lidar_normal_alignment=lidar_normal_alignment,
             **paths,
             **options,
         )
@@ -321,6 +334,7 @@ class TrainerConfig:
         if self.pinhole_rasterize_mode not in ("classic", "antialiased"):
             raise ValueError("pinhole_rasterize_mode must be 'classic' or 'antialiased'")
         self.ppisp.validate()
+        self.lidar_normal_alignment.validate()
         if self.ppisp.enabled and self.exposure_compensation.enabled:
             raise ValueError(
                 "ppisp replaces scalar exposure compensation; enable only one"
@@ -520,6 +534,7 @@ class TrainerConfig:
             "rig_pose_refinement": self.rig_pose_refinement.to_dict(),
             "exposure_compensation": self.exposure_compensation.to_dict(),
             "ppisp": self.ppisp.to_dict(),
+            "lidar_normal_alignment": self.lidar_normal_alignment.to_dict(),
             "geometry_regularization": self.geometry_regularization.to_dict(),
             "golden_evaluation": self.golden_evaluation.to_dict(),
             "viewer": False,
@@ -1021,6 +1036,14 @@ def train(
     config_sha256 = hashlib.sha256(canonical_json_bytes(contract)).hexdigest()
     initialization_sha256 = _sha256_file(config.initialization_ply)
     xyz, rgb = load_initialization_ply(config.initialization_ply)
+    normal_anchors = None
+    if config.lidar_normal_alignment.enabled:
+        # LiDAR-normal geometry prior: KNN-PCA normals + planarity over the
+        # metric initialization cloud (~1.3s for 390k points), anchoring each
+        # gaussian's shortest axis to the measured surface orientation.
+        normal_anchors = LidarNormalAnchors(
+            build_normal_field(xyz), config.lidar_normal_alignment
+        )
     if len(xyz) >= config.cap_max:
         raise ValueError(
             f"initialization has {len(xyz)} Gaussians but cap_max is {config.cap_max}"
@@ -1267,6 +1290,14 @@ def train(
             config=config.geometry_regularization,
         )
         loss = loss + regularization["total"]
+        if normal_anchors is not None:
+            if (
+                normal_anchors.stale
+                or step == 0
+                or step % config.lidar_normal_alignment.refresh_every == 0
+            ):
+                normal_anchors.refresh(params["means"])
+            loss = loss + normal_anchors.loss(params)["total"]
         require_finite_training_tensors(
             params=params,
             loss=loss,
@@ -1344,6 +1375,10 @@ def train(
             info=info,
         )
         append_mcmc_telemetry(mcmc_telemetry, mcmc_event)
+        if mcmc_event["refine_triggered"] and normal_anchors is not None:
+            # Relocation/densification changed the gaussian set; re-anchor
+            # before the next normal-alignment loss uses stale indices.
+            normal_anchors.refresh(params["means"])
         if mcmc_event["refine_triggered"]:
             require_finite_training_tensors(
                 params=params,
