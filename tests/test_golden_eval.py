@@ -256,6 +256,63 @@ class GoldenEvaluationTests(unittest.TestCase):
         )
         self.assertAlmostEqual(report["summary"]["depth_mae_m_mean"], 0.2, places=6)
 
+    def test_floater_guard_blocks_geometry_bought_psnr(self) -> None:
+        import torch
+        from scipy.spatial import cKDTree
+
+        from cloudstudio_3dgs.training.golden_eval import count_floaters
+
+        # A wall of measured points at the origin plane; two gaussians sit on
+        # it, one drifts 2 m away, and one distant gaussian is invisible.
+        tree = cKDTree(np.zeros((5, 3), dtype=np.float64))
+        params = {
+            "means": torch.tensor(
+                [[0.0, 0.0, 0.0], [0.01, 0.0, 0.0], [2.0, 0.0, 0.0], [9.0, 0.0, 0.0]]
+            ),
+            "opacities": torch.tensor([3.0, 3.0, 3.0, -9.0]),
+        }
+        self.assertEqual(count_floaters(params, tree), 1)
+
+        def report(psnr: float, floaters: int) -> dict:
+            return {"summary": {"psnr_db_mean": psnr, "floater_count": floaters}}
+
+        best = report(15.0, 100)
+        # Better PSNR bought with a floater explosion is rejected...
+        self.assertFalse(
+            is_golden_improvement(
+                report(16.0, 400),
+                best,
+                min_psnr_improvement_db=0.001,
+                max_floater_growth_ratio=1.2,
+            )
+        )
+        # ...while the same PSNR gain within the allowance is accepted.
+        self.assertTrue(
+            is_golden_improvement(
+                report(16.0, 118),
+                best,
+                min_psnr_improvement_db=0.001,
+                max_floater_growth_ratio=1.2,
+            )
+        )
+        # Without the guard configured, behaviour is unchanged.
+        self.assertTrue(
+            is_golden_improvement(
+                report(16.0, 400), best, min_psnr_improvement_db=0.001
+            )
+        )
+        # Guard requested but counts missing: fail closed.
+        self.assertFalse(
+            is_golden_improvement(
+                {"summary": {"psnr_db_mean": 16.0}},
+                best,
+                min_psnr_improvement_db=0.001,
+                max_floater_growth_ratio=1.2,
+            )
+        )
+        with self.assertRaisesRegex(ValueError, "floater guard"):
+            GoldenEvaluationConfig(max_floater_growth_ratio=0.5).validate()
+
     def test_golden_contract_rejects_empty_or_non_validation_views(self) -> None:
         with self.assertRaisesRegex(ValueError, "not in the validation"):
             golden_image_ids(

@@ -32,6 +32,7 @@ class GoldenEvaluationConfig:
     artifact_every: int = 1_000
     min_psnr_improvement_db: float = 0.001
     max_depth_regression_m: float | None = None
+    max_floater_growth_ratio: float | None = None
 
     def validate(self) -> None:
         if self.every <= 0 or self.full_every <= 0 or self.artifact_every <= 0:
@@ -43,6 +44,11 @@ class GoldenEvaluationConfig:
             or self.max_depth_regression_m < 0.0
         ):
             raise ValueError("golden depth regression guard must be finite and non-negative")
+        if self.max_floater_growth_ratio is not None and (
+            not math.isfinite(self.max_floater_growth_ratio)
+            or self.max_floater_growth_ratio < 1.0
+        ):
+            raise ValueError("golden floater guard ratio must be finite and at least one")
 
     def to_dict(self) -> dict[str, Any]:
         result = {
@@ -57,6 +63,8 @@ class GoldenEvaluationConfig:
         # explicitly requested.
         if self.max_depth_regression_m is not None:
             result["max_depth_regression_m"] = self.max_depth_regression_m
+        if self.max_floater_growth_ratio is not None:
+            result["max_floater_growth_ratio"] = self.max_floater_growth_ratio
         return result
 
 
@@ -251,9 +259,10 @@ def evaluate_golden_views(
     completed_steps: int,
     background_rgb: Any | None = None,
     artifact_output_dir: Path | None = None,
+    geometry_tree: Any | None = None,
 ) -> dict[str, Any]:
     """Evaluate signed golden views and optionally persist visual evidence."""
-    return _evaluate_views(
+    report = _evaluate_views(
         backend=backend,
         params=params,
         dataset=dataset,
@@ -264,6 +273,10 @@ def evaluate_golden_views(
         background_rgb=background_rgb,
         artifact_output_dir=artifact_output_dir,
     )
+    if geometry_tree is not None:
+        report["summary"]["floater_count"] = count_floaters(params, geometry_tree)
+        report["summary"]["floater_threshold_m"] = FLOATER_DISTANCE_THRESHOLD_M
+    return report
 
 
 def evaluate_full_validation(
@@ -291,14 +304,41 @@ def evaluate_full_validation(
     )
 
 
+FLOATER_DISTANCE_THRESHOLD_M = 0.3
+FLOATER_MINIMUM_OPACITY = 0.1
+
+
+def count_floaters(params: Any, geometry_tree: Any) -> int:
+    """Count visible gaussians that sit far from the measured LiDAR geometry.
+
+    A "floater" is a gaussian the renderer can actually see (opacity above
+    ``FLOATER_MINIMUM_OPACITY``) whose center is further than
+    ``FLOATER_DISTANCE_THRESHOLD_M`` from any measured LiDAR point. Long
+    training accumulates these faster than the appearance metrics notice: on
+    this scene the count grew 326 -> 2376 between 8k and 30k steps at
+    unchanged PSNR-only selection, which is what the guard exists to catch.
+    """
+    import torch
+
+    with torch.no_grad():
+        opacity = torch.sigmoid(params["opacities"].detach().reshape(-1))
+        visible = opacity > FLOATER_MINIMUM_OPACITY
+        if not bool(visible.any()):
+            return 0
+        centers = params["means"].detach()[visible].cpu().numpy()
+    distances, _ = geometry_tree.query(centers, k=1, workers=-1)
+    return int((distances > FLOATER_DISTANCE_THRESHOLD_M).sum())
+
+
 def is_golden_improvement(
     candidate: dict[str, Any],
     best: dict[str, Any] | None,
     *,
     min_psnr_improvement_db: float,
     max_depth_regression_m: float | None = None,
+    max_floater_growth_ratio: float | None = None,
 ) -> bool:
-    """Return whether a candidate clears appearance and optional depth bars."""
+    """Return whether a candidate clears appearance and optional geometry bars."""
     candidate_score = candidate["summary"]["psnr_db_mean"]
     if candidate_score is None:
         return False
@@ -323,6 +363,16 @@ def is_golden_improvement(
         float(best["summary"]["psnr_db_mean"]) + min_psnr_improvement_db
     ):
         return False
+    if max_floater_growth_ratio is not None:
+        candidate_floaters = candidate["summary"].get("floater_count")
+        best_floaters = best["summary"].get("floater_count")
+        if candidate_floaters is None or best_floaters is None:
+            return False
+        # A candidate may not buy its PSNR with geometry: the floater count is
+        # allowed to grow only within the configured ratio of the incumbent.
+        allowance = max(1.0, float(best_floaters) * float(max_floater_growth_ratio))
+        if float(candidate_floaters) > allowance:
+            return False
     if max_depth_regression_m is None:
         return True
     best_depth_frames = [

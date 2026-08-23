@@ -1036,6 +1036,12 @@ def train(
     config_sha256 = hashlib.sha256(canonical_json_bytes(contract)).hexdigest()
     initialization_sha256 = _sha256_file(config.initialization_ply)
     xyz, rgb = load_initialization_ply(config.initialization_ply)
+    geometry_tree = None
+    if config.golden_evaluation.max_floater_growth_ratio is not None:
+        # Shared metric reference for the checkpoint-selection floater guard.
+        from scipy.spatial import cKDTree
+
+        geometry_tree = cKDTree(np.asarray(xyz, dtype=np.float64))
     normal_anchors = None
     if config.lidar_normal_alignment.enabled:
         # LiDAR-normal geometry prior: KNN-PCA normals + planarity over the
@@ -1444,6 +1450,7 @@ def train(
                 completed_steps=completed,
                 background_rgb=config.background_color,
                 artifact_output_dir=output_dir if golden_artifact_due else None,
+                geometry_tree=geometry_tree,
             )
             golden_history.append(golden_result)
             golden_promoted = is_golden_improvement(
@@ -1451,6 +1458,9 @@ def train(
                 best_golden,
                 min_psnr_improvement_db=config.golden_evaluation.min_psnr_improvement_db,
                 max_depth_regression_m=config.golden_evaluation.max_depth_regression_m,
+                max_floater_growth_ratio=(
+                    config.golden_evaluation.max_floater_growth_ratio
+                ),
             )
             if golden_promoted:
                 best_golden = golden_result
