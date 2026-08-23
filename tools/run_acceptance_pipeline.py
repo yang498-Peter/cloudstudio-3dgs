@@ -136,8 +136,11 @@ def main() -> int:
     run_name = output_dir.name
     say(f"acceptance start: {run_name}")
 
+    # The log lives beside the run, not inside it: the trainer refuses to
+    # start into a non-empty output directory, and creating the log there
+    # would trip that check before the first step.
     train(config=args.config, output_dir=output_dir,
-          log=args.log or (output_dir / "training.log"))
+          log=args.log or output_dir.with_name(f"{run_name}_training.log"))
     link_evaluation(output_dir, args.probes_root, run_name)
 
     checkpoint = output_dir / "checkpoints" / args.checkpoint_name
