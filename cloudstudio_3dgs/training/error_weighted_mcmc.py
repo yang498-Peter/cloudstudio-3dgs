@@ -43,6 +43,7 @@ from gsplat.strategy.ops import _multinomial_sample, _update_param_with_optimize
 from cloudstudio_3dgs.training.error_weighted_config import (
     ErrorScoreConfig as _CoreErrorScoreConfig,
 )
+from cloudstudio_3dgs.training.gaussian_lifecycle import GaussianLifecycleState
 
 
 @dataclass(frozen=True)
@@ -78,7 +79,14 @@ class ErrorScoreConfig(_CoreErrorScoreConfig):
 
 
 class ErrorScoreState:
-    """Per-Gaussian EMA of image-space error, indexed like the parameter tensors."""
+    """Per-Gaussian EMA of image-space error, indexed like the parameter tensors.
+
+    The scores are no longer owned by this class: they are the ``error_ema``
+    column of a :class:`GaussianLifecycleState`, which carries the rest of the
+    per-Gaussian bookkeeping (anchors, generation, parent, age) through the
+    same relocate/grow/prune index mutations. ``scores`` stays a plain
+    read/write attribute so every existing caller and test is unaffected.
+    """
 
     def __init__(
         self,
@@ -90,10 +98,44 @@ class ErrorScoreState:
         self.config.validate()
         if int(num_gaussians) < 0:
             raise ValueError("num_gaussians must be non-negative")
-        self.scores: Tensor = torch.ones(int(num_gaussians), device=device)
+        self.lifecycle = GaussianLifecycleState(int(num_gaussians), device=device)
+
+    @property
+    def scores(self) -> Tensor:
+        """The lifecycle's ``error_ema`` column (live tensor, not a copy)."""
+        return self.lifecycle.error_ema
+
+    @scores.setter
+    def scores(self, value: Any) -> None:
+        tensor = torch.as_tensor(value)
+        if tensor.dim() != 1:
+            raise ValueError("scores must be a one-dimensional tensor")
+        if int(tensor.shape[0]) != len(self.lifecycle):
+            # Keep the sibling lifecycle columns aligned with the new length
+            # instead of silently desynchronizing the index space.
+            self.lifecycle.resize(int(tensor.shape[0]))
+        if tensor.device != self.lifecycle.device:
+            self.lifecycle.to(tensor.device)
+        self.lifecycle.error_ema = tensor
 
     def __len__(self) -> int:
         return int(self.scores.shape[0])
+
+    @torch.no_grad()
+    def on_step(self, step: int) -> None:
+        """Advance the lifecycle clock (ages) by one training step."""
+        self.lifecycle.on_step(int(step))
+
+    @torch.no_grad()
+    def reset(self, num_gaussians: int) -> None:
+        """Discard all history and start over with ``num_gaussians`` fresh rows.
+
+        For a brand-new cloud only (backend initialization). Refinements must
+        use :meth:`resize` / the lifecycle operations, which keep history.
+        """
+        self.lifecycle = GaussianLifecycleState(
+            int(num_gaussians), device=self.lifecycle.device
+        )
 
     @torch.no_grad()
     def update(
@@ -305,17 +347,22 @@ class ErrorScoreState:
 
     @torch.no_grad()
     def resize(self, new_count: int) -> None:
-        """Reset to all-ones at ``new_count`` after the Gaussian count changed.
+        """Align the length to ``new_count``, preserving the surviving scores.
 
-        A full reset is deliberately simple and safe: scores rebuild within a
-        few EMA windows, and all-ones weighting degrades exactly to gsplat's
-        plain opacity sampling in the meantime.
+        Growth appends fresh entries (score 1.0), shrinking truncates the tail;
+        every entry that stays keeps its accumulated EMA bit-for-bit.
+
+        This used to reset *every* score to 1.0, which was a defect, not a
+        simplification: MCMC densification runs every ``refine_every`` steps,
+        so a multi-thousand-step multi-view error EMA was discarded on a fixed
+        cadence and the sampler kept collapsing back to plain opacity MCMC.
+        ``resize`` is now only the fallback for refinements whose parent/child
+        mapping is not observable; when it is,
+        :meth:`GaussianLifecycleState.on_grow` inherits the parent's score.
         """
         if int(new_count) < 0:
             raise ValueError("new_count must be non-negative")
-        self.scores = torch.ones(
-            int(new_count), device=self.scores.device, dtype=self.scores.dtype
-        )
+        self.lifecycle.resize(int(new_count))
 
     @torch.no_grad()
     def sampling_weights(self, opacities: Tensor) -> Tensor:
@@ -330,10 +377,17 @@ class ErrorScoreState:
         return opac * score ** float(self.config.score_power)
 
     def checkpoint_state(self) -> dict[str, Any]:
-        """Return the complete state required for deterministic resume."""
+        """Return the complete state required for deterministic resume.
+
+        ``schema_version`` stays 1 and ``scores`` stays the authoritative EMA
+        column so checkpoints remain readable in both directions; ``lifecycle``
+        is an additive payload that older readers ignore and that older
+        checkpoints simply do not carry.
+        """
         return {
             "schema_version": 1,
             "scores": self.scores.detach().clone(),
+            "lifecycle": self.lifecycle.state_dict(),
         }
 
     @torch.no_grad()
@@ -355,9 +409,22 @@ class ErrorScoreState:
             )
         if not bool(torch.isfinite(scores).all()):
             raise ValueError("checkpoint error scores contain non-finite values")
+        lifecycle_payload = payload.get("lifecycle")
+        if lifecycle_payload is None:
+            # Pre-lifecycle checkpoint: the scores are all that was ever
+            # persisted, so the sibling columns start from their defaults at
+            # the restored length.
+            self.lifecycle = GaussianLifecycleState(
+                int(expected_count), device=self.lifecycle.device
+            )
+        else:
+            self.lifecycle.load_state_dict(
+                lifecycle_payload, expected_count=int(expected_count)
+            )
+        target_dtype = self.lifecycle.error_ema.dtype
         self.scores = scores.detach().to(
-            device=self.scores.device,
-            dtype=self.scores.dtype,
+            device=self.lifecycle.device,
+            dtype=target_dtype,
         ).clone()
 
 
@@ -378,13 +445,18 @@ def relocate_weighted(
     probs: Tensor,
     min_opacity: float = 0.005,
     scene: Any | None = None,
-):
+) -> tuple[Tensor, Tensor]:
     """Inplace relocate dead Gaussians onto live ones sampled by ``probs``.
 
     Adapted from gsplat.strategy.ops.relocate; ``probs`` is a full-length
     [N] weight vector aligned with the Gaussians (e.g. from
     :meth:`ErrorScoreState.sampling_weights`). The alive subset is taken
     internally, exactly where the original takes ``opacities[alive_indices]``.
+
+    Unlike the upstream op this returns ``(dead_indices, sampled_idxs)``: the
+    dead/source pairing is computed here and is the only place it exists, and
+    per-Gaussian lifecycle state cannot be kept consistent without it. Nothing
+    else about the adapted logic changes; callers may ignore the return value.
     """
     # support "opacities" with shape [N,] or [N, 1]
     opacities = torch.sigmoid(params["opacities"])
@@ -430,6 +502,7 @@ def relocate_weighted(
             v[sampled_idxs] = 0
     if scene is not None:
         scene.on_relocate(dead_indices, sampled_idxs)
+    return dead_indices, sampled_idxs
 
 
 @torch.no_grad()
@@ -442,11 +515,17 @@ def sample_add_weighted(
     probs: Tensor,
     min_opacity: float = 0.005,
     scene: Any | None = None,
-):
+) -> Tensor:
     """Inplace add ``n`` Gaussians cloned from existing ones sampled by ``probs``.
 
     Adapted from gsplat.strategy.ops.sample_add; ``probs`` is a full-length
     [N] weight vector aligned with the Gaussians.
+
+    Unlike the upstream op this returns ``sampled_idxs``, the parent index of
+    each appended Gaussian in pre-growth index space and in append order.
+    Without it a caller cannot tell which existing Gaussian each new row was
+    cloned from, and per-Gaussian state can only be reset. Nothing else about
+    the adapted logic changes; callers may ignore the return value.
     """
     opacities = torch.sigmoid(params["opacities"])
 
@@ -484,6 +563,7 @@ def sample_add_weighted(
             state[k] = torch.cat((v, v_new))
     if scene is not None:
         scene.on_sample_add(sampled_idxs)
+    return sampled_idxs
 
 
 @dataclass
@@ -499,6 +579,9 @@ class ErrorWeightedMCMCStrategy(MCMCStrategy):
 
     score_state: Optional[ErrorScoreState] = None
     error_config: ErrorScoreConfig = field(default_factory=ErrorScoreConfig)
+    # Bookkeeping only: the refine hooks are called without the step number,
+    # but lifecycle rows record the step at which they were (re)born.
+    current_step: int = 0
 
     def __post_init__(self) -> None:
         self.error_config.validate()
@@ -509,6 +592,21 @@ class ErrorWeightedMCMCStrategy(MCMCStrategy):
             and self.score_state is not None
             and len(self.score_state) == int(num_gaussians)
         )
+
+    def step_post_backward(self, *args: Any, **kwargs: Any):
+        """Record the step, then run the unmodified upstream refinement."""
+        step = kwargs.get("step")
+        if step is None and len(args) >= 4:
+            step = args[3]
+        if step is not None:
+            self.current_step = int(step)
+        return super().step_post_backward(*args, **kwargs)
+
+    @torch.no_grad()
+    def _sync_lifecycle_length(self, num_gaussians: int) -> None:
+        """Fallback alignment when the parent/child mapping is not observable."""
+        if self.score_state is not None and len(self.score_state) != int(num_gaussians):
+            self.score_state.resize(int(num_gaussians))
 
     @torch.no_grad()
     def _relocate_gs(
@@ -526,7 +624,7 @@ class ErrorWeightedMCMCStrategy(MCMCStrategy):
         if n_gs > 0:
             assert self.score_state is not None
             probs = self.score_state.sampling_weights(opacities)
-            relocate_weighted(
+            outcome = relocate_weighted(
                 params=params,
                 optimizers=optimizers,
                 state={},
@@ -536,8 +634,14 @@ class ErrorWeightedMCMCStrategy(MCMCStrategy):
                 min_opacity=self.min_opacity,
                 scene=scene,
             )
-            # Relocation keeps N constant; relocated Gaussians inherit their
-            # slot's score and re-converge through the EMA.
+            # Relocation keeps N constant, but each dead slot now holds a copy
+            # of its source Gaussian: its lifecycle row must follow the source
+            # instead of keeping the corpse's history.
+            if isinstance(outcome, tuple) and len(outcome) == 2:
+                dead_indices, sampled_idxs = outcome
+                self.score_state.lifecycle.on_relocate(
+                    dead_indices, sampled_idxs, step=self.current_step
+                )
         return n_gs
 
     @torch.no_grad()
@@ -551,8 +655,9 @@ class ErrorWeightedMCMCStrategy(MCMCStrategy):
         current_n_points = len(params["means"])
         if not self._weighting_active(current_n_points):
             n_gs = super()._add_new_gs(params, optimizers, binoms, scene=scene)
-            if n_gs > 0 and self.score_state is not None:
-                self.score_state.resize(len(params["means"]))
+            # Upstream sample_add keeps its parent indices private, so only a
+            # length alignment is possible here; surviving rows are preserved.
+            self._sync_lifecycle_length(len(params["means"]))
             return n_gs
         n_target = min(self.cap_max, int(1.05 * current_n_points))
         n_gs = max(0, n_target - current_n_points)
@@ -561,7 +666,7 @@ class ErrorWeightedMCMCStrategy(MCMCStrategy):
             probs = self.score_state.sampling_weights(
                 torch.sigmoid(params["opacities"].flatten())
             )
-            sample_add_weighted(
+            sampled_idxs = sample_add_weighted(
                 params=params,
                 optimizers=optimizers,
                 state={},
@@ -571,5 +676,11 @@ class ErrorWeightedMCMCStrategy(MCMCStrategy):
                 min_opacity=self.min_opacity,
                 scene=scene,
             )
-            self.score_state.resize(len(params["means"]))
+            # Children inherit their parent's accumulated error EMA and anchor;
+            # nothing that already existed is touched.
+            if isinstance(sampled_idxs, Tensor):
+                self.score_state.lifecycle.on_grow(
+                    sampled_idxs, step=self.current_step
+                )
+            self._sync_lifecycle_length(len(params["means"]))
         return n_gs

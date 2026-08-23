@@ -191,7 +191,9 @@ class GsplatBackend:
             )
         params = torch.nn.ParameterDict(entries)
         if self.error_score_state is not None:
-            self.error_score_state.resize(len(points))
+            # A brand-new cloud: reset() rather than resize(), which now
+            # preserves surviving per-Gaussian lifecycle rows by design.
+            self.error_score_state.reset(len(points))
         optimizers = {
             name: torch.optim.Adam(
                 [{"params": [parameter], "lr": float(learning_rates[name]), "name": name}],

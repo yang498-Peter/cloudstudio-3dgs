@@ -151,7 +151,10 @@ class ErrorScoreStateUpdateTests(unittest.TestCase):
                 width=2,
             )
 
-    def test_resize_resets_to_ones(self) -> None:
+    def test_resize_preserves_existing_scores_and_defaults_new_ones(self) -> None:
+        # WP-1 semantics change: resize() used to reset EVERY score to 1.0,
+        # discarding the accumulated multi-view EMA on every densification.
+        # It now only aligns the length.
         state = ErrorScoreState(2, ErrorScoreConfig(ema_decay=0.0))
         pixel_error = torch.full((2, 2), 0.5)
         state.update(
@@ -160,7 +163,13 @@ class ErrorScoreStateUpdateTests(unittest.TestCase):
         self.assertTrue(torch.allclose(state.scores, torch.tensor([0.5, 0.5])))
         state.resize(5)
         self.assertEqual(len(state), 5)
-        self.assertTrue(torch.allclose(state.scores, torch.ones(5)))
+        self.assertTrue(
+            torch.allclose(
+                state.scores, torch.tensor([0.5, 0.5, 1.0, 1.0, 1.0])
+            )
+        )
+        state.resize(3)
+        self.assertTrue(torch.allclose(state.scores, torch.tensor([0.5, 0.5, 1.0])))
 
 
 class SamplingWeightTests(unittest.TestCase):

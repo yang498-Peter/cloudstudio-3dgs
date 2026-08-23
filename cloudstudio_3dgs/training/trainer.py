@@ -1366,6 +1366,10 @@ def train(
                 if "opacities" in info
                 else None,
             )
+            # Advance the per-Gaussian lifecycle clock before the refinement
+            # below can grow/relocate: ages tick, and rows born in this step
+            # record it as their birth step.
+            backend.error_score_state.on_step(step)
         # Before strategy_post_step: relocation/add would desynchronize this
         # step's projected radii from the gaussian count.
         clip_report = clip_oversized_gaussians(
