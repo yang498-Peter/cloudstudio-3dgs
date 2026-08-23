@@ -1,14 +1,20 @@
+import hashlib
 import importlib.util
+import tempfile
 import unittest
+from pathlib import Path
 
 import numpy as np
 
+from cloudstudio_3dgs.data.manifest import canonical_json_bytes
 from cloudstudio_3dgs.training.dataset import TrainingSample
 from cloudstudio_3dgs.training.golden_eval import (
     GoldenEvaluationConfig,
+    evaluate_full_validation,
     evaluate_golden_views,
     golden_image_ids,
     is_golden_improvement,
+    verify_golden_history,
 )
 
 
@@ -75,20 +81,70 @@ class GoldenEvaluationTests(unittest.TestCase):
                     raise AssertionError("fixture does not contain depth")
 
         backend = Backend()
-        report = evaluate_golden_views(
-            backend=backend,
-            params=None,
-            dataset=Dataset(),
-            split_manifest=_split_manifest(),
-            completed_steps=10,
-            background_rgb=(1.0, 1.0, 1.0),
-        )
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            report = evaluate_golden_views(
+                backend=backend,
+                params=None,
+                dataset=Dataset(),
+                split_manifest=_split_manifest(),
+                completed_steps=10,
+                background_rgb=(1.0, 1.0, 1.0),
+                artifact_output_dir=root,
+            )
+            for frame in report["frames"]:
+                for key in ("rendered_path", "reference_path", "mask_path"):
+                    self.assertTrue((root / frame["artifacts"][key]).is_file())
         self.assertEqual(report["image_ids"], ["golden-left", "golden-right"])
         self.assertEqual([frame["image_id"] for frame in report["frames"]], report["image_ids"])
         self.assertGreater(float(report["summary"]["psnr_db_mean"]), 20.0)
         self.assertEqual(backend.backgrounds, [(1.0, 1.0, 1.0)] * 2)
         self.assertTrue(is_golden_improvement(report, None, min_psnr_improvement_db=0.001))
         self.assertFalse(is_golden_improvement(report, report, min_psnr_improvement_db=0.001))
+
+    def test_full_validation_covers_signed_validation_order(self) -> None:
+        import torch
+
+        class Dataset:
+            image_ids = ["golden-left", "golden-right", "other-val"]
+
+            def __getitem__(self, index: int) -> TrainingSample:
+                image_id = self.image_ids[index]
+                return TrainingSample(
+                    image_id=image_id,
+                    rig_frame_id=image_id,
+                    camera_id="left",
+                    image=np.full((16, 16, 3), 64, dtype=np.uint8),
+                    rgb_mask=np.ones((16, 16), dtype=bool),
+                    depth_range_m=None,
+                    depth_confidence=None,
+                    depth_mask=None,
+                    depth_cache_path=None,
+                    c2w=np.eye(4, dtype=np.float32),
+                    K=np.eye(3, dtype=np.float32),
+                    radial_coeffs=np.zeros(4, dtype=np.float32),
+                    width=16,
+                    height=16,
+                )
+        class Backend:
+            def __init__(self) -> None:
+                self.torch = torch
+
+            @staticmethod
+            def render(params, sample, **kwargs):
+                return torch.full((16, 16, 3), 0.2), None, None, None
+
+        report = evaluate_full_validation(
+            backend=Backend(),
+            params=None,
+            dataset=Dataset(),
+            split_manifest=_split_manifest(),
+            completed_steps=4000,
+        )
+        self.assertEqual(report["evaluation_kind"], "full")
+        self.assertEqual(report["image_ids"], Dataset.image_ids)
+        self.assertEqual(len(report["frames"]), 3)
+        self.assertIn("psnr_db_p10", report["summary"])
 
     def test_uncovered_depth_is_recorded_not_fatal(self) -> None:
         import torch
@@ -147,6 +203,59 @@ class GoldenEvaluationTests(unittest.TestCase):
         self.assertIsNone(report["summary"]["depth_mae_m_mean"])
         self.assertIsNotNone(report["summary"]["psnr_db_mean"])
 
+    def test_depth_metrics_measure_covered_pixels_above_the_coverage_gate(self) -> None:
+        import torch
+
+        class Dataset:
+            image_ids = ["golden-left", "golden-right"]
+
+            def __getitem__(self, index: int) -> TrainingSample:
+                image_id = self.image_ids[index]
+                return TrainingSample(
+                    image_id=image_id,
+                    rig_frame_id=image_id,
+                    camera_id="left",
+                    image=np.full((16, 16, 3), 60, dtype=np.uint8),
+                    rgb_mask=np.ones((16, 16), dtype=bool),
+                    depth_range_m=np.full((16, 16), 2.0, dtype=np.float32),
+                    depth_confidence=np.ones((16, 16), dtype=np.float32),
+                    depth_mask=np.ones((16, 16), dtype=bool),
+                    depth_cache_path=None,
+                    c2w=np.eye(4, dtype=np.float32),
+                    K=np.eye(3, dtype=np.float32),
+                    radial_coeffs=np.zeros(4, dtype=np.float32),
+                    width=16,
+                    height=16,
+                )
+
+        class Backend:
+            def __init__(self) -> None:
+                self.torch = torch
+
+            @staticmethod
+            def render(params, sample, *, with_range, background_rgb=None):
+                assert with_range
+                rendered_range = torch.full((16, 16), 2.2)
+                rendered_range[0, :] = 0.0
+                return torch.full((16, 16, 3), 0.25), rendered_range, None, None
+
+        report = evaluate_golden_views(
+            backend=Backend(),
+            params=None,
+            dataset=Dataset(),
+            split_manifest=_split_manifest(),
+            completed_steps=1000,
+        )
+        for frame in report["frames"]:
+            self.assertEqual(frame["depth"]["status"], "MEASURED")
+            self.assertAlmostEqual(
+                frame["depth"]["prediction_coverage_fraction"], 0.9375
+            )
+        self.assertAlmostEqual(
+            report["summary"]["depth_prediction_coverage_fraction_min"], 0.9375
+        )
+        self.assertAlmostEqual(report["summary"]["depth_mae_m_mean"], 0.2, places=6)
+
     def test_golden_contract_rejects_empty_or_non_validation_views(self) -> None:
         with self.assertRaisesRegex(ValueError, "not in the validation"):
             golden_image_ids(
@@ -157,3 +266,97 @@ class GoldenEvaluationTests(unittest.TestCase):
             )
         with self.assertRaisesRegex(ValueError, "interval"):
             GoldenEvaluationConfig(every=0).validate()
+        with self.assertRaisesRegex(ValueError, "depth regression"):
+            GoldenEvaluationConfig(max_depth_regression_m=-0.01).validate()
+
+    def test_golden_depth_guard_rejects_geometry_regression_and_missing_depth(self) -> None:
+        def record(psnr: float, depth: float | None, status: str = "MEASURED") -> dict:
+            return {
+                "frames": [{"depth": {"status": status}}],
+                "summary": {
+                    "psnr_db_mean": psnr,
+                    "depth_mae_m_mean": depth,
+                },
+            }
+
+        best = record(20.0, 4.9)
+        small_regression = record(20.2, 4.94)
+        large_regression = record(20.3, 5.02)
+        self.assertTrue(
+            is_golden_improvement(
+                small_regression,
+                best,
+                min_psnr_improvement_db=0.001,
+                max_depth_regression_m=0.05,
+            )
+        )
+        self.assertFalse(
+            is_golden_improvement(
+                large_regression,
+                best,
+                min_psnr_improvement_db=0.001,
+                max_depth_regression_m=0.05,
+            )
+        )
+        self.assertTrue(
+            is_golden_improvement(
+                large_regression,
+                best,
+                min_psnr_improvement_db=0.001,
+            )
+        )
+        self.assertFalse(
+            is_golden_improvement(
+                record(20.4, None, status="UNMEASURABLE"),
+                best,
+                min_psnr_improvement_db=0.001,
+                max_depth_regression_m=0.05,
+            )
+        )
+        config = GoldenEvaluationConfig(max_depth_regression_m=0.05)
+        self.assertEqual(config.to_dict()["max_depth_regression_m"], 0.05)
+        self.assertNotIn("max_depth_regression_m", GoldenEvaluationConfig().to_dict())
+
+    def test_signed_history_replays_depth_guard_selection(self) -> None:
+        config = GoldenEvaluationConfig(max_depth_regression_m=0.05)
+
+        def signed_record(step: int, psnr: float, depth: float) -> dict:
+            record = {
+                "schema_version": 1,
+                "algorithm_version": "golden_validation_v3",
+                "evaluation_kind": "golden",
+                "completed_steps": step,
+                "split_manifest_sha256": "split-sha",
+                "image_ids": ["golden"],
+                "frames": [
+                    {
+                        "image_id": "golden",
+                        "depth": {"status": "MEASURED", "mae_m": depth},
+                    }
+                ],
+                "summary": {
+                    "selection_metric": "masked_rgb_psnr_db_mean",
+                    "psnr_db_mean": psnr,
+                    "depth_mae_m_mean": depth,
+                },
+            }
+            record["golden_evaluation_sha256"] = hashlib.sha256(
+                canonical_json_bytes(record)
+            ).hexdigest()
+            return record
+
+        accepted = signed_record(1000, 20.0, 4.9)
+        rejected = signed_record(2000, 20.2, 5.1)
+        history = {
+            "schema_version": 1,
+            "configuration": config.to_dict(),
+            "history": [accepted, rejected],
+            "best": accepted,
+        }
+        history["golden_history_sha256"] = hashlib.sha256(
+            canonical_json_bytes(history)
+        ).hexdigest()
+        self.assertEqual(
+            verify_golden_history(history),
+            history["golden_history_sha256"],
+        )

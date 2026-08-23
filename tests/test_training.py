@@ -555,6 +555,7 @@ class TrainingContractTests(unittest.TestCase):
         )
         config.validate()
         contract = config.contract_dict()
+        self.assertEqual(contract["algorithm_version"], "cloudstudio_gsplat_trainer_v4")
         self.assertEqual(contract["renderer"]["camera_model"], "fisheye")
         self.assertEqual(contract["renderer"]["range_mode"], "RGB-Ed")
         self.assertEqual(contract["strategy"]["name"], "MCMC")
@@ -569,6 +570,12 @@ class TrainingContractTests(unittest.TestCase):
             contract["loss_contract"]["lidar_range"]["mode"],
             "robust_log_huber",
         )
+        self.assertNotIn("lidar_linear_aux", contract["loss_weights"])
+        self.assertNotIn(
+            "linear_aux_weight",
+            contract["loss_contract"]["lidar_range"],
+        )
+        self.assertNotIn("error_weighted_sampling", contract["strategy"])
         self.assertFalse(contract["rig_pose_refinement"]["enabled"])
         self.assertFalse(contract["dynamic_person_mask"]["required"])
         self.assertFalse(contract["viewer"])
@@ -576,6 +583,67 @@ class TrainingContractTests(unittest.TestCase):
         self.assertNotIn("S1_KEEP_FISHEYE", source)
         self.assertNotIn("simple_trainer", source)
         self.assertNotIn("examples.datasets", source)
+
+    def test_trainer_contract_v5_records_enabled_linear_lidar_auxiliary_loss(self) -> None:
+        config = TrainerConfig.from_dict(
+            {
+                "run_id": "linear-aux-contract",
+                "dataset_manifest": "dataset.json",
+                "recording_root": "recording",
+                "mask_manifest": "masks.json",
+                "mask_root": "masks",
+                "split_manifest": "split.json",
+                "initialization_ply": "sparse_pc.ply",
+                "depth_manifest": "depth.json",
+                "depth_root": "depth",
+                "output_dir": "run",
+                "gsplat_lock": "upstream/cloudstudio_trainer.lock.json",
+                "require_person_masks": False,
+                "lidar_range_weight": 0.2,
+                "lidar_linear_aux_weight": 0.05,
+            }
+        )
+        config.validate()
+        contract = config.contract_dict()
+        self.assertEqual(contract["algorithm_version"], "cloudstudio_gsplat_trainer_v5")
+        self.assertEqual(contract["loss_weights"]["lidar_linear_aux"], 0.05)
+        self.assertEqual(
+            contract["loss_contract"]["lidar_range"]["linear_aux_weight"],
+            0.05,
+        )
+
+    def test_trainer_contract_records_enabled_error_weighted_sampling(self) -> None:
+        config = TrainerConfig.from_dict(
+            {
+                "run_id": "error-sampling-contract",
+                "dataset_manifest": "dataset.json",
+                "recording_root": "recording",
+                "mask_manifest": "masks.json",
+                "mask_root": "masks",
+                "split_manifest": "split.json",
+                "initialization_ply": "sparse_pc.ply",
+                "output_dir": "run",
+                "gsplat_lock": "upstream/cloudstudio_trainer.lock.json",
+                "require_person_masks": False,
+                "lidar_range_weight": 0.0,
+                "error_weighted_sampling": {
+                    "enabled": True,
+                    "ema_decay": 0.8,
+                    "score_power": 0.5,
+                    "min_score_floor": 0.002,
+                },
+            }
+        )
+        config.validate()
+        self.assertEqual(
+            config.contract_dict()["strategy"]["error_weighted_sampling"],
+            {
+                "enabled": True,
+                "ema_decay": 0.8,
+                "score_power": 0.5,
+                "min_score_floor": 0.002,
+            },
+        )
 
     def test_rig_pose_refinement_contract_is_explicit_and_validated(self) -> None:
         config = TrainerConfig.from_dict(
@@ -639,8 +707,37 @@ class TrainingContractTests(unittest.TestCase):
                 "lidar_range_weight": 0.05,
             }
         )
-        with self.assertRaisesRegex(ValueError, "positive lidar_range_weight requires"):
+        with self.assertRaisesRegex(ValueError, "positive LiDAR loss weight requires"):
             config.validate()
+
+    def test_linear_lidar_aux_requires_robust_primary_and_depth(self) -> None:
+        base = {
+            "run_id": "linear-aux",
+            "dataset_manifest": "dataset.json",
+            "recording_root": "recording",
+            "mask_manifest": "masks.json",
+            "mask_root": "masks",
+            "split_manifest": "split.json",
+            "initialization_ply": "sparse_pc.ply",
+            "output_dir": "run",
+            "gsplat_lock": "upstream/cloudstudio_trainer.lock.json",
+            "require_person_masks": False,
+            "lidar_range_weight": 0.0,
+            "lidar_linear_aux_weight": 0.0025,
+        }
+        missing_depth = TrainerConfig.from_dict(base)
+        with self.assertRaisesRegex(ValueError, "positive LiDAR loss weight requires"):
+            missing_depth.validate()
+        invalid_mode = TrainerConfig.from_dict(
+            {
+                **base,
+                "depth_manifest": "depth.json",
+                "depth_root": "depth",
+                "lidar_range_loss_mode": "linear_l1",
+            }
+        )
+        with self.assertRaisesRegex(ValueError, "only valid with robust_log_huber"):
+            invalid_mode.validate()
 
     def test_unpatched_lock_is_required_before_importing_runtime(self) -> None:
         lock = json.loads((ROOT / "upstream" / "cloudstudio_trainer.lock.json").read_text(encoding="utf-8"))
@@ -1178,6 +1275,8 @@ class RenderScaleContractTests(unittest.TestCase):
         )
         self.assertAlmostEqual(float(terms["opacity_sparsity"].detach()), 0.5)
         self.assertGreater(float(terms["scale_upper"].detach()), 0.0)
+        self.assertAlmostEqual(float(terms["scale_over_limit_fraction"]), 0.5)
+        self.assertEqual(terms["scale_upper_tail_count"], 2)
         self.assertGreater(float(terms["anisotropy"].detach()), 0.0)
         terms["total"].backward()
         self.assertTrue(torch.isfinite(params["opacities"].grad).all())
@@ -1188,6 +1287,49 @@ class RenderScaleContractTests(unittest.TestCase):
             config=GeometryRegularizationConfig(enabled=False),
         )
         self.assertEqual(float(disabled["total"]), 0.0)
+
+    def test_scale_upper_tail_reduction_focuses_on_giant_population(self) -> None:
+        import torch
+
+        params = {
+            "opacities": torch.zeros(4, requires_grad=True),
+            "scales": torch.tensor(
+                [[0.1, 0.1, 0.1], [0.2, 0.2, 0.2], [1.0, 1.0, 1.0], [1.6, 1.6, 1.6]],
+                dtype=torch.float32,
+            ).log().requires_grad_(),
+        }
+        mean_terms = geometry_regularization_terms(
+            params,
+            reference_scale_m=0.1,
+            config=GeometryRegularizationConfig(scale_upper_weight=1.0),
+        )
+        tail_config = GeometryRegularizationConfig(
+            scale_upper_weight=1.0,
+            scale_upper_tail_fraction=0.25,
+        )
+        tail_terms = geometry_regularization_terms(
+            params,
+            reference_scale_m=0.1,
+            config=tail_config,
+        )
+        self.assertGreater(
+            float(tail_terms["scale_upper"].detach()),
+            float(mean_terms["scale_upper"].detach()),
+        )
+        self.assertEqual(tail_terms["scale_upper_tail_count"], 1)
+        self.assertAlmostEqual(float(tail_terms["scale_over_limit_fraction"]), 0.5)
+        self.assertNotIn(
+            "scale_upper_tail_fraction",
+            GeometryRegularizationConfig().to_dict(),
+        )
+        self.assertEqual(
+            tail_config.to_dict()["scale_upper_tail_fraction"],
+            0.25,
+        )
+        tail_terms["total"].backward()
+        self.assertTrue(torch.isfinite(params["scales"].grad).all())
+        with self.assertRaisesRegex(ValueError, "tail_fraction"):
+            GeometryRegularizationConfig(scale_upper_tail_fraction=0.0).validate()
 
     def test_backend_initializes_per_point_metric_knn_scales(self) -> None:
         import torch

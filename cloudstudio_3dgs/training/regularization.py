@@ -14,6 +14,7 @@ class GeometryRegularizationConfig:
     enabled: bool = True
     opacity_sparsity_weight: float = 1e-4
     scale_upper_weight: float = 1e-4
+    scale_upper_tail_fraction: float = 1.0
     anisotropy_weight: float = 1e-4
     max_scale_ratio_to_reference: float = 8.0
     max_anisotropy: float = 10.0
@@ -31,6 +32,8 @@ class GeometryRegularizationConfig:
         )
         if any(float(value) < 0.0 for value in weights):
             raise ValueError("geometry regularization weights must be non-negative")
+        if not 0.0 < self.scale_upper_tail_fraction <= 1.0:
+            raise ValueError("scale_upper_tail_fraction must be within (0, 1]")
         if self.max_scale_ratio_to_reference <= 1.0:
             raise ValueError("max_scale_ratio_to_reference must exceed one")
         if self.max_anisotropy <= 1.0:
@@ -46,7 +49,7 @@ class GeometryRegularizationConfig:
 
     def to_dict(self) -> dict[str, Any]:
         self.validate()
-        return {
+        result = {
             "enabled": self.enabled,
             "opacity_sparsity_weight": self.opacity_sparsity_weight,
             "scale_upper_weight": self.scale_upper_weight,
@@ -59,6 +62,12 @@ class GeometryRegularizationConfig:
             "screen_clip_opacity_bump": self.screen_clip_opacity_bump,
             "max_world_size_m": self.max_world_size_m,
         }
+        # Omit the compatibility value so existing Australian P5 contracts and
+        # checkpoints remain byte-for-byte identifiable. Opt-in tail risk is
+        # still explicit and signed.
+        if self.scale_upper_tail_fraction != 1.0:
+            result["scale_upper_tail_fraction"] = self.scale_upper_tail_fraction
+        return result
 
 
 def geometry_regularization_terms(
@@ -86,6 +95,8 @@ def geometry_regularization_terms(
         return {
             "opacity_sparsity": zero,
             "scale_upper": zero,
+            "scale_over_limit_fraction": zero,
+            "scale_upper_tail_count": 0,
             "anisotropy": zero,
             "total": zero,
         }
@@ -94,10 +105,29 @@ def geometry_regularization_terms(
     max_scale = scales.max(dim=1).values
     min_scale = scales.min(dim=1).values.clamp_min(1e-12)
     # Soft barriers begin only outside metric bounds, preserving normal geometry.
-    scale_upper = torch.relu(
+    scale_upper_per_gaussian = torch.relu(
         torch.log(max_scale / float(reference_scale_m))
         - math.log(config.max_scale_ratio_to_reference)
-    ).square().mean()
+    ).square()
+    tail_count = scales.shape[0]
+    if config.scale_upper_tail_fraction < 1.0:
+        tail_count = max(
+            1,
+            int(math.ceil(scales.shape[0] * config.scale_upper_tail_fraction)),
+        )
+        scale_upper = torch.topk(
+            scale_upper_per_gaussian,
+            k=tail_count,
+            largest=True,
+            sorted=False,
+        ).values.mean()
+    else:
+        # Preserve the original reduction exactly for Australian P5.
+        scale_upper = scale_upper_per_gaussian.mean()
+    scale_over_limit_fraction = (
+        max_scale
+        > float(reference_scale_m) * config.max_scale_ratio_to_reference
+    ).to(scales.dtype).mean()
     anisotropy = torch.relu(
         torch.log(max_scale / min_scale) - math.log(config.max_anisotropy)
     ).square().mean()
@@ -109,6 +139,8 @@ def geometry_regularization_terms(
     return {
         "opacity_sparsity": opacity_sparsity,
         "scale_upper": scale_upper,
+        "scale_over_limit_fraction": scale_over_limit_fraction,
+        "scale_upper_tail_count": int(tail_count),
         "anisotropy": anisotropy,
         "total": total,
     }

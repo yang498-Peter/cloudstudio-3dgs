@@ -23,7 +23,11 @@ from cloudstudio_3dgs.evaluation.image_metrics import (
     masked_ssim,
 )
 from cloudstudio_3dgs.evaluation.splits import verify_split_manifest
-from cloudstudio_3dgs.training.golden_eval import verify_golden_history
+from cloudstudio_3dgs.training.golden_eval import (
+    MINIMUM_DEPTH_PREDICTION_COVERAGE,
+    verify_full_evaluation_history,
+    verify_golden_history,
+)
 
 
 def _safe_path(root: Path, value: str) -> Path:
@@ -155,10 +159,66 @@ def _golden_checkpoint_selection(
         raise ValueError("golden evaluation count does not match history")
     if declaration.get("best") != history.get("best"):
         raise ValueError("golden evaluation best record does not match history")
+    completed_steps = int(run.get("training", {}).get("completed_steps", 0))
+    if completed_steps <= 0:
+        raise ValueError("run manifest has no completed step count for golden evaluation")
+    configuration = history["configuration"]
+    expected_golden_steps = sorted(
+        set(range(int(configuration["every"]), completed_steps + 1, int(configuration["every"])))
+        | set(
+            range(
+                int(configuration["artifact_every"]),
+                completed_steps + 1,
+                int(configuration["artifact_every"]),
+            )
+        )
+        | {completed_steps}
+    )
+    actual_golden_steps = [int(record["completed_steps"]) for record in records]
+    if configuration["enabled"] and actual_golden_steps != expected_golden_steps:
+        raise ValueError("golden evaluation steps do not match configured schedule")
+    artifact_steps: list[int] = []
+    for record in records:
+        record_has_artifacts = False
+        for frame in record.get("frames", []):
+            artifacts = frame.get("artifacts")
+            if artifacts is None:
+                continue
+            if not isinstance(artifacts, dict):
+                raise ValueError("golden evaluation artifact declaration is invalid")
+            record_has_artifacts = True
+            for name in ("rendered", "reference", "mask"):
+                path_value = artifacts.get(f"{name}_path")
+                expected_sha = artifacts.get(f"{name}_sha256")
+                if not isinstance(path_value, str) or not isinstance(expected_sha, str):
+                    raise ValueError("golden evaluation artifact identity is incomplete")
+                artifact_path = _safe_path(run_root, path_value)
+                if not artifact_path.is_file():
+                    raise FileNotFoundError(
+                        f"missing golden evaluation artifact: {artifact_path}"
+                    )
+                if _sha256_file(artifact_path) != expected_sha:
+                    raise ValueError("golden evaluation artifact SHA256 mismatch")
+        if record_has_artifacts:
+            artifact_steps.append(int(record["completed_steps"]))
+    if records and not artifact_steps:
+        raise ValueError("golden evaluation history has no periodic render artifacts")
+    expected_artifact_steps = sorted(
+        set(
+            range(
+                int(configuration["artifact_every"]),
+                completed_steps + 1,
+                int(configuration["artifact_every"]),
+            )
+        )
+        | {completed_steps}
+    )
+    if configuration["enabled"] and artifact_steps != expected_artifact_steps:
+        raise ValueError("golden artifact steps do not match configured schedule")
     best = history.get("best")
     checkpoint_value = declaration.get("best_checkpoint_path")
     if best is None:
-        if checkpoint_value is not None:
+        if checkpoint_value is not None or declaration.get("best_checkpoint_sha256") is not None:
             raise ValueError("golden evaluation has a checkpoint without a best record")
     else:
         if not isinstance(checkpoint_value, str):
@@ -166,13 +226,75 @@ def _golden_checkpoint_selection(
         checkpoint = _safe_path(run_root, checkpoint_value)
         if not checkpoint.is_file():
             raise FileNotFoundError(f"missing golden best checkpoint: {checkpoint}")
+        if _sha256_file(checkpoint) != declaration.get("best_checkpoint_sha256"):
+            raise ValueError("golden best checkpoint SHA256 mismatch")
     return {
         "status": "VERIFIED",
         "history_sha256": history_sha,
         "evaluation_count": len(records),
         "best_completed_steps": None if best is None else best["completed_steps"],
         "best_psnr_db_mean": None if best is None else best["summary"]["psnr_db_mean"],
+        "artifact_steps": artifact_steps,
     }, []
+
+
+def _periodic_full_evaluation(
+    run: dict[str, Any], run_root: Path
+) -> tuple[dict[str, Any], list[str]]:
+    declaration = run.get("periodic_full_evaluation")
+    if declaration is None:
+        return {"status": "NOT_RUN"}, ["periodic_full_evaluation:NOT_RUN"]
+    if not isinstance(declaration, dict):
+        raise ValueError("run manifest periodic full evaluation declaration is invalid")
+    history_value = declaration.get("history_path")
+    if not isinstance(history_value, str):
+        raise ValueError("periodic full evaluation has no history path")
+    history_path = _safe_path(run_root, history_value)
+    if not history_path.is_file():
+        raise FileNotFoundError(f"missing periodic full evaluation history: {history_path}")
+    history = json.loads(history_path.read_text(encoding="utf-8"))
+    if not isinstance(history, dict):
+        raise ValueError("periodic full evaluation history must be an object")
+    history_sha = verify_full_evaluation_history(history)
+    if history_sha != declaration.get("history_sha256"):
+        raise ValueError("periodic full evaluation history does not match run manifest")
+    records = history["history"]
+    if int(declaration.get("evaluation_count", -1)) != len(records):
+        raise ValueError("periodic full evaluation count does not match history")
+    expected_latest = None if not records else records[-1]
+    if declaration.get("latest") != expected_latest:
+        raise ValueError("periodic full evaluation latest record does not match history")
+    configuration = run.get("golden_evaluation", {}).get("configuration")
+    completed_steps = int(run.get("training", {}).get("completed_steps", 0))
+    if not isinstance(configuration, dict) or completed_steps <= 0:
+        raise ValueError("periodic full evaluation has no signed schedule")
+    expected_steps = (
+        sorted(
+            set(
+                range(
+                    int(configuration["full_every"]),
+                    completed_steps + 1,
+                    int(configuration["full_every"]),
+                )
+            )
+            | {completed_steps}
+        )
+        if configuration.get("enabled")
+        else []
+    )
+    if [int(record["completed_steps"]) for record in records] != expected_steps:
+        raise ValueError("periodic full evaluation steps do not match configured schedule")
+    return {
+        "status": "VERIFIED" if records else "NOT_RUN",
+        "history_sha256": history_sha,
+        "evaluation_count": len(records),
+        "latest_completed_steps": None
+        if expected_latest is None
+        else expected_latest["completed_steps"],
+        "latest_psnr_db_mean": None
+        if expected_latest is None
+        else expected_latest["summary"]["psnr_db_mean"],
+    }, ([] if records else ["periodic_full_evaluation:NOT_RUN"])
 
 
 def _resource_metrics(run: dict[str, Any], run_root: Path) -> tuple[dict[str, Any], list[str]]:
@@ -197,11 +319,15 @@ def _resource_metrics(run: dict[str, Any], run_root: Path) -> tuple[dict[str, An
         model_path = _safe_path(run_root, str(model_path_value))
         if not model_path.is_file():
             raise FileNotFoundError(f"missing model artifact: {model_path}")
+        model_sha = _sha256_file(model_path)
+        expected_model_sha = source.get("model_sha256")
+        if expected_model_sha is not None and model_sha != expected_model_sha:
+            raise ValueError("selected model SHA256 does not match run manifest")
         output["model_size_bytes"] = {
             "status": "MEASURED",
             "value": model_path.stat().st_size,
             "path": str(model_path_value),
-            "sha256": _sha256_file(model_path),
+            "sha256": model_sha,
         }
     return output, warnings
 
@@ -362,6 +488,7 @@ def build_quality_report(
     lpips_values: list[float] = []
     depth_mae: list[float] = []
     depth_rmse: list[float] = []
+    depth_coverage: list[float] = []
     golden_reports: list[dict[str, str]] = []
     warnings: list[str] = []
     lpips_model = (
@@ -426,10 +553,14 @@ def build_quality_report(
                 target_depth,
                 mask & target_valid,
                 confidence=confidence,
+                minimum_prediction_coverage=(
+                    MINIMUM_DEPTH_PREDICTION_COVERAGE
+                ),
             )
             depth_report = {"status": "MEASURED", **metrics}
             depth_mae.append(float(metrics["mae_m"]))
             depth_rmse.append(float(metrics["rmse_m"]))
+            depth_coverage.append(float(metrics["prediction_coverage_fraction"]))
         frame_report = {
             "image_id": image_id,
             "split": split,
@@ -457,6 +588,10 @@ def build_quality_report(
         run, Path(run_root)
     )
     warnings.extend(golden_warnings)
+    periodic_full, periodic_full_warnings = _periodic_full_evaluation(
+        run, Path(run_root)
+    )
+    warnings.extend(periodic_full_warnings)
     resources, resource_warnings = _resource_metrics(run, Path(run_root))
     warnings.extend(resource_warnings)
     if not run_lpips_metric:
@@ -478,6 +613,7 @@ def build_quality_report(
         "warnings": warnings,
         "resources": resources,
         "golden_checkpoint_selection": golden_selection,
+        "periodic_full_evaluation": periodic_full,
         "frames": frame_reports,
         "golden_views": golden_reports,
         "summary": {
@@ -490,6 +626,10 @@ def build_quality_report(
             "depth_metrics": {
                 "mae_m": _finite_summary(depth_mae),
                 "rmse_m": _finite_summary(depth_rmse),
+                "prediction_coverage_fraction": _finite_summary(depth_coverage),
+                "minimum_prediction_coverage_gate": (
+                    MINIMUM_DEPTH_PREDICTION_COVERAGE
+                ),
             }
             if depth_mae
             else {"status": "NOT_RUN"},

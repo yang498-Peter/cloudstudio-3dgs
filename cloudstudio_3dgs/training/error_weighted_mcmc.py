@@ -4,12 +4,16 @@
 # gsplat 1.5.3 (Apache-2.0) gsplat/strategy/ops.py (relocate / sample_add):
 # the only behavioural change is that the multinomial sampling distribution
 # is a caller-supplied ``probs`` tensor instead of the hard-coded opacities.
-"""Error-weighted MCMC relocation and densification.
+"""Experimental error-weighted MCMC relocation and densification.
 
-Implements the LichtFeld idea (arXiv:2508.12313): when the MCMC strategy
-teleports dead Gaussians or adds new ones, the landing spots are sampled
-proportionally to ``opacity * error_score**power`` instead of opacity alone,
-so refinement capacity flows to regions the current render gets wrong.
+This is a CloudStudio heuristic motivated by error/edge-aware densification:
+when MCMC teleports dead Gaussians or adds new ones, landing spots are sampled
+proportionally to ``opacity * error_score**power`` instead of opacity alone.
+It is not a reproduction of arXiv:2508.12313: that paper combines Laplacian
+edge weights, per-pixel Gaussian alpha contributions, and absolute coordinate
+gradients, while this implementation samples the RGB residual only at each
+Gaussian's projected center. The distinction is kept explicit until a real A/B
+establishes whether this cheaper proxy helps the S1 scene.
 
 The per-Gaussian error score is an EMA of the rendered-vs-reference pixel
 error sampled at each Gaussian's projected center (visible Gaussians only).
@@ -27,34 +31,7 @@ from gsplat.relocation import compute_relocation
 from gsplat.strategy.mcmc import MCMCStrategy
 from gsplat.strategy.ops import _multinomial_sample, _update_param_with_optimizer
 
-
-@dataclass(frozen=True)
-class ErrorScoreConfig:
-    """Configuration for error-weighted MCMC sampling."""
-
-    enabled: bool = False
-    ema_decay: float = 0.9
-    # LichtFeld tempers the raw error with score**0.4 before weighting.
-    score_power: float = 0.4
-    # Floor keeps never-seen / zero-error Gaussians samplable (no zero weights).
-    min_score_floor: float = 1e-3
-
-    def validate(self) -> None:
-        if not 0.0 <= float(self.ema_decay) < 1.0:
-            raise ValueError("ema_decay must be within [0, 1)")
-        if float(self.score_power) < 0.0:
-            raise ValueError("score_power must be non-negative")
-        if not float(self.min_score_floor) > 0.0:
-            raise ValueError("min_score_floor must be positive")
-
-    def to_dict(self) -> dict[str, Any]:
-        self.validate()
-        return {
-            "enabled": self.enabled,
-            "ema_decay": self.ema_decay,
-            "score_power": self.score_power,
-            "min_score_floor": self.min_score_floor,
-        }
+from cloudstudio_3dgs.training.error_weighted_config import ErrorScoreConfig
 
 
 class ErrorScoreState:
@@ -161,6 +138,37 @@ class ErrorScoreState:
         score = self.scores.to(device=opac.device, dtype=opac.dtype)
         score = score.clamp_min(float(self.config.min_score_floor))
         return opac * score ** float(self.config.score_power)
+
+    def checkpoint_state(self) -> dict[str, Any]:
+        """Return the complete state required for deterministic resume."""
+        return {
+            "schema_version": 1,
+            "scores": self.scores.detach().clone(),
+        }
+
+    @torch.no_grad()
+    def restore_checkpoint_state(
+        self,
+        payload: Any,
+        *,
+        expected_count: int,
+    ) -> None:
+        """Restore EMA scores, rejecting partial or stale checkpoint state."""
+        if not isinstance(payload, dict) or payload.get("schema_version") != 1:
+            raise ValueError("checkpoint error-weighted sampling state is invalid")
+        scores = payload.get("scores")
+        if not isinstance(scores, Tensor) or scores.dim() != 1:
+            raise ValueError("checkpoint error scores must be a one-dimensional tensor")
+        if int(scores.shape[0]) != int(expected_count):
+            raise ValueError(
+                "checkpoint error score count does not match restored Gaussians"
+            )
+        if not bool(torch.isfinite(scores).all()):
+            raise ValueError("checkpoint error scores contain non-finite values")
+        self.scores = scores.detach().to(
+            device=self.scores.device,
+            dtype=self.scores.dtype,
+        ).clone()
 
 
 # ---------------------------------------------------------------------------

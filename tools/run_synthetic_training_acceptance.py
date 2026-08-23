@@ -26,6 +26,7 @@ from cloudstudio_3dgs.geometry.lidar_projection import SparseDepthMap
 from cloudstudio_3dgs.training.backend import GsplatBackend
 from cloudstudio_3dgs.training.checkpoint import compare_checkpoint_payloads
 from cloudstudio_3dgs.training.dataset import TrainingSample
+from cloudstudio_3dgs.training.error_weighted_config import ErrorScoreConfig
 from cloudstudio_3dgs.training.runtime_evidence import (
     execute_mcmc_native_kernel_smoke,
     execute_render_scale_contract_smoke,
@@ -298,9 +299,19 @@ def main() -> int:
             "Gaussian and telemetry state"
         ),
     )
+    parser.add_argument(
+        "--error-weighted-sampling",
+        action="store_true",
+        help=(
+            "enable the Australian opacity*error^0.4 MCMC sampler; use with "
+            "--resume-equivalence to prove its EMA state survives interruption"
+        ),
+    )
     args = parser.parse_args()
     if args.resume_equivalence and not args.full_mcmc:
         parser.error("--resume-equivalence requires --full-mcmc")
+    if args.error_weighted_sampling and not args.full_mcmc:
+        parser.error("--error-weighted-sampling requires --full-mcmc")
     if args.full_mcmc and args.steps < 40:
         parser.error("--full-mcmc requires at least 40 steps to enter a refine window")
     if args.output.exists() and any(args.output.iterdir()):
@@ -379,6 +390,9 @@ def main() -> int:
                 noise_std_fraction=None,
             ),
             geometry_regularization=GeometryRegularizationConfig(enabled=False),
+            error_weighted_sampling=ErrorScoreConfig(
+                enabled=args.error_weighted_sampling
+            ),
             rgb_l1_weight=1.0,
             rgb_ssim_weight=0.0,
             lidar_range_weight=0.01,

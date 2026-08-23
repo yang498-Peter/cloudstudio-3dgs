@@ -890,3 +890,312 @@ MCMC 的 relocate/add 能控制低 opacity 对象的数量，但不会阻止 RGB
 新增 CPU 回归构造顺序被打乱的 validation Dataset，断言仍严格按 signed golden 顺序评估、背景参数确实传到 renderer、PSNR 选择阈值不允许同分或不足 `0.001 dB` 的 checkpoint 覆盖最佳模型；同时验证非法黄金视图和零间隔 fail-closed。质量报告回归再篡改 history 中的 PSNR，验证签名立即失败。定向 `34` 项为 `33 PASS + 1 SKIPPED`，尚未启动新的真实 GPU 训练。
 
 当前状态为 **PASS（Gate 2E 源码/CPU 契约）**。下一步是以合入的澳洲质量实现，在干净锁定 CUDA runtime 上跑短程真实基线，检查 golden history、best checkpoint、全量 validation 质量报告与 GPU 资源证据，再决定原始 POS / Stage 2 POS 的受控 A/B 是否可以启动。
+
+## 28. 当前阶段记录：Gate 2F preset、周期完整验证与受控 A/B 证据链
+
+### 问题现象
+
+Gate 2E 虽然能生成 `best_golden.pt`，但旧 Trainer 没有可执行的兼容 preset，澳洲 P5 也仍靠手工配置；KNN、SH 和 local SSIM 无法保证只改变一个变量。周期评估只覆盖 golden views，正式完整 validation 仍只在终点渲染；更关键的是终点质量产物继续使用最后一步参数，`best_golden.pt` 并未真正成为被验收模型。因此仅凭“存在最佳 checkpoint”不能满足 Gate 2 Exit。
+
+### 修改文件
+
+- `cloudstudio_3dgs/training/presets.py`
+- `cloudstudio_3dgs/training/ab_matrix.py`
+- `cloudstudio_3dgs/training/ab_results.py`
+- `cloudstudio_3dgs/training/golden_eval.py`
+- `cloudstudio_3dgs/training/trainer.py`
+- `cloudstudio_3dgs/evaluation/quality_report.py`
+- `tools/build_trainer_ab_matrix.py`
+- `tools/summarize_trainer_ab.py`
+- `configs/trainer_gate2_ab_base.example.json`
+- `tests/test_training_presets.py`
+- `tests/test_ab_matrix.py`
+- `tests/test_golden_eval.py`
+- `tests/test_quality_report.py`
+- `README.md`
+- `docs/IMPLEMENTATION_PLAN.zh-CN.md`
+
+### 修改内容
+
+- 固化五个不可冒名 preset：`legacy_minimal_v1` 精确恢复 fixed-scale、RGB sigmoid、global masked moments、linear range、无 exposure/geometry regularization/means decay 的旧语义；三个单变量臂分别只启用 KNN、SH3 progressive 或 local SSIM；组合候选 `gate2_quality_australian_p5_v1` 以澳洲 P5 的 exposure、SH3、means decay `0.01`、白背景为优先外观基础，再叠加 KNN、local SSIM、robust log-range 和米制正则。preset 固定字段出现冲突时拒绝运行，直接构造 dataclass 也不能用不匹配参数冒充命名 preset。
+- `GoldenEvaluationConfig` 默认每 `1000` 步生成 signed golden PSNR/SSIM/depth 与 reference/render/mask PNG 哈希证据，每 `4000` 步对完整 validation 计算相同指标；两类 history 都按严格递增 step 签名并进入 checkpoint。最终若最佳步早于终点，Trainer 会原子读取 `best_golden.pt` 后再生成正式完整 validation 产物，run Manifest 同时区分 final 与 selected step/Gaussian 数并绑定 selected model SHA；`latest.pt` 仍保留最终训练状态。
+- 质量报告验证 golden/full history、每条记录、周期 PNG、最佳 checkpoint 和 selected model 的 SHA；缺失或篡改 fail-closed。旧 run 会明确产生 `golden_evaluation:NOT_RUN` / `periodic_full_evaluation:NOT_RUN`，不升级历史证据。
+- A/B builder 只接收共享数据/资源/训练预算字段，禁止 base 混入 arm-specific 算法项；生成五份配置和签名 matrix，逐项绑定 dataset、base/person/depth mask、split、初始化 PLY、gsplat lock、seed、factor、步数和 Trainer contract。verifier 重新计算 contract diff，确保 KNN/SH/local SSIM 三臂只有声明的变量组变化。
+- A/B 汇总器要求每臂训练完成、完整 validation、verified golden/best、至少两次 periodic full eval、相同输入身份、深度指标和默认 LPIPS；统一把“正值=更好”后报告单变量 IMPROVED/MIXED/REGRESSED，并对澳洲质量候选执行零容差、不低于 legacy reference 的 Gate 判定。工具只汇总真实产物，不启动训练，也不把缺失报告写成 PASS。
+
+### 验证方式与当前状态
+
+CPU 回归覆盖 preset 固定/冲突/冒名拒绝、legacy global SSIM 实际执行、单变量 contract diff、matrix/config/input SHA 篡改、周期 golden PNG、完整 validation 顺序与 P10、history/checkpoint/model SHA 以及结果分类/报告绑定。CLI help 和 Python 编译通过。当前源码/CPU 契约已 PASS，本机锁定 CUDA 合成重放随后由第 29 节关闭；factor4 五臂 A/B、LPIPS 和真实质量候选 Gate 仍保持 `NOT_RUN`，因此 Gate 2 尚未关闭。
+
+## 29. 当前阶段记录：Windows CUDA 可复现入口与周期评估恢复等价闭环
+
+### 问题现象
+
+澳洲优先代码合并后，本机首次 JIT 构建曾成功输出 `GSPLAT_READY`，但普通 PowerShell/`cmd` 进程同时继承大小写不同的 `Path`/`PATH`；交互式 `where cl` 可通过，Python 启动的 NVCC 子进程却取到不含 MSVC 的另一份 PATH。另一次运行少带 `/FI...msvc_clzll.h`，PyTorch 因编译参数签名变化清空了已完成缓存。固定环境后 42 个对象全部编译成功，但 G: 上旧 `.ninja_log` 在记录 90 分钟大对象时返回 `Invalid argument`，导致最终链接未执行。直接链接并进入 80 步 GPU 验收后，参数/优化器/MCMC/RNG 最大差在容差内，但新增 golden/full evaluation 记录因 CUDA 原子累加带来的约 `1e-7` 指标微差产生不同自签名 SHA，旧比较器把 3 个有效签名差异误判为恢复状态不等价。
+
+### 修改文件
+
+- `train/run_gate2_synthetic_acceptance_local.ps1`
+- `tools/run_with_prebuilt_gsplat.py`
+- `cloudstudio_3dgs/training/checkpoint.py`
+- `tests/test_mcmc_runtime.py`
+- `README.md`
+- `docs/IMPLEMENTATION_PLAN.zh-CN.md`
+
+### 修改内容
+
+- 新增 PowerShell 7 入口，从脚本位置解析仓库根目录，从 `vcvars64.bat` 重建大小写不敏感的环境字典，清空子进程继承环境后只写入一个 `Path`；显式固定 Python、CUDA 12.8、MSVC、Ninja、sm_120、JIT cache、`NVCC_FLAGS`、`INCLUDE` 和 `LINK`。每次先在真实 Python 子进程断言 `cl`/`ninja`/`nvcc` 可解析且只有一个 PATH key，构建与训练共享同一环境。巨量编译输出写入 `external/runtime-logs` 的 UTF-8 日志，终端只显示尾部和退出码。
+- 对已完成 42 个对象但 Ninja 日志不可写的恢复场景，入口严格读取 `build.ninja` 的 link rule，要求 42 个对象全部存在后才允许显式 `-LinkExistingObjects`；直接调用同一 MSVC linker 生成 `gsplat_cuda.pyd`。两个 trainer 不调用的 world-space batch 符号仍按澳洲 Windows 运行边界以 `/FORCE:UNRESOLVED` 留下明确告警，实际单视图 3DGUT、MCMC、covariance 与尺度渲染路径由运行验收覆盖。
+- 新增 prebuilt bootstrap，以编译名 `gsplat_cuda` 加载 `.pyd` 并显式注入 `gsplat.csrc`，使后续 probe/训练不再读取不可靠的 Ninja 日志；不存在扩展、脚本或对象时均 fail-closed。
+- checkpoint comparator 不宽松忽略 SHA。它先对 golden/full evaluation 记录重新计算自签名；任一伪造签名立即 FAIL。只有连续/恢复两边自签名均有效时，才跳过自签名字节串本身，并继续用既有 `atol/rtol` 比较记录内全部浮点、结构和身份字段。数据集、mask、split、初始化、模型与其他身份 SHA 仍严格逐字节比较，报告列出被语义归一的精确路径。
+
+### 验证方式
+
+- 子环境 probe：`CL`、`NINJA`、`NVCC` 均解析到锁定工具链，`PATH_KEYS=['PATH']`。
+- 直接链接扩展 `gsplat_cuda.pyd` 为 `107,542,528` bytes，文件 SHA256 `2d7ce65600808f3cf9f281e72773e589f13ed4d3e7d3614f551a921444e4adce`；bootstrap 输出 `GSPLAT_READY 1.5.3`。
+- `run_synthetic_training_acceptance.py --steps 80 --full-mcmc --resume-equivalence` 在真实 RTX 5070 Laptop/CUDA 上完成：原生 covariance forward/backward 与 fused perturb 均 finite；render scale contract 以 `0.1 m` 线性尺度覆盖 `368` 像素并 PASS；24 个初始 Gaussian 经 5 次 refine 变为 29 个，add=5、relocation=1，80/80 步均调用 noise；loss 从 `0.0354085` 降至 `0.0227030`，改善 `35.88%`，无 NaN。
+- 连续 80 步与 step 40 受控中断恢复到 80 步：Gaussian 数均为 29，参数/优化器/MCMC/sampler/telemetry/auxiliary/CPU+CUDA RNG 和 signed evaluation semantics 共 `0 mismatch`，`max_abs_error=1.9073486328125e-6 < atol 5e-6`；3 个 evaluation 自签名先验证有效后按语义比较。签名 evidence 内部 SHA 为 `c86f94163a1135b5cd260c466c8c2a821e17c9eaf037df34bd4b2006ece83189`，证据文件 SHA256 为 `51426f21c640e8ea2dcbab7f5f0bf67b87c84e7cc5c0d4f43c5b06a040215306`。
+- 独立 `verify_full_mcmc_gate.py` 返回 `status=PASS`、`signature_valid=true`、`errors=[]`。新增回归同时证明容差内重新签名的 evaluation 记录可通过语义等价比较，而篡改自签名仍 FAIL。
+
+### 当前状态
+
+当前为 **PASS（锁定 Windows CUDA 运行时、完整 MCMC、物理尺度渲染与中断恢复等价）**。这关闭了合并澳洲最新代码后的本机短程 GPU 复验，不等于真实场景画质或 Gate 2 正式退出；下一步仍需重建真实 gs2 的签名 person/depth/split/PLY 输入，并执行同一 factor4 数据上的 legacy、KNN-only、SH-only、local-SSIM-only 与澳洲 P5 质量候选五臂 A/B，且至少产生两次完整 validation 和 LPIPS 后才能判定 Gate 2。
+
+## 30. 当前阶段记录：澳洲 P8/P9 归因、软曝光锚与 PLY 导出吸收
+
+### 问题现象
+
+联网复核时澳洲 `machine-b/uk-quality` 先从 `b5bcb30` 前进到 `21235e4`，随后 P10 完成并推进到 `2113134`。P8 单变量证据表明 hard zero-mean exposure anchor 相对 P5 下降约 `0.8 dB`，geometry regularization 被排除为主因；P9 同时使用 soft anchor、decoupled SSIM、SH1 和 geometry regularization 后仍比 P5 低 `0.62 dB`，因此澳洲用 P10 在当前代码上重跑完全相同的 P5 control。P10 得到 PSNR `16.45`、SSIM `0.5587`、P10 PSNR `16.01`、depth MAE `4.156 m`，高于旧 P5 的 `16.21 dB`，排除了“合并后 trainer 代码整体回归”，并确认 hard/soft exposure anchoring 都应拒绝。合并新配置后，旧命名 preset 未声明 `mean_anchor_weight/beta`，fail-closed 校验报 exposure contract 不匹配。全仓回归还暴露 PPISP 梯度测试使用未设种子的全局随机扰动，偶尔把 CRF 参数推入饱和区而产生零梯度，造成非确定性红灯。
+
+### 修改文件
+
+- 澳洲原提交：`cloudstudio_3dgs/training/exposure.py`、`experiments/runs.csv`、`tests/test_training.py`、`tools/export_gaussian_ply.py`
+- 本机兼容：`cloudstudio_3dgs/training/presets.py`、`tests/test_ppisp.py`
+- `docs/IMPLEMENTATION_PLAN.zh-CN.md`
+
+### 修改内容
+
+- 完整吸收澳洲 soft per-camera mean anchor：对每个物理相机组的 mean log-gain 使用 SmoothL1 软约束，保留 hard projection 但不把它提升为推荐 preset；P8/P9 回归结果按原记录保留，不把未通过实验的旋钮默认启用。
+- 合并标准 3DGS viewer PLY 导出器，支持从 checkpoint 输出 INRIA binary little-endian 字段布局，并明确保留 trainer 本地米制坐标与 coordinate transform 责任边界。
+- 所有命名 preset 显式冻结 `mean_anchor_weight=0.0`、`mean_anchor_beta=0.1`，使 P5、legacy 和三个单变量臂不会随 dataclass 新默认漂移，也不能被不匹配配置冒名。
+- PPISP 梯度夹具改用测试内部固定 `torch.Generator(seed=20260822)`；仍要求 exposure、vignetting、color 与 CRF 全部参数取得 finite 且非零梯度，没有放宽断言。
+
+### 验证方式与当前状态
+
+合并后 `export_gaussian_ply.py --help` 通过；preset/A-B/soft anchor/PPISP 定向 `18` 项为 `17 PASS + 1 SKIPPED`，当时全仓 `182` 项为 `181 PASS + 1 SKIPPED`。澳洲最新 `2113134` 已成为当前分支祖先。当前状态为 **PASS（澳洲代码与 P10 结论已吸收）**：P10 证明当前代码下原始 P5 仍是赢家，P8/P9 的 hard/soft anchor 均被拒绝；澳洲已用该配置启动 30k-gold，最终结果仍待同步。
+
+## 31. 当前阶段记录：真实 factor4 P5 短基线与深度覆盖率评估修复
+
+### 问题现象
+
+重新联网确认澳洲 `machine-b/uk-quality@21235e4` 已完整成为当前分支祖先后，本机使用澳洲 P5 作为组合候选准备真实 Gate 2。完整输入逐文件预检通过，但 600 步短基线暴露出评估契约缺陷：训练 step telemetry 中 `lidar_range_loss=0.344568`，最终也保存了 728×728 rendered range；周期 golden 和完整 validation 却把 16/16 与 124/124 张深度全部标记为 `UNMEASURABLE`。抽查并统计 124 张产物后确认，预测在 LiDAR 监督像素的覆盖率实际为 min/p05/p50/mean `0.932899 / 0.964930 / 0.993464 / 0.989577`，旧指标因为每张图仅有少量未覆盖像素就否决整张图，掩盖了绝大多数可测深度。
+
+### 修改文件
+
+- `cloudstudio_3dgs/evaluation/image_metrics.py`
+- `cloudstudio_3dgs/training/golden_eval.py`
+- `cloudstudio_3dgs/evaluation/quality_report.py`
+- `tests/test_quality_metrics.py`
+- `tests/test_golden_eval.py`
+- `train/run_gate2_synthetic_acceptance_local.ps1`
+- `docs/IMPLEMENTATION_PLAN.zh-CN.md`
+
+### 修改内容
+
+- 深度指标继续以 target-valid LiDAR 像素为分母，同时显式统计预测正有限覆盖数、缺失数和覆盖率；默认 API 仍保持 `100%` 严格门，训练周期评估和正式质量报告采用固定 `90%` fail-closed 门。达到门限后只在正有限交集计算 confidence-weighted MAE/RMSE，并把 coverage 作为伴随指标写入逐帧与汇总证据；低于门限或完全无覆盖仍明确失败，不会用极少量命中像素伪造好指标。
+- golden/full evaluation 算法版本升级为 `v3`，签名记录新增 coverage min/mean 和门限；最终质量报告同时汇总 124 张 coverage 分布。
+- Windows 锁定 CUDA 启动器新增互斥的 `-TrainerConfig` 路径，复用同一个去重 PATH、MSVC/CUDA 环境和预编译 gsplat bootstrap 启动真实 Trainer；原 `Output` 合成验收入口保持不变。
+
+### 验证方式与当前状态
+
+- 真实输入：1238/1238 张、4952 个原图/base mask/person mask/depth 文件逐文件 SHA 与实际解码通过；内部签名为 dataset `54c01abe...`、mask `86ae782a...`、person `1eb2284f...`、depth `3c114dfd...`、split `dbb4cf46...`，初始化 PLY 为 `66fbe620...`。五臂 matrix 使用相同输入，SHA 为 `1382d7b7210ed7a4b328256106fea0c1c7bd88290a4f9d1bdc204885f05dd228`，组合候选明确为 `gate2_quality_australian_p5_v1`。
+- 真实 GPU：RTX 5070 Laptop 上 factor4 P5 完成 600 步，耗时 `316.99 s`、峰值额外 VRAM `866,290,688 bytes`、376,906 个 Gaussian、无 NaN；loss 从 `0.276763` 降至 `0.200898`，改善 `27.41%`。golden PSNR 在 step 200/400/600 为 `15.17 / 15.75 / 16.15 dB`，终点完整 124 图为 PSNR `16.1195 dB`、SSIM `0.502887`。签名 run Manifest SHA 为 `5146c877d3ccf4e9d00e5aea831960e1dc99f225af302d153ea12c85cb35e4d2`。
+- 修复后对同一签名 run 重新生成质量报告：124/124 张深度可测，coverage min/mean 为 `0.932899 / 0.989577`，depth MAE mean 为 `8.19595 m`；报告仅因 LPIPS 尚未运行而保持 `PARTIAL`。该 MAE 是 600 步短链结果，不能解释为正式质量通过。
+- 定向回归 `14/14 PASS`：严格默认仍拒绝缺口，显式低门测试只在超过门限时测量，低于门限/全零预测仍 `UNMEASURABLE`。完整 CPU 套件为 `182 PASS + 1 SKIPPED + 3 subtests PASS`；唯一跳过是需要锁定 CUDA 扩展的物理足迹测试，本轮真实 600 步 GPU 运行和第 29 节签名尺度证据已分别覆盖运行链与足迹链。
+
+当前为 **PASS（真实输入、短训练链、RGB 与深度评估可测性）**，但 Gate 2 仍未关闭：LPIPS、至少两次周期完整验证、legacy/KNN/SH/local-SSIM/P5 五臂正式 A/B 均未完成；澳洲 P10 已确认 P5，30k-gold 最终结果仍待同步。下一步先推送本修复与澳洲最新合并，再用新 `v3` 评估契约启动正式受控运行。
+
+## 32. 当前阶段记录：澳洲误差加权 MCMC 吸收与恢复状态门禁
+
+### 问题现象
+
+GitHub 重新联网后，澳洲 `machine-b/uk-quality` 从 `2113134` 推进到 `aaf25b8`，新增按 `opacity * error_score^0.4` 为 relocation 和 densification 选择落点的误差加权 MCMC。实现默认关闭并带 CPU 算法测试，但首次审计发现两个门禁缺口：其一，每个 Gaussian 的误差 EMA 只保存在运行期 `ErrorScoreState`，checkpoint 没有保存该层；启用后若中断恢复，下一次 refine 可能走不同 multinomial 分支。其二，Trainer 为读取轻量配置在模块顶层导入完整 CUDA 策略，使本来不依赖 gsplat 的 CPU preset/A-B 测试在收集阶段尝试 JIT，默认关闭也无法保持轻量导入契约。
+
+### 修改文件
+
+- 澳洲原提交：`cloudstudio_3dgs/training/error_weighted_mcmc.py`、`cloudstudio_3dgs/training/backend.py`、`cloudstudio_3dgs/training/trainer.py`、`tests/test_error_weighted_mcmc.py`
+- 本机恢复补强：`cloudstudio_3dgs/training/error_weighted_config.py`、`cloudstudio_3dgs/training/error_weighted_mcmc.py`、`cloudstudio_3dgs/training/trainer.py`、`tools/run_synthetic_training_acceptance.py`、`tests/test_error_weighted_mcmc.py`
+- `docs/IMPLEMENTATION_PLAN.zh-CN.md`
+
+### 修改内容
+
+- 以澳洲 `aaf25b8` 为当前优先代码主线；算法保持默认关闭，不能在未声明的旧 P5/legacy 配置中改变采样语义。
+- 对原提交引用的 arXiv:2508.12313 进行原文核对：论文的 EAS 使用 Laplacian 边缘权重、Gaussian 对像素的 alpha contribution，并以绝对坐标梯度筛选候选；当前 `opacity * center-RGB-residual^0.4` 没有实现这些量。因此保留澳洲功能代码，但明确改称 CloudStudio 实验启发式，不再冒充论文复现；`0.4` 也作为待 A/B 的本项目参数记录。
+- `ErrorScoreState` 新增版本化 checkpoint payload，保存完整 EMA tensor；恢复时严格检查 schema、维度、Gaussian 数和 finite 值，再复制到当前 device/dtype。启用算法但 checkpoint 缺少该层时 fail-closed，不允许静默退化为 uniform/opacity-only 采样。
+- Trainer 的 `training_state` 同步持久化该状态；载入模型和 optimizer 后按恢复后的 Gaussian 数校验并恢复 EMA，使全状态比较器能够逐元素覆盖它。默认关闭时写入 `null`，旧的默认关闭 checkpoint 仍可读取。
+- 将 `ErrorScoreConfig` 拆到不导入 torch/gsplat 的轻量模块；Trainer、配置解析和合成验收只依赖该模块。真正构造 `GsplatBackend` 时才导入 CUDA 策略，恢复默认关闭与纯 CPU 工具的模块边界。
+- 合成验收工具新增 `--error-weighted-sampling`，只允许与完整 MCMC 同时使用；可与 `--resume-equivalence` 组合，专门执行启用新算法后的连续训练与受控中断恢复比较，而不是用“默认关闭”结果代替新路径证据。
+
+### 验证方式与当前状态
+
+- 新增 checkpoint round-trip 回归，验证 EMA scores 精确恢复且不共享存储；缺失/错误 schema、数量不符和 NaN 均明确拒绝。
+- 通过锁定的 prebuilt gsplat bootstrap 执行 `tests/test_error_weighted_mcmc.py`，结果为 `21 PASS + 4 subtests PASS`；Python 编译检查通过。全仓 CPU 套件在隐藏 CUDA 后为 `182 PASS + 22 SKIPPED + 3 subtests PASS`，新增跳过项是明确需要已加载 gsplat 的澳洲策略测试，不再发生 preset/A-B 收集期 JIT 或权限错误。
+- 启用误差加权采样后，真实 CUDA 80 步完整 MCMC 连续训练与 step-40 受控中断恢复到 80 步均完成：Gaussian 数均为 29，恢复比较 `0 mismatch`、`max_abs_error=2.6226043701171875e-6 < atol 5e-6`；恢复 checkpoint 中 29 个 EMA score 全部 finite，范围 `0.411736–0.557433`，trainer contract 明确记录 `enabled=true`。签名 run Manifest 为 `d07e0e712b5cca0675c82ae5e721311d2cc03fd438fc32013394138757bcc5b2`，验收文件 SHA256 为 `5d6b19f173fd4dced1a29a9fa78cf95890ae8e13779ea2cbee58a197942080e4`。
+
+本节当前为 **PASS（澳洲误差加权采样的加载、真实执行与中断恢复状态门禁）**；这仍不证明画质提升，也不把它升级为默认。真实短 A/B 必须继续使用相同输入、seed、预算、mask 与 `v3` 深度覆盖门。
+
+## 33. 当前阶段记录：真实 Gate 2 legacy 与澳洲 P5 正式两臂结果
+
+### 问题现象
+
+600 步短链只能证明训练、mask 和深度评估可运行，不能回答长期外观、LPIPS、最佳 checkpoint 或巨型 Gaussian 的行为。为避免把澳洲 P5 的改进归因于不同输入，本机在同一个签名 matrix 下先完成 legacy reference 与 `gate2_quality_australian_p5_v1` 两个 8000 步正式臂；两者绑定相同 1238 图 dataset、1114/124 train/validation split、person/depth mask、初始化 PLY、factor4、seed 42、1M cap 和锁定 gsplat runtime。
+
+### 验证结果
+
+- Legacy reference：选择 step 6000，124 图 PSNR `17.834794`、SSIM `0.467080`、LPIPS-Alex `0.592530`、depth MAE `4.005335 m`，质量报告 SHA256 为 `edc604a1ecb9feb9d1cbd456d51678bd04f22607f7a351ef08f21675b81009b1`。
+- 澳洲 P5：8000 步耗时 `3275.30 s`、峰值额外 VRAM `1,961,667,584 bytes`、最终 1M Gaussian、无 NaN；golden PSNR 在 step 6000 达到 `20.5556 dB`，step 7000 回落到 `20.4886`，因此最终正确选择 step 6000。签名 run Manifest 为 `dc8293128cfca9da1cf032c63b23782971212ad482112d1dab7cdc6cead57a11`。
+- P5 选择模型的 124 图正式指标为 PSNR `20.520440`、SSIM `0.595492`、LPIPS-Alex `0.479350`、depth MAE `6.555521 m`、预测 coverage min `1.0`；质量报告 SHA256 为 `08fd4f3700ddc1b12cc0dbbaabd1747620791e85ae8eb76d5233f523084ed9bb`。
+- 相对 legacy，P5 提升 `+2.68565 dB` PSNR、`+0.12841` SSIM，LPIPS 降低 `0.11318`，但绝对深度 MAE 恶化 `+2.55019 m`（约 `63.7%`）。因此正式结论是 **MIXED / Gate 2 未通过**，不能用外观优势掩盖米制几何回归。
+- CPU 尸检同为 1M Gaussian 的最佳 checkpoint：legacy 的 scale p50/p95/p99/p999/max 为 `0.0693/0.2279/0.5536/1.8695/13.9442 m`，大于 10 m 的仅 13 个；P5 为 `0.1249/0.3375/0.8977/4.7247/142.2038 m`，大于 10 m 的有 396 个。P5 的 soft scale regularization 没有阻止极端巨型 splat，与前景/边缘模糊及深度回归方向一致，但仍属于待单变量验证的根因候选。
+
+### 当前状态
+
+当前为 **PASS（两臂正式证据完整）/ FAIL（澳洲组合候选的零回归 Gate）**。下一步不盲目加大所有正则，而是按同数据短臂分别验证：① P5 保持外观配置、只把 LiDAR loss 改回 `linear_l1`；② P5 保持 loss、只启用米制 world-scale fuse；③ 澳洲最新误差加权采样。只有单变量结果确定后才组合复验，并继续完成 KNN/SH/local-SSIM 三个正式臂。
+
+## 34. 当前阶段记录：P5 深度回归单变量探针与平衡候选
+
+### 问题现象
+
+澳洲 P5 已被正式证据确认是当前最强外观基础，但相对 legacy 的深度 MAE 恶化 `2.55019 m`。需要优先保留澳洲版本的 SH、KNN、local SSIM、曝光、背景与 means decay，不用多变量改动掩盖归因；短探针只允许改变一个深度或采样变量，再决定是否值得执行完整 8000 步。
+
+### 修改文件
+
+- `cloudstudio_3dgs/training/trainer.py`
+- `cloudstudio_3dgs/training/presets.py`
+- `cloudstudio_3dgs/training/ab_matrix.py`
+- `cloudstudio_3dgs/training/checkpoint.py`
+- `tests/test_training.py`
+- `tests/test_training_presets.py`
+- `train/run_gate2_synthetic_acceptance_local.ps1`
+- `README.md`
+- `docs/IMPLEMENTATION_PLAN.zh-CN.md`
+
+### 修改内容与探针结果
+
+- 澳洲误差加权 MCMC 在相同真实输入上的 1000 步 probe，正式 124 图为 PSNR `17.37595`、SSIM `0.53350`、LPIPS `0.60239`、depth MAE `7.73792 m`；相对默认关闭 P5 同步点外观轻微回归、深度不改善，因此保持默认关闭，不进入正式候选。
+- 将 P5 的 robust log-Huber 整体换成 `linear_l1` 后，golden step 1000 为 PSNR `14.1659`、SSIM `0.48135`、depth MAE `4.47748 m`，且完整验证存在 depth coverage `0.895791 < 0.9`。虽然深度回收明显，但外观损失过大并触发覆盖门，拒绝。
+- 只启用 `1.5 m` world-scale fuse 后，golden step 1000 为 PSNR `16.7026`、SSIM `0.53030`、depth MAE `7.63966 m`；仅改善约 `0.06 m` 深度却损失约 `0.77 dB`，拒绝把硬裁剪提升为候选。
+- 新增 `lidar_linear_aux_weight`：主损失仍为澳洲 P5 的 confidence-weighted robust log-Huber，仅叠加弱线性米制 L1；该权重进入签名 Trainer contract、preset/A-B 字段与逐步 telemetry，非 robust 主损失、负权重或缺少 depth 输入均 fail-closed，算法版本升级为 `cloudstudio_gsplat_trainer_v5`。
+- 三个同输入、同 seed、同 1000 步探针呈单调 Pareto：权重 `0.0025` 的完整 PSNR/SSIM/LPIPS/depth 为 `17.21927 / 0.52850 / 0.60563 / 6.99518 m`；`0.005` 为 `16.92767 / 0.52367 / 0.60939 / 6.37880 m`；`0.01` 为 `16.35399 / 0.51503 / 0.61603 / 5.80396 m`。`0.01` 相对原 P5 同步点约损失 `1.08 dB`，但改善约 `1.93 m` 深度，最可能利用 P5 正式 `+2.69 dB` 的外观余量关闭 legacy 深度门。
+- 因此新增命名候选 `gate2_quality_australian_p5_depth_balanced_v1`，与 `gate2_quality_australian_p5_v1` 的固定字段只允许 `lidar_linear_aux_weight: 0.0 → 0.01` 一处差异。它是待正式验证的澳洲优先候选，不是生产默认；测试会直接比较两个 preset，防止未来悄然漂移其他外观旋钮。
+
+### 验证方式与当前状态
+
+当前 CPU 全仓为 `183 PASS + 22 SKIPPED + 3 subtests PASS`；跳过项仍是需要预加载锁定 CUDA 扩展的运行测试。所有短 probe 都绑定相同真实 factor4 输入、person/depth mask、初始化 PLY、seed 42 和 1M cap，质量报告分别签名保存。
+
+### 正式 8000 步结果
+
+- 命名候选在 RTX 5070 Laptop 上完成 8000 步，耗时 `3269.10 s`、峰值额外显存 `1,932,662,272 bytes`、最终 1M Gaussian、无 NaN；内部签名 run Manifest SHA256 为 `085ca8e0900f8dc4cea96edcc05a2376c2aba539cb093174c41494f6ab2f8661`。
+- golden PSNR 从 step 1000 到 6000 按 `16.3869 → 17.6076 → 18.6600 → 19.1409 → 19.3240 → 19.5010 dB` 提升，step 7000/8000 回落到 `19.4583 / 19.3989 dB`，因此正确选择 step 6000；step 5000 的 golden depth MAE `4.917 m` 最低，step 6000 回退到 `5.024 m`，明确暴露外观选择与米制几何并非同一目标。
+- 124 图 selected-model 正式报告为 `COMPLETE`：PSNR `19.452818 dB`、SSIM `0.568499`、LPIPS-Alex `0.501412`、depth MAE `5.042365 m`、depth coverage min `0.979954`；内部签名 quality report SHA256 为 `04d33bfe8dde895361c7418a45a11134750f6c68c263f80507c8eaad33999209`。
+- 相对澳洲 P5，深度改善 `1.513156 m`，但 PSNR 下降 `1.067622 dB`、SSIM 下降 `0.026992`、LPIPS 恶化 `0.022062`；相对 legacy，PSNR 仍提升 `1.618024 dB`、SSIM 提升 `0.101420`、LPIPS 改善 `0.091118`，但 depth MAE 仍恶化 `1.037031 m`。结论仍为 **MIXED / Gate 2 FAIL**，不能替代澳洲 P5，也不能进入 POS A/B。
+- 尺度尸检表明该辅助项没有根治巨型 splat：selected step 6000 的 scale p50/p95/p99/p999/max 为 `0.1308/0.4445/1.2527/4.9981/42.7079 m`，大于 `1 m` 有 `14,246` 个、大于 `10 m` 有 `270` 个。最大值虽比 P5 的 `142.2038 m` 小，但大于 `1 m` 的数量比 P5 的 `8,442` 个更多；抽检同一验证视角也确认建筑结构仍可辨，但前景和图像边缘继续存在明显模糊，不能仅凭平均指标升级。
+- 按预定停止条件追加的 `0.02` 单变量 1000 步探针耗时 `478.92 s`、峰值额外显存 `959,450,112 bytes`，内部签名 run Manifest SHA256 为 `a646ceb3332178ce226d5673430e9ae22dce372e6ff6266ea1dacdaeed5222e8`。step 1000 full history 为 PSNR `15.584667 dB`、SSIM `0.503213`、depth MAE `5.072061 m`、p10 `15.230879 dB`；随后 selected-model 质量报告在逐帧重算时检测到最低 depth coverage `0.8994976 < 0.9` 并 fail-closed，未生成 `COMPLETE` LPIPS 报告。该权重既继续大幅损伤外观，又跨过覆盖硬门，明确拒绝扩大到 8000 步。
+
+当前为 **PASS（正式证据完整）/ FAIL（深度零回归门）**。澳洲 `gate2_quality_australian_p5_v1` 继续作为优先外观基线，`0.01` 只保留为已验证的 Pareto 点；线性辅助权重蛮力搜索在 `0.02` 按预定条件终止。下一步转向显式 scale/visibility 约束和多目标 checkpoint 选择，重点处理“最大 scale 下降但大于 1 m 的数量反而增加”以及 30k 在 20k 处离散断崖，而不是继续增大深度 loss。
+
+## 35. 当前阶段记录：尺度尾部风险与深度护栏 checkpoint 选择
+
+### 问题现象
+
+正式 P5 尸检显示 1M Gaussian 中只有少数严重超限点，但现有 `scale_upper` 对全部 Gaussian 的 barrier 取均值，再乘 `1e-4`；正常点的海量零值会稀释最坏尾部。`0.01` 深度平衡正式运行又出现 step 5000 depth MAE `4.917 m` 最低、step 6000 PSNR 更高但 depth 回退到 `5.024 m`，旧选择器仍覆盖 `best_golden.pt`。澳洲 30k 运行在 20k 发生离散断崖并依靠早期 best checkpoint 免疫，进一步证明 checkpoint promotion 不能只看单一外观均值。
+
+### 修改文件
+
+- `cloudstudio_3dgs/training/regularization.py`
+- `cloudstudio_3dgs/training/golden_eval.py`
+- `cloudstudio_3dgs/training/trainer.py`
+- `tests/test_training.py`
+- `tests/test_golden_eval.py`
+- `README.md`
+- `docs/IMPLEMENTATION_PLAN.zh-CN.md`
+
+### 修改内容
+
+- `GeometryRegularizationConfig` 新增 opt-in `scale_upper_tail_fraction`。默认 `1.0` 时继续执行原始 `.mean()`，并从序列化 contract 省略该兼容值，保证澳洲 P5 的配置身份与数值语义不变；小于 `1.0` 时只对 barrier 最大的 `ceil(N*fraction)` 个 Gaussian 求均值，使同一弱权重集中约束最坏尺度尾部，不使用会直接破坏外观的硬 world fuse。
+- 新增训练 telemetry：`scale_over_limit_fraction` 和 `scale_upper_tail_count`，使短 A/B 能同时检查损失、超限比例和实际参与风险聚合的数量，而不是只看最大值。
+- `GoldenEvaluationConfig` 新增 opt-in `max_depth_regression_m`。默认省略并保持 PSNR-only 澳洲 P5 兼容；启用后，候选必须先满足原 PSNR 提升门，同时所有带深度的 golden 帧均为 `MEASURED`，且 depth MAE 不得比当前最佳 checkpoint 回退超过指定米数。深度不可测、NaN 或超限均拒绝 promotion。
+- history verifier 使用签名配置重放同一多目标规则；不能通过手改 `best` 或恢复时退化为 PSNR-only 绕过深度护栏。旧 history 不含新字段时仍按原规则验证，不破坏已完成证据。
+
+### 验证方式与当前状态
+
+- tail-risk 单测构造 4 个 Gaussian、其中 2 个超过 `8×` 参考尺度：默认均值保持原值，`tail_fraction=0.25` 只选最坏 1 个并产生更强 penalty；超限比例精确为 `0.5`，反向梯度 finite，非法 `0` 比例 fail-closed。
+- checkpoint 单测证明 `+0.2 dB / +0.04 m` 在 `0.05 m` 护栏内可晋级，`+0.3 dB / +0.12 m` 被拒绝，深度 `UNMEASURABLE` 也被拒绝；签名 history 含一个外观更高但深度超限的候选时，verifier 重放后仍认定前一个 checkpoint 为 best。
+- 修改后全仓 CPU 套件共运行 `209` 项，为 `208 PASS + 1 SKIPPED`；唯一跳过仍是需要预加载锁定 CUDA 扩展的物理足迹测试。
+
+### 真实 tail-risk successive-halving
+
+- `tail_fraction=0.01` 1000 步运行完成，内部 run Manifest SHA256 `c5a7c8bd95ecd904dfc71ae7ca3455f916991a9b37cc8e50854083aee5e43c275`；124 图报告 `COMPLETE`，PSNR `17.496205 dB`、SSIM `0.534071`、LPIPS `0.602686`、depth MAE `7.881738 m`、coverage min `0.933729`，报告 SHA256 `e28175f10eff990bc836c74f42823af505c0ca9256edec04239ad523562b5366`。但最终 max scale `26.3902 m`、大于 `1 m` 410 个；top 1% 约 4582 个仍远多于约 735 个实际超限点，barrier 被零值稀释，拒绝该比例。
+- 按 successive-halving 收紧到 `tail_fraction=0.001` 后，内部 run Manifest SHA256 `e5b7dcbb844220c284b5e3730f9dab5551b5588f4770f11b8768de9cf4326ccc`；124 图报告同为 `COMPLETE`，PSNR `17.383084 dB`、SSIM `0.533708`、LPIPS `0.601801`、depth MAE `7.771762 m`、coverage min `0.959218`，报告 SHA256 `06efbae6da83615d49729c4cce2dce304ac2010fd5f46938868b802a5c5ac89c`。
+- 与原澳洲 P5 的相同 seed、step 900 MCMC snapshot 比较，Gaussian 数同为 458129、p50/p95 同为约 `0.10/0.17 m`，但 max scale 从 P5 `11.82 m` 降到 `9.64 m`（约 `18.4%`）；相对 1% tail 的最终 checkpoint，p999 从 `0.9518` 降到 `0.8827 m`，大于 `1 m` 从 410 降到 324。同步 golden PSNR 相对 P5 仅约 `-0.07 dB`，depth 近似，属于小幅外观代价换取可测尺度尾部改善。
+
+### 正式 8000 步结果
+
+- `tail_fraction=0.001` 与 `max_depth_regression_m=0.05` 在 RTX 5070 Laptop 上完成正式 8000 步，耗时 `3140.83 s`、峰值额外显存 `1,961,272,320 bytes`、最终 1M Gaussian、状态 `COMPLETE`；run Manifest SHA256 为 `417cedaf9d6c669471394796d6005baa7684585a2d41308704691243b9133f39`，签名验证通过。
+- golden 曲线在 step 1000/2000/3000/4000/5000/6000 达到 `17.4256/18.8812/19.7063/19.8385/20.1029/20.4991 dB`，step 7000/8000 回落到 `20.4816/20.3128 dB`，因此清单正确绑定 `best_golden@6000`，模型 SHA256 为 `e9109b911ca3f909b537192336feb3e02bcb314d97dead6e7ca45ab19217533e`。各次 PSNR 晋级时 depth 均改善或相对当前 best 回退不超过 `0.05 m`；本次没有出现需要真实拦截的超限候选，history verifier 仍按签名规则重放并通过。
+- 124 图 selected-model 报告为 PSNR `20.412882 dB`、SSIM `0.594863`、LPIPS-Alex `0.476925`、depth MAE `6.762314 m`、depth coverage min `0.999568`，quality report SHA256 为 `5c4e7079f6f74edfdadb8a1f3b0f0a81f8c266793e1b2b504f59a478d4828b81`，完整签名验证通过。
+- 相对澳洲 P5 正式基线，PSNR 下降 `0.107558 dB`、SSIM 下降 `0.000629`、depth MAE 恶化 `0.206793 m`，仅 LPIPS 改善 `0.002425`。这不是综合质量提升，不能替代澳洲 `gate2_quality_australian_p5_v1`。
+- selected step 6000 的 scale p50/p95/p99/p999/max 为 `0.1253/0.3492/0.9565/2.0031/154.8749 m`，大于 `1 m` 有 `9,223` 个；澳洲 P5 同为 step 6000 的对应值为 `0.1249/0.3375/0.8977/4.7247/142.2038 m`、大于 `1 m` 有 `8,442` 个。该方案只压低 p999 分位，没有改善 p95/p99、超限数量或单点最大值，证明弱 top-tail 均值仍允许极少数 Gaussian 逃逸。
+
+当前为 **PASS（实现、CPU 回归、真实 1000/8000 步、完整签名与 LPIPS 证据）/ FAIL（正式综合晋级）**。澳洲 P5 保持优先版本；`tail_fraction=0.001 + scale_upper_weight=1e-4` 记录为已拒绝 Pareto 点。后续若继续尺度治理，必须将分位 CVaR 与极值/屏幕足迹保险拆成单变量短探针，不得直接把这条配置升级为默认或混入 POS A/B。
+
+### 屏幕足迹保险单变量探针
+
+- 为避免把两个机制混在一起，下一条 1000 步探针恢复澳洲 P5 的默认 `scale_upper_tail_fraction=1.0`，只将 `screen_clip_enabled` 从 `false` 改为 `true`；`max_screen_fraction=0.15`、hardness `1.5` 和 opacity bump `3.0` 保持已有默认参数。运行状态 `COMPLETE`，耗时 `477.91 s`、峰值额外显存 `922,298,880 bytes`，触发 `157,144` 次 screen clip、world clamp 为 `0`，run Manifest SHA256 为 `0f9a16a272f13c8cbf8bcbe8e8eaa51750261434ece5b079ca5a603233a09931`。
+- 124 图报告为 PSNR `16.248149 dB`、SSIM `0.532618`、LPIPS-Alex `0.594732`、depth MAE `7.655046 m`、depth coverage min `0.913219`，quality report SHA256 为 `1c91b28d317df09fa4973d69c3316f0f7477f73e99829779166cd076809aa119`。相对 `tail_fraction=0.001` 的同步 1k 报告，LPIPS 改善 `0.007069`、depth 改善 `0.116716 m`，但 PSNR 下降 `1.134935 dB`、SSIM 下降 `0.001091`、最低覆盖下降 `0.045999`。
+- selected step 1000 的 scale p50/p95/p99/p999/max 为 `0.1034/0.1816/0.2907/0.7788/5.7713 m`，大于 `1 m` 有 `262` 个；尺度尾部确实受控，证明该运行路径有效而非空配置，但 15% 足迹阈值在训练早期过度干预可见 Gaussian，外观代价远超晋级余量。因此该参数 **REJECTED**，不进入 8k；若再探索，只允许提高足迹阈值做单变量短探针，不能与 CVaR 同时开启。
+- 按停止计划只把 `max_screen_fraction` 从 `0.15` 放宽到 `0.30` 再做一次 1000 步探针。该运行耗时 `451.49 s`、峰值额外显存 `921,739,776 bytes`，screen clip 仍触发 `154,910` 次，run Manifest SHA256 为 `01e0c9d29d785dc0231576d4bf4d3a97a3c5f1a8cf9e62da591d264215847101`。124 图报告为 PSNR `16.324915 dB`、SSIM `0.532937`、LPIPS-Alex `0.588965`、depth MAE `7.771479 m`、coverage min `0.916894`，quality report SHA256 为 `320405626097313d8b3db29ca7444cf86978b7d133f8997ea1a41a20076bb158`。
+- 30% 相对 15% 只恢复 `0.076766 dB` PSNR，触发数也只减少 `2,234`；相对弱 tail 同步 1k，p999/max/大于 1 m 为 `0.8022/8.2444 m/266`，仍有可测尺度改善，LPIPS 改善 `0.012836`，但 PSNR 下降 `1.058170 dB`、最低覆盖下降 `0.042324`。因此问题不是 15% 阈值单点过紧，而是逐视角 no-grad 硬缩放与外观优化冲突；screen-footprint 路线在此关闭，不继续 45%/60% 搜索。
+
+## 36. 问题修复记录：澳洲 Gate 2 签名契约向后兼容
+
+### 问题现象
+
+准备按澳洲优先版本继续执行 KNN-only 正式臂时，`verify_trainer_ab_matrix` 对已签名五臂矩阵 fail-closed，报错 `A/B Trainer contract identity mismatch`。逐字段对照澳洲已完成 reference/P5 的 `run_manifest` 后确认，旧运行均绑定 `cloudstudio_gsplat_trainer_v4`，但后续代码把默认值为 `0` 的 `lidar_linear_aux_weight` 和默认关闭的 `error_weighted_sampling` 无条件写入 contract；即使训练数值语义未启用新功能，签名身份也被改变，导致澳洲原矩阵及两个已完成正式臂无法复核。
+
+### 修改文件
+
+- `cloudstudio_3dgs/training/trainer.py`
+- `tests/test_training.py`
+- `docs/IMPLEMENTATION_PLAN.zh-CN.md`
+
+### 修改内容
+
+- 默认 `lidar_linear_aux_weight=0` 时恢复精确 v4 contract：省略 `loss_weights.lidar_linear_aux` 与 `loss_contract.lidar_range.linear_aux_weight`；只有显式设置为正值时才输出这两个字段并使用 `cloudstudio_gsplat_trainer_v5`。
+- 默认 `error_weighted_sampling.enabled=false` 时从 `strategy` 省略该可选块；显式启用时仍完整签名 `enabled/ema_decay/score_power/min_score_floor`，不削弱新实验的可审计性。
+- 未修改旧矩阵、已完成运行或 verifier，也未把签名不符降级成警告；兼容行为通过 contract 构造恢复，而不是重签历史证据。
+
+### 验证方式与当前状态
+
+- 红灯先行：修复前默认配置断言实际得到 v5 而失败，复现了签名漂移；随后增加默认省略、线性辅助显式启用和误差加权显式启用三类定向回归。
+- 修复后定向 `3/3 PASS`；原澳洲矩阵在不改文件的条件下重新验证为原 SHA256 `7e6daf8ca6baecc915dda020610419b7f6313867b55b95e3d9c67f4adfd86593`。
+- 全仓 CPU 套件在显式隐藏 CUDA 后运行 `211` 项，为 `189 PASS + 22 SKIPPED`；跳过项均为需要 CUDA/锁定 gsplat runtime 的既有运行测试。未隐藏 CUDA 的首次运行中，210 个非足迹测试通过，唯一错误是受限环境不允许向用户 Torch 扩展缓存写文件，不是断言失败，也没有被记录为通过。
+
+当前为 **PASS（澳洲历史 contract 身份恢复）**。澳洲 P5 继续作为优先外观版本；KNN/SH/local-SSIM 正式臂必须继续使用这份原始签名矩阵，不能通过重建矩阵绕过已完成 reference/P5 的共同输入与单变量约束。
+
+## 37. 当前阶段记录：Gate 2 KNN-only 正式单变量臂
+
+### 受控变量与运行身份
+
+在第 36 节恢复原澳洲矩阵 SHA256 `7e6daf8ca6baecc915dda020610419b7f6313867b55b95e3d9c67f4adfd86593` 后，执行其中未完成的 `knn_only` 正式臂。该臂与 legacy reference 共用 1238 图数据、1114/124 train/validation split、person/depth mask、初始化 PLY、factor4、seed 42、8000 步、1M cap、RGB/LiDAR loss、MCMC 和 white background；contract 只允许 KNN 初始化及对应尺度感知 means/noise 步长字段变化，不能吸收 SH、local SSIM 或澳洲 P5 的其他变量。
+
+### 运行与验证结果
+
+- RTX 5070 Laptop 上完成 8000 步，耗时 `2927.32 s`、峰值额外显存 `998,101,504 bytes`、最终 1M Gaussian、状态 `COMPLETE`、无 NaN；run Manifest SHA256 为 `fe258a9951b0d828d6e6a1c4748bbabc8fda4da479fdb67311c323bdc49d3455`，Trainer contract SHA256 与矩阵记录一致为 `428089c26ebb159c1485cd1480c31434c1366cc5203064982cbd37d5311e612a`。
+- golden PSNR 在 step 1000–6000 为 `15.7943 / 17.3588 / 17.9150 / 17.9584 / 18.0678 / 18.1258 dB`，step 7000/8000 回落到 `18.0002 / 17.9926 dB`；选择器正确绑定 `best_golden@6000`，模型 SHA256 为 `e8c9b7b02491c3b473e11370b4135337961f7bed6b4e3d929a2fda2861aac803`。
+- step 4000 的首次 124 图 full validation 为 PSNR `17.96022 dB`、SSIM `0.476802`、depth MAE `4.05599 m`；step 8000 的第二次 full validation及最终 Manifest 均完成，满足正式臂至少两次全量验证的要求。
+- selected-model 的 124 图 LPIPS-Alex 报告为 `COMPLETE`：PSNR `18.093963 dB`、SSIM `0.479076`、LPIPS `0.587172`、depth MAE `4.094303 m`、depth coverage min `0.923022`；quality report SHA256 为 `6a6e20138afcb6258b428209373fc9a9f1911bd1313b1d11a3d1be16d95befd0`，run/quality 双签名验证通过，golden checkpoint 与 periodic full evidence 均为 `VERIFIED`。
+
+### 结论与下一步
+
+相对 legacy reference，KNN-only 提升 PSNR `0.259168 dB`、SSIM `0.011996`，LPIPS 降低 `0.005358`，最低深度覆盖提高 `0.004058`；但 depth MAE 恶化 `0.088968 m`。按 A/B 聚合器的严格零回归语义，该臂结论为 **MIXED**，不能写成全指标晋级；它证明 KNN 初始化是澳洲 P5 外观增益的有效组成部分，但不能单独关闭 Gate 2 深度门。相对澳洲 P5，KNN-only 的 depth 改善 `2.461218 m`，但 PSNR 低 `2.426477 dB`、SSIM 低 `0.116415`、LPIPS 恶化 `0.107822`，因此澳洲 `gate2_quality_australian_p5_v1` 仍是优先外观版本，不能被本臂替换。下一步按同一原矩阵继续 `sh_only`，再执行 `local_ssim_only`，完成三项独立归因后才能生成五臂正式聚合报告。

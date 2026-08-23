@@ -213,6 +213,33 @@ class SamplingWeightTests(unittest.TestCase):
         self.assertGreater(share, 0.5)
 
 
+class ErrorScoreCheckpointTests(unittest.TestCase):
+    def setUp(self) -> None:
+        _requires_module(self)
+
+    def test_checkpoint_roundtrip_restores_exact_scores(self) -> None:
+        source = ErrorScoreState(3, ErrorScoreConfig(enabled=True))
+        source.scores = torch.tensor([0.15, 0.5, 0.95])
+        payload = source.checkpoint_state()
+        restored = ErrorScoreState(3, ErrorScoreConfig(enabled=True))
+        restored.restore_checkpoint_state(payload, expected_count=3)
+        self.assertTrue(torch.equal(restored.scores, source.scores))
+        self.assertIsNot(restored.scores, payload["scores"])
+
+    def test_restore_rejects_missing_stale_and_non_finite_state(self) -> None:
+        state = ErrorScoreState(3, ErrorScoreConfig(enabled=True))
+        bad_payloads = (
+            None,
+            {"schema_version": 2, "scores": torch.ones(3)},
+            {"schema_version": 1, "scores": torch.ones(2)},
+            {"schema_version": 1, "scores": torch.tensor([1.0, float("nan"), 1.0])},
+        )
+        for payload in bad_payloads:
+            with self.subTest(payload=payload):
+                with self.assertRaises(ValueError):
+                    state.restore_checkpoint_state(payload, expected_count=3)
+
+
 class StrategyWiringTests(unittest.TestCase):
     """Exercise the overridden refine hooks with the heavy ops mocked out.
 

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import hashlib
 import json
 import tempfile
@@ -409,6 +410,62 @@ class MCMCTelemetryTests(unittest.TestCase):
         self.assertTrue(
             any("params.means" in item for item in failing["mismatches"])
         )
+
+    def test_checkpoint_equivalence_normalizes_only_valid_evaluation_self_hashes(self) -> None:
+        import hashlib
+        import torch
+
+        from cloudstudio_3dgs.data.manifest import canonical_json_bytes
+
+        def signed_evaluation(psnr: float) -> dict:
+            record = {
+                "algorithm_version": "golden_validation_v2",
+                "completed_steps": 80,
+                "summary": {"psnr_db_mean": psnr, "ssim_mean": 0.8},
+            }
+            record["golden_evaluation_sha256"] = hashlib.sha256(
+                canonical_json_bytes(record)
+            ).hexdigest()
+            return record
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            reference_path = root / "reference.pt"
+            resumed_path = root / "resumed.pt"
+            base = {
+                "step": 80,
+                "params": {"means": torch.zeros((1, 3))},
+                "training_state": {
+                    "golden_evaluation": {
+                        "history": [signed_evaluation(20.0)],
+                    }
+                },
+            }
+            resumed = copy.deepcopy(base)
+            resumed["training_state"]["golden_evaluation"]["history"] = [
+                signed_evaluation(20.0 + 2e-7)
+            ]
+            torch.save(base, reference_path)
+            torch.save(resumed, resumed_path)
+            passing = compare_checkpoint_payloads(
+                reference_path, resumed_path, atol=5e-6, rtol=1e-6
+            )
+            self.assertEqual(passing["status"], "PASS")
+            self.assertEqual(
+                passing["tolerance_normalized_evaluation_hash_count"], 1
+            )
+
+            resumed["training_state"]["golden_evaluation"]["history"][0][
+                "golden_evaluation_sha256"
+            ] = "0" * 64
+            torch.save(resumed, resumed_path)
+            failing = compare_checkpoint_payloads(
+                reference_path, resumed_path, atol=5e-6, rtol=1e-6
+            )
+            self.assertEqual(failing["status"], "FAIL")
+            self.assertTrue(
+                any("signed evaluation hash mismatch" in item for item in failing["mismatches"])
+            )
 
 
 if __name__ == "__main__":

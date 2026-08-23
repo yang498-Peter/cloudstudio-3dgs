@@ -163,9 +163,18 @@ class PpispExposureTest(unittest.TestCase):
     def test_all_parameters_receive_finite_gradients(self) -> None:
         corrector = _make_corrector(param_type="crf")
         rgb = _make_rgb(seed=5)
+        generator = torch.Generator().manual_seed(20260822)
         with torch.no_grad():
             for param in corrector.parameters():
-                param.add_(torch.randn_like(param) * 0.01)
+                param.add_(
+                    torch.randn(
+                        param.shape,
+                        dtype=param.dtype,
+                        device=param.device,
+                        generator=generator,
+                    )
+                    * 0.01
+                )
         out = corrector.apply(rgb, "left_000")
         out.mean().backward()
         for param in corrector.parameters():

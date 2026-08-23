@@ -26,8 +26,13 @@ from cloudstudio_3dgs.training.dataset import S1TrainingDataset, TrainingSample
 from cloudstudio_3dgs.training.losses import (
     confidence_weighted_log_range_huber,
     confidence_weighted_range_l1,
+    global_masked_rgb_ssim_loss,
     masked_rgb_l1,
     masked_rgb_ssim_loss,
+)
+from cloudstudio_3dgs.training.presets import (
+    assert_trainer_preset_matches,
+    expand_trainer_preset,
 )
 from cloudstudio_3dgs.training.exposure import (
     ExposureCompensationConfig,
@@ -35,6 +40,7 @@ from cloudstudio_3dgs.training.exposure import (
 )
 from cloudstudio_3dgs.training.golden_eval import (
     GoldenEvaluationConfig,
+    evaluate_full_validation,
     evaluate_golden_views,
     is_golden_improvement,
 )
@@ -48,7 +54,7 @@ from cloudstudio_3dgs.training.rig_pose import (
     build_pose_refinement_report,
     disabled_pose_refinement_report,
 )
-from cloudstudio_3dgs.training.error_weighted_mcmc import ErrorScoreConfig
+from cloudstudio_3dgs.training.error_weighted_config import ErrorScoreConfig
 from cloudstudio_3dgs.training.regularization import (
     GeometryRegularizationConfig,
     clip_oversized_gaussians,
@@ -93,6 +99,7 @@ class TrainerConfig:
     face_cache_manifest: Path | None = None
     face_cache_root: Path | None = None
     require_person_masks: bool = True
+    trainer_preset: str = "custom"
     device: str = "cuda:0"
     seed: int = 42
     max_steps: int = 3_000
@@ -106,12 +113,14 @@ class TrainerConfig:
     )
     rgb_l1_weight: float = 0.8
     rgb_ssim_weight: float = 0.2
+    rgb_ssim_mode: str = "local_gaussian"
     lidar_range_weight: float = 0.05
     ssim_window_size: int = 11
     ssim_sigma: float = 1.5
     ssim_min_valid_fraction: float = 0.8
     lidar_range_loss_mode: str = "robust_log_huber"
     lidar_log_range_huber_delta: float = 0.05
+    lidar_linear_aux_weight: float = 0.0
     decoupled_ssim: bool = False
     sh_regularization_weight: float = 0.0
     pinhole_rasterize_mode: str = "classic"
@@ -150,6 +159,7 @@ class TrainerConfig:
 
     @classmethod
     def from_dict(cls, value: dict[str, Any]) -> "TrainerConfig":
+        value = expand_trainer_preset(value)
         paths = {
             key: None if value.get(key) is None else Path(value[key])
             for key in (
@@ -209,12 +219,14 @@ class TrainerConfig:
                 "init_scale_m",
                 "rgb_l1_weight",
                 "rgb_ssim_weight",
+                "rgb_ssim_mode",
                 "lidar_range_weight",
                 "ssim_window_size",
                 "ssim_sigma",
                 "ssim_min_valid_fraction",
                 "lidar_range_loss_mode",
                 "lidar_log_range_huber_delta",
+                "lidar_linear_aux_weight",
                 "decoupled_ssim",
                 "sh_regularization_weight",
                 "pinhole_rasterize_mode",
@@ -234,6 +246,7 @@ class TrainerConfig:
         }
         return cls(
             run_id=str(value["run_id"]),
+            trainer_preset=str(value["trainer_preset"]),
             crop=crop,
             rig_pose_refinement=pose_refinement,
             metric_scale_calibration=scale_calibration,
@@ -269,11 +282,18 @@ class TrainerConfig:
             raise ValueError("sh_degree_interval must be non-negative")
         if not 0.0 < self.means_lr_final_factor <= 1.0:
             raise ValueError("means_lr_final_factor must be in (0, 1]")
-        weights = (self.rgb_l1_weight, self.rgb_ssim_weight, self.lidar_range_weight)
+        weights = (
+            self.rgb_l1_weight,
+            self.rgb_ssim_weight,
+            self.lidar_range_weight,
+            self.lidar_linear_aux_weight,
+        )
         if any(weight < 0.0 for weight in weights):
             raise ValueError("loss weights must be non-negative")
         if self.rgb_l1_weight + self.rgb_ssim_weight <= 0.0:
             raise ValueError("at least one RGB loss weight must be positive")
+        if self.rgb_ssim_mode not in {"local_gaussian", "global_moments"}:
+            raise ValueError("rgb_ssim_mode must be local_gaussian or global_moments")
         if self.ssim_window_size <= 0 or self.ssim_window_size % 2 == 0:
             raise ValueError("ssim_window_size must be a positive odd integer")
         if self.ssim_sigma <= 0.0 or not 0.0 < self.ssim_min_valid_fraction <= 1.0:
@@ -282,6 +302,13 @@ class TrainerConfig:
             raise ValueError("lidar_range_loss_mode must be linear_l1 or robust_log_huber")
         if self.lidar_log_range_huber_delta <= 0.0:
             raise ValueError("lidar_log_range_huber_delta must be positive")
+        if (
+            self.lidar_linear_aux_weight > 0.0
+            and self.lidar_range_loss_mode != "robust_log_huber"
+        ):
+            raise ValueError(
+                "lidar_linear_aux_weight is only valid with robust_log_huber"
+            )
         if self.sh_regularization_weight < 0.0:
             raise ValueError("sh_regularization_weight must be non-negative")
         if self.pinhole_rasterize_mode not in ("classic", "antialiased"):
@@ -303,6 +330,26 @@ class TrainerConfig:
         self.exposure_compensation.validate()
         self.geometry_regularization.validate()
         self.golden_evaluation.validate()
+        assert_trainer_preset_matches(
+            self.trainer_preset,
+            {
+                "metric_scale_calibration": self.metric_scale_calibration.to_dict(),
+                "color_model": self.color_model,
+                "sh_degree": self.sh_degree,
+                "sh_degree_interval": self.sh_degree_interval,
+                "rgb_ssim_mode": self.rgb_ssim_mode,
+                "decoupled_ssim": self.decoupled_ssim,
+                "sh_regularization_weight": self.sh_regularization_weight,
+                "lidar_range_loss_mode": self.lidar_range_loss_mode,
+                "lidar_linear_aux_weight": self.lidar_linear_aux_weight,
+                "means_lr_final_factor": self.means_lr_final_factor,
+                "background_color": None
+                if self.background_color is None
+                else [float(value) for value in self.background_color],
+                "exposure_compensation": self.exposure_compensation.to_dict(),
+                "geometry_regularization": self.geometry_regularization.to_dict(),
+            },
+        )
         if (self.depth_manifest is None) != (self.depth_root is None):
             raise ValueError("depth_manifest and depth_root must be provided together")
         if (self.face_cache_manifest is None) != (self.face_cache_root is None):
@@ -317,9 +364,11 @@ class TrainerConfig:
             raise ValueError(
                 "production 3DGS training requires person_mask_manifest and person_mask_root"
             )
-        if self.lidar_range_weight > 0.0 and self.depth_manifest is None:
+        if (
+            self.lidar_range_weight > 0.0 or self.lidar_linear_aux_weight > 0.0
+        ) and self.depth_manifest is None:
             raise ValueError(
-                "positive lidar_range_weight requires depth_manifest and depth_root"
+                "positive LiDAR loss weight requires depth_manifest and depth_root"
             )
         required_paths = {
             "dataset_manifest": self.dataset_manifest,
@@ -336,9 +385,41 @@ class TrainerConfig:
             raise ValueError(f"trainer config is missing paths: {', '.join(sorted(missing))}")
 
     def contract_dict(self) -> dict[str, Any]:
+        uses_lidar_linear_aux = self.lidar_linear_aux_weight > 0.0
+        loss_weights = {
+            "rgb_l1": self.rgb_l1_weight,
+            "rgb_ssim": self.rgb_ssim_weight,
+            "lidar_range": self.lidar_range_weight,
+        }
+        lidar_range_contract = {
+            "mode": self.lidar_range_loss_mode,
+            "semantics": "euclidean_ray_range_m",
+            "log_huber_delta": self.lidar_log_range_huber_delta,
+            "confidence_weighted": True,
+        }
+        if uses_lidar_linear_aux:
+            loss_weights["lidar_linear_aux"] = self.lidar_linear_aux_weight
+            lidar_range_contract["linear_aux_weight"] = self.lidar_linear_aux_weight
+        strategy_contract = {
+            "name": "MCMC",
+            "refine_start_iter": self.mcmc_refine_start_iter,
+            "refine_stop_iter": self.mcmc_refine_stop_iter,
+            "refine_every": self.mcmc_refine_every,
+            "noise_injection_stop_iter": self.mcmc_noise_injection_stop_iter,
+            "noise_lr": self.mcmc_noise_lr,
+            "noise_std_fraction": self.metric_scale_calibration.noise_std_fraction,
+        }
+        if self.error_weighted_sampling.enabled:
+            strategy_contract["error_weighted_sampling"] = (
+                self.error_weighted_sampling.to_dict()
+            )
+
         return {
             "schema_version": 2,
-            "algorithm_version": "cloudstudio_gsplat_trainer_v3",
+            "algorithm_version": "cloudstudio_gsplat_trainer_v5"
+            if uses_lidar_linear_aux
+            else "cloudstudio_gsplat_trainer_v4",
+            "trainer_preset": self.trainer_preset,
             "seed": self.seed,
             "max_steps": self.max_steps,
             "factor": self.factor,
@@ -356,11 +437,7 @@ class TrainerConfig:
                 "fixed_scale_m": self.init_scale_m,
                 **self.metric_scale_calibration.to_dict(),
             },
-            "loss_weights": {
-                "rgb_l1": self.rgb_l1_weight,
-                "rgb_ssim": self.rgb_ssim_weight,
-                "lidar_range": self.lidar_range_weight,
-            },
+            "loss_weights": loss_weights,
             "color_model": {
                 "mode": self.color_model,
                 "sh_degree": self.sh_degree if self.color_model == "sh" else None,
@@ -379,23 +456,23 @@ class TrainerConfig:
             },
             "loss_contract": {
                 "rgb_ssim": {
-                    "mode": "mask_aware_local_gaussian",
+                    "mode": "mask_aware_local_gaussian"
+                    if self.rgb_ssim_mode == "local_gaussian"
+                    else "global_masked_moments",
+                    "configuration_mode": self.rgb_ssim_mode,
                     "window_size": self.ssim_window_size,
                     "sigma": self.ssim_sigma,
                     "minimum_valid_fraction": self.ssim_min_valid_fraction,
-                    "global_masked_ssim": "diagnostic_only",
+                    "global_masked_ssim": "active"
+                    if self.rgb_ssim_mode == "global_moments"
+                    else "diagnostic_only",
                     "decoupled_exposure": self.decoupled_ssim,
                 },
                 "sh_regularization": {
                     "mode": "shN_l2",
                     "weight": self.sh_regularization_weight,
                 },
-                "lidar_range": {
-                    "mode": self.lidar_range_loss_mode,
-                    "semantics": "euclidean_ray_range_m",
-                    "log_huber_delta": self.lidar_log_range_huber_delta,
-                    "confidence_weighted": True,
-                },
+                "lidar_range": lidar_range_contract,
             },
             "dynamic_person_mask": {
                 "required": self.require_person_masks,
@@ -423,16 +500,7 @@ class TrainerConfig:
                 "global_z_order": False,
                 "packed": False,
             },
-            "strategy": {
-                "name": "MCMC",
-                "refine_start_iter": self.mcmc_refine_start_iter,
-                "refine_stop_iter": self.mcmc_refine_stop_iter,
-                "refine_every": self.mcmc_refine_every,
-                "noise_injection_stop_iter": self.mcmc_noise_injection_stop_iter,
-                "noise_lr": self.mcmc_noise_lr,
-                "noise_std_fraction": self.metric_scale_calibration.noise_std_fraction,
-                "error_weighted_sampling": self.error_weighted_sampling.to_dict(),
-            },
+            "strategy": strategy_contract,
             "rig_pose_refinement": self.rig_pose_refinement.to_dict(),
             "exposure_compensation": self.exposure_compensation.to_dict(),
             "geometry_regularization": self.geometry_regularization.to_dict(),
@@ -520,6 +588,22 @@ def _write_golden_history(
     return payload
 
 
+def _write_full_evaluation_history(
+    path: Path,
+    *,
+    history: list[dict[str, Any]],
+) -> dict[str, Any]:
+    payload: dict[str, Any] = {
+        "schema_version": 1,
+        "history": history,
+    }
+    payload["full_evaluation_history_sha256"] = hashlib.sha256(
+        canonical_json_bytes(payload)
+    ).hexdigest()
+    _atomic_json(path, payload)
+    return payload
+
+
 def _sha256_file(path: Path) -> str:
     digest = hashlib.sha256()
     with Path(path).open("rb") as stream:
@@ -593,7 +677,9 @@ def _render_supervision_loss(
     rgb_gain: Any | None = None,
     active_sh_degree: int | None = None,
 ) -> tuple[Any, Any, Any, Any, dict[str, Any]]:
-    has_range = "range_m" in tensors and config.lidar_range_weight > 0.0
+    has_range = "range_m" in tensors and (
+        config.lidar_range_weight > 0.0 or config.lidar_linear_aux_weight > 0.0
+    )
     rendered, rendered_range, _, info = backend.render(
         params,
         sample,
@@ -609,9 +695,11 @@ def _render_supervision_loss(
         # and validation renders stay at gain 1.0.
         rendered = rendered * rgb_gain
     l1 = masked_rgb_l1(rendered, tensors["rgb"], tensors["rgb_mask"])
-    decouple = config.decoupled_ssim and rgb_gain is not None
-    ssim = (
-        masked_rgb_ssim_loss(
+    if config.rgb_ssim_weight <= 0.0:
+        ssim = rendered.new_zeros(())
+    elif config.rgb_ssim_mode == "local_gaussian":
+        decouple = config.decoupled_ssim and rgb_gain is not None
+        ssim = masked_rgb_ssim_loss(
             # Decoupled: structure/contrast compares the RAW render so the
             # exposure gain can move brightness but never mask structure.
             raw_rendered if decouple else rendered,
@@ -622,11 +710,13 @@ def _render_supervision_loss(
             min_valid_fraction=config.ssim_min_valid_fraction,
             luminance_gain=rgb_gain if decouple else None,
         )
-        if config.rgb_ssim_weight > 0.0
-        else rendered.new_zeros(())
-    )
+    else:
+        ssim = global_masked_rgb_ssim_loss(
+            rendered, tensors["rgb"], tensors["rgb_mask"]
+        )
     loss = config.rgb_l1_weight * l1 + config.rgb_ssim_weight * ssim
     range_loss = None
+    linear_range_aux_loss = None
     if has_range and getattr(sample, "camera_model", "fisheye") == "pinhole":
         # A face legitimately may catch only a handful of LiDAR rays, and the
         # edge-weight gate can empty the intersection entirely; skip the range
@@ -666,6 +756,17 @@ def _render_supervision_loss(
                 delta=config.lidar_log_range_huber_delta,
             )
         loss = loss + config.lidar_range_weight * range_loss
+        if config.lidar_linear_aux_weight > 0.0:
+            linear_range_aux_loss = confidence_weighted_range_l1(
+                rendered_range,
+                tensors["range_m"],
+                tensors["confidence"],
+                tensors["depth_mask"],
+            )
+            loss = loss + config.lidar_linear_aux_weight * linear_range_aux_loss
+    info["cloudstudio_linear_range_aux_loss"] = (
+        None if linear_range_aux_loss is None else linear_range_aux_loss.detach()
+    )
     # Stashed for the error-weighted MCMC score update; detached, so it never
     # extends the autograd graph.
     info["cloudstudio_rendered_rgb"] = rendered.detach()
@@ -979,6 +1080,7 @@ def train(
     mcmc_telemetry: dict[str, Any] | None = None
     golden_history: list[dict[str, Any]] = []
     best_golden: dict[str, Any] | None = None
+    full_evaluation_history: list[dict[str, Any]] = []
     if config.resume_checkpoint is not None:
         completed_steps, strategy_state, sampler_state, training_state = load_checkpoint(
             config.resume_checkpoint,
@@ -1004,11 +1106,26 @@ def train(
         if restored_best is not None and not isinstance(restored_best, dict):
             raise ValueError("checkpoint golden evaluation best record is invalid")
         best_golden = None if restored_best is None else dict(restored_best)
+        restored_full_history = restored_golden.get("full_history", [])
+        if not isinstance(restored_full_history, list):
+            raise ValueError("checkpoint full evaluation history is invalid")
+        full_evaluation_history = [dict(record) for record in restored_full_history]
         restored_telemetry = training_state.get("mcmc_telemetry")
         if restored_telemetry is None and config.mcmc_noise_injection_stop_iter != 0:
             raise ValueError("full-MCMC checkpoint has no MCMC telemetry state")
         if restored_telemetry is not None:
             mcmc_telemetry = dict(restored_telemetry)
+        error_score_state = getattr(backend, "error_score_state", None)
+        restored_error_scores = training_state.get("error_weighted_sampling")
+        if error_score_state is not None:
+            if restored_error_scores is None:
+                raise ValueError(
+                    "error-weighted checkpoint has no resumable sampling state"
+                )
+            error_score_state.restore_checkpoint_state(
+                restored_error_scores,
+                expected_count=len(params["means"]),
+            )
         if completed_steps >= config.max_steps:
             raise ValueError("checkpoint already reached or exceeded max_steps")
 
@@ -1022,8 +1139,12 @@ def train(
     checkpoint_path = output_dir / "checkpoints" / "latest.pt"
     best_checkpoint_path = output_dir / "checkpoints" / "best_golden.pt"
     golden_history_path = output_dir / "evaluation" / "golden_history.json"
+    full_evaluation_history_path = (
+        output_dir / "evaluation" / "full_evaluation_history.json"
+    )
 
     def checkpoint_training_state() -> dict[str, Any]:
+        error_score_state = getattr(backend, "error_score_state", None)
         return {
             "last_metrics": last_metrics,
             "initial_loss": initial_loss,
@@ -1032,7 +1153,13 @@ def train(
             "golden_evaluation": {
                 "history": golden_history,
                 "best": best_golden,
+                "full_history": full_evaluation_history,
             },
+            "error_weighted_sampling": (
+                None
+                if error_score_state is None
+                else error_score_state.checkpoint_state()
+            ),
         }
 
     for step in range(completed_steps, config.max_steps):
@@ -1167,7 +1294,13 @@ def train(
             "loss": float(loss.detach().cpu()),
             "rgb_l1": float(l1.detach().cpu()),
             "rgb_ssim_loss": float(ssim.detach().cpu()),
-            "rgb_local_ssim_loss": float(ssim.detach().cpu()),
+            "rgb_ssim_mode": config.rgb_ssim_mode,
+            "rgb_local_ssim_loss": None
+            if config.rgb_ssim_mode != "local_gaussian"
+            else float(ssim.detach().cpu()),
+            "rgb_global_ssim_loss": None
+            if config.rgb_ssim_mode != "global_moments"
+            else float(ssim.detach().cpu()),
             "lidar_range_loss": None
             if range_loss is None
             else float(range_loss.detach().cpu()),
@@ -1175,21 +1308,35 @@ def train(
             "lidar_range_l1_m": None
             if range_loss is None or config.lidar_range_loss_mode != "linear_l1"
             else float(range_loss.detach().cpu()),
+            "lidar_linear_aux_l1_m": None
+            if info["cloudstudio_linear_range_aux_loss"] is None
+            else float(info["cloudstudio_linear_range_aux_loss"].cpu()),
             "rig_pose_prior": None
             if pose_prior is None
             else float(pose_prior.detach().cpu()),
             "geometry_regularization": float(regularization["total"].detach().cpu()),
             "opacity_sparsity": float(regularization["opacity_sparsity"].detach().cpu()),
             "scale_upper": float(regularization["scale_upper"].detach().cpu()),
+            "scale_over_limit_fraction": float(
+                regularization["scale_over_limit_fraction"].detach().cpu()
+            ),
+            "scale_upper_tail_count": int(
+                regularization["scale_upper_tail_count"]
+            ),
             "anisotropy": float(regularization["anisotropy"].detach().cpu()),
         }
         if initial_loss is None:
             initial_loss = last_metrics["loss"]
         best_loss = min(best_loss, last_metrics["loss"])
         completed = step + 1
+        golden_artifact_due = config.golden_evaluation.enabled and (
+            completed % config.golden_evaluation.artifact_every == 0
+            or completed == config.max_steps
+        )
         golden_due = config.golden_evaluation.enabled and (
             completed % config.golden_evaluation.every == 0
             or completed == config.max_steps
+            or golden_artifact_due
         )
         golden_promoted = False
         if golden_due:
@@ -1200,12 +1347,14 @@ def train(
                 split_manifest=valset.split_manifest,
                 completed_steps=completed,
                 background_rgb=config.background_color,
+                artifact_output_dir=output_dir if golden_artifact_due else None,
             )
             golden_history.append(golden_result)
             golden_promoted = is_golden_improvement(
                 golden_result,
                 best_golden,
                 min_psnr_improvement_db=config.golden_evaluation.min_psnr_improvement_db,
+                max_depth_regression_m=config.golden_evaluation.max_depth_regression_m,
             )
             if golden_promoted:
                 best_golden = golden_result
@@ -1215,11 +1364,31 @@ def train(
                 history=golden_history,
                 best=best_golden,
             )
+        full_evaluation_due = config.golden_evaluation.enabled and (
+            completed % config.golden_evaluation.full_every == 0
+            or completed == config.max_steps
+        )
+        if full_evaluation_due:
+            full_evaluation_history.append(
+                evaluate_full_validation(
+                    backend=backend,
+                    params=params,
+                    dataset=valset,
+                    split_manifest=valset.split_manifest,
+                    completed_steps=completed,
+                    background_rgb=config.background_color,
+                )
+            )
+            _write_full_evaluation_history(
+                full_evaluation_history_path,
+                history=full_evaluation_history,
+            )
         checkpoint_due = (
             completed % config.checkpoint_every == 0
             or completed == config.max_steps
             or completed == controlled_stop_after_steps
             or golden_due
+            or full_evaluation_due
         )
         if checkpoint_due:
             mcmc_telemetry["last_snapshot"] = snapshot_gaussians(
@@ -1311,6 +1480,32 @@ def train(
         history=golden_history,
         best=best_golden,
     )
+    full_evaluation_artifact = _write_full_evaluation_history(
+        full_evaluation_history_path,
+        history=full_evaluation_history,
+    )
+    final_gaussian_count = len(params["means"])
+    selected_model_path = checkpoint_path
+    selected_model_step = config.max_steps
+    selected_checkpoint_training_state = checkpoint_training_state()
+    if best_golden is not None:
+        (
+            selected_model_step,
+            _,
+            _,
+            selected_checkpoint_training_state,
+        ) = load_checkpoint(
+            best_checkpoint_path,
+            expected_identity=checkpoint_identity,
+            params=params,
+            optimizers=optimizers,
+            map_location=config.device,
+            auxiliary_params=auxiliary_params,
+            auxiliary_optimizers=auxiliary_optimizers,
+        )
+        if selected_model_step != int(best_golden["completed_steps"]):
+            raise ValueError("best checkpoint step does not match golden selection")
+        selected_model_path = best_checkpoint_path
     frames = _save_evaluation_artifacts(
         backend=backend,
         params=params,
@@ -1344,6 +1539,21 @@ def train(
                 "best_checkpoint_path": None
                 if best_golden is None
                 else best_checkpoint_path.relative_to(output_dir).as_posix(),
+                "best_checkpoint_sha256": None
+                if best_golden is None
+                else _sha256_file(best_checkpoint_path),
+            },
+            "periodic_full_evaluation": {
+                "history_path": full_evaluation_history_path.relative_to(
+                    output_dir
+                ).as_posix(),
+                "history_sha256": full_evaluation_artifact[
+                    "full_evaluation_history_sha256"
+                ],
+                "evaluation_count": len(full_evaluation_history),
+                "latest": None
+                if not full_evaluation_history
+                else full_evaluation_history[-1],
             },
             "frames": frames,
             "training": {
@@ -1352,9 +1562,21 @@ def train(
                 "duration_seconds": duration_seconds,
                 "peak_vram_bytes": peak_vram_bytes,
                 "gaussian_count": len(params["means"]),
+                "final_gaussian_count": final_gaussian_count,
+                "model_path": selected_model_path.relative_to(output_dir).as_posix(),
+                "model_sha256": _sha256_file(selected_model_path),
+                "selected_checkpoint_step": selected_model_step,
+                "selected_checkpoint_kind": "best_golden"
+                if best_golden is not None
+                else "latest_final",
+                "latest_checkpoint_path": checkpoint_path.relative_to(
+                    output_dir
+                ).as_posix(),
+                "selected_checkpoint_last_metrics": selected_checkpoint_training_state.get(
+                    "last_metrics"
+                ),
                 "screen_clip_events": screen_clip_total,
                 "world_clamp_events": world_clamp_total,
-                "model_path": checkpoint_path.relative_to(output_dir).as_posix(),
                 "last_metrics": last_metrics,
                 "initial_loss": initial_loss,
                 "best_loss": best_loss,

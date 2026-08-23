@@ -2,11 +2,20 @@
 
 from __future__ import annotations
 
+import hashlib
 import math
 import os
 import tempfile
 from pathlib import Path
 from typing import Any
+
+from cloudstudio_3dgs.data.manifest import canonical_json_bytes
+
+
+_TOLERANCE_NORMALIZED_EVALUATION_HASHES = {
+    "golden_evaluation_sha256",
+    "full_evaluation_sha256",
+}
 
 
 def compare_checkpoint_payloads(
@@ -29,12 +38,41 @@ def compare_checkpoint_payloads(
     mismatches: list[str] = []
     mismatch_count = 0
     max_abs_error = 0.0
+    normalized_evaluation_hash_paths: set[str] = set()
 
     def record(message: str) -> None:
         nonlocal mismatch_count
         mismatch_count += 1
         if len(mismatches) < max_reported_mismatches:
             mismatches.append(message)
+
+    def validated_evaluation_hashes(value: Any, path: str) -> set[str]:
+        validated: set[str] = set()
+        if isinstance(value, dict):
+            for hash_key in _TOLERANCE_NORMALIZED_EVALUATION_HASHES:
+                if hash_key not in value:
+                    continue
+                expected = str(value[hash_key])
+                unsigned = dict(value)
+                unsigned.pop(hash_key, None)
+                actual = hashlib.sha256(canonical_json_bytes(unsigned)).hexdigest()
+                hash_path = f"{path}.{hash_key}"
+                if actual != expected:
+                    record(
+                        f"{hash_path}: signed evaluation hash mismatch "
+                        f"(expected {expected}, computed {actual})"
+                    )
+                else:
+                    validated.add(hash_path)
+            for key, child in value.items():
+                validated.update(validated_evaluation_hashes(child, f"{path}.{key}"))
+        elif isinstance(value, (list, tuple)):
+            for index, child in enumerate(value):
+                validated.update(validated_evaluation_hashes(child, f"{path}[{index}]"))
+        return validated
+
+    reference_validated_hashes = validated_evaluation_hashes(reference, "checkpoint")
+    resumed_validated_hashes = validated_evaluation_hashes(resumed, "checkpoint")
 
     def compare(left: Any, right: Any, path: str) -> None:
         nonlocal max_abs_error
@@ -69,7 +107,18 @@ def compare_checkpoint_payloads(
             for key in sorted(right_keys - left_keys, key=repr):
                 record(f"{path}.{key}: unexpected in resumed checkpoint")
             for key in sorted(left_keys & right_keys, key=repr):
-                compare(left[key], right[key], f"{path}.{key}")
+                child_path = f"{path}.{key}"
+                if (
+                    key in _TOLERANCE_NORMALIZED_EVALUATION_HASHES
+                    and child_path.startswith(
+                        "checkpoint.training_state.golden_evaluation."
+                    )
+                    and child_path in reference_validated_hashes
+                    and child_path in resumed_validated_hashes
+                ):
+                    normalized_evaluation_hash_paths.add(child_path)
+                    continue
+                compare(left[key], right[key], child_path)
             return
         if isinstance(left, (list, tuple)) or isinstance(right, (list, tuple)):
             if not isinstance(left, (list, tuple)) or not isinstance(
@@ -117,14 +166,22 @@ def compare_checkpoint_payloads(
         "max_abs_error": max_abs_error,
         "mismatch_count": mismatch_count,
         "mismatches": mismatches,
+        "tolerance_normalized_evaluation_hash_count": len(
+            normalized_evaluation_hash_paths
+        ),
+        "tolerance_normalized_evaluation_hash_paths": sorted(
+            normalized_evaluation_hash_paths
+        ),
         "compared_state": [
             "parameters_and_gaussian_order",
             "optimizer_state",
             "MCMC_strategy_state",
             "sampler_state",
             "training_telemetry",
+            "error_weighted_sampling_EMA_state",
             "auxiliary_state",
             "CPU_and_CUDA_RNG_state",
+            "signed_evaluation_history_semantics",
         ],
     }
 

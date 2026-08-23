@@ -1,0 +1,30 @@
+{
+  "cap_max": 1000000,
+  "checkpoint_every": 1000,
+  "depth_manifest": "G:/3dgs-work/gs2/depth/depth_manifest.json",
+  "depth_root": "G:/3dgs-work/gs2/depth",
+  "device": "cuda:0",
+  "factor": 4,
+  "golden_evaluation": {
+    "artifact_every": 1000,
+    "enabled": true,
+    "every": 1000,
+    "full_every": 4000,
+    "min_psnr_improvement_db": 0.001
+  },
+  "gsplat_lock": "../upstream/cloudstudio_trainer.lock.json",
+  "initialization_ply": "G:/3dgs-work/gs2/lidar_init/sparse_pc.ply",
+  "lidar_range_weight": 0.05,
+  "mask_manifest": "G:/3dgs-work/gs2/masks/mask_manifest.json",
+  "mask_root": "G:/3dgs-work/gs2/masks",
+  "max_steps": 8000,
+  "person_mask_manifest": "G:/3dgs-work/gs2/person_masks/person_mask_manifest.json",
+  "person_mask_root": "G:/3dgs-work/gs2/person_masks",
+  "recording_root": "G:/S1/2026-06-17_12-40-48gs2",
+  "require_person_masks": true,
+  "rgb_l1_weight": 0.8,
+  "rgb_ssim_weight": 0.2,
+  "seed": 42,
+  "split_manifest": "G:/3dgs-work/gs2/evaluation/split_manifest.json",
+  "dataset_manifest": "G:/3dgs-work/gs2/manifest/dataset_manifest.json"
+}

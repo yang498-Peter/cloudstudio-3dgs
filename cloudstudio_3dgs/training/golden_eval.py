@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 import hashlib
+import math
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 import numpy as np
+from PIL import Image
 
 from cloudstudio_3dgs.data.manifest import canonical_json_bytes
 from cloudstudio_3dgs.evaluation.image_metrics import (
@@ -16,27 +19,45 @@ from cloudstudio_3dgs.evaluation.image_metrics import (
 )
 
 
+MINIMUM_DEPTH_PREDICTION_COVERAGE = 0.9
+
+
 @dataclass(frozen=True)
 class GoldenEvaluationConfig:
     """Small, repeatable validation set used to choose a training checkpoint."""
 
     enabled: bool = True
     every: int = 1_000
+    full_every: int = 4_000
+    artifact_every: int = 1_000
     min_psnr_improvement_db: float = 0.001
+    max_depth_regression_m: float | None = None
 
     def validate(self) -> None:
-        if self.every <= 0:
-            raise ValueError("golden evaluation interval must be positive")
+        if self.every <= 0 or self.full_every <= 0 or self.artifact_every <= 0:
+            raise ValueError("golden/full/artifact evaluation intervals must be positive")
         if self.min_psnr_improvement_db < 0.0:
             raise ValueError("golden PSNR improvement threshold must be non-negative")
+        if self.max_depth_regression_m is not None and (
+            not math.isfinite(self.max_depth_regression_m)
+            or self.max_depth_regression_m < 0.0
+        ):
+            raise ValueError("golden depth regression guard must be finite and non-negative")
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        result = {
             "enabled": self.enabled,
             "every": self.every,
+            "full_every": self.full_every,
+            "artifact_every": self.artifact_every,
             "selection_metric": "masked_rgb_psnr_db_mean",
             "min_psnr_improvement_db": self.min_psnr_improvement_db,
         }
+        # Preserve the existing PSNR-only contract unless the geometry guard is
+        # explicitly requested.
+        if self.max_depth_regression_m is not None:
+            result["max_depth_regression_m"] = self.max_depth_regression_m
+        return result
 
 
 def golden_image_ids(split_manifest: dict[str, Any]) -> tuple[str, ...]:
@@ -56,25 +77,30 @@ def golden_image_ids(split_manifest: dict[str, Any]) -> tuple[str, ...]:
     return tuple(result)
 
 
-def evaluate_golden_views(
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        for chunk in iter(lambda: stream.read(4 * 1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _evaluate_views(
     *,
     backend: Any,
     params: Any,
     dataset: Any,
     split_manifest: dict[str, Any],
+    ordered_ids: tuple[str, ...],
     completed_steps: int,
+    evaluation_kind: str,
     background_rgb: Any | None = None,
+    artifact_output_dir: Path | None = None,
 ) -> dict[str, Any]:
-    """Measure PSNR/SSIM and optional range error without writing image assets.
-
-    The selection score is intentionally RGB-only: all runs have an RGB mask,
-    whereas sparse LiDAR availability varies by capture.  The depth result is
-    nevertheless recorded so a visually sharper but geometrically broken
-    checkpoint is visible before formal full-validation acceptance.
-    """
+    if evaluation_kind not in {"golden", "full"}:
+        raise ValueError("evaluation_kind must be golden or full")
     if completed_steps <= 0:
-        raise ValueError("golden evaluation requires at least one completed step")
-    ordered_ids = golden_image_ids(split_manifest)
+        raise ValueError("periodic evaluation requires at least one completed step")
     index_by_id = {str(image_id): index for index, image_id in enumerate(dataset.image_ids)}
     missing = [image_id for image_id in ordered_ids if image_id not in index_by_id]
     if missing:
@@ -84,6 +110,7 @@ def evaluate_golden_views(
     psnr_values: list[float] = []
     ssim_values: list[float] = []
     depth_mae_values: list[float] = []
+    depth_coverage_values: list[float] = []
     frames: list[dict[str, Any]] = []
     with torch.no_grad():
         for image_id in ordered_ids:
@@ -108,6 +135,43 @@ def evaluate_golden_views(
                 "ssim": float(ssim),
                 "depth": {"status": "NOT_RUN"},
             }
+            if artifact_output_dir is not None:
+                if any(token in image_id for token in ("/", "\\", "..")):
+                    raise ValueError(f"unsafe golden artifact image ID: {image_id!r}")
+                artifact_dir = (
+                    Path(artifact_output_dir)
+                    / "evaluation"
+                    / "periodic_golden"
+                    / f"step_{completed_steps:08d}"
+                )
+                artifact_dir.mkdir(parents=True, exist_ok=True)
+                render_path = artifact_dir / f"{image_id}_rendered.png"
+                reference_path = artifact_dir / f"{image_id}_reference.png"
+                mask_path = artifact_dir / f"{image_id}_mask.png"
+                rendered_u8 = (
+                    rendered.detach()
+                    .clamp(0.0, 1.0)
+                    .mul(255.0)
+                    .round()
+                    .to(torch.uint8)
+                    .cpu()
+                    .numpy()
+                )
+                Image.fromarray(rendered_u8).save(render_path, format="PNG", optimize=False)
+                Image.fromarray(np.asarray(sample.image, dtype=np.uint8)).save(
+                    reference_path, format="PNG", optimize=False
+                )
+                Image.fromarray(np.asarray(sample.rgb_mask, dtype=np.uint8) * 255).save(
+                    mask_path, format="PNG", optimize=False
+                )
+                frame["artifacts"] = {
+                    "rendered_path": render_path.relative_to(artifact_output_dir).as_posix(),
+                    "rendered_sha256": _sha256_file(render_path),
+                    "reference_path": reference_path.relative_to(artifact_output_dir).as_posix(),
+                    "reference_sha256": _sha256_file(reference_path),
+                    "mask_path": mask_path.relative_to(artifact_output_dir).as_posix(),
+                    "mask_sha256": _sha256_file(mask_path),
+                }
             if sample.depth_range_m is not None:
                 assert sample.depth_mask is not None and sample.depth_confidence is not None
                 if rendered_range is None:
@@ -118,6 +182,9 @@ def evaluate_golden_views(
                         sample.depth_range_m,
                         sample.depth_mask,
                         confidence=sample.depth_confidence,
+                        minimum_prediction_coverage=(
+                            MINIMUM_DEPTH_PREDICTION_COVERAGE
+                        ),
                     )
                 except ValueError as error:
                     # Early/mid-training renders legitimately miss coverage at
@@ -127,13 +194,17 @@ def evaluate_golden_views(
                     frame["depth"] = {"status": "UNMEASURABLE", "reason": str(error)}
                 else:
                     depth_mae_values.append(float(depth["mae_m"]))
+                    depth_coverage_values.append(
+                        float(depth["prediction_coverage_fraction"])
+                    )
                     frame["depth"] = {"status": "MEASURED", **depth}
             frames.append(frame)
 
     finite_psnr = [value for value in psnr_values if np.isfinite(value)]
     result: dict[str, Any] = {
         "schema_version": 1,
-        "algorithm_version": "golden_validation_v1",
+        "algorithm_version": f"{evaluation_kind}_validation_v3",
+        "evaluation_kind": evaluation_kind,
         "completed_steps": int(completed_steps),
         "split_manifest_sha256": str(split_manifest["split_manifest_sha256"]),
         "image_ids": list(ordered_ids),
@@ -141,17 +212,83 @@ def evaluate_golden_views(
         "summary": {
             "selection_metric": "masked_rgb_psnr_db_mean",
             "psnr_db_mean": None if not finite_psnr else float(np.mean(finite_psnr)),
+            "psnr_db_p10": None
+            if not finite_psnr
+            else float(np.percentile(finite_psnr, 10)),
             "perfect_psnr_frame_count": int(len(psnr_values) - len(finite_psnr)),
             "ssim_mean": float(np.mean(ssim_values)),
             "depth_mae_m_mean": None
             if not depth_mae_values
             else float(np.mean(depth_mae_values)),
+            "depth_prediction_coverage_fraction_min": None
+            if not depth_coverage_values
+            else float(np.min(depth_coverage_values)),
+            "depth_prediction_coverage_fraction_mean": None
+            if not depth_coverage_values
+            else float(np.mean(depth_coverage_values)),
+            "minimum_depth_prediction_coverage_gate": (
+                MINIMUM_DEPTH_PREDICTION_COVERAGE
+            ),
         },
     }
-    result["golden_evaluation_sha256"] = hashlib.sha256(
+    signature_key = (
+        "golden_evaluation_sha256"
+        if evaluation_kind == "golden"
+        else "full_evaluation_sha256"
+    )
+    result[signature_key] = hashlib.sha256(
         canonical_json_bytes(result)
     ).hexdigest()
     return result
+
+
+def evaluate_golden_views(
+    *,
+    backend: Any,
+    params: Any,
+    dataset: Any,
+    split_manifest: dict[str, Any],
+    completed_steps: int,
+    background_rgb: Any | None = None,
+    artifact_output_dir: Path | None = None,
+) -> dict[str, Any]:
+    """Evaluate signed golden views and optionally persist visual evidence."""
+    return _evaluate_views(
+        backend=backend,
+        params=params,
+        dataset=dataset,
+        split_manifest=split_manifest,
+        ordered_ids=golden_image_ids(split_manifest),
+        completed_steps=completed_steps,
+        evaluation_kind="golden",
+        background_rgb=background_rgb,
+        artifact_output_dir=artifact_output_dir,
+    )
+
+
+def evaluate_full_validation(
+    *,
+    backend: Any,
+    params: Any,
+    dataset: Any,
+    split_manifest: dict[str, Any],
+    completed_steps: int,
+    background_rgb: Any | None = None,
+) -> dict[str, Any]:
+    """Evaluate every validation image at configured intermediate steps."""
+    expected = tuple(str(value) for value in split_manifest["splits"]["val"])
+    if tuple(str(value) for value in dataset.image_ids) != expected:
+        raise ValueError("full validation dataset order differs from split manifest")
+    return _evaluate_views(
+        backend=backend,
+        params=params,
+        dataset=dataset,
+        split_manifest=split_manifest,
+        ordered_ids=expected,
+        completed_steps=completed_steps,
+        evaluation_kind="full",
+        background_rgb=background_rgb,
+    )
 
 
 def is_golden_improvement(
@@ -159,14 +296,49 @@ def is_golden_improvement(
     best: dict[str, Any] | None,
     *,
     min_psnr_improvement_db: float,
+    max_depth_regression_m: float | None = None,
 ) -> bool:
-    """Return whether a finite candidate clears the configured promotion bar."""
+    """Return whether a candidate clears appearance and optional depth bars."""
     candidate_score = candidate["summary"]["psnr_db_mean"]
     if candidate_score is None:
         return False
+    candidate_depth = None
+    if max_depth_regression_m is not None:
+        depth_frames = [
+            frame.get("depth", {})
+            for frame in candidate.get("frames", [])
+            if frame.get("depth", {}).get("status") != "NOT_RUN"
+        ]
+        if not depth_frames or any(
+            frame.get("status") != "MEASURED" for frame in depth_frames
+        ):
+            return False
+        value = candidate["summary"].get("depth_mae_m_mean")
+        if value is None or not math.isfinite(float(value)):
+            return False
+        candidate_depth = float(value)
     if best is None or best["summary"]["psnr_db_mean"] is None:
         return True
-    return float(candidate_score) >= float(best["summary"]["psnr_db_mean"]) + min_psnr_improvement_db
+    if float(candidate_score) < (
+        float(best["summary"]["psnr_db_mean"]) + min_psnr_improvement_db
+    ):
+        return False
+    if max_depth_regression_m is None:
+        return True
+    best_depth_frames = [
+        frame.get("depth", {})
+        for frame in best.get("frames", [])
+        if frame.get("depth", {}).get("status") != "NOT_RUN"
+    ]
+    if not best_depth_frames or any(
+        frame.get("status") != "MEASURED" for frame in best_depth_frames
+    ):
+        return False
+    best_depth_value = best["summary"].get("depth_mae_m_mean")
+    if best_depth_value is None or not math.isfinite(float(best_depth_value)):
+        return False
+    assert candidate_depth is not None
+    return candidate_depth <= float(best_depth_value) + max_depth_regression_m
 
 
 def verify_golden_history(payload: dict[str, Any]) -> str:
@@ -189,8 +361,15 @@ def verify_golden_history(payload: dict[str, Any]) -> str:
     config = GoldenEvaluationConfig(
         enabled=bool(configuration.get("enabled")),
         every=int(configuration.get("every", 0)),
+        full_every=int(configuration.get("full_every", 0)),
+        artifact_every=int(configuration.get("artifact_every", 0)),
         min_psnr_improvement_db=float(
             configuration.get("min_psnr_improvement_db", -1.0)
+        ),
+        max_depth_regression_m=(
+            None
+            if configuration.get("max_depth_regression_m") is None
+            else float(configuration["max_depth_regression_m"])
         ),
     )
     config.validate()
@@ -217,6 +396,7 @@ def verify_golden_history(payload: dict[str, Any]) -> str:
             record,
             best,
             min_psnr_improvement_db=config.min_psnr_improvement_db,
+            max_depth_regression_m=config.max_depth_regression_m,
         ):
             best = record
     if not config.enabled and history:
@@ -224,4 +404,38 @@ def verify_golden_history(payload: dict[str, Any]) -> str:
     recorded_best = payload.get("best")
     if recorded_best != best:
         raise ValueError("golden history best record does not match promotion rule")
+    return actual
+
+
+def verify_full_evaluation_history(payload: dict[str, Any]) -> str:
+    """Verify periodic full-validation records and their strict step order."""
+    expected = str(payload.get("full_evaluation_history_sha256", ""))
+    if not expected:
+        raise ValueError("full evaluation history has no SHA256")
+    unsigned = dict(payload)
+    unsigned.pop("full_evaluation_history_sha256", None)
+    actual = hashlib.sha256(canonical_json_bytes(unsigned)).hexdigest()
+    if actual != expected:
+        raise ValueError(
+            "full evaluation history SHA256 mismatch: "
+            f"expected {expected}, computed {actual}"
+        )
+    if payload.get("schema_version") != 1:
+        raise ValueError("unsupported full evaluation history schema")
+    history = payload.get("history")
+    if not isinstance(history, list):
+        raise ValueError("full evaluation history records are invalid")
+    previous_step = 0
+    for record in history:
+        if not isinstance(record, dict) or record.get("evaluation_kind") != "full":
+            raise ValueError("full evaluation history contains an invalid record")
+        record_sha = str(record.get("full_evaluation_sha256", ""))
+        unsigned_record = dict(record)
+        unsigned_record.pop("full_evaluation_sha256", None)
+        if not record_sha or hashlib.sha256(canonical_json_bytes(unsigned_record)).hexdigest() != record_sha:
+            raise ValueError("full evaluation record SHA256 mismatch")
+        step = int(record.get("completed_steps", 0))
+        if step <= previous_step:
+            raise ValueError("full evaluation history steps are not strictly increasing")
+        previous_step = step
     return actual

@@ -173,18 +173,28 @@ def masked_depth_metrics(
     valid_mask: np.ndarray,
     *,
     confidence: np.ndarray | None = None,
+    minimum_prediction_coverage: float = 1.0,
 ) -> dict[str, float | int]:
     predicted = np.asarray(prediction_range_m, dtype=np.float64)
     expected = np.asarray(target_range_m, dtype=np.float64)
     valid = np.asarray(valid_mask, dtype=bool)
     if predicted.shape != expected.shape or valid.shape != expected.shape:
         raise ValueError("depth prediction, target, and mask shapes must match")
+    if not 0.0 < minimum_prediction_coverage <= 1.0:
+        raise ValueError("minimum depth prediction coverage must be in (0, 1]")
     target_valid = valid & np.isfinite(expected) & (expected > 0.0)
     if not np.any(target_valid):
         raise ValueError("depth metric has no valid target pixels")
-    if np.any(~np.isfinite(predicted[target_valid])) or np.any(predicted[target_valid] <= 0.0):
-        raise ValueError("rendered depth is missing or invalid at supervised pixels")
-    error = predicted[target_valid] - expected[target_valid]
+    prediction_valid = target_valid & np.isfinite(predicted) & (predicted > 0.0)
+    target_count = int(np.count_nonzero(target_valid))
+    predicted_count = int(np.count_nonzero(prediction_valid))
+    coverage = predicted_count / target_count
+    if coverage < minimum_prediction_coverage:
+        raise ValueError(
+            "rendered depth coverage at supervised pixels is below the gate: "
+            f"{coverage:.6f} < {minimum_prediction_coverage:.6f}"
+        )
+    error = predicted[prediction_valid] - expected[prediction_valid]
     absolute = np.abs(error)
     if confidence is None:
         weights = np.ones(len(error), dtype=np.float64)
@@ -192,14 +202,17 @@ def masked_depth_metrics(
         confidence_array = np.asarray(confidence, dtype=np.float64)
         if confidence_array.shape != expected.shape:
             raise ValueError("depth confidence shape does not match target")
-        weights = confidence_array[target_valid]
+        weights = confidence_array[prediction_valid]
         if np.any(~np.isfinite(weights)) or np.any(weights <= 0.0):
             raise ValueError("depth confidence must be finite and positive at valid pixels")
     weight_sum = float(np.sum(weights))
     mae = float(np.sum(weights * absolute) / weight_sum)
     rmse = float(np.sqrt(np.sum(weights * error * error) / weight_sum))
     return {
-        "valid_pixels": int(len(error)),
+        "valid_pixels": predicted_count,
+        "target_valid_pixels": target_count,
+        "missing_prediction_pixels": target_count - predicted_count,
+        "prediction_coverage_fraction": float(coverage),
         "mae_m": mae,
         "rmse_m": rmse,
         "absolute_error_p95_m": float(np.percentile(absolute, 95)),
