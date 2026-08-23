@@ -55,6 +55,10 @@ from cloudstudio_3dgs.training.rig_pose import (
     disabled_pose_refinement_report,
 )
 from cloudstudio_3dgs.training.error_weighted_mcmc import ErrorScoreConfig
+from cloudstudio_3dgs.training.contribution_attribution import (
+    ContributionConfig,
+    compute_contribution_scores,
+)
 from cloudstudio_3dgs.training.ppisp import PpispConfig, PpispCorrector
 from cloudstudio_3dgs.training.lidar_normals import (
     LidarNormalAnchors,
@@ -154,6 +158,8 @@ class TrainerConfig:
     )
     error_weighted_sampling: ErrorScoreConfig = field(default_factory=ErrorScoreConfig)
     ppisp: PpispConfig = field(default_factory=PpispConfig)
+    contribution: ContributionConfig = field(default_factory=ContributionConfig)
+    contribution_every: int = 5
     lidar_normal_alignment: NormalAlignmentConfig = field(
         default_factory=NormalAlignmentConfig
     )
@@ -216,6 +222,10 @@ class TrainerConfig:
         if not isinstance(ppisp_value, dict):
             raise ValueError("ppisp must be an object")
         ppisp = PpispConfig(**ppisp_value)
+        contribution_value = value.get("contribution", {})
+        if not isinstance(contribution_value, dict):
+            raise ValueError("contribution must be an object")
+        contribution_config = ContributionConfig(**contribution_value)
         normal_value = value.get("lidar_normal_alignment", {})
         if not isinstance(normal_value, dict):
             raise ValueError("lidar_normal_alignment must be an object")
@@ -248,6 +258,7 @@ class TrainerConfig:
                 "decoupled_ssim",
                 "sh_regularization_weight",
                 "pinhole_rasterize_mode",
+                "contribution_every",
                 "color_model",
                 "sh_degree",
                 "background_color",
@@ -273,6 +284,7 @@ class TrainerConfig:
             golden_evaluation=golden_evaluation,
             error_weighted_sampling=error_weighted_sampling,
             ppisp=ppisp,
+            contribution=contribution_config,
             lidar_normal_alignment=lidar_normal_alignment,
             **paths,
             **options,
@@ -334,6 +346,9 @@ class TrainerConfig:
         if self.pinhole_rasterize_mode not in ("classic", "antialiased"):
             raise ValueError("pinhole_rasterize_mode must be 'classic' or 'antialiased'")
         self.ppisp.validate()
+        self.contribution.validate()
+        if self.contribution_every <= 0:
+            raise ValueError("contribution_every must be positive")
         self.lidar_normal_alignment.validate()
         if self.ppisp.enabled and self.exposure_compensation.enabled:
             raise ValueError(
@@ -534,6 +549,10 @@ class TrainerConfig:
             "rig_pose_refinement": self.rig_pose_refinement.to_dict(),
             "exposure_compensation": self.exposure_compensation.to_dict(),
             "ppisp": self.ppisp.to_dict(),
+            "contribution": {
+                **self.contribution.to_dict(),
+                "every": self.contribution_every,
+            },
             "lidar_normal_alignment": self.lidar_normal_alignment.to_dict(),
             "geometry_regularization": self.geometry_regularization.to_dict(),
             "golden_evaluation": self.golden_evaluation.to_dict(),
@@ -1355,6 +1374,24 @@ def train(
             radii = (
                 radii.reshape(-1, 2) if radii.shape[-1] == 2 else radii.reshape(-1)
             )
+            contribution = None
+            if (
+                getattr(config.error_weighted_sampling, "aggregation", "center")
+                == "contribution"
+                and step % max(1, config.contribution_every) == 0
+            ):
+                # One extra rasterization of a non-learnable scalar channel
+                # gives the true alpha/transmittance-weighted error per
+                # Gaussian, which the footprint proxy cannot see. Cadenced,
+                # because the EMA already spans thousands of steps.
+                contribution = compute_contribution_scores(
+                    backend,
+                    params,
+                    sample,
+                    error_map,
+                    config=config.contribution,
+                    c2w_override=c2w_override,
+                )
             backend.error_score_state.update(
                 info["means2d"].detach().reshape(-1, 2),
                 radii,
@@ -1365,6 +1402,7 @@ def train(
                 opacities=info["opacities"].detach().reshape(-1)
                 if "opacities" in info
                 else None,
+                contribution=contribution,
             )
             # Advance the per-Gaussian lifecycle clock before the refinement
             # below can grow/relocate: ages tick, and rows born in this step

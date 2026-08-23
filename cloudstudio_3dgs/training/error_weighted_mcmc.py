@@ -72,8 +72,10 @@ class ErrorScoreConfig(_CoreErrorScoreConfig):
 
     def validate(self) -> None:
         super().validate()
-        if self.aggregation not in ("center", "footprint"):
-            raise ValueError('aggregation must be "center" or "footprint"')
+        if self.aggregation not in ("center", "footprint", "contribution"):
+            raise ValueError(
+                'aggregation must be "center", "footprint" or "contribution"'
+            )
         if int(self.footprint_radius_px) < 1:
             raise ValueError("footprint_radius_px must be a positive integer")
 
@@ -147,6 +149,7 @@ class ErrorScoreState:
         width: int,
         conics: Optional[Tensor] = None,
         opacities: Optional[Tensor] = None,
+        contribution: Optional[Tensor] = None,
     ) -> None:
         """EMA-update scores of visible Gaussians from the current view's error map.
 
@@ -193,6 +196,23 @@ class ErrorScoreState:
         if vis.numel() == 0:
             return
         aggregation = str(getattr(self.config, "aggregation", "center"))
+        if aggregation == "contribution" and contribution is not None:
+            # The caller already rendered the alpha/transmittance-weighted
+            # error per Gaussian (contribution_attribution); EMA it directly.
+            score = torch.as_tensor(contribution).reshape(-1)
+            if int(score.shape[0]) != n:
+                raise ValueError("contribution count does not match means2d")
+            if self.scores.device != score.device:
+                self.scores = self.scores.to(score.device)
+            score = score.to(self.scores.dtype)
+            decay = float(self.config.ema_decay)
+            finite = torch.isfinite(score[vis])
+            rows = vis[finite]
+            if rows.numel():
+                self.scores[rows] = (
+                    decay * self.scores[rows] + (1.0 - decay) * score[rows]
+                )
+            return
         if aggregation == "footprint" and conics is not None:
             self._update_footprint(
                 means2d,
