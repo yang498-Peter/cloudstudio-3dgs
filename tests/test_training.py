@@ -1253,6 +1253,37 @@ class RenderScaleContractTests(unittest.TestCase):
         )
         self.assertEqual(noop["clipped_count"], 0)
 
+    def test_ppisp_config_is_exclusive_with_scalar_exposure(self) -> None:
+        base = dict(
+            run_id="run",
+            dataset_manifest=Path("d.json"),
+            recording_root=Path("r"),
+            mask_manifest=Path("m.json"),
+            mask_root=Path("m"),
+            split_manifest=Path("s.json"),
+            initialization_ply=Path("i.ply"),
+            output_dir=Path("o"),
+            gsplat_lock=Path("l.json"),
+        )
+        from cloudstudio_3dgs.training.ppisp import PpispConfig
+
+        config = TrainerConfig(
+            **base,
+            ppisp=PpispConfig(enabled=True),
+            exposure_compensation=ExposureCompensationConfig(enabled=True),
+        )
+        with self.assertRaisesRegex(ValueError, "enable only one"):
+            config.validate()
+        config = TrainerConfig(
+            **base,
+            ppisp=PpispConfig(enabled=True),
+            decoupled_ssim=True,
+        )
+        with self.assertRaisesRegex(ValueError, "scalar exposure gain"):
+            config.validate()
+        solo = TrainerConfig(**base, ppisp=PpispConfig(enabled=True))
+        self.assertTrue(solo.contract_dict()["ppisp"]["enabled"])
+
     def test_metric_geometry_regularization_only_hits_bad_geometry(self) -> None:
         import torch
 

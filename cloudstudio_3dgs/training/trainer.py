@@ -55,6 +55,7 @@ from cloudstudio_3dgs.training.rig_pose import (
     disabled_pose_refinement_report,
 )
 from cloudstudio_3dgs.training.error_weighted_config import ErrorScoreConfig
+from cloudstudio_3dgs.training.ppisp import PpispConfig, PpispCorrector
 from cloudstudio_3dgs.training.regularization import (
     GeometryRegularizationConfig,
     clip_oversized_gaussians,
@@ -147,6 +148,7 @@ class TrainerConfig:
         default_factory=GoldenEvaluationConfig
     )
     error_weighted_sampling: ErrorScoreConfig = field(default_factory=ErrorScoreConfig)
+    ppisp: PpispConfig = field(default_factory=PpispConfig)
     learning_rates: dict[str, float] = field(
         default_factory=lambda: {
             "means": 1.6e-4,
@@ -202,6 +204,10 @@ class TrainerConfig:
         if not isinstance(error_sampling_value, dict):
             raise ValueError("error_weighted_sampling must be an object")
         error_weighted_sampling = ErrorScoreConfig(**error_sampling_value)
+        ppisp_value = value.get("ppisp", {})
+        if not isinstance(ppisp_value, dict):
+            raise ValueError("ppisp must be an object")
+        ppisp = PpispConfig(**ppisp_value)
         scale_value = value.get("metric_scale_calibration", {})
         if not isinstance(scale_value, dict):
             raise ValueError("metric_scale_calibration must be an object")
@@ -254,6 +260,7 @@ class TrainerConfig:
             geometry_regularization=regularization,
             golden_evaluation=golden_evaluation,
             error_weighted_sampling=error_weighted_sampling,
+            ppisp=ppisp,
             **paths,
             **options,
         )
@@ -313,6 +320,15 @@ class TrainerConfig:
             raise ValueError("sh_regularization_weight must be non-negative")
         if self.pinhole_rasterize_mode not in ("classic", "antialiased"):
             raise ValueError("pinhole_rasterize_mode must be 'classic' or 'antialiased'")
+        self.ppisp.validate()
+        if self.ppisp.enabled and self.exposure_compensation.enabled:
+            raise ValueError(
+                "ppisp replaces scalar exposure compensation; enable only one"
+            )
+        if self.ppisp.enabled and self.decoupled_ssim:
+            raise ValueError(
+                "decoupled_ssim currently supports only the scalar exposure gain"
+            )
         expected_lrs = {"means", "scales", "quats", "opacities", "colors"}
         if set(self.learning_rates) != expected_lrs:
             raise ValueError(f"learning_rates must contain exactly {sorted(expected_lrs)}")
@@ -503,6 +519,7 @@ class TrainerConfig:
             "strategy": strategy_contract,
             "rig_pose_refinement": self.rig_pose_refinement.to_dict(),
             "exposure_compensation": self.exposure_compensation.to_dict(),
+            "ppisp": self.ppisp.to_dict(),
             "geometry_regularization": self.geometry_regularization.to_dict(),
             "golden_evaluation": self.golden_evaluation.to_dict(),
             "viewer": False,
@@ -675,6 +692,7 @@ def _render_supervision_loss(
     config: TrainerConfig,
     c2w_override: Any | None = None,
     rgb_gain: Any | None = None,
+    ppisp: Any | None = None,
     active_sh_degree: int | None = None,
 ) -> tuple[Any, Any, Any, Any, dict[str, Any]]:
     has_range = "range_m" in tensors and (
@@ -689,6 +707,20 @@ def _render_supervision_loss(
         background_rgb=config.background_color,
     )
     raw_rendered = rendered
+    if ppisp is not None:
+        # Per-camera ISP: exposure -> vignetting (on ORIGINAL sensor coords
+        # for warped faces) -> color, applied after background compositing and
+        # before the photometric losses. Validation renders stay at identity.
+        coords = getattr(sample, "sensor_pixel_coords", None)
+        pixel_coords = None
+        if coords is not None:
+            pixel_coords = ppisp.exposure_params.new_tensor(coords)
+        rendered = ppisp.apply(
+            rendered,
+            sample.image_id.split("::")[0],
+            pixel_coords=pixel_coords,
+            resolution=getattr(sample, "sensor_resolution", None),
+        )
     if rgb_gain is not None:
         # Per-frame auto-exposure compensation: scale the render toward the
         # frame's brightness for the photometric losses only. Geometry (range)
@@ -949,6 +981,7 @@ def train(
         trainset = FaceCacheDataset(
             face_manifest_path=config.face_cache_manifest,
             cache_root=config.face_cache_root,
+            dataset_manifest_path=config.dataset_manifest,
         )
     else:
         trainset = S1TrainingDataset(
@@ -1071,6 +1104,24 @@ def train(
         exposure_optimizer = exposure.make_optimizer()
         auxiliary_params["exposure_log_gains"] = exposure.log_gains
         auxiliary_optimizers["exposure_log_gains"] = exposure_optimizer
+    ppisp = None
+    ppisp_optimizer = None
+    if config.ppisp.enabled:
+        # Per-camera ISP correction (exposure/vignetting/color): the physical
+        # generalisation of the scalar gain; mutual exclusion is validated.
+        ppisp = PpispCorrector(
+            getattr(trainset, "exposure_image_ids", trainset.image_ids),
+            config=config.ppisp,
+            device=config.device,
+            camera_by_image=trainset.camera_id_by_image,
+        )
+        ppisp_optimizer = ppisp.make_optimizer()
+        auxiliary_params["ppisp_exposure"] = ppisp.exposure_params
+        auxiliary_params["ppisp_vignetting"] = ppisp.vignetting_params
+        auxiliary_params["ppisp_color"] = ppisp.color_params
+        if ppisp.crf_params is not None:
+            auxiliary_params["ppisp_crf"] = ppisp.crf_params
+        auxiliary_optimizers["ppisp"] = ppisp_optimizer
     completed_steps = 0
     screen_clip_total = 0
     world_clamp_total = 0
@@ -1193,6 +1244,7 @@ def train(
             rgb_gain=None
             if exposure is None
             else exposure.gain(sample.image_id.split("::")[0]),
+            ppisp=ppisp,
             active_sh_degree=active_sh_degree,
         )
         pose_prior = None
@@ -1201,6 +1253,8 @@ def train(
             loss = loss + pose_prior
         if exposure is not None:
             loss = loss + exposure.prior_loss()
+        if ppisp is not None:
+            loss = loss + ppisp.regularization_loss()
         if config.sh_regularization_weight > 0.0 and "shN" in params:
             # Weak pull on the view-dependent SH bands: the 30k diagnosis
             # measured shN energy doubling over long training while validation
@@ -1247,6 +1301,9 @@ def train(
             exposure_optimizer.step()
             exposure_optimizer.zero_grad(set_to_none=True)
             exposure.project_zero_mean()
+        if ppisp_optimizer is not None:
+            ppisp_optimizer.step()
+            ppisp_optimizer.zero_grad(set_to_none=True)
         if getattr(backend, "error_score_state", None) is not None:
             # Feed the per-pixel residual of this step's view into the
             # relocation/densification sampling scores while the projected
@@ -1530,6 +1587,7 @@ def train(
             "metric_scale_calibration": scale_calibration,
             "rig_pose_refinement": pose_report,
             "exposure_compensation": None if exposure is None else exposure.report(),
+            "ppisp": None if ppisp is None else ppisp.report(),
             "golden_evaluation": {
                 "configuration": config.golden_evaluation.to_dict(),
                 "history_path": golden_history_path.relative_to(output_dir).as_posix(),

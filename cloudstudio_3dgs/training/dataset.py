@@ -71,6 +71,12 @@ class TrainingSample:
     # range; this per-pixel factor (||K^-1 [u,v,1]||) converts z to range.
     # None means the renderer already outputs ray range (the fisheye path).
     depth_to_range_scale: np.ndarray | None = None
+    # Absolute pixel-center coordinates on the ORIGINAL fisheye sensor for
+    # every pixel of this sample ([H, W, 2] x/y), plus that sensor's (w, h).
+    # Faces need these for spatially varying corrections (PPISP vignetting):
+    # the vignetting field lives on the sensor, not on the warped face.
+    sensor_pixel_coords: np.ndarray | None = None
+    sensor_resolution: tuple[int, int] | None = None
 
 
 class S1TrainingDataset:

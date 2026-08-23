@@ -133,6 +133,7 @@ class FaceCacheDataset:
         cache_root: Path,
         *,
         verify_artifacts: bool = True,
+        dataset_manifest_path: Path | None = None,
     ) -> None:
         face_manifest_path = Path(face_manifest_path)
         self.manifest = json.loads(face_manifest_path.read_text(encoding="utf-8"))
@@ -140,6 +141,31 @@ class FaceCacheDataset:
         self.cache_root = Path(cache_root)
         self.verify_artifacts = verify_artifacts
         self._verified_paths: set[Path] = set()
+        # Sensor pixel coordinates (PPISP vignetting lives on the fisheye
+        # sensor, not on the warped face) need the source camera intrinsics;
+        # supplied optionally via the base dataset manifest.
+        self._sensor_cameras: dict[str, dict[str, Any]] = {}
+        self._sensor_coords_cache: dict[tuple[str, str], np.ndarray] = {}
+        if dataset_manifest_path is not None:
+            base = json.loads(Path(dataset_manifest_path).read_text(encoding="utf-8"))
+            for camera in base.get("cameras", []):
+                intrinsic = camera["intrinsic"]
+                params = camera["distortion"]["params"]
+                self._sensor_cameras[str(camera["camera_id"])] = {
+                    "K": np.array(
+                        [
+                            [intrinsic["fl_x"], 0.0, intrinsic["cx"]],
+                            [0.0, intrinsic["fl_y"], intrinsic["cy"]],
+                            [0.0, 0.0, 1.0],
+                        ],
+                        dtype=np.float64,
+                    ),
+                    "radial": np.array(
+                        [params["k1"], params["k2"], params["k3"], params["k4"]],
+                        dtype=np.float64,
+                    ),
+                    "resolution": (int(camera["width"]), int(camera["height"])),
+                }
         # depth_to_range_scale is pure face geometry: cache one float32 map per
         # (camera_id, face_id) for the whole process lifetime.
         self._range_scale_cache: dict[tuple[str, str], np.ndarray] = {}
@@ -278,6 +304,25 @@ class FaceCacheDataset:
             )
         self._verified_paths.add(path)
 
+    def _sensor_pixel_coords(self, camera_id: str, face: FaceSpec) -> np.ndarray | None:
+        """Absolute fisheye pixel-center coordinates for every face pixel."""
+        if camera_id not in self._sensor_cameras:
+            return None
+        key = (camera_id, str(face.face_id))
+        cached = self._sensor_coords_cache.get(key)
+        if cached is None:
+            from cloudstudio_3dgs.data.face_warp import build_face_warp_grid
+
+            camera = self._sensor_cameras[camera_id]
+            grid = build_face_warp_grid(camera["K"], camera["radial"], face)
+            # The grid stores array-index coordinates; +0.5 restores the
+            # pixel-center convention PPISP expects.
+            cached = np.stack(
+                [grid.u + 0.5, grid.v + 0.5], axis=-1
+            ).astype(np.float32)
+            self._sensor_coords_cache[key] = cached
+        return cached
+
     def _depth_to_range_scale(self, camera_id: str, face: FaceSpec) -> np.ndarray:
         key = (camera_id, face.face_id)
         cached = self._range_scale_cache.get(key)
@@ -365,4 +410,10 @@ class FaceCacheDataset:
             height=face.height,
             camera_model="pinhole",
             depth_to_range_scale=self._depth_to_range_scale(camera_id, face),
+            sensor_pixel_coords=self._sensor_pixel_coords(camera_id, face),
+            sensor_resolution=(
+                self._sensor_cameras[camera_id]["resolution"]
+                if camera_id in self._sensor_cameras
+                else None
+            ),
         )
