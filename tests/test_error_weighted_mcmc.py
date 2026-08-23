@@ -355,5 +355,278 @@ class StrategyWiringTests(unittest.TestCase):
         self.assertEqual(weighted_relocate.call_count, 0)
 
 
+def _footprint_oracle(mean, conic, opacity, err_map, radius_cap, r_eff):
+    """Naive per-pixel reference implementation of the v2 aggregation.
+
+    Loops the fixed (2R+1)^2 window, drops offsets beyond ``r_eff`` and
+    pixels outside the image, weights by ``opacity * exp(-0.5 * d^T C d)``
+    around the true sub-pixel center, and normalizes. Returns None when the
+    weight mass is below the 1e-8 skip threshold.
+    """
+    import math
+
+    height, width = err_map.shape
+    cx, cy = int(round(mean[0])), int(round(mean[1]))
+    a, b, c = conic
+    numerator = 0.0
+    denominator = 0.0
+    for dy in range(-radius_cap, radius_cap + 1):
+        for dx in range(-radius_cap, radius_cap + 1):
+            if abs(dx) > r_eff or abs(dy) > r_eff:
+                continue
+            x, y = cx + dx, cy + dy
+            if not (0 <= x < width and 0 <= y < height):
+                continue
+            ddx, ddy = x - mean[0], y - mean[1]
+            quad = a * ddx * ddx + 2.0 * b * ddx * ddy + c * ddy * ddy
+            weight = opacity * math.exp(-0.5 * quad)
+            numerator += weight * float(err_map[y, x])
+            denominator += weight
+    if denominator < 1e-8:
+        return None
+    return numerator / denominator
+
+
+class FootprintConfigTests(unittest.TestCase):
+    def setUp(self) -> None:
+        _requires_module(self)
+
+    def test_defaults_extend_center_sampling(self) -> None:
+        config = ErrorScoreConfig()
+        config.validate()
+        self.assertEqual(config.aggregation, "center")
+        self.assertEqual(config.footprint_radius_px, 4)
+        # to_dict schema is intentionally unchanged (4 core fields).
+        self.assertEqual(
+            set(config.to_dict()),
+            {"enabled", "ema_decay", "score_power", "min_score_floor"},
+        )
+
+    def test_validate_accepts_footprint_and_rejects_bad_values(self) -> None:
+        ErrorScoreConfig(aggregation="footprint", footprint_radius_px=2).validate()
+        for bad in (
+            ErrorScoreConfig(aggregation="alpha_t"),
+            ErrorScoreConfig(aggregation=""),
+            ErrorScoreConfig(footprint_radius_px=0),
+            ErrorScoreConfig(footprint_radius_px=-3),
+        ):
+            with self.assertRaises(ValueError):
+                bad.validate()
+
+
+class FootprintAggregationTests(unittest.TestCase):
+    """v2 conic-weighted footprint aggregation (all CPU, no rasterizer)."""
+
+    def setUp(self) -> None:
+        _requires_module(self)
+
+    def _v2_config(self, **overrides) -> "ErrorScoreConfig":
+        kwargs = {"aggregation": "footprint"}
+        kwargs.update(overrides)
+        return ErrorScoreConfig(**kwargs)
+
+    def test_matches_center_on_isotropic_footprint_constant_error(self) -> None:
+        # A constant error map makes any normalized weighted average equal the
+        # center sample, so v1 and v2 must agree to float tolerance.
+        err = torch.full((12, 12), 0.37)
+        means2d = torch.tensor([[5.3, 6.1], [2.0, 9.0]])
+        radii = torch.tensor([1, 1])  # small isotropic footprint
+        conics = torch.tensor([[2.0, 0.0, 2.0], [2.0, 0.0, 2.0]])
+        opacities = torch.tensor([0.8, 0.4])
+        state_v1 = ErrorScoreState(2, ErrorScoreConfig(ema_decay=0.5))
+        state_v1.update(means2d, radii, err, height=12, width=12)
+        state_v2 = ErrorScoreState(2, self._v2_config(ema_decay=0.5))
+        state_v2.update(
+            means2d, radii, err, height=12, width=12,
+            conics=conics, opacities=opacities,
+        )
+        self.assertTrue(
+            torch.allclose(state_v1.scores, state_v2.scores, atol=1e-5)
+        )
+
+    def test_footprint_sees_offset_high_error_block(self) -> None:
+        # Center sits on zero error; the right side of the footprint covers a
+        # high-error block. v1 attributes nothing, v2 attributes a large share
+        # -- the whole point of the upgrade.
+        h = w = 16
+        err = torch.zeros(h, w)
+        err[:, 7:12] = 1.0  # block right of the center column 5
+        means2d = torch.tensor([[5.0, 8.0]])
+        radii = torch.tensor([10])
+        conics = torch.tensor([[0.08, 0.0, 0.08]])  # sigma ~ 3.5 px isotropic
+        opacities = torch.tensor([0.9])
+        state_v1 = ErrorScoreState(1, ErrorScoreConfig(ema_decay=0.0))
+        state_v1.update(means2d, radii, err, height=h, width=w)
+        state_v2 = ErrorScoreState(1, self._v2_config(ema_decay=0.0))
+        state_v2.update(
+            means2d, radii, err, height=h, width=w,
+            conics=conics, opacities=opacities,
+        )
+        self.assertAlmostEqual(float(state_v1.scores[0]), 0.0, places=6)
+        self.assertGreater(float(state_v2.scores[0]), 0.15)
+        self.assertGreater(
+            float(state_v2.scores[0]) - float(state_v1.scores[0]), 0.1
+        )
+        # And the aggregate matches the naive oracle.
+        expected = _footprint_oracle(
+            (5.0, 8.0), (0.08, 0.0, 0.08), 0.9, err, radius_cap=4, r_eff=4
+        )
+        self.assertAlmostEqual(float(state_v2.scores[0]), expected, places=5)
+
+    def test_anisotropic_conic_responds_more_along_major_axis(self) -> None:
+        # Conic elongated along x (small a => large sigma_x): an error spike
+        # 3 px away along x must contribute far more than the same spike 3 px
+        # away along y.
+        h = w = 21
+        means2d = torch.tensor([[10.0, 10.0]])
+        radii = torch.tensor([10])
+        conics = torch.tensor([[0.05, 0.0, 1.0]])
+        opacities = torch.tensor([1.0])
+        err_x = torch.zeros(h, w)
+        err_x[10, 13] = 1.0  # dx = +3
+        err_y = torch.zeros(h, w)
+        err_y[13, 10] = 1.0  # dy = +3
+        scores = []
+        for err in (err_x, err_y):
+            state = ErrorScoreState(1, self._v2_config(ema_decay=0.0))
+            state.update(
+                means2d, radii, err, height=h, width=w,
+                conics=conics, opacities=opacities,
+            )
+            scores.append(float(state.scores[0]))
+        score_x, score_y = scores
+        self.assertGreater(score_x, 0.0)
+        self.assertGreater(score_x, 5.0 * score_y)
+
+    def test_out_of_bounds_pixels_get_zero_weight(self) -> None:
+        # Near-edge Gaussian: clamped out-of-image offsets must contribute
+        # nothing, so the result matches an oracle that simply drops them.
+        torch.manual_seed(7)
+        err = torch.rand(6, 9)
+        means2d = torch.tensor([[0.4, 2.6]])
+        radii = torch.tensor([5])  # capped to r_eff = 2 below
+        conics = torch.tensor([[0.3, 0.05, 0.5]])
+        opacities = torch.tensor([0.6])
+        state = ErrorScoreState(
+            1, self._v2_config(ema_decay=0.0, footprint_radius_px=2)
+        )
+        state.update(
+            means2d, radii, err, height=6, width=9,
+            conics=conics, opacities=opacities,
+        )
+        expected = _footprint_oracle(
+            (0.4, 2.6), (0.3, 0.05, 0.5), 0.6, err, radius_cap=2, r_eff=2
+        )
+        self.assertAlmostEqual(float(state.scores[0]), expected, places=5)
+
+        # Fully off-screen center: every window pixel is out of bounds, the
+        # weight mass is zero, and the Gaussian is skipped (score unchanged).
+        state_off = ErrorScoreState(1, self._v2_config(ema_decay=0.5))
+        state_off.update(
+            torch.tensor([[-40.0, -40.0]]),
+            torch.tensor([3]),
+            err,
+            height=6,
+            width=9,
+            conics=torch.tensor([[0.5, 0.0, 0.5]]),
+            opacities=torch.tensor([0.9]),
+        )
+        self.assertTrue(torch.allclose(state_off.scores, torch.ones(1)))
+
+    def test_degenerate_conic_falls_back_to_center_sample(self) -> None:
+        # Non-finite, non-positive, and non-PD conics must all degrade to the
+        # v1 center sample for that Gaussian (and still update the EMA).
+        err = (torch.arange(30, dtype=torch.float32) / 100.0).reshape(5, 6)
+        means2d = torch.tensor([[2.0, 1.0], [4.0, 3.0], [1.0, 4.0]])
+        radii = torch.tensor([3, 3, 3])
+        conics = torch.tensor(
+            [
+                [float("nan"), 0.0, 1.0],  # non-finite
+                [-1.0, 0.0, 1.0],  # a <= 0
+                [1.0, 2.0, 1.0],  # a*c - b^2 < 0
+            ]
+        )
+        opacities = torch.tensor([0.5, 0.5, 0.5])
+        state = ErrorScoreState(3, self._v2_config(ema_decay=0.0))
+        state.update(
+            means2d, radii, err, height=5, width=6,
+            conics=conics, opacities=opacities,
+        )
+        expected = torch.tensor([err[1, 2], err[3, 4], err[4, 1]])
+        self.assertTrue(torch.allclose(state.scores, expected, atol=1e-6))
+
+    def test_center_aggregation_is_bitwise_identical_to_v1(self) -> None:
+        # Regression guard: aggregation="center" must run the exact v1 code
+        # path whether or not conics/opacities are passed, and a footprint
+        # config without conics must also fall back to v1 bit-for-bit.
+        torch.manual_seed(3)
+        err = torch.rand(10, 10)
+        means2d = torch.rand(6, 2) * 12.0 - 1.0  # includes out-of-bounds
+        radii = torch.tensor([2, 0, 1, 3, 0, 5])
+        conics = torch.rand(6, 3) + torch.tensor([1.0, 0.0, 1.0])
+        opacities = torch.rand(6)
+        reference = ErrorScoreState(6, ErrorScoreConfig(ema_decay=0.7))
+        reference.update(means2d, radii, err, height=10, width=10)
+
+        center_with_extras = ErrorScoreState(6, ErrorScoreConfig(ema_decay=0.7))
+        center_with_extras.update(
+            means2d, radii, err, height=10, width=10,
+            conics=conics, opacities=opacities,
+        )
+        self.assertTrue(
+            torch.equal(reference.scores, center_with_extras.scores)
+        )
+
+        footprint_no_conics = ErrorScoreState(6, self._v2_config(ema_decay=0.7))
+        footprint_no_conics.update(means2d, radii, err, height=10, width=10)
+        self.assertTrue(
+            torch.equal(reference.scores, footprint_no_conics.scores)
+        )
+
+    def test_conics_shapes_and_count_mismatch(self) -> None:
+        err = torch.full((8, 8), 0.25)
+        means2d = torch.tensor([[3.0, 3.0], [5.0, 5.0]])
+        radii = torch.tensor([2, 2])
+        conics_flat = torch.tensor([[0.5, 0.0, 0.5], [0.5, 0.0, 0.5]])
+        opacities = torch.tensor([0.7, 0.7])
+        state_flat = ErrorScoreState(2, self._v2_config(ema_decay=0.0))
+        state_flat.update(
+            means2d, radii, err, height=8, width=8,
+            conics=conics_flat, opacities=opacities,
+        )
+        # The gsplat packed=False layout [1, N, 3] / [1, N] is accepted too.
+        state_batched = ErrorScoreState(2, self._v2_config(ema_decay=0.0))
+        state_batched.update(
+            means2d, radii, err, height=8, width=8,
+            conics=conics_flat.unsqueeze(0), opacities=opacities.unsqueeze(0),
+        )
+        self.assertTrue(torch.equal(state_flat.scores, state_batched.scores))
+        with self.assertRaisesRegex(ValueError, "conics"):
+            ErrorScoreState(2, self._v2_config()).update(
+                means2d, radii, err, height=8, width=8,
+                conics=torch.zeros(3, 3), opacities=opacities,
+            )
+        with self.assertRaisesRegex(ValueError, "opacities"):
+            ErrorScoreState(2, self._v2_config()).update(
+                means2d, radii, err, height=8, width=8,
+                conics=conics_flat, opacities=torch.ones(5),
+            )
+
+    def test_zero_opacity_gaussian_is_skipped(self) -> None:
+        err = torch.full((6, 6), 0.9)
+        means2d = torch.tensor([[3.0, 3.0], [2.0, 2.0]])
+        radii = torch.tensor([2, 2])
+        conics = torch.tensor([[0.5, 0.0, 0.5], [0.5, 0.0, 0.5]])
+        opacities = torch.tensor([0.0, 0.8])  # first has zero weight mass
+        state = ErrorScoreState(2, self._v2_config(ema_decay=0.0))
+        state.update(
+            means2d, radii, err, height=6, width=6,
+            conics=conics, opacities=opacities,
+        )
+        self.assertTrue(
+            torch.allclose(state.scores, torch.tensor([1.0, 0.9]), atol=1e-6)
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

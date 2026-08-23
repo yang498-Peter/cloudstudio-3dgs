@@ -16,7 +16,16 @@ Gaussian's projected center. The distinction is kept explicit until a real A/B
 establishes whether this cheaper proxy helps the S1 scene.
 
 The per-Gaussian error score is an EMA of the rendered-vs-reference pixel
-error sampled at each Gaussian's projected center (visible Gaussians only).
+error attributed to each visible Gaussian. Two attribution modes exist:
+
+* ``aggregation="center"`` (v1, default): sample the error map at the
+  Gaussian's projected center pixel only.
+* ``aggregation="footprint"`` (v2): aggregate the error map over the
+  Gaussian's 2D footprint with weights ``opacity * exp(-0.5 * d^T Sigma^-1 d)``
+  computed from the rasterizer's ``conics`` — a PyTorch approximation of
+  LichtFeld-style alpha/T-weighted error attribution. The v2 path only runs
+  when ``conics`` is supplied to :meth:`ErrorScoreState.update`; otherwise
+  behaviour is bit-for-bit the v1 path.
 """
 
 from __future__ import annotations
@@ -31,7 +40,41 @@ from gsplat.relocation import compute_relocation
 from gsplat.strategy.mcmc import MCMCStrategy
 from gsplat.strategy.ops import _multinomial_sample, _update_param_with_optimizer
 
-from cloudstudio_3dgs.training.error_weighted_config import ErrorScoreConfig
+from cloudstudio_3dgs.training.error_weighted_config import (
+    ErrorScoreConfig as _CoreErrorScoreConfig,
+)
+
+
+@dataclass(frozen=True)
+class ErrorScoreConfig(_CoreErrorScoreConfig):
+    """Core :class:`ErrorScoreConfig` extended with v2 footprint aggregation.
+
+    Extended here instead of in ``error_weighted_config`` so the torch-free
+    core module (consumed by the Trainer config parser and synthetic
+    acceptance) stays untouched; consumers importing ``ErrorScoreConfig``
+    from this module transparently get the extended class. ``to_dict`` is
+    deliberately inherited unchanged: the 4-field payload is the schema
+    existing telemetry/config consumers expect, and the v2 knobs only affect
+    in-process score updates.
+
+    Attributes:
+        aggregation: ``"center"`` samples the error map at the projected
+            center (v1); ``"footprint"`` aggregates over the conic-weighted
+            pixel footprint (v2) whenever ``conics`` is provided to
+            :meth:`ErrorScoreState.update`.
+        footprint_radius_px: clamp for the footprint window half-size R; the
+            v2 gather window is a fixed ``(2R+1)**2`` patch per Gaussian.
+    """
+
+    aggregation: str = "center"
+    footprint_radius_px: int = 4
+
+    def validate(self) -> None:
+        super().validate()
+        if self.aggregation not in ("center", "footprint"):
+            raise ValueError('aggregation must be "center" or "footprint"')
+        if int(self.footprint_radius_px) < 1:
+            raise ValueError("footprint_radius_px must be a positive integer")
 
 
 class ErrorScoreState:
@@ -60,6 +103,8 @@ class ErrorScoreState:
         pixel_error: Tensor,
         height: int,
         width: int,
+        conics: Optional[Tensor] = None,
+        opacities: Optional[Tensor] = None,
     ) -> None:
         """EMA-update scores of visible Gaussians from the current view's error map.
 
@@ -71,6 +116,14 @@ class ErrorScoreState:
             pixel_error: [H, W] per-pixel error of the current step, e.g. the
                 channel-mean of ``|render - reference|`` (masked if applicable).
             height/width: dimensions of ``pixel_error``.
+            conics: optional [N, 3] (or [1, N, 3]) inverse-2D-covariance upper
+                triangles ``(a, b, c)`` from gsplat ``info["conics"]``. Only
+                used when ``config.aggregation == "footprint"``; supplying it
+                enables the v2 footprint-weighted aggregation. Without it the
+                v1 center-sampling path runs bit-for-bit unchanged.
+            opacities: optional [N] (or [1, N] / [N, 1]) per-Gaussian
+                opacities used as the footprint weight prefactor. Ignored on
+                the v1 path.
         """
         means2d = torch.as_tensor(means2d)
         if means2d.dim() != 2 or means2d.shape[-1] != 2:
@@ -97,6 +150,19 @@ class ErrorScoreState:
         vis = visible.nonzero(as_tuple=True)[0]
         if vis.numel() == 0:
             return
+        aggregation = str(getattr(self.config, "aggregation", "center"))
+        if aggregation == "footprint" and conics is not None:
+            self._update_footprint(
+                means2d,
+                radii,
+                pixel_error,
+                int(height),
+                int(width),
+                conics,
+                opacities,
+                vis,
+            )
+            return
         # Invisible entries may carry garbage projections; index visible only.
         # nan_to_num guards against stray non-finite centers before .long().
         centers = torch.nan_to_num(
@@ -112,6 +178,130 @@ class ErrorScoreState:
         vis = vis.to(self.scores.device)
         decay = float(self.config.ema_decay)
         self.scores[vis] = decay * self.scores[vis] + (1.0 - decay) * err
+
+    @torch.no_grad()
+    def _update_footprint(
+        self,
+        means2d: Tensor,
+        radii: Tensor,
+        pixel_error: Tensor,
+        height: int,
+        width: int,
+        conics: Tensor,
+        opacities: Optional[Tensor],
+        vis: Tensor,
+    ) -> None:
+        """v2: EMA-update from a conic-weighted aggregate over each footprint.
+
+        Fully vectorized over the visible set V: a fixed ``(2R+1)**2`` offset
+        window (R = ``footprint_radius_px``) is gathered per Gaussian; offsets
+        beyond the per-Gaussian effective radius ``min(max(radii), R)`` or
+        outside the image get zero weight (out-of-bounds gathers are clamped
+        for indexing only). Per pixel offset ``d`` the weight is
+        ``opacity * exp(-0.5 * d^T Sigma^-1 d)`` via the conic ``(a, b, c)``;
+        the aggregate is ``sum(w * err) / sum(w)``. Note the per-Gaussian
+        opacity therefore cancels inside the normalized ratio — it only gates
+        the ``sum(w) < 1e-8`` skip. Gaussians with a non-finite or
+        non-positive-definite conic fall back to the v1 center sample;
+        Gaussians whose weights sum below 1e-8 are skipped (no EMA update).
+        """
+        conics = torch.as_tensor(conics)
+        if conics.dim() == 3 and int(conics.shape[0]) == 1:
+            conics = conics.squeeze(0)
+        if conics.dim() != 2 or int(conics.shape[-1]) != 3:
+            raise ValueError("conics must have shape [N, 3] (or [1, N, 3])")
+        n = int(means2d.shape[0])
+        if int(conics.shape[0]) != n:
+            raise ValueError("conics count does not match means2d")
+        if opacities is not None:
+            opacities = torch.as_tensor(opacities).reshape(-1)
+            if int(opacities.shape[0]) != n:
+                raise ValueError("opacities count does not match means2d")
+
+        err_map = pixel_error.detach().float()
+        device = err_map.device
+        radius_cap = int(getattr(self.config, "footprint_radius_px", 4))
+
+        # Sub-pixel centers for the quadratic form; rounded centers anchor the
+        # gather window and the degenerate-conic fallback (v1 semantics).
+        centers = torch.nan_to_num(
+            means2d[vis].detach().float(), nan=0.0, posinf=1e12, neginf=-1e12
+        ).to(device)
+        cx = centers[:, 0].round()
+        cy = centers[:, 1].round()
+
+        radii_vis = radii[vis].detach().float().to(device)
+        if radii_vis.dim() == 2:
+            radii_vis = radii_vis.max(dim=-1).values
+        r_eff = radii_vis.clamp(min=0.0, max=float(radius_cap))  # [V]
+
+        offsets = torch.arange(
+            -radius_cap, radius_cap + 1, device=device, dtype=torch.float32
+        )
+        dy_grid, dx_grid = torch.meshgrid(offsets, offsets, indexing="ij")
+        dx = dx_grid.reshape(-1)  # [K], K = (2R+1)**2
+        dy = dy_grid.reshape(-1)
+
+        px = cx[:, None] + dx[None, :]  # [V, K]
+        py = cy[:, None] + dy[None, :]
+        in_bounds = (px >= 0) & (px <= width - 1) & (py >= 0) & (py <= height - 1)
+        in_window = (dx.abs()[None, :] <= r_eff[:, None]) & (
+            dy.abs()[None, :] <= r_eff[:, None]
+        )
+        px_idx = px.clamp(0, width - 1).long()
+        py_idx = py.clamp(0, height - 1).long()
+        err_win = err_map[py_idx, px_idx]  # [V, K]
+
+        con = conics[vis].detach().float().to(device)
+        a, b, c = con[:, 0], con[:, 1], con[:, 2]
+        conic_ok = (
+            torch.isfinite(con).all(dim=-1)
+            & (a > 0)
+            & (c > 0)
+            & (a * c - b * b > 0)
+        )
+
+        ddx = px - centers[:, 0][:, None]
+        ddy = py - centers[:, 1][:, None]
+        quad = (
+            a[:, None] * ddx * ddx
+            + 2.0 * b[:, None] * ddx * ddy
+            + c[:, None] * ddy * ddy
+        )
+        if opacities is None:
+            opac = torch.ones(int(vis.numel()), device=device)
+        else:
+            opac = torch.nan_to_num(
+                opacities[vis].detach().float().to(device), nan=0.0
+            ).clamp(min=0.0)
+        weights = opac[:, None] * torch.exp(-0.5 * quad)
+        weights = torch.where(
+            conic_ok[:, None] & in_bounds & in_window,
+            weights,
+            torch.zeros((), device=device),
+        )
+        weights = torch.nan_to_num(weights, nan=0.0, posinf=0.0, neginf=0.0)
+        weight_sum = weights.sum(dim=-1)
+        aggregated = (weights * err_win).sum(dim=-1) / weight_sum.clamp_min(1e-12)
+
+        center_err = err_map[
+            cy.long().clamp(0, height - 1), cx.long().clamp(0, width - 1)
+        ]
+        err = torch.where(conic_ok, aggregated, center_err)
+        # Degenerate conics always update via the center fallback; healthy
+        # conics with an (effectively) empty footprint are skipped entirely.
+        keep = (~conic_ok) | (weight_sum >= 1e-8)
+        if not bool(keep.any()):
+            return
+        vis_upd = vis.to(device)[keep]
+        err = err[keep]
+
+        if self.scores.device != err.device:
+            self.scores = self.scores.to(err.device)
+        err = err.to(self.scores.dtype)
+        vis_upd = vis_upd.to(self.scores.device)
+        decay = float(self.config.ema_decay)
+        self.scores[vis_upd] = decay * self.scores[vis_upd] + (1.0 - decay) * err
 
     @torch.no_grad()
     def resize(self, new_count: int) -> None:

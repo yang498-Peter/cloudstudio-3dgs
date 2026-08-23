@@ -54,7 +54,7 @@ from cloudstudio_3dgs.training.rig_pose import (
     build_pose_refinement_report,
     disabled_pose_refinement_report,
 )
-from cloudstudio_3dgs.training.error_weighted_config import ErrorScoreConfig
+from cloudstudio_3dgs.training.error_weighted_mcmc import ErrorScoreConfig
 from cloudstudio_3dgs.training.ppisp import PpispConfig, PpispCorrector
 from cloudstudio_3dgs.training.regularization import (
     GeometryRegularizationConfig,
@@ -1321,6 +1321,10 @@ def train(
                 error_map,
                 sample.height,
                 sample.width,
+                conics=info["conics"].detach().reshape(-1, 3),
+                opacities=info["opacities"].detach().reshape(-1)
+                if "opacities" in info
+                else None,
             )
         # Before strategy_post_step: relocation/add would desynchronize this
         # step's projected radii from the gaussian count.
