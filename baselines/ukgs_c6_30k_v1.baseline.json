@@ -1,0 +1,36 @@
+{
+  "artifacts": {
+    "best_checkpoint": "C:\\Peter\\3dgs-runs\\ukgs_c6_30k\\checkpoints\\best_golden.pt",
+    "config": "C:\\Peter\\3dgs-runs\\ukgs_c6_30k_config.json",
+    "ply": "C:\\Peter\\3dgs-runs\\exports\\ukgs_c6_30k.ply"
+  },
+  "baseline_id": "ukgs_c6_30k_v1",
+  "config_summary": "face-split fullres + antialiased + depthfix + v2 footprint + lidar normals(0.1) + contribution attribution(l1_ssim 0.2) + soft lidar admission(floor 0.2)",
+  "coordinate_transform_sha256": "b8653a170b56c7a43d03d3ca505734a4f0b3ad2447f082aef77d6b5ff20ec73d",
+  "dataset_manifest_sha256": "1a1d0219219d79aa2e07db9eb397f5cdd85a05d1c3faf5625f79d6e28f764cd7",
+  "depth_manifest_sha256": "f8d4260f318aed1c665c71b7907b674fb28b97c44be855aa62dffaf88aa42390",
+  "five_table": {
+    "depth_mae_m": 4.747,
+    "floater_gt_0.3m_dperp": 541,
+    "floater_gt_0.3m_nearest": 1417,
+    "floater_gt_1.0m_dperp": 83,
+    "floater_gt_1.0m_nearest": 238,
+    "ground_thickness_p50_m": 0.04174,
+    "lpips_mean": 0.504,
+    "lpips_p90": 0.5487,
+    "psnr_mean": 16.122,
+    "psnr_p10": 15.85,
+    "shortest_axis_angle_deg_p50": 4.243,
+    "ssim_mean": 0.4613
+  },
+  "gsplat_commit": "f2d14131483644e9977451b6403f6f0b73e6637f",
+  "initialization_ply_sha256": "e4a58dee2dfcc13c2b157338b7ea39036cd237625e92160601cec6e8cd75cf6a",
+  "mask_manifest_sha256": "a9f8e221cca5a4d32427ea9692e30ef6a720ce70c6b0460990208bafd676a944",
+  "person_mask_manifest_sha256": "27a9d35db95bb28f95724301ae50f9982f7e0b2fd6aa19d83b8a8ed474b62698",
+  "run_id": "ukgs-c6-30k",
+  "run_manifest_sha256": "f6ba01b35ecfd3bae40d46a80798dd2e54f77976698a1e839dd6a92a2aa5a64b",
+  "schema_version": 1,
+  "split_manifest_sha256": "3d40c503e5035936f35b94b9ab76817362a14194b22729927759349208dd1f02",
+  "supersedes": "ukgs_final_v1",
+  "trainer_config_sha256": "68af3f2c513ef0d1b6b8023ee7147c2fe07262067e2fdc1c8afcd3ce63281e1c"
+}
