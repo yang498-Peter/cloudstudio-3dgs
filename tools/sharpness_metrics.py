@@ -89,10 +89,31 @@ def agreement(render: np.ndarray, reference: np.ndarray,
     return float((a * b).sum() / denominator) if denominator > 0 else float("nan")
 
 
-def classify(energy: float, correlation: float) -> str:
+def background_fraction(render: np.ndarray, mask: np.ndarray,
+                        background: np.ndarray, tolerance: float = 0.02) -> float:
+    """Share of masked pixels left showing the background - i.e. holes.
+
+    Reported alongside sharpness because the two can be traded against each
+    other silently. Shrinking Gaussians raises gradient energy whether the new
+    edges are texture or the rims of gaps, and a model that has thinned its way
+    to 15% background will look sharper on the energy number while being
+    strictly worse. Coverage collapses when footprint is reduced without raising
+    the count to match: covered area goes as N * r^2, so halving r needs four
+    times the Gaussians just to stand still.
+    """
+    inner = mask
+    if not inner.any():
+        return float("nan")
+    distance = np.abs(render - background[None, None, :]).max(axis=2)
+    return float((distance[inner] < tolerance).mean())
+
+
+def classify(energy: float, correlation: float, holes: float = 0.0) -> str:
     """The reading that matters, so a caller cannot rank on energy alone."""
     if not np.isfinite(energy) or not np.isfinite(correlation):
         return "unmeasured"
+    if np.isfinite(holes) and holes > 0.10:
+        return "holes"
     if energy > 0.6 and correlation > 0.6:
         return "resolved"
     if energy > 0.6 and correlation < 0.4:
@@ -167,8 +188,9 @@ def main() -> int:
     print(f"Sharpness metrics ({SCHEMA_VERSION})")
     print(f"split={args.split}  frames={len(dataset)}  "
           f"gaussians={params['means'].shape[0]:,}")
-    print(f"\n{'view':>6}{'energy':>10}{'agreement':>12}   reading")
+    print(f"\n{'view':>6}{'energy':>10}{'agreement':>12}{'holes':>9}   reading")
 
+    background = np.asarray(config["background_color"], dtype=np.float32)
     per_view = []
     for index in args.views:
         if index >= len(dataset):
@@ -185,9 +207,11 @@ def main() -> int:
 
         e = energy_ratio(render, reference, mask)
         c = agreement(render, reference, mask)
+        h = background_fraction(render, mask, background)
         per_view.append({"view": index, "image_id": sample.image_id,
-                         "energy": e, "agreement": c, "reading": classify(e, c)})
-        print(f"{index:>6}{e:>10.3f}{c:>12.3f}   {classify(e, c)}")
+                         "energy": e, "agreement": c, "holes": h,
+                         "reading": classify(e, c, h)})
+        print(f"{index:>6}{e:>10.3f}{c:>12.3f}{h * 100:>8.1f}%   {classify(e, c, h)}")
 
         if args.crops_dir is not None:
             args.crops_dir.mkdir(parents=True, exist_ok=True)
@@ -204,9 +228,16 @@ def main() -> int:
 
     energy_mean = float(np.mean([v["energy"] for v in per_view]))
     agreement_mean = float(np.mean([v["agreement"] for v in per_view]))
-    reading = classify(energy_mean, agreement_mean)
-    print(f"\n{'mean':>6}{energy_mean:>10.3f}{agreement_mean:>12.3f}   {reading}")
-    print("photo reference: energy 1.000, agreement 1.000")
+    holes_mean = float(np.mean([v["holes"] for v in per_view]))
+    reading = classify(energy_mean, agreement_mean, holes_mean)
+    print(f"\n{'mean':>6}{energy_mean:>10.3f}{agreement_mean:>12.3f}"
+          f"{holes_mean * 100:>8.1f}%   {reading}")
+    print("photo reference: energy 1.000, agreement 1.000, holes 0.0%")
+    if holes_mean > 0.10:
+        print(f"\nWARNING: {holes_mean * 100:.1f}% of the masked frame is background. "
+              f"Sharpness numbers are not comparable against a covered model - hole "
+              f"rims raise energy and depress agreement on their own. Raise cap_max "
+              f"before reading anything else here.")
 
     if args.output is not None:
         args.output.write_text(json.dumps({
@@ -215,6 +246,7 @@ def main() -> int:
             "split": args.split,
             "energy": energy_mean,
             "agreement": agreement_mean,
+            "holes": holes_mean,
             "reading": reading,
             "per_view": per_view,
         }, indent=1), encoding="utf-8")
