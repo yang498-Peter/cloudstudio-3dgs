@@ -47,6 +47,7 @@ from cloudstudio_3dgs.training.gaussian_lifecycle import GaussianLifecycleState
 
 if TYPE_CHECKING:  # pragma: no cover - annotation only, no runtime dependency
     from cloudstudio_3dgs.training.lidar_admission import LidarAdmission
+    from cloudstudio_3dgs.training.tangent_proposal import TangentProposal
 
 
 @dataclass(frozen=True)
@@ -560,6 +561,8 @@ def sample_add_weighted(
     probs: Tensor,
     min_opacity: float = 0.005,
     scene: Any | None = None,
+    proposal: Optional["TangentProposal"] = None,
+    proposal_out: Optional[Dict[str, Any]] = None,
 ) -> Tensor:
     """Inplace add ``n`` Gaussians cloned from existing ones sampled by ``probs``.
 
@@ -571,6 +574,30 @@ def sample_add_weighted(
     Without it a caller cannot tell which existing Gaussian each new row was
     cloned from, and per-Gaussian state can only be reset. Nothing else about
     the adapted logic changes; callers may ignore the return value.
+
+    Tangent-plane proposal (WP-5)
+    -----------------------------
+    With ``proposal`` supplied and active, the appended rows' ``means``,
+    ``quats`` and ``scales`` are replaced by
+    :meth:`~cloudstudio_3dgs.training.tangent_proposal.TangentProposal.propose`
+    instead of being bit-exact copies of the parent. Two index-space facts make
+    this delicate, and both are pinned by tests:
+
+    * the child's *base* values are the ones upstream would have appended, which
+      for ``scales`` and ``opacities`` are the **post-**``compute_relocation``
+      values, not the parent's originals. Worse, ``p[sampled_idxs] = ...``
+      followed by ``p[sampled_idxs]`` is a scatter-then-gather: when a parent is
+      sampled twice, both children read back the *last* value written, not the
+      two distinct entries of ``new_scales``. The child base scales are
+      therefore reconstructed here with the same scatter-then-gather rather than
+      assumed equal to ``new_scales``.
+    * the override is computed *before* ``_update_param_with_optimizer``, from a
+      snapshot. That function walks ``params`` in dict order, so anything
+      computed inside one ``param_fn`` cannot be relied on by another.
+
+    ``proposal_out``, when given, is filled with ``applied`` / ``anchor_index``
+    / ``anchor_confidence`` for the appended rows so the caller can write the
+    lifecycle anchor columns without recomputing the query.
     """
     opacities = torch.sigmoid(params["opacities"])
 
@@ -587,12 +614,50 @@ def sample_add_weighted(
     )
     new_opacities = torch.clamp(new_opacities, max=1.0 - eps, min=min_opacity)
 
+    override: Dict[str, Tensor] = {}
+    if proposal is not None and proposal.active and int(sampled_idxs.numel()) > 0:
+        # Reproduce the child's base log-scales exactly as param_fn will derive
+        # them, without touching the live parameter.
+        child_scales = params["scales"].detach().clone()
+        child_scales[sampled_idxs] = torch.log(new_scales)
+        payload = proposal.propose(
+            params["means"].detach()[sampled_idxs],
+            params["quats"].detach()[sampled_idxs],
+            child_scales[sampled_idxs],
+        )
+        applied = payload["applied"]
+        for name in ("means", "quats", "scales"):
+            if name in payload:
+                override[name] = payload[name]
+        if proposal_out is not None:
+            proposal_out.update(
+                {
+                    "applied": applied,
+                    "anchor_index": payload["anchor_index"],
+                    "anchor_confidence": payload["anchor_confidence"],
+                    "applied_count": int(applied.sum().item()),
+                    "stats": dict(proposal.last_stats),
+                }
+            )
+    else:
+        applied = None
+
     def param_fn(name: str, p: Tensor) -> Tensor:
         if name == "opacities":
             p[sampled_idxs] = torch.logit(new_opacities)
         elif name == "scales":
             p[sampled_idxs] = torch.log(new_scales)
-        p_new = torch.cat([p, p[sampled_idxs]])
+        children = p[sampled_idxs]
+        replacement = override.get(name)
+        if replacement is not None and applied is not None:
+            # Broadcast the [M] mask over the trailing feature dims. Non-applied
+            # rows keep the clone verbatim; the proposal already passes those
+            # through, so this is a second, structural guarantee.
+            mask = applied.reshape(-1, *([1] * (children.dim() - 1)))
+            children = torch.where(
+                mask, replacement.to(dtype=children.dtype, device=children.device), children
+            )
+        p_new = torch.cat([p, children])
         return torch.nn.Parameter(p_new, requires_grad=p.requires_grad)
 
     def optimizer_fn(key: str, v: Tensor) -> Tensor:
@@ -630,6 +695,9 @@ class ErrorWeightedMCMCStrategy(MCMCStrategy):
     # Optional soft LiDAR surface-support weighting of the birth sites
     # (WP-4). Left as None the strategy is unchanged in every respect.
     admission_state: Optional["LidarAdmission"] = None
+    # Optional tangent-plane birth-site proposal (WP-5). Decides *where the
+    # newborn lands*, where admission decides *which parent it comes from*.
+    proposal_state: Optional["TangentProposal"] = None
 
     def __post_init__(self) -> None:
         self.error_config.validate()
@@ -708,6 +776,16 @@ class ErrorWeightedMCMCStrategy(MCMCStrategy):
                 self.score_state.lifecycle.on_relocate(
                     dead_indices, sampled_idxs, step=self.current_step
                 )
+                if self.admission_state is not None:
+                    # Event-driven maintenance: relocation keeps N constant, so
+                    # only the dead slots' rows moved. Copying the source rows
+                    # keeps the cache usable at the *next* refine instead of
+                    # blanking it (WP-5; see LidarAdmission.on_relocate).
+                    self.admission_state.on_relocate(
+                        dead_indices,
+                        sampled_idxs,
+                        lifecycle=self.score_state.lifecycle,
+                    )
         return n_gs
 
     @torch.no_grad()
@@ -733,6 +811,7 @@ class ErrorWeightedMCMCStrategy(MCMCStrategy):
             probs = self.score_state.sampling_weights(
                 opacities, admission=self._admission_weights(opacities)
             )
+            proposal_out: Dict[str, Any] = {}
             sampled_idxs = sample_add_weighted(
                 params=params,
                 optimizers=optimizers,
@@ -742,12 +821,79 @@ class ErrorWeightedMCMCStrategy(MCMCStrategy):
                 probs=probs,
                 min_opacity=self.min_opacity,
                 scene=scene,
+                proposal=self.proposal_state,
+                proposal_out=proposal_out,
             )
             # Children inherit their parent's accumulated error EMA and anchor;
             # nothing that already existed is touched.
             if isinstance(sampled_idxs, Tensor):
-                self.score_state.lifecycle.on_grow(
+                new_rows = self.score_state.lifecycle.on_grow(
                     sampled_idxs, step=self.current_step
                 )
+                # Order matters: extending admission rewrites the whole anchor
+                # columns from its own cache, so the per-birth anchors have to
+                # land after it to stay authoritative.
+                self._extend_admission(
+                    current_n_points, params["means"], sampled_idxs
+                )
+                self._record_birth_anchors(new_rows, proposal_out)
             self._sync_lifecycle_length(len(params["means"]))
         return n_gs
+
+    @torch.no_grad()
+    def _record_birth_anchors(
+        self, new_rows: Tensor, proposal_out: Dict[str, Any]
+    ) -> None:
+        """Write the proposal's surface anchors onto the freshly grown rows.
+
+        ``on_grow`` inherits the parent's ``anchor_index``/``anchor_confidence``,
+        which is right for a bit-exact clone and wrong the moment the child was
+        moved: the child's nearest surface point is its own, measured at birth.
+        These are the first real writers of those two lifecycle columns, which
+        WP-1 reserved and nothing had populated per-birth until now.
+        """
+        anchor_index = proposal_out.get("anchor_index")
+        if anchor_index is None or new_rows.numel() == 0:
+            return
+        assert self.score_state is not None
+        lifecycle = self.score_state.lifecycle
+        applied = proposal_out["applied"].to(lifecycle.device)
+        rows = new_rows[applied]
+        if rows.numel() == 0:
+            return
+        lifecycle.anchor_index[rows] = anchor_index.to(
+            device=lifecycle.device, dtype=lifecycle.anchor_index.dtype
+        )[applied]
+        lifecycle.anchor_confidence[rows] = proposal_out["anchor_confidence"].to(
+            device=lifecycle.device, dtype=lifecycle.anchor_confidence.dtype
+        )[applied]
+
+    @torch.no_grad()
+    def _extend_admission(
+        self, old_count: int, means: Tensor, sampled_idxs: Tensor
+    ) -> None:
+        """Append admission rows for the newborns instead of blanking the cache.
+
+        Falls silently back to the conservative stale path whenever the cache
+        was not already aligned with the pre-growth count: extending a vector
+        that is out of sync would misalign every row after the join, which is
+        strictly worse than having no weights at all.
+        """
+        admission = self.admission_state
+        if admission is None or not admission.in_sync(old_count):
+            return
+        assert self.score_state is not None
+        if self.proposal_state is not None and self.proposal_state.active:
+            # Children were moved, so their support has to be measured at their
+            # own positions rather than inherited from the parents.
+            admission.extend(
+                new_means=means[old_count:],
+                lifecycle=self.score_state.lifecycle,
+            )
+        else:
+            # A plain clone sits exactly on its parent: copying the parent row
+            # is the same query, for free.
+            admission.extend(
+                parent_indices=sampled_idxs,
+                lifecycle=self.score_state.lifecycle,
+            )

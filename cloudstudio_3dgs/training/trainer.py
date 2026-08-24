@@ -71,6 +71,11 @@ from cloudstudio_3dgs.training.lidar_admission import (
     normal_field_from_surface_field,
     update_admission_telemetry,
 )
+from cloudstudio_3dgs.training.tangent_proposal import (
+    ProposalConfig,
+    TangentProposal,
+    update_proposal_telemetry,
+)
 from cloudstudio_3dgs.training.regularization import (
     GeometryRegularizationConfig,
     clip_oversized_gaussians,
@@ -170,6 +175,7 @@ class TrainerConfig:
         default_factory=NormalAlignmentConfig
     )
     lidar_admission: AdmissionConfig = field(default_factory=AdmissionConfig)
+    tangent_proposal: ProposalConfig = field(default_factory=ProposalConfig)
     learning_rates: dict[str, float] = field(
         default_factory=lambda: {
             "means": 1.6e-4,
@@ -241,6 +247,10 @@ class TrainerConfig:
         if not isinstance(admission_value, dict):
             raise ValueError("lidar_admission must be an object")
         lidar_admission = AdmissionConfig(**admission_value)
+        proposal_value = value.get("tangent_proposal", {})
+        if not isinstance(proposal_value, dict):
+            raise ValueError("tangent_proposal must be an object")
+        tangent_proposal = ProposalConfig(**proposal_value)
         scale_value = value.get("metric_scale_calibration", {})
         if not isinstance(scale_value, dict):
             raise ValueError("metric_scale_calibration must be an object")
@@ -298,6 +308,7 @@ class TrainerConfig:
             contribution=contribution_config,
             lidar_normal_alignment=lidar_normal_alignment,
             lidar_admission=lidar_admission,
+            tangent_proposal=tangent_proposal,
             **paths,
             **options,
         )
@@ -369,6 +380,14 @@ class TrainerConfig:
             # enabling it alone would silently do nothing at all.
             raise ValueError(
                 "lidar_admission requires error_weighted_sampling to be enabled"
+            )
+        self.tangent_proposal.validate()
+        if self.tangent_proposal.enabled and not self.error_weighted_sampling.enabled:
+            # The proposal only runs inside the weighted _add_new_gs path; the
+            # plain-opacity fallback calls upstream sample_add, which has no
+            # hook for it, so enabling it alone would silently do nothing.
+            raise ValueError(
+                "tangent_proposal requires error_weighted_sampling to be enabled"
             )
         if self.ppisp.enabled and self.exposure_compensation.enabled:
             raise ValueError(
@@ -486,6 +505,10 @@ class TrainerConfig:
         # to a pre-WP-4 run.
         if self.lidar_admission.enabled:
             strategy_contract["lidar_admission"] = self.lidar_admission.to_dict()
+        if self.tangent_proposal.enabled:
+            # Same conditional rule and the same reason: an unconditional key
+            # would rewrite trainer_config_sha256 for every pre-WP-5 config.
+            strategy_contract["tangent_proposal"] = self.tangent_proposal.to_dict()
 
         return {
             "schema_version": 2,
@@ -1094,14 +1117,25 @@ def train(
         geometry_tree = cKDTree(np.asarray(xyz, dtype=np.float64))
     surface_field = None
     admission = None
-    if config.lidar_admission.enabled:
-        # Soft LiDAR admission: the continuous surface field (KNN-PCA normals,
-        # planarity, roughness, spacing, confidence; ~1.2-2.2s for 390k points)
-        # biases *where* densification is allowed to give birth.
+    proposal = None
+    if config.lidar_admission.enabled or config.tangent_proposal.enabled:
+        # One continuous surface field (KNN-PCA normals, planarity, roughness,
+        # spacing, confidence; ~1.2-2.2s for 390k points) shared by every
+        # consumer: admission biases *which parent* densification clones, the
+        # proposal decides *where the child lands*, and the normal prior reads
+        # the same normals. Building a second field would double the cost and,
+        # worse, let the three disagree about where the surface is.
         from cloudstudio_3dgs.geometry.lidar_surface_field import build_surface_field
 
         surface_field = build_surface_field(xyz)
+    if config.lidar_admission.enabled:
         admission = LidarAdmission(surface_field, config.lidar_admission)
+    if config.tangent_proposal.enabled:
+        # Seeded off the run seed so the tangential scatter is reproducible
+        # without coupling to torch's global RNG stream.
+        proposal = TangentProposal(
+            surface_field, config.tangent_proposal, seed=int(config.seed)
+        )
     normal_anchors = None
     if config.lidar_normal_alignment.enabled:
         # LiDAR-normal geometry prior: KNN-PCA normals + planarity over the
@@ -1151,6 +1185,9 @@ def train(
         # The strategy consults this only inside _relocate_gs / _add_new_gs and
         # falls back to pure error weighting whenever it is stale.
         backend.strategy.admission_state = admission
+    if proposal is not None:
+        # Read only inside _add_new_gs, and only for the rows it appends.
+        backend.strategy.proposal_state = proposal
     backend.pinhole_rasterize_mode = config.pinhole_rasterize_mode
     runtime_contract = {
         key: backend.runtime.get(key)
@@ -1226,6 +1263,8 @@ def train(
     completed_steps = 0
     screen_clip_total = 0
     world_clamp_total = 0
+    # Last proposal batch already folded into the telemetry; see the fold site.
+    proposal_batches = 0
     last_metrics: dict[str, Any] = {}
     initial_loss: float | None = None
     best_loss = float("inf")
@@ -1498,10 +1537,20 @@ def train(
             # before the next normal-alignment loss uses stale indices.
             normal_anchors.refresh(params["means"])
         if mcmc_event["refine_triggered"] and admission is not None:
-            # Same index-space invalidation, but admission is only read at the
-            # next refine, so it is re-queried lazily by the stale branch above
-            # rather than eagerly here.
-            admission.on_count_changed(len(params["means"]))
+            # The strategy now maintains the cache event by event (extend on
+            # grow, copy on relocate), so the wholesale invalidation is only the
+            # fallback for refinements it could not follow - notably the
+            # unweighted upstream sample_add branch, which keeps its parent
+            # indices private. Anything still out of sync is re-queried lazily
+            # by the stale branch above rather than eagerly here.
+            if not admission.in_sync(len(params["means"])):
+                admission.on_count_changed(len(params["means"]))
+        if proposal is not None and proposal.propose_count != proposal_batches:
+            # Fold in only when a batch actually ran: a refine that relocated
+            # but grew nothing leaves last_stats untouched, and re-folding it
+            # would double-count the previous batch.
+            proposal_batches = proposal.propose_count
+            update_proposal_telemetry(mcmc_telemetry, proposal.last_stats)
         if mcmc_event["refine_triggered"]:
             require_finite_training_tensors(
                 params=params,

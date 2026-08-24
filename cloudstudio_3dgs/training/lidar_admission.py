@@ -23,11 +23,17 @@ Scope (WP-4)
 ------------
 **Soft weighting only.** No candidate is ever rejected and no Gaussian is ever
 moved: ``mode`` accepts ``"off"`` and ``"soft"``, and ``"hard"`` is explicitly
-refused. Hard admission and projection-onto-surface belong to WP-5, where the
-staleness window documented on :meth:`LidarAdmission.on_count_changed` has to be
-closed first — a hard reject computed against stale anchors would delete real
-candidates, whereas a soft weight computed against stale anchors merely
-mis-prioritizes them.
+refused. Hard admission remains unimplemented: a hard reject computed against
+stale anchors would delete real candidates, whereas a soft weight computed
+against stale anchors merely mis-prioritizes them.
+
+WP-5 closed the staleness window that made that asymmetry dangerous —
+:meth:`LidarAdmission.extend` and :meth:`LidarAdmission.on_relocate` maintain
+the cache event by event instead of invalidating it wholesale — so the
+remaining barrier to a hard mode is evidence that rejecting is better than
+down-weighting, not the cache. Projection onto the surface moved to
+:mod:`cloudstudio_3dgs.training.tangent_proposal`, which acts on the *newborn*
+rather than on the sampling weight.
 
 Why not a ``d_perp`` threshold
 ------------------------------
@@ -265,13 +271,8 @@ class LidarAdmission:
             self.last_stats = _empty_stats()
             return self.last_stats
 
-        query = self.field.query(points, k=1)
-        base = support_weight(
-            query, sigma_perp_factor=float(self.config.sigma_perp_factor)
-        )
-        gate = self._tangent_gate(query)
+        admission, base, gate, query = self._evaluate(points)
         floor = float(self.config.weight_floor)
-        admission = np.clip(base * gate, floor, 1.0)
 
         self.weights = torch.from_numpy(
             np.ascontiguousarray(admission, dtype=np.float32)
@@ -293,6 +294,213 @@ class LidarAdmission:
 
         self.last_stats = _summarize(admission, base, gate, floor)
         return self.last_stats
+
+    def _evaluate(self, points: np.ndarray) -> tuple[Any, Any, Any, Any]:
+        """Admission weights for ``[P, 3]`` points; the shared core of the queries."""
+        query = self.field.query(points, k=1)
+        base = support_weight(
+            query, sigma_perp_factor=float(self.config.sigma_perp_factor)
+        )
+        gate = self._tangent_gate(query)
+        floor = float(self.config.weight_floor)
+        return np.clip(base * gate, floor, 1.0), base, gate, query
+
+    # -- event-driven maintenance (WP-5) ------------------------------------
+
+    def in_sync(self, count: int) -> bool:
+        """True when the cache is usable for exactly ``count`` Gaussians.
+
+        Callers use this to decide whether the incremental path
+        (:meth:`extend` / :meth:`on_relocate`) already kept the cache aligned,
+        and therefore whether the conservative
+        :meth:`on_count_changed` fallback still has to fire.
+        """
+        return (
+            not self.stale
+            and self.weights is not None
+            and int(self.weights.shape[0]) == int(count)
+        )
+
+    def extend(
+        self,
+        new_means: Any | None = None,
+        parent_indices: Any | None = None,
+        lifecycle: Any | None = None,
+    ) -> dict[str, Any]:
+        """Append rows for freshly grown Gaussians without a full re-query.
+
+        Why this exists (it closes the WP-4 gap)
+        ----------------------------------------
+        :meth:`on_count_changed` marks the whole cache stale after a
+        densification, so admission goes dark until the next :meth:`refresh`.
+        For a *soft* weight that is merely conservative. It is not survivable
+        for two WP-5 consumers:
+
+        * a **hard** admission rule computed against a stale cache would reject
+          — that is, delete — real candidates, so "fall back to no opinion" is
+          not an option the way it is for a multiplier; and
+        * the tangent-plane proposal moves a newborn *away from its parent* at
+          birth. Its surface support is therefore genuinely different from the
+          parent's from the very first step, and it is knowable at exactly that
+          moment. Waiting for a global refresh would attribute the parent's
+          support to a child that is no longer there.
+
+        Cost is proportional to the number of *new* rows, not to ``N``: one
+        cKDTree query over ``M`` points, where ``M`` is 5% of ``N`` per refine
+        at the usual growth rate.
+
+        Args:
+            new_means: ``[M, 3]`` positions of the appended Gaussians. Given
+                when the children were moved (the proposal path), so their own
+                surface support must be measured.
+            parent_indices: ``[M]`` parent rows in *pre-growth* index space.
+                Used when ``new_means`` is absent: a plain clone sits exactly on
+                its parent, so copying the parent's cached row is not an
+                approximation, it is the same query.
+            lifecycle: optional
+                :class:`~cloudstudio_3dgs.training.gaussian_lifecycle.GaussianLifecycleState`
+                whose anchor columns are refreshed when its length matches the
+                extended cache.
+
+        Raises:
+            RuntimeError: if there is no trustworthy cache to extend. The caller
+                must fall back to :meth:`refresh`; silently growing a stale
+                vector would misalign every row after the join.
+        """
+        torch = __import__("torch")
+        if self.weights is None or self.stale:
+            raise RuntimeError(
+                "cannot extend a stale or absent admission cache; refresh first"
+            )
+        if (new_means is None) == (parent_indices is None):
+            raise ValueError("pass exactly one of new_means or parent_indices")
+
+        old_count = int(self.weights.shape[0])
+        if new_means is not None:
+            points = np.ascontiguousarray(
+                new_means.detach().cpu().to(torch.float64).numpy()
+            )
+            if points.ndim != 2 or points.shape[1] != 3:
+                raise ValueError("new_means must have shape [M, 3]")
+            added = len(points)
+            if added == 0:
+                return dict(self.last_stats)
+            admission, base, gate, query = self._evaluate(points)
+            appended_weights = torch.from_numpy(
+                np.ascontiguousarray(admission, dtype=np.float32)
+            )
+            appended_index = torch.from_numpy(
+                np.ascontiguousarray(query.index, dtype=np.int64)
+            )
+            appended_confidence = torch.from_numpy(
+                np.ascontiguousarray(query.confidence, dtype=np.float32)
+            )
+        else:
+            parents = torch.as_tensor(parent_indices, dtype=torch.int64).reshape(-1).cpu()
+            added = int(parents.numel())
+            if added == 0:
+                return dict(self.last_stats)
+            if bool(((parents < 0) | (parents >= old_count)).any()):
+                raise ValueError("parent_indices contains out-of-range indices")
+            appended_weights = self.weights[parents].clone()
+            appended_index = self.anchor_index[parents].clone()
+            appended_confidence = self.anchor_confidence[parents].clone()
+            admission = appended_weights.numpy().astype(np.float64)
+            base = admission
+            gate = np.ones_like(admission)
+
+        # Concatenate rather than write in place: the existing rows must stay
+        # bit-identical, which a fresh tensor makes structurally obvious.
+        self.weights = torch.cat([self.weights, appended_weights])
+        self.anchor_index = torch.cat([self.anchor_index, appended_index])
+        self.anchor_confidence = torch.cat(
+            [self.anchor_confidence, appended_confidence]
+        )
+        self._device_cache.clear()
+        self.stale = False
+
+        if lifecycle is not None and int(len(lifecycle)) == int(self.weights.shape[0]):
+            device = lifecycle.anchor_index.device
+            lifecycle.anchor_index = self.anchor_index.to(device)
+            lifecycle.anchor_confidence = self.anchor_confidence.to(device)
+
+        self.last_stats = _summarize(
+            admission, base, gate, float(self.config.weight_floor)
+        )
+        self.last_stats["extended"] = added
+        return self.last_stats
+
+    def on_relocate(
+        self,
+        dead_indices: Any,
+        source_indices: Any,
+        means: Any | None = None,
+        lifecycle: Any | None = None,
+    ) -> None:
+        """Re-point the relocated slots' cached rows; the count is unchanged.
+
+        MCMC relocation overwrites each dead slot with a copy of a live source
+        Gaussian, so the slot's admission must follow the source rather than
+        keep the corpse's. With ``means`` omitted the source's cached row is
+        copied — exact, because the slot now *is* the source's position, and
+        exactly as fresh as the source's own entry. Pass ``means`` (the ``[D, 3]``
+        post-relocation positions of the dead slots) to re-query instead, which
+        is what a proposal-moved relocation needs.
+        """
+        torch = __import__("torch")
+        if self.weights is None or self.stale:
+            # Nothing trustworthy to maintain; the refresh path will rebuild.
+            return
+        count = int(self.weights.shape[0])
+        dead = torch.as_tensor(dead_indices, dtype=torch.int64).reshape(-1).cpu()
+        source = torch.as_tensor(source_indices, dtype=torch.int64).reshape(-1).cpu()
+        if int(dead.numel()) != int(source.numel()):
+            raise ValueError("dead_indices and source_indices must have equal length")
+        if dead.numel() == 0:
+            return
+        if bool(((dead < 0) | (dead >= count)).any()) or bool(
+            ((source < 0) | (source >= count)).any()
+        ):
+            raise ValueError("relocation indices are out of range")
+
+        if means is None:
+            # Gather before scatter: a source row must never be read after a
+            # write, and a source can legitimately also be a dead slot's target.
+            inherited = self.weights[source].clone()
+            inherited_index = self.anchor_index[source].clone()
+            inherited_confidence = self.anchor_confidence[source].clone()
+        else:
+            points = np.ascontiguousarray(
+                means.detach().cpu().to(torch.float64).numpy()
+            )
+            if points.shape != (int(dead.numel()), 3):
+                raise ValueError("means must have shape [D, 3] matching dead_indices")
+            admission, _base, _gate, query = self._evaluate(points)
+            inherited = torch.from_numpy(
+                np.ascontiguousarray(admission, dtype=np.float32)
+            )
+            inherited_index = torch.from_numpy(
+                np.ascontiguousarray(query.index, dtype=np.int64)
+            )
+            inherited_confidence = torch.from_numpy(
+                np.ascontiguousarray(query.confidence, dtype=np.float32)
+            )
+
+        # Clone before scattering: admission_weights() hands out the cached
+        # tensor itself when no device/dtype conversion is needed, so an
+        # in-place write here could mutate a vector a caller is still holding.
+        self.weights = self.weights.clone()
+        self.anchor_index = self.anchor_index.clone()
+        self.anchor_confidence = self.anchor_confidence.clone()
+        self.weights[dead] = inherited
+        self.anchor_index[dead] = inherited_index
+        self.anchor_confidence[dead] = inherited_confidence
+        self._device_cache.clear()
+
+        if lifecycle is not None and int(len(lifecycle)) == count:
+            device = lifecycle.anchor_index.device
+            lifecycle.anchor_index = self.anchor_index.to(device)
+            lifecycle.anchor_confidence = self.anchor_confidence.to(device)
 
     def _tangent_gate(self, query: Any) -> np.ndarray:
         """Extrapolation penalty for queries projecting outside the scanned patch."""
@@ -342,8 +550,18 @@ class LidarAdmission:
     def on_count_changed(self, new_count: int | None = None) -> None:
         """Mark the cache stale because the Gaussian index space moved.
 
-        Known limitation (WP-4 accepts it, WP-5 must close it)
-        ------------------------------------------------------
+        Fallback only, since WP-5
+        -------------------------
+        :meth:`extend` and :meth:`on_relocate` are now the primary path: they
+        maintain the cache event by event, at a cost proportional to the rows
+        that actually changed, and leave it usable immediately. This method
+        remains as the catch-all for index-space changes that carry no
+        parent/child mapping (pruning without a mask, checkpoint restore, the
+        unweighted upstream ``sample_add`` branch), and callers should reach for
+        it only after :meth:`in_sync` says the incremental path did not keep up.
+
+        Original WP-4 rationale, still accurate for that fallback
+        ---------------------------------------------------------
         This is the same conservative policy
         :class:`~cloudstudio_3dgs.training.lidar_normals.LidarNormalAnchors`
         uses, and it has the same window: from the moment a refinement changes
@@ -356,10 +574,8 @@ class LidarAdmission:
 
         It is also conservative in the wrong direction for a *hard* rule: a
         stale hard reject would delete real candidates, while a stale soft
-        weight only mis-prioritizes them. That asymmetry is why WP-5 has to
-        replace this with event-driven maintenance (``on_grow`` /
-        ``on_relocate`` / ``on_prune`` carrying the anchors, which the lifecycle
-        columns already support) before hard admission is safe to enable.
+        weight only mis-prioritizes them. That asymmetry is what WP-5's
+        :meth:`extend` / :meth:`on_relocate` exist to remove.
         """
         self.stale = True
         self._device_cache.clear()
