@@ -65,6 +65,12 @@ from cloudstudio_3dgs.training.lidar_normals import (
     NormalAlignmentConfig,
     build_normal_field,
 )
+from cloudstudio_3dgs.training.lidar_admission import (
+    AdmissionConfig,
+    LidarAdmission,
+    normal_field_from_surface_field,
+    update_admission_telemetry,
+)
 from cloudstudio_3dgs.training.regularization import (
     GeometryRegularizationConfig,
     clip_oversized_gaussians,
@@ -163,6 +169,7 @@ class TrainerConfig:
     lidar_normal_alignment: NormalAlignmentConfig = field(
         default_factory=NormalAlignmentConfig
     )
+    lidar_admission: AdmissionConfig = field(default_factory=AdmissionConfig)
     learning_rates: dict[str, float] = field(
         default_factory=lambda: {
             "means": 1.6e-4,
@@ -230,6 +237,10 @@ class TrainerConfig:
         if not isinstance(normal_value, dict):
             raise ValueError("lidar_normal_alignment must be an object")
         lidar_normal_alignment = NormalAlignmentConfig(**normal_value)
+        admission_value = value.get("lidar_admission", {})
+        if not isinstance(admission_value, dict):
+            raise ValueError("lidar_admission must be an object")
+        lidar_admission = AdmissionConfig(**admission_value)
         scale_value = value.get("metric_scale_calibration", {})
         if not isinstance(scale_value, dict):
             raise ValueError("metric_scale_calibration must be an object")
@@ -286,6 +297,7 @@ class TrainerConfig:
             ppisp=ppisp,
             contribution=contribution_config,
             lidar_normal_alignment=lidar_normal_alignment,
+            lidar_admission=lidar_admission,
             **paths,
             **options,
         )
@@ -350,6 +362,14 @@ class TrainerConfig:
         if self.contribution_every <= 0:
             raise ValueError("contribution_every must be positive")
         self.lidar_normal_alignment.validate()
+        self.lidar_admission.validate()
+        if self.lidar_admission.enabled and not self.error_weighted_sampling.enabled:
+            # Admission is a multiplier on the error-weighted sampling weights;
+            # the plain-opacity fallback path never calls sampling_weights, so
+            # enabling it alone would silently do nothing at all.
+            raise ValueError(
+                "lidar_admission requires error_weighted_sampling to be enabled"
+            )
         if self.ppisp.enabled and self.exposure_compensation.enabled:
             raise ValueError(
                 "ppisp replaces scalar exposure compensation; enable only one"
@@ -458,6 +478,14 @@ class TrainerConfig:
             strategy_contract["error_weighted_sampling"] = (
                 self.error_weighted_sampling.to_dict()
             )
+        # Recorded only when active, unlike the older unconditional blocks:
+        # contract_dict feeds trainer_config_sha256, which resume compares
+        # against the checkpoint identity. An unconditional key would change the
+        # hash of every existing config and invalidate every existing checkpoint
+        # - including the L0 control arm, whose whole point is to stay identical
+        # to a pre-WP-4 run.
+        if self.lidar_admission.enabled:
+            strategy_contract["lidar_admission"] = self.lidar_admission.to_dict()
 
         return {
             "schema_version": 2,
@@ -1064,13 +1092,31 @@ def train(
         from scipy.spatial import cKDTree
 
         geometry_tree = cKDTree(np.asarray(xyz, dtype=np.float64))
+    surface_field = None
+    admission = None
+    if config.lidar_admission.enabled:
+        # Soft LiDAR admission: the continuous surface field (KNN-PCA normals,
+        # planarity, roughness, spacing, confidence; ~1.2-2.2s for 390k points)
+        # biases *where* densification is allowed to give birth.
+        from cloudstudio_3dgs.geometry.lidar_surface_field import build_surface_field
+
+        surface_field = build_surface_field(xyz)
+        admission = LidarAdmission(surface_field, config.lidar_admission)
     normal_anchors = None
     if config.lidar_normal_alignment.enabled:
         # LiDAR-normal geometry prior: KNN-PCA normals + planarity over the
         # metric initialization cloud (~1.3s for 390k points), anchoring each
         # gaussian's shortest axis to the measured surface orientation.
+        if surface_field is not None and config.lidar_admission.share_normal_field:
+            # The surface field already computed the same KNN-PCA with the same
+            # planarity definition; adopt it (and its cKDTree) instead of
+            # building a second one. Note this carries the surface field's knn
+            # over to the alignment loss - see AdmissionConfig.share_normal_field.
+            normal_field = normal_field_from_surface_field(surface_field)
+        else:
+            normal_field = build_normal_field(xyz)
         normal_anchors = LidarNormalAnchors(
-            build_normal_field(xyz), config.lidar_normal_alignment
+            normal_field, config.lidar_normal_alignment
         )
     if len(xyz) >= config.cap_max:
         raise ValueError(
@@ -1101,6 +1147,10 @@ def train(
         },
         error_score_config=config.error_weighted_sampling,
     )
+    if admission is not None:
+        # The strategy consults this only inside _relocate_gs / _add_new_gs and
+        # falls back to pure error weighting whenever it is stale.
+        backend.strategy.admission_state = admission
     backend.pinhole_rasterize_mode = config.pinhole_rasterize_mode
     runtime_contract = {
         key: backend.runtime.get(key)
@@ -1418,6 +1468,23 @@ def train(
         )
         screen_clip_total += clip_report["clipped_count"]
         world_clamp_total += clip_report["world_clamped_count"]
+        if admission is not None and (
+            admission.stale or step % config.lidar_admission.refresh_every == 0
+        ):
+            # Refresh *before* strategy_post_step: the densification inside it
+            # is the only consumer, and the means still line up with the count
+            # the last refine produced. The stale branch covers the step after
+            # each refine (count changed); the cadence branch covers positional
+            # drift while the count held still.
+            update_admission_telemetry(
+                mcmc_telemetry,
+                admission.refresh(
+                    params["means"],
+                    lifecycle=getattr(
+                        getattr(backend, "error_score_state", None), "lifecycle", None
+                    ),
+                ),
+            )
         mcmc_event = backend.strategy_post_step(
             params,
             optimizers,
@@ -1430,6 +1497,11 @@ def train(
             # Relocation/densification changed the gaussian set; re-anchor
             # before the next normal-alignment loss uses stale indices.
             normal_anchors.refresh(params["means"])
+        if mcmc_event["refine_triggered"] and admission is not None:
+            # Same index-space invalidation, but admission is only read at the
+            # next refine, so it is re-queried lazily by the stale branch above
+            # rather than eagerly here.
+            admission.on_count_changed(len(params["means"]))
         if mcmc_event["refine_triggered"]:
             require_finite_training_tensors(
                 params=params,

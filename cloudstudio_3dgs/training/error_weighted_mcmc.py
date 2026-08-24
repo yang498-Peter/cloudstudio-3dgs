@@ -31,7 +31,7 @@ error attributed to each visible Gaussian. Two attribution modes exist:
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Dict, Optional, Union
+from typing import TYPE_CHECKING, Any, Dict, Optional, Union
 
 import torch
 from torch import Tensor
@@ -44,6 +44,9 @@ from cloudstudio_3dgs.training.error_weighted_config import (
     ErrorScoreConfig as _CoreErrorScoreConfig,
 )
 from cloudstudio_3dgs.training.gaussian_lifecycle import GaussianLifecycleState
+
+if TYPE_CHECKING:  # pragma: no cover - annotation only, no runtime dependency
+    from cloudstudio_3dgs.training.lidar_admission import LidarAdmission
 
 
 @dataclass(frozen=True)
@@ -385,8 +388,22 @@ class ErrorScoreState:
         self.lifecycle.resize(int(new_count))
 
     @torch.no_grad()
-    def sampling_weights(self, opacities: Tensor) -> Tensor:
-        """Return ``opacity * clamped_score**power`` aligned with the Gaussians."""
+    def sampling_weights(
+        self, opacities: Tensor, admission: Optional[Tensor] = None
+    ) -> Tensor:
+        """Return ``opacity * clamped_score**power [* admission]`` per Gaussian.
+
+        ``admission`` is the optional soft LiDAR surface-support factor from
+        :meth:`~cloudstudio_3dgs.training.lidar_admission.LidarAdmission.admission_weights`,
+        a ``[N]`` vector in ``[weight_floor, 1]``. It biases *where* newly
+        densified Gaussians are born toward measured surfaces; because its floor
+        is strictly positive it can never zero a candidate out, so this stays a
+        preference and not a rejection.
+
+        When ``admission`` is ``None`` the returned tensor is bit-for-bit the
+        pre-WP-4 result — that is the regression guarantee every disabled run
+        and every existing caller relies on.
+        """
         opac = torch.as_tensor(opacities).flatten()
         if int(opac.shape[0]) != len(self):
             raise ValueError(
@@ -394,7 +411,15 @@ class ErrorScoreState:
             )
         score = self.scores.to(device=opac.device, dtype=opac.dtype)
         score = score.clamp_min(float(self.config.min_score_floor))
-        return opac * score ** float(self.config.score_power)
+        weights = opac * score ** float(self.config.score_power)
+        if admission is None:
+            return weights
+        factor = torch.as_tensor(admission).flatten()
+        if int(factor.shape[0]) != len(self):
+            raise ValueError(
+                f"admission has {int(factor.shape[0])} entries but state holds {len(self)}"
+            )
+        return weights * factor.to(device=opac.device, dtype=opac.dtype)
 
     def checkpoint_state(self) -> dict[str, Any]:
         """Return the complete state required for deterministic resume.
@@ -602,6 +627,9 @@ class ErrorWeightedMCMCStrategy(MCMCStrategy):
     # Bookkeeping only: the refine hooks are called without the step number,
     # but lifecycle rows record the step at which they were (re)born.
     current_step: int = 0
+    # Optional soft LiDAR surface-support weighting of the birth sites
+    # (WP-4). Left as None the strategy is unchanged in every respect.
+    admission_state: Optional["LidarAdmission"] = None
 
     def __post_init__(self) -> None:
         self.error_config.validate()
@@ -611,6 +639,22 @@ class ErrorWeightedMCMCStrategy(MCMCStrategy):
             self.error_config.enabled
             and self.score_state is not None
             and len(self.score_state) == int(num_gaussians)
+        )
+
+    def _admission_weights(self, opacities: Tensor) -> Optional[Tensor]:
+        """Admission factor for the current cloud, or ``None`` to skip it.
+
+        Any doubt — no admission state, disabled, stale after a refinement, or
+        a length that does not match the live Gaussian count — degrades to pure
+        error-weighted sampling. Falling back is always safe here because the
+        admission factor is a preference, not a gate.
+        """
+        if self.admission_state is None:
+            return None
+        return self.admission_state.admission_weights(
+            int(opacities.shape[0]),
+            device=opacities.device,
+            dtype=opacities.dtype,
         )
 
     def step_post_backward(self, *args: Any, **kwargs: Any):
@@ -643,7 +687,9 @@ class ErrorWeightedMCMCStrategy(MCMCStrategy):
         n_gs = int(dead_mask.sum().item())
         if n_gs > 0:
             assert self.score_state is not None
-            probs = self.score_state.sampling_weights(opacities)
+            probs = self.score_state.sampling_weights(
+                opacities, admission=self._admission_weights(opacities)
+            )
             outcome = relocate_weighted(
                 params=params,
                 optimizers=optimizers,
@@ -683,8 +729,9 @@ class ErrorWeightedMCMCStrategy(MCMCStrategy):
         n_gs = max(0, n_target - current_n_points)
         if n_gs > 0:
             assert self.score_state is not None
+            opacities = torch.sigmoid(params["opacities"].flatten())
             probs = self.score_state.sampling_weights(
-                torch.sigmoid(params["opacities"].flatten())
+                opacities, admission=self._admission_weights(opacities)
             )
             sampled_idxs = sample_add_weighted(
                 params=params,
