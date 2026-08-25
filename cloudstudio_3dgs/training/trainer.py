@@ -1946,7 +1946,14 @@ def train(
                 "completed_steps": config.max_steps,
                 "duration_seconds": duration_seconds,
                 "peak_vram_bytes": peak_vram_bytes,
+                # CAREFUL: params was reloaded from best_golden above, so this
+                # counts the DELIVERED model. When the floater gate freezes
+                # selection early the two diverge sharply - R5 delivered step
+                # 1000 with 390,901 Gaussians while training ended at 1,894,580
+                # - and reading the wrong one inverts conclusions about
+                # capacity. final_gaussian_count is the end of training.
                 "gaussian_count": len(params["means"]),
+                "delivered_gaussian_count": len(params["means"]),
                 "final_gaussian_count": final_gaussian_count,
                 "model_path": selected_model_path.relative_to(output_dir).as_posix(),
                 "model_sha256": _sha256_file(selected_model_path),
