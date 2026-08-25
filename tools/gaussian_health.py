@@ -94,6 +94,19 @@ def read_ply_xyz(path: Path) -> np.ndarray:
     List properties and non-vertex elements after vertex are not supported for
     binary files unless the vertex element comes first (true for our writer).
     """
+    records = read_ply_records(path)
+    return np.stack(
+        [records["x"], records["y"], records["z"]], axis=1
+    ).astype(np.float64)
+
+
+def read_ply_records(path: Path) -> np.ndarray:
+    """Read every vertex property as a structured array.
+
+    Split out of ``read_ply_xyz`` so that tools comparing against foreign
+    Gaussian PLYs can reach the splat fields (f_dc/f_rest/opacity/scale/rot)
+    without adding a plyfile dependency.
+    """
     path = Path(path)
     with path.open("rb") as stream:
         magic = stream.readline().strip()
@@ -148,10 +161,7 @@ def read_ply_xyz(path: Path) -> np.ndarray:
             raise ValueError(
                 f"PLY truncated: expected {vertex_count} vertices, got {len(records)}"
             )
-        xyz = np.stack(
-            [records["x"], records["y"], records["z"]], axis=1
-        ).astype(np.float64)
-        return xyz
+        return records
 
 
 def _to_numpy(value) -> np.ndarray:
