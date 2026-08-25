@@ -55,10 +55,26 @@ class DefaultStrategyAdapter:
         refine_stop_iter: int = 15000,
         refine_every: int = 100,
         reset_every: int = 3000,
+        pause_refine_after_reset: int = 0,
         grow_grad2d: float = 0.0002,
-        grow_scale3d: float = 0.01,
         prune_opa: float = 0.005,
+        # Metric thresholds are the product-facing form. Upstream normalises by
+        # scene_scale, and passing the wrong quantity there is silent and severe:
+        # an early run here passed the median initial Gaussian size (0.058 m)
+        # instead of the scene extent, which set the split threshold to 0.58 mm
+        # and the prune threshold to 5.8 mm against 1-8 cm Gaussians. Every
+        # high-gradient Gaussian was therefore split and never cloned, the model
+        # grew to 694k, and the arm looked like evidence against the method.
+        split_scale_m: float | None = None,
+        prune_scale_m: float | None = None,
+        grow_scale3d: float = 0.01,
         prune_scale3d: float = 0.1,
+        # Screen-space growth and pruning. Upstream gates both behind
+        # refine_scale2d_stop_iter, which is 0 by default and disables them -
+        # so a footprint problem cannot be addressed without setting it.
+        grow_scale2d: float = 0.05,
+        prune_scale2d: float = 0.15,
+        refine_scale2d_stop_iter: int = 0,
         absgrad: bool = False,
         revised_opacity: bool = False,
         verbose: bool = False,
@@ -66,15 +82,30 @@ class DefaultStrategyAdapter:
         from gsplat.strategy import DefaultStrategy
 
         self.scene_scale = float(scene_scale)
+        if self.scene_scale <= 0.0:
+            raise ValueError("scene_scale must be positive")
+        # Metric thresholds win when given, so a config can state what it means
+        # in metres instead of in units of a scale factor it cannot see.
+        self.split_scale_m = split_scale_m
+        self.prune_scale_m = prune_scale_m
+        if split_scale_m is not None:
+            grow_scale3d = float(split_scale_m) / self.scene_scale
+        if prune_scale_m is not None:
+            prune_scale3d = float(prune_scale_m) / self.scene_scale
+
         self.inner = DefaultStrategy(
             prune_opa=float(prune_opa),
             grow_grad2d=float(grow_grad2d),
             grow_scale3d=float(grow_scale3d),
             prune_scale3d=float(prune_scale3d),
+            grow_scale2d=float(grow_scale2d),
+            prune_scale2d=float(prune_scale2d),
+            refine_scale2d_stop_iter=int(refine_scale2d_stop_iter),
             refine_start_iter=int(refine_start_iter),
             refine_stop_iter=int(refine_stop_iter),
             reset_every=int(reset_every),
             refine_every=int(refine_every),
+            pause_refine_after_reset=int(pause_refine_after_reset),
             absgrad=bool(absgrad),
             revised_opacity=bool(revised_opacity),
             verbose=bool(verbose),
@@ -147,13 +178,35 @@ class DefaultStrategyAdapter:
         )
 
     def state_dict(self) -> dict[str, Any]:
+        """Every knob, plus the metres each normalised threshold resolves to.
+
+        Recorded in full because the normalised form is unreadable on its own -
+        "grow_scale3d 0.01" says nothing about whether a 8 cm Gaussian will be
+        split, and the run where it silently meant 0.58 mm looked identical in
+        the config.
+        """
         return {
             "strategy": "default_3dgs",
             "scene_scale": self.scene_scale,
             "grow_grad2d": float(self.inner.grow_grad2d),
             "grow_scale3d": float(self.inner.grow_scale3d),
+            "prune_scale3d": float(self.inner.prune_scale3d),
+            "grow_scale2d": float(self.inner.grow_scale2d),
+            "prune_scale2d": float(self.inner.prune_scale2d),
+            "refine_scale2d_stop_iter": int(self.inner.refine_scale2d_stop_iter),
             "prune_opa": float(self.inner.prune_opa),
             "absgrad": bool(self.inner.absgrad),
             "revised_opacity": bool(self.inner.revised_opacity),
             "reset_every": int(self.inner.reset_every),
+            "pause_refine_after_reset": int(self.inner.pause_refine_after_reset),
+            "refine_start_iter": int(self.inner.refine_start_iter),
+            "refine_stop_iter": int(self.inner.refine_stop_iter),
+            "refine_every": int(self.inner.refine_every),
+            # The resolved metric meaning of the two normalised scale gates.
+            "effective_split_scale_m": float(
+                self.inner.grow_scale3d * self.scene_scale
+            ),
+            "effective_prune_scale_m": float(
+                self.inner.prune_scale3d * self.scene_scale
+            ),
         }

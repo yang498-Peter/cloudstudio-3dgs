@@ -1180,6 +1180,13 @@ def train(
         config, config.learning_rates
     )
     reference_scale_m = float(scale_calibration["reference_scale_m"])
+    # Scene EXTENT, distinct from reference_scale_m (median Gaussian size).
+    # Upstream's scale gates are fractions of this, so conflating the two moves
+    # every threshold by three orders of magnitude. p95 rather than max so a
+    # handful of distant returns cannot inflate it.
+    scene_extent_m = float(
+        np.percentile(np.linalg.norm(xyz - np.median(xyz, axis=0), axis=1), 95)
+    )
     effective_learning_rates["means"] = float(scale_calibration["effective_means_lr_m"])
     backend = backend_factory(
         device=config.device,
@@ -1196,7 +1203,14 @@ def train(
         densification_strategy=config.densification_strategy,
         default_strategy_config={
             **config.default_strategy,
-            "scene_scale": reference_scale_m,
+            # Upstream normalises its scale gates by the SCENE extent, not by
+            # Gaussian size. Passing reference_scale_m here - the median initial
+            # Gaussian scale, ~0.058 m - made the split gate 0.58 mm and the
+            # prune gate 5.8 mm against 1-8 cm Gaussians, so everything split,
+            # nothing cloned, and the arm read as evidence against the method.
+            # Configs should set split_scale_m / prune_scale_m instead and let
+            # the adapter convert; this remains the denominator for that.
+            "scene_scale": scene_extent_m,
         },
     )
     classic_densification = config.densification_strategy == "default_3dgs"

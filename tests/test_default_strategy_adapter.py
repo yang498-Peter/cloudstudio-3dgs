@@ -197,3 +197,43 @@ class PruningInvariantTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class MetricThresholdTests(unittest.TestCase):
+    """Scale gates are normalised by scene extent, and the wrong quantity is silent."""
+
+    def test_metric_thresholds_convert_through_scene_scale(self):
+        adapter = DefaultStrategyAdapter(
+            scene_scale=16.7, split_scale_m=0.03, prune_scale_m=0.20
+        )
+        recorded = adapter.state_dict()
+        self.assertAlmostEqual(recorded["effective_split_scale_m"], 0.03, places=6)
+        self.assertAlmostEqual(recorded["effective_prune_scale_m"], 0.20, places=6)
+
+    def test_the_resolved_metres_are_recorded_not_just_the_ratios(self):
+        # The run that passed median Gaussian size as scene_scale looked
+        # identical in its config; only the resolved metres expose it.
+        wrong = DefaultStrategyAdapter(scene_scale=0.0582).state_dict()
+        right = DefaultStrategyAdapter(scene_scale=16.7).state_dict()
+        self.assertLess(wrong["effective_split_scale_m"], 0.001)
+        self.assertGreater(right["effective_split_scale_m"], 0.1)
+
+    def test_a_non_positive_scene_scale_is_refused(self):
+        with self.assertRaises(ValueError):
+            DefaultStrategyAdapter(scene_scale=0.0)
+
+    def test_screen_space_gates_are_exposed(self):
+        # Upstream disables both behind refine_scale2d_stop_iter=0, so a
+        # footprint problem cannot be addressed unless this is settable.
+        adapter = DefaultStrategyAdapter(
+            scene_scale=16.7, grow_scale2d=0.04, prune_scale2d=0.12,
+            refine_scale2d_stop_iter=12000,
+        )
+        recorded = adapter.state_dict()
+        self.assertEqual(recorded["grow_scale2d"], 0.04)
+        self.assertEqual(recorded["prune_scale2d"], 0.12)
+        self.assertEqual(recorded["refine_scale2d_stop_iter"], 12000)
+
+    def test_pause_after_reset_is_exposed(self):
+        adapter = DefaultStrategyAdapter(scene_scale=16.7, pause_refine_after_reset=938)
+        self.assertEqual(adapter.state_dict()["pause_refine_after_reset"], 938)
