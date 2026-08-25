@@ -188,6 +188,21 @@ def main() -> int:
     print(f"Sharpness metrics ({SCHEMA_VERSION})")
     print(f"split={args.split}  frames={len(dataset)}  "
           f"gaussians={params['means'].shape[0]:,}")
+    # Which model this actually is. best_golden.pt stops advancing as soon as
+    # the golden gate starts refusing checkpoints, so a 16000-step run can hand
+    # back a step-7000 model with nothing in the log saying so - and every
+    # number below would then describe that earlier model.
+    measured_step = payload.get("step", payload.get("completed_steps"))
+    requested_steps = config.get("max_steps")
+    if measured_step is not None:
+        note = f"\ncheckpoint is step {measured_step:,}"
+        if requested_steps:
+            note += f" of {requested_steps:,} requested"
+            if measured_step < requested_steps:
+                note += (f"  <- DELIVERED MODEL IS EARLIER THAN THE RUN; the "
+                         f"golden gate froze selection at "
+                         f"{measured_step / requested_steps * 100:.0f}%")
+        print(note)
     print(f"\n{'view':>6}{'energy':>10}{'agreement':>12}{'holes':>9}   reading")
 
     background = np.asarray(config["background_color"], dtype=np.float32)
@@ -243,6 +258,8 @@ def main() -> int:
         args.output.write_text(json.dumps({
             "schema_version": SCHEMA_VERSION,
             "checkpoint": str(args.checkpoint),
+            "checkpoint_step": measured_step,
+            "requested_steps": requested_steps,
             "split": args.split,
             "energy": energy_mean,
             "agreement": agreement_mean,

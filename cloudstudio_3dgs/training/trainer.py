@@ -1324,6 +1324,14 @@ def train(
     # held rather than assume it.
     normal_loss_steps_total = 0
     normal_loss_steps_stale = 0
+    # A run can complete every step it was asked for and still DELIVER a much
+    # earlier model: the golden gate refuses any checkpoint over the floater
+    # budget, and best_golden.pt - which the acceptance pipeline and the
+    # sharpness tool both read - simply stops advancing. Nothing warns. R1
+    # trained 16000 steps and delivered step 7000. These counters put the
+    # delivered-vs-trained gap in the manifest.
+    golden_rejection_streak = 0
+    golden_floater_rejections = 0
     # Last proposal batch already folded into the telemetry; see the fold site.
     proposal_batches = 0
     last_metrics: dict[str, Any] = {}
@@ -1727,6 +1735,13 @@ def train(
             )
             if golden_promoted:
                 best_golden = golden_result
+                golden_rejection_streak = 0
+            else:
+                golden_rejection_streak += 1
+                gate = config.golden_evaluation.max_floater_count
+                floaters = golden_result["summary"].get("floater_count")
+                if gate is not None and floaters is not None and floaters > gate:
+                    golden_floater_rejections += 1
             _write_golden_history(
                 golden_history_path,
                 config=config.golden_evaluation,
@@ -1955,6 +1970,14 @@ def train(
                 "normal_loss_active_ratio": None
                 if normal_loss_steps_total == 0
                 else 1.0 - normal_loss_steps_stale / normal_loss_steps_total,
+                # How much of the training the delivered model actually saw.
+                # A ratio below 1.0 means the gate froze selection early and
+                # every metric describes that earlier model, not this run.
+                "delivered_step_fraction": None
+                if not config.max_steps or selected_model_step is None
+                else selected_model_step / config.max_steps,
+                "golden_rejection_streak_final": golden_rejection_streak,
+                "golden_floater_rejections": golden_floater_rejections,
                 "last_metrics": last_metrics,
                 "initial_loss": initial_loss,
                 "best_loss": best_loss,
