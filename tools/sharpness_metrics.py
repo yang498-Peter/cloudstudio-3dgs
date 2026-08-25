@@ -159,6 +159,20 @@ def main() -> int:
     parser.add_argument("--split", default="val", choices=("train", "val"))
     parser.add_argument("--views", type=int, nargs="*", default=list(DEFAULT_VIEWS))
     parser.add_argument("--crop-size", type=int, default=DEFAULT_CROP_PX)
+    parser.add_argument("--exclude-sky", action="store_true",
+                        help="restrict every metric to pixels with LiDAR depth "
+                             "support, i.e. real geometry. Required for honest "
+                             "comparison against products that render sky from "
+                             "a separate layer; sky is 78-85%% of frame here")
+    parser.add_argument("--crop-metrics", action="store_true",
+                        help="also report energy/agreement/holes restricted to "
+                             "the crop window, so the region shown in the "
+                             "image has numbers of its own")
+    parser.add_argument("--crop-center", type=float, nargs=2, default=None,
+                        metavar=("X", "Y"),
+                        help="crop centre as fractions of width/height "
+                             "(default: the highest-texture region, which in "
+                             "outdoor scenes is reliably the ground)")
     parser.add_argument("--crops-dir", type=Path, default=None,
                         help="write native-resolution photo|render crops here")
     parser.add_argument("--tag", default="model", help="prefix for crop filenames")
@@ -183,7 +197,16 @@ def main() -> int:
         split=args.split,
         factor=config["factor"],
         crop=None,
+        # Only loaded when asked for: it is what makes --exclude-sky possible,
+        # and configs that predate it simply do not carry the keys.
+        **({"depth_manifest_path": Path(config["depth_manifest"]),
+            "depth_root": Path(config["depth_root"])}
+           if args.exclude_sky and "depth_manifest" in config else {}),
     )
+    if args.exclude_sky and "depth_manifest" not in config:
+        print("--exclude-sky needs depth_manifest/depth_root in the config",
+              file=sys.stderr)
+        return 2
 
     print(f"Sharpness metrics ({SCHEMA_VERSION})")
     print(f"split={args.split}  frames={len(dataset)}  "
@@ -213,6 +236,21 @@ def main() -> int:
         sample = dataset[index]
         reference = np.asarray(sample.image, dtype=np.float32) / 255.0
         mask = np.asarray(sample.rgb_mask, dtype=bool)
+        if args.exclude_sky:
+            # LiDAR returns nothing from sky, so depth support is a direct
+            # "has real geometry" test - no colour heuristic needed. This
+            # matters for cross-product comparison: a competitor that renders
+            # sky from a separate layer (a sky sphere shipped as its own file)
+            # is measured unfairly here if that file is absent, and in this
+            # scene sky is 78-85% of the frame, so it dominates any average
+            # taken over the whole image.
+            if sample.depth_mask is None:
+                print("--exclude-sky needs a depth manifest in the config",
+                      file=sys.stderr)
+                return 2
+            mask = mask & np.asarray(sample.depth_mask, dtype=bool)
+            if not mask.any():
+                continue
         with torch.no_grad():
             rgb, _, _, _ = backend.render(
                 params, sample, with_range=False,
@@ -228,9 +266,51 @@ def main() -> int:
                          "reading": classify(e, c, h)})
         print(f"{index:>6}{e:>10.3f}{c:>12.3f}{h * 100:>8.1f}%   {classify(e, c, h)}")
 
+        if args.crop_metrics and (args.crops_dir is not None
+                                  or args.crop_center is not None):
+            # Metrics restricted to the crop window. The full-frame numbers
+            # above average gravel, sky, walls and foliage together, so two
+            # crops of the same view report identical figures and the picture
+            # the crop shows has no number attached to it. Every metric takes
+            # a mask, so confining the mask to the window is all this needs.
+            if args.crop_center is not None:
+                cx, cy = args.crop_center
+                height, width = reference.shape[:2]
+                mx = int(round(cx * width - args.crop_size / 2))
+                my = int(round(cy * height - args.crop_size / 2))
+                mx = max(0, min(width - args.crop_size, mx))
+                my = max(0, min(height - args.crop_size, my))
+            else:
+                my, mx = highest_texture_crop(reference, mask, args.crop_size)
+            window = np.zeros_like(mask)
+            window[my:my + args.crop_size, mx:mx + args.crop_size] = True
+            window &= mask
+            if window.any():
+                per_view[-1]["crop_energy"] = energy_ratio(render, reference, window)
+                per_view[-1]["crop_agreement"] = agreement(render, reference, window)
+                per_view[-1]["crop_holes"] = background_fraction(
+                    render, window, background
+                )
+
         if args.crops_dir is not None:
             args.crops_dir.mkdir(parents=True, exist_ok=True)
-            y, x = highest_texture_crop(reference, mask, args.crop_size)
+            if args.crop_center is not None:
+                # Highest-texture selection lands on gravel in every outdoor
+                # frame here - it carries the most high-frequency energy of
+                # anything in view, and it is also the hardest content to
+                # reconstruct (thin coverage, no large-scale structure), so
+                # judging by eye from it is unrepresentative. This aims the
+                # crop at built structure instead: walls, window frames,
+                # rooflines, vehicle panels, where a straight edge either
+                # survives or visibly does not.
+                cx, cy = args.crop_center
+                height, width = reference.shape[:2]
+                x = int(round(cx * width - args.crop_size / 2))
+                y = int(round(cy * height - args.crop_size / 2))
+                x = max(0, min(width - args.crop_size, x))
+                y = max(0, min(height - args.crop_size, y))
+            else:
+                y, x = highest_texture_crop(reference, mask, args.crop_size)
             pair = np.concatenate([reference[y:y + args.crop_size, x:x + args.crop_size],
                                    render[y:y + args.crop_size, x:x + args.crop_size]],
                                   axis=1)
@@ -254,6 +334,18 @@ def main() -> int:
               f"rims raise energy and depress agreement on their own. Raise cap_max "
               f"before reading anything else here.")
 
+    crop_summary = {}
+    if per_view and "crop_energy" in per_view[0]:
+        for name in ("energy", "agreement", "holes"):
+            crop_summary[name] = float(
+                np.mean([v[f"crop_{name}"] for v in per_view])
+            )
+        print(f"{'crop':>6}{crop_summary['energy']:>10.3f}"
+              f"{crop_summary['agreement']:>12.3f}"
+              f"{crop_summary['holes'] * 100:>8.1f}%   "
+              f"{classify(crop_summary['energy'], crop_summary['agreement'], crop_summary['holes'])}"
+              "   <- inside the crop only")
+
     if args.output is not None:
         args.output.write_text(json.dumps({
             "schema_version": SCHEMA_VERSION,
@@ -265,6 +357,7 @@ def main() -> int:
             "agreement": agreement_mean,
             "holes": holes_mean,
             "reading": reading,
+            "crop": crop_summary or None,
             "per_view": per_view,
         }, indent=1), encoding="utf-8")
         print(f"\nreport written to {args.output}")
