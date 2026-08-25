@@ -151,6 +151,49 @@ class BackendWiringTests(unittest.TestCase):
         self.assertFalse(GsplatBackend.needs_pre_backward)
         self.assertTrue(hasattr(GsplatBackend, "strategy_pre_step"))
 
+    def test_defaults_describe_mcmc_semantics(self):
+        from cloudstudio_3dgs.training.backend import GsplatBackend
+
+        # Both flags exist so the shared telemetry path can tell the two
+        # strategies apart; MCMC neither prunes nor needs the absgrad channel.
+        self.assertFalse(GsplatBackend.strategy_prunes)
+        self.assertFalse(GsplatBackend.needs_absgrad)
+
+
+class PruningInvariantTests(unittest.TestCase):
+    """The count check encodes MCMC semantics that classic densification breaks."""
+
+    def _event(self, before_count, after_count, **kwargs):
+        from cloudstudio_3dgs.training.runtime_evidence import build_mcmc_step_event
+
+        return build_mcmc_step_event(
+            step=1000,
+            before={"gaussian_count": before_count, "dead_gaussian_count": 0},
+            after={"gaussian_count": after_count, "dead_gaussian_count": 0},
+            refine_start_iter=500,
+            refine_stop_iter=7000,
+            refine_every=100,
+            noise_injection_stop_iter=0,
+            **kwargs,
+        )
+
+    def test_mcmc_still_rejects_a_falling_count(self):
+        # MCMC relocates and appends but never removes, so this remains a bug
+        # signal for the existing path and must not be relaxed for everyone.
+        with self.assertRaises(RuntimeError):
+            self._event(1000, 900)
+
+    def test_a_pruning_strategy_is_allowed_to_reduce_the_count(self):
+        event = self._event(1000, 900, strategy_prunes=True)
+        self.assertEqual(event["pruned_gaussian_count"], 100)
+        self.assertEqual(event["new_gaussian_count"], 0)
+
+    def test_growth_is_reported_the_same_way_for_both(self):
+        for prunes in (False, True):
+            event = self._event(1000, 1200, strategy_prunes=prunes)
+            self.assertEqual(event["new_gaussian_count"], 200)
+            self.assertEqual(event["pruned_gaussian_count"], 0)
+
 
 if __name__ == "__main__":
     unittest.main()

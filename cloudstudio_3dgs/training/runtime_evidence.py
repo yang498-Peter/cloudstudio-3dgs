@@ -562,6 +562,7 @@ def build_mcmc_step_event(
     refine_every: int,
     noise_injection_stop_iter: int,
     noise_position_delta_max_m: float | None = None,
+    strategy_prunes: bool = False,
 ) -> dict[str, Any]:
     """Describe one completed strategy call without overstating visual quality."""
     refine = _refine_triggered(
@@ -585,18 +586,31 @@ def build_mcmc_step_event(
             raise ValueError("noise position delta requires a finite active-noise step")
     relocated = 0
     added = 0
+    pruned = 0
     if refine:
         assert before is not None and after is not None
         relocated = int(before["dead_gaussian_count"])
         added = int(after["gaussian_count"]) - int(before["gaussian_count"])
         if added < 0:
-            raise RuntimeError("MCMC strategy unexpectedly reduced Gaussian count")
+            # MCMC relocates dead Gaussians and appends new ones but never
+            # removes any, so a falling count means the strategy misbehaved.
+            # Classic 3DGS densification prunes low-opacity and oversized splats
+            # by design, and asserting MCMC's invariant against it would reject
+            # correct behaviour - so the caller states which semantics apply
+            # rather than the check being relaxed for everyone.
+            if not strategy_prunes:
+                raise RuntimeError(
+                    "MCMC strategy unexpectedly reduced Gaussian count"
+                )
+            pruned = -added
+            added = 0
     return {
         "step": int(step),
         "refine_triggered": refine,
         "noise_injection_invoked": noise,
         "relocated_count": relocated,
         "new_gaussian_count": added,
+        "pruned_gaussian_count": pruned,
         "noise_position_delta_max_m": noise_position_delta_max_m,
         "before": before,
         "after": after,

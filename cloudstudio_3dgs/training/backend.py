@@ -78,6 +78,11 @@ class GsplatBackend:
     # Classic densification needs a pre-backward hook; MCMC does not. Recorded
     # here so callers can skip the call without knowing which strategy is live.
     needs_pre_backward: bool = False
+    # AbsGS reads a gradient accumulator the rasterizer only produces on request.
+    needs_absgrad: bool = False
+    # MCMC relocates and adds but never removes, so a falling count means a bug.
+    # Classic densification prunes by design, so the same check would be wrong.
+    strategy_prunes: bool = False
 
     def __init__(
         self,
@@ -136,6 +141,8 @@ class GsplatBackend:
                                 (mcmc_config or {}).get("refine_every", 100))
             self.strategy = DefaultStrategyAdapter(**settings)
             self.needs_pre_backward = True
+            self.needs_absgrad = bool(settings.get("absgrad", False))
+            self.strategy_prunes = True
             # No relocation or noise injection is involved, so the MCMC operator
             # audit does not apply; record that rather than asserting on it.
             self.runtime["mcmc_operator_report"] = {
@@ -296,6 +303,12 @@ class GsplatBackend:
             width=sample.width,
             height=sample.height,
             packed=False,
+            # AbsGS sums per-pixel gradient magnitudes instead of letting
+            # opposing contributions cancel inside one Gaussian. The strategy
+            # reads info["means2d"].absgrad, which only exists when the
+            # rasterizer was asked to accumulate it - without this the strategy
+            # raises on its first refine rather than silently degrading.
+            **({"absgrad": True} if self.needs_absgrad else {}),
             # Fisheye+eval3d "RGB-Ed" is expected HIT DISTANCE (Euclidean ray
             # range, the supervision semantics). The classic pinhole path only
             # offers Gaussian z-depth ("RGB+ED"); the per-face
@@ -417,4 +430,5 @@ class GsplatBackend:
             refine_every=self.strategy.refine_every,
             noise_injection_stop_iter=self.strategy.noise_injection_stop_iter,
             noise_position_delta_max_m=noise_position_delta_max_m,
+            strategy_prunes=self.strategy_prunes,
         )
