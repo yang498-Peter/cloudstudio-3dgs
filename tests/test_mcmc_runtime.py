@@ -468,5 +468,51 @@ class MCMCTelemetryTests(unittest.TestCase):
             )
 
 
+@unittest.skipIf(torch is None, "torch is required")
+class LargeModelTelemetryTests(unittest.TestCase):
+    """Evidence collection must not be the thing that kills the biggest run.
+
+    torch.quantile refuses inputs above 2**24 elements. The H3 arm - 15.9M
+    Gaussians, 47.7M scale values - died at step zero inside snapshot_gaussians,
+    so the code whose only job is to DESCRIBE a run is what prevented it. The
+    failure scales with model size: it appears first on the most expensive arm
+    and never on any cheap test, which is why it needs one of its own.
+    """
+
+    def test_quantiles_survive_a_tensor_over_the_torch_limit(self):
+        from cloudstudio_3dgs.training.runtime_evidence import (
+            _QUANTILE_LIMIT,
+            _quantiles,
+        )
+
+        oversized = torch.linspace(0.0, 1.0, _QUANTILE_LIMIT + 1024)
+        stats = _quantiles(oversized)
+        # min and max stay exact - they are read from the full tensor.
+        self.assertAlmostEqual(stats["min"], 0.0, places=5)
+        self.assertAlmostEqual(stats["max"], 1.0, places=5)
+        # Subsampling a uniform ramp must not shift the middle noticeably.
+        self.assertAlmostEqual(stats["p50"], 0.5, places=2)
+        self.assertAlmostEqual(stats["p95"], 0.95, places=2)
+
+    def test_small_tensors_are_unaffected(self):
+        from cloudstudio_3dgs.training.runtime_evidence import _quantiles
+
+        stats = _quantiles(torch.linspace(0.0, 1.0, 1001))
+        self.assertAlmostEqual(stats["min"], 0.0, places=6)
+        self.assertAlmostEqual(stats["p50"], 0.5, places=6)
+        self.assertAlmostEqual(stats["max"], 1.0, places=6)
+
+    def test_subsampling_is_deterministic(self):
+        from cloudstudio_3dgs.training.runtime_evidence import (
+            _QUANTILE_LIMIT,
+            _quantiles,
+        )
+
+        # Identical models must yield identical evidence, so the reduction
+        # cannot be random.
+        tensor = torch.rand(_QUANTILE_LIMIT + 4096)
+        self.assertEqual(_quantiles(tensor), _quantiles(tensor.clone()))
+
+
 if __name__ == "__main__":
     unittest.main()

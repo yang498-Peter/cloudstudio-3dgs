@@ -494,19 +494,35 @@ def execute_render_scale_contract_smoke(backend: Any) -> dict[str, Any]:
     }
 
 
+# torch.quantile refuses inputs above 2**24 elements. A 15.9M-Gaussian model
+# carries 47.7M scale values, so the telemetry that merely DESCRIBES a run
+# aborted it before step one - which is what killed the H3 arm.
+_QUANTILE_LIMIT = 2 ** 24
+
+
 def _quantiles(tensor: Any) -> dict[str, float]:
     import torch
 
     flattened = tensor.detach().float().flatten()
+    # min and max come from the full tensor: exact, cheap, and they are what a
+    # reader checks for degenerate geometry.
+    minimum = float(flattened.min().cpu())
+    maximum = float(flattened.max().cpu())
+    if flattened.numel() > _QUANTILE_LIMIT:
+        # Deterministic stride rather than random sampling: identical evidence
+        # must come out of an identical model. Parameter tensors carry no
+        # meaningful ordering, so a strided subsample is unbiased here.
+        stride = flattened.numel() // _QUANTILE_LIMIT + 1
+        flattened = flattened[::stride]
     values = torch.quantile(
         flattened,
-        torch.tensor([0.0, 0.5, 0.95, 1.0], device=flattened.device),
+        torch.tensor([0.5, 0.95], device=flattened.device),
     )
     return {
-        "min": float(values[0].cpu()),
-        "p50": float(values[1].cpu()),
-        "p95": float(values[2].cpu()),
-        "max": float(values[3].cpu()),
+        "min": minimum,
+        "p50": float(values[0].cpu()),
+        "p95": float(values[1].cpu()),
+        "max": maximum,
     }
 
 
