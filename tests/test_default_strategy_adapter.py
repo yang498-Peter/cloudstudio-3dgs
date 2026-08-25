@@ -339,3 +339,30 @@ class GradientIsolationTests(unittest.TestCase):
         backend = self._backend()
         with self.assertRaises(RuntimeError):
             backend.strategy_isolate_gradient(info)
+
+
+class CapacityGuardTests(unittest.TestCase):
+    """Threshold-driven growth has no upstream cap; the 2k smoke measured it
+    accelerating (6k -> 32k per refine event). The guard turns a would-be CUDA
+    OOM hours into an immediate diagnosis carrying the telemetry."""
+
+    def _backend(self, hard_cap):
+        from cloudstudio_3dgs.training.backend import GsplatBackend
+
+        backend = GsplatBackend.__new__(GsplatBackend)
+        backend.hard_cap = hard_cap
+        return backend
+
+    def test_a_count_past_the_cap_aborts_with_a_diagnosis(self):
+        backend = self._backend(hard_cap=10)
+        with self.assertRaises(RuntimeError) as caught:
+            backend.enforce_capacity({"means": range(11)}, step=1200)
+        self.assertIn("runaway", str(caught.exception))
+
+    def test_a_count_at_the_cap_is_still_allowed(self):
+        self._backend(hard_cap=10).enforce_capacity({"means": range(10)}, step=1200)
+
+    def test_no_cap_means_no_guard(self):
+        self._backend(hard_cap=None).enforce_capacity(
+            {"means": range(10_000_000)}, step=1200
+        )

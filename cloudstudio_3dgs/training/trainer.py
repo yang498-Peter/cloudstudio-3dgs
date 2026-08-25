@@ -1964,6 +1964,16 @@ def train(
                 "mcmc_operator_report": backend.runtime.get(
                     "mcmc_operator_report"
                 ),
+                # What actually densified this run, with the metric metres each
+                # normalised gate resolved to - the scene_scale incident showed
+                # the config alone cannot expose a wrong resolution.
+                "densification": {
+                    "strategy": config.densification_strategy,
+                    "gradient_source": config.densification_gradient_source,
+                    "resolved": backend.strategy.state_dict()
+                    if config.densification_strategy == "default_3dgs"
+                    else None,
+                },
                 "mcmc_telemetry": mcmc_telemetry,
             },
         }

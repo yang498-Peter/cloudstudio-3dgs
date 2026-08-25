@@ -86,6 +86,9 @@ class GsplatBackend:
     # Between-pass snapshots for densification_gradient_source="rgb_only".
     _criterion_grad: Any = None
     _criterion_absgrad: Any = None
+    # Capacity abort for threshold-driven growth; None means uncapped (MCMC
+    # already enforces its own cap through the sampler).
+    hard_cap: int | None = None
 
     def __init__(
         self,
@@ -146,6 +149,12 @@ class GsplatBackend:
             self.needs_pre_backward = True
             self.needs_absgrad = bool(settings.get("absgrad", False))
             self.strategy_prunes = True
+            # Threshold-driven growth has no upstream cap, and the 2k smoke
+            # measured accelerating growth (6k -> 32k per refine event). On a
+            # 16 GB card ~3M Gaussians is the ceiling; past the configured cap
+            # the run aborts with a diagnosis instead of dying in an opaque OOM
+            # hours later.
+            self.hard_cap = int(cap_max) if cap_max else None
             # No relocation or noise injection is involved, so the MCMC operator
             # audit does not apply; record that rather than asserting on it.
             self.runtime["mcmc_operator_report"] = {
@@ -401,6 +410,25 @@ class GsplatBackend:
                 "was strategy_pre_step skipped?"
             )
 
+    def enforce_capacity(self, params: Any, step: int) -> None:
+        """Abort a runaway densification instead of letting it OOM hours in.
+
+        Classic threshold-driven growth has no upstream cap and compounds -
+        children of a split inherit high gradients and split again. Breaching
+        the cap is a RESULT (the criterion or the scale gates are wrong for
+        this scene), and the abort preserves it as a diagnosis with the full
+        telemetry rather than as an opaque CUDA OOM.
+        """
+        if self.hard_cap is None:
+            return
+        count = len(params["means"])
+        if count > self.hard_cap:
+            raise RuntimeError(
+                f"densification grew to {count} Gaussians at step {step}, past "
+                f"the capacity cap {self.hard_cap}; treat as a runaway-growth "
+                "result, not an infrastructure failure"
+            )
+
     def strategy_restore_gradient(self, info: dict[str, Any]) -> None:
         """Put the photometric-only gradients back for the strategy to read."""
         means2d = info["means2d"]
@@ -448,6 +476,7 @@ class GsplatBackend:
             info=info,
             lr=optimizers["means"].param_groups[0]["lr"],
         )
+        self.enforce_capacity(params, step)
         noise_position_delta_max_m = None
         if noise_probe_before is not None:
             probe_after = params["means"][: len(noise_probe_before)].detach()
