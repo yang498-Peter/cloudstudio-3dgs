@@ -162,6 +162,11 @@ class TrainerConfig:
     # 2026-08-25 traced the blur to where the error map places births.
     densification_strategy: str = "error_weighted_mcmc"
     default_strategy: dict[str, Any] = field(default_factory=dict)
+    # What loss the densification criterion differentiates. "rgb_only" scores
+    # births from L1+SSIM alone, the way Kerbl et al. trained; under "total_loss"
+    # the LiDAR range and normal terms leak into means2d.grad through the shared
+    # rasterization, and the criterion is no longer the published one.
+    densification_gradient_source: str = "total_loss"
     rig_pose_refinement: RigPoseRefinementConfig = field(
         default_factory=RigPoseRefinementConfig
     )
@@ -299,6 +304,7 @@ class TrainerConfig:
                 "mcmc_noise_lr",
                 "densification_strategy",
                 "default_strategy",
+                "densification_gradient_source",
                 "learning_rates",
             )
             if key in value
@@ -422,6 +428,21 @@ class TrainerConfig:
         if self.densification_strategy not in DENSIFICATION_STRATEGIES:
             raise ValueError(
                 f"densification_strategy must be one of {list(DENSIFICATION_STRATEGIES)}"
+            )
+        if self.densification_gradient_source not in ("total_loss", "rgb_only"):
+            raise ValueError(
+                "densification_gradient_source must be 'total_loss' or 'rgb_only'"
+            )
+        if (
+            self.densification_gradient_source == "rgb_only"
+            and self.densification_strategy != "default_3dgs"
+        ):
+            # The MCMC path never reads means2d.grad, so accepting the knob
+            # there would be a silent no-op - the class of bug this campaign
+            # keeps paying for.
+            raise ValueError(
+                "densification_gradient_source='rgb_only' requires "
+                "densification_strategy='default_3dgs'"
             )
         self.rig_pose_refinement.validate()
         self.exposure_compensation.validate()
@@ -1296,6 +1317,13 @@ def train(
     completed_steps = 0
     screen_clip_total = 0
     world_clamp_total = 0
+    # Anchor-liveness evidence: densification splits change the Gaussian count,
+    # and a stale anchor table silently zeroes the normal term for the very
+    # Gaussians a fresh split most needs constrained. The refresh is event-
+    # driven (see the refine_triggered branch below); these counters prove it
+    # held rather than assume it.
+    normal_loss_steps_total = 0
+    normal_loss_steps_stale = 0
     # Last proposal batch already folded into the telemetry; see the fold site.
     proposal_batches = 0
     last_metrics: dict[str, Any] = {}
@@ -1448,6 +1476,11 @@ def train(
             ):
                 normal_anchors.refresh(params["means"])
             loss = loss + normal_anchors.loss(params)["total"]
+            normal_loss_steps_total += 1
+            # loss() re-flags itself stale when the cached table no longer
+            # matches the Gaussian count and contributes zero for that step.
+            if normal_anchors.stale:
+                normal_loss_steps_stale += 1
         require_finite_training_tensors(
             params=params,
             loss=loss,
@@ -1464,7 +1497,28 @@ def train(
         backend.strategy_pre_step(
             params, optimizers, strategy_state, step=step, info=info
         )
-        loss.backward()
+        if (
+            backend.needs_pre_backward
+            and config.densification_gradient_source == "rgb_only"
+        ):
+            # Two-pass backward so the densification criterion sees the gradient
+            # of L1+SSIM alone, as Kerbl et al. trained. One backward over the
+            # total loss would let the LiDAR range and normal terms leak into
+            # means2d.grad through the shared rasterization. The photometric
+            # pass runs FIRST and its means2d gradients are snapshotted, because
+            # .grad accumulates across passes while gsplat overwrites .absgrad
+            # on each - only a snapshot survives both semantics. The optimizer
+            # still steps on the full total-loss gradient (the two passes sum
+            # in the leaf parameters).
+            rgb_loss = config.rgb_l1_weight * l1 + config.rgb_ssim_weight * ssim
+            rest_loss = loss - rgb_loss
+            rgb_loss.backward(retain_graph=True)
+            backend.strategy_isolate_gradient(info)
+            if rest_loss.requires_grad:
+                rest_loss.backward()
+            backend.strategy_restore_gradient(info)
+        else:
+            loss.backward()
         refine_boundary = (
             step < config.mcmc_refine_stop_iter
             and step > config.mcmc_refine_start_iter
@@ -1893,6 +1947,14 @@ def train(
                 ),
                 "screen_clip_events": screen_clip_total,
                 "world_clamp_events": world_clamp_total,
+                # Anchor-liveness evidence for the LiDAR normal term: any
+                # nonzero stale count means Gaussians trained unconstrained
+                # right after a refine event, which biases densification arms.
+                "normal_loss_steps_total": normal_loss_steps_total,
+                "normal_loss_steps_stale": normal_loss_steps_stale,
+                "normal_loss_active_ratio": None
+                if normal_loss_steps_total == 0
+                else 1.0 - normal_loss_steps_stale / normal_loss_steps_total,
                 "last_metrics": last_metrics,
                 "initial_loss": initial_loss,
                 "best_loss": best_loss,

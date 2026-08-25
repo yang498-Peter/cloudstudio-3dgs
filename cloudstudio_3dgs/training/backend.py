@@ -83,6 +83,9 @@ class GsplatBackend:
     # MCMC relocates and adds but never removes, so a falling count means a bug.
     # Classic densification prunes by design, so the same check would be wrong.
     strategy_prunes: bool = False
+    # Between-pass snapshots for densification_gradient_source="rgb_only".
+    _criterion_grad: Any = None
+    _criterion_absgrad: Any = None
 
     def __init__(
         self,
@@ -369,6 +372,43 @@ class GsplatBackend:
         self.strategy.step_pre_backward(
             params=params, optimizers=optimizers, state=state, step=step, info=info
         )
+
+    def strategy_isolate_gradient(self, info: dict[str, Any]) -> None:
+        """Snapshot the criterion gradients right after the photometric backward.
+
+        Under densification_gradient_source="rgb_only" the trainer runs two
+        backward passes. means2d.grad ACCUMULATES across them while gsplat
+        OVERWRITES means2d.absgrad on each, so the only representation that
+        survives both is a snapshot taken between the passes.
+        """
+        means2d = info["means2d"]
+        self._criterion_grad = (
+            None if means2d.grad is None else means2d.grad.detach().clone()
+        )
+        absgrad = getattr(means2d, "absgrad", None)
+        self._criterion_absgrad = None if absgrad is None else absgrad.detach().clone()
+        if self.needs_absgrad and self._criterion_absgrad is None:
+            # Fail closed: an absgrad strategy fed no absgrad would silently
+            # score every Gaussian at zero and never densify.
+            raise RuntimeError(
+                "absgrad strategy is active but the photometric backward "
+                "produced no means2d.absgrad"
+            )
+        if self._criterion_grad is None and self._criterion_absgrad is None:
+            # Same silent-death mode for the plain-gradient criterion.
+            raise RuntimeError(
+                "photometric backward left no gradient on means2d; "
+                "was strategy_pre_step skipped?"
+            )
+
+    def strategy_restore_gradient(self, info: dict[str, Any]) -> None:
+        """Put the photometric-only gradients back for the strategy to read."""
+        means2d = info["means2d"]
+        means2d.grad = self._criterion_grad
+        if self._criterion_absgrad is not None:
+            means2d.absgrad = self._criterion_absgrad
+        self._criterion_grad = None
+        self._criterion_absgrad = None
 
     def strategy_post_step(
         self,

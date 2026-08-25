@@ -237,3 +237,105 @@ class MetricThresholdTests(unittest.TestCase):
     def test_pause_after_reset_is_exposed(self):
         adapter = DefaultStrategyAdapter(scene_scale=16.7, pause_refine_after_reset=938)
         self.assertEqual(adapter.state_dict()["pause_refine_after_reset"], 938)
+
+
+class GradientSourceTests(unittest.TestCase):
+    """rgb_only keeps the LiDAR terms out of the densification criterion.
+
+    Both losses backprop through the same rasterization, so under a single
+    backward means2d.grad differentiates the TOTAL loss and the criterion is no
+    longer the published one. The knob exists to cut that leak; refusing it
+    under MCMC exists because MCMC never reads means2d.grad and accepting it
+    there would be a silent no-op.
+    """
+
+    def test_default_is_the_total_loss_for_compatibility(self):
+        config = TrainerConfig.from_dict(_minimal_config())
+        self.assertEqual(config.densification_gradient_source, "total_loss")
+
+    def test_rgb_only_is_accepted_with_the_classic_strategy(self):
+        config = TrainerConfig.from_dict(
+            _minimal_config(
+                densification_strategy="default_3dgs",
+                densification_gradient_source="rgb_only",
+            )
+        )
+        config.validate()
+        self.assertEqual(config.densification_gradient_source, "rgb_only")
+
+    def test_rgb_only_under_mcmc_is_refused_not_ignored(self):
+        config = TrainerConfig.from_dict(
+            _minimal_config(densification_gradient_source="rgb_only")
+        )
+        with self.assertRaises(ValueError):
+            config.validate()
+
+    def test_an_unknown_source_is_refused(self):
+        config = TrainerConfig.from_dict(
+            _minimal_config(
+                densification_strategy="default_3dgs",
+                densification_gradient_source="whatever",
+            )
+        )
+        with self.assertRaises(ValueError):
+            config.validate()
+
+
+class GradientIsolationTests(unittest.TestCase):
+    """The two-pass snapshot must survive both gradient semantics.
+
+    means2d.grad ACCUMULATES across backward passes while gsplat OVERWRITES
+    means2d.absgrad on each, so a snapshot between the passes is the only
+    representation that stays photometric-only in both cases.
+    """
+
+    def _backend(self, needs_absgrad=False):
+        from cloudstudio_3dgs.training.backend import GsplatBackend
+
+        backend = GsplatBackend.__new__(GsplatBackend)
+        backend.needs_absgrad = needs_absgrad
+        return backend
+
+    def test_grad_snapshot_survives_a_contaminating_second_pass(self):
+        import torch
+
+        means2d = torch.zeros(4, 2, requires_grad=True)
+        means2d.grad = torch.full((4, 2), 0.5)
+        info = {"means2d": means2d}
+        backend = self._backend()
+        backend.strategy_isolate_gradient(info)
+        means2d.grad = means2d.grad + 1.0  # what the LiDAR pass does
+        backend.strategy_restore_gradient(info)
+        self.assertTrue(torch.equal(means2d.grad, torch.full((4, 2), 0.5)))
+
+    def test_absgrad_snapshot_survives_the_overwrite_semantics(self):
+        import torch
+
+        means2d = torch.zeros(4, 2, requires_grad=True)
+        means2d.grad = torch.zeros(4, 2)
+        means2d.absgrad = torch.full((4, 2), 0.25)
+        info = {"means2d": means2d}
+        backend = self._backend(needs_absgrad=True)
+        backend.strategy_isolate_gradient(info)
+        means2d.absgrad = torch.full((4, 2), 9.0)  # gsplat overwrites per pass
+        backend.strategy_restore_gradient(info)
+        self.assertTrue(torch.equal(means2d.absgrad, torch.full((4, 2), 0.25)))
+
+    def test_an_absgrad_strategy_without_absgrad_fails_closed(self):
+        import torch
+
+        means2d = torch.zeros(4, 2, requires_grad=True)
+        means2d.grad = torch.zeros(4, 2)
+        info = {"means2d": means2d}
+        backend = self._backend(needs_absgrad=True)
+        with self.assertRaises(RuntimeError):
+            backend.strategy_isolate_gradient(info)
+
+    def test_a_gradient_free_backward_fails_closed(self):
+        import torch
+
+        means2d = torch.zeros(4, 2, requires_grad=True)
+        info = {"means2d": means2d}
+        backend = self._backend()
+        with self.assertRaises(RuntimeError):
+            backend.strategy_isolate_gradient(info)
