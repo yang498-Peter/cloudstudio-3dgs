@@ -75,6 +75,10 @@ class GsplatBackend:
     # Default for instances constructed without __init__ in contract tests.
     error_score_state: Any = None
 
+    # Classic densification needs a pre-backward hook; MCMC does not. Recorded
+    # here so callers can skip the call without knowing which strategy is live.
+    needs_pre_backward: bool = False
+
     def __init__(
         self,
         *,
@@ -83,11 +87,17 @@ class GsplatBackend:
         lock_path: Path,
         mcmc_config: dict[str, Any] | None = None,
         error_score_config: Any | None = None,
+        densification_strategy: str = "error_weighted_mcmc",
+        default_strategy_config: dict[str, Any] | None = None,
     ) -> None:
         self.runtime = verify_gsplat_runtime(lock_path)
         import torch
         from gsplat import rasterization
 
+        from cloudstudio_3dgs.training.default_strategy_adapter import (
+            DENSIFICATION_STRATEGIES,
+            DefaultStrategyAdapter,
+        )
         from cloudstudio_3dgs.training.error_weighted_mcmc import (
             ErrorScoreConfig,
             ErrorScoreState,
@@ -106,6 +116,33 @@ class GsplatBackend:
             if error_score_config.enabled
             else None
         )
+        if densification_strategy not in DENSIFICATION_STRATEGIES:
+            raise ValueError(
+                f"densification_strategy must be one of {list(DENSIFICATION_STRATEGIES)}"
+            )
+        self.densification_strategy = densification_strategy
+
+        if densification_strategy == "default_3dgs":
+            # gsplat's reference implementation of Kerbl et al. The homegrown
+            # error-weighted sampler it replaces was measured to place births in
+            # regions carrying a quarter of the photo texture of the ones that
+            # actually lack detail; see default_strategy_adapter for the numbers.
+            settings = dict(default_strategy_config or {})
+            settings.setdefault("refine_start_iter",
+                                (mcmc_config or {}).get("refine_start_iter", 500))
+            settings.setdefault("refine_stop_iter",
+                                (mcmc_config or {}).get("refine_stop_iter", 15000))
+            settings.setdefault("refine_every",
+                                (mcmc_config or {}).get("refine_every", 100))
+            self.strategy = DefaultStrategyAdapter(**settings)
+            self.needs_pre_backward = True
+            # No relocation or noise injection is involved, so the MCMC operator
+            # audit does not apply; record that rather than asserting on it.
+            self.runtime["mcmc_operator_report"] = {
+                "skipped": "densification_strategy=default_3dgs"
+            }
+            return
+
         self.strategy = ErrorWeightedMCMCStrategy(
             cap_max=cap_max,
             verbose=False,
@@ -296,6 +333,29 @@ class GsplatBackend:
             rgb = rgb + (1.0 - alpha[0]) * background
         range_m = render[0, ..., 3] if with_range else None
         return rgb, range_m, alpha[0, ..., 0], info
+
+    def strategy_pre_step(
+        self,
+        params: Any,
+        optimizers: dict[str, Any],
+        state: Any,
+        *,
+        step: int,
+        info: dict[str, Any],
+    ) -> None:
+        """Called before loss.backward(); a no-op unless the strategy needs it.
+
+        Classic densification scores each Gaussian by the gradient of the loss
+        with respect to its projected position, and that gradient only survives
+        the backward pass if this hook retains it. Omitting the call does not
+        raise - the criterion just never fires - so it is routed through the
+        backend rather than left to callers to remember.
+        """
+        if not self.needs_pre_backward:
+            return
+        self.strategy.step_pre_backward(
+            params=params, optimizers=optimizers, state=state, step=step, info=info
+        )
 
     def strategy_post_step(
         self,

@@ -1,0 +1,156 @@
+"""The reference-3DGS densification path must be selectable without disturbing MCMC.
+
+The adapter exists so that gsplat's DefaultStrategy can be driven through the
+attribute surface this backend and trainer already read from MCMC. Two things
+therefore need guarding: that the surface is complete, and that selecting the
+new path does not alter the old one.
+
+The pre-backward hook gets its own test because omitting it fails SILENTLY -
+DefaultStrategy scores Gaussians by a gradient that is only retained inside that
+call, so a missing call leaves the criterion permanently inert rather than
+raising. That is exactly the class of bug a test has to catch, because nothing
+at runtime will.
+"""
+
+from __future__ import annotations
+
+import unittest
+
+from cloudstudio_3dgs.training.default_strategy_adapter import (
+    DENSIFICATION_STRATEGIES,
+    DefaultStrategyAdapter,
+)
+from cloudstudio_3dgs.training.trainer import TrainerConfig
+
+
+def _minimal_config(**overrides):
+    payload = {
+        "run_id": "unit",
+        "dataset_manifest": "d.json",
+        "recording_root": ".",
+        "mask_manifest": "m.json",
+        "mask_root": ".",
+        "split_manifest": "s.json",
+        "output_dir": "out",
+        "gsplat_lock": "lock.json",
+        "device": "cuda:0",
+        "max_steps": 100,
+        "cap_max": 1000,
+        # validate() enforces the full production contract, so these are present
+        # to reach the densification checks rather than because this test cares
+        # about person masking.
+        "person_mask_manifest": "p.json",
+        "person_mask_root": ".",
+        "lidar_range_weight": 0.0,
+        "initialization_ply": "init.ply",
+    }
+    payload.update(overrides)
+    return payload
+
+
+class DefaultStrategySelectionTests(unittest.TestCase):
+    def test_the_existing_mcmc_path_remains_the_default(self):
+        config = TrainerConfig.from_dict(_minimal_config())
+        self.assertEqual(config.densification_strategy, "error_weighted_mcmc")
+
+    def test_classic_densification_can_be_selected(self):
+        config = TrainerConfig.from_dict(
+            _minimal_config(densification_strategy="default_3dgs")
+        )
+        config.validate()
+        self.assertEqual(config.densification_strategy, "default_3dgs")
+
+    def test_an_unknown_strategy_is_refused_rather_than_ignored(self):
+        config = TrainerConfig.from_dict(
+            _minimal_config(densification_strategy="whatever")
+        )
+        with self.assertRaises(ValueError):
+            config.validate()
+
+    def test_published_refinements_pass_through_to_the_strategy(self):
+        # absgrad is the AbsGS fix and revised_opacity the corrected split
+        # opacity; both are upstream options, not local inventions.
+        config = TrainerConfig.from_dict(
+            _minimal_config(
+                densification_strategy="default_3dgs",
+                default_strategy={"absgrad": True, "revised_opacity": True},
+            )
+        )
+        config.validate()
+        self.assertEqual(
+            config.default_strategy, {"absgrad": True, "revised_opacity": True}
+        )
+
+
+class DefaultStrategyAdapterTests(unittest.TestCase):
+    def setUp(self):
+        self.adapter = DefaultStrategyAdapter(
+            scene_scale=2.5,
+            refine_start_iter=500,
+            refine_stop_iter=7000,
+            refine_every=100,
+            absgrad=True,
+        )
+
+    def test_it_presents_every_attribute_the_backend_reads_from_mcmc(self):
+        for name in ("min_opacity", "noise_injection_stop_iter", "refine_start_iter",
+                     "refine_stop_iter", "refine_every", "cap_max"):
+            self.assertTrue(hasattr(self.adapter, name), name)
+
+    def test_min_opacity_maps_onto_the_upstream_prune_threshold(self):
+        self.assertEqual(self.adapter.min_opacity, self.adapter.inner.prune_opa)
+
+    def test_noise_injection_reports_stopped_because_classic_injects_none(self):
+        # The backend uses this to decide whether to probe for a position delta;
+        # reporting anything else would make it wait for noise that never comes.
+        self.assertEqual(self.adapter.noise_injection_stop_iter, 0)
+
+    def test_cap_max_is_none_because_classic_growth_is_threshold_driven(self):
+        self.assertIsNone(self.adapter.cap_max)
+
+    def test_refine_window_is_forwarded_not_defaulted(self):
+        self.assertEqual(self.adapter.refine_start_iter, 500)
+        self.assertEqual(self.adapter.refine_stop_iter, 7000)
+        self.assertEqual(self.adapter.refine_every, 100)
+
+    def test_state_carries_the_gradient_accumulator_the_criterion_needs(self):
+        state = self.adapter.initialize_state()
+        self.assertIn("grad2d", state)
+        self.assertEqual(state["scene_scale"], 2.5)
+
+    def test_step_post_backward_accepts_and_ignores_the_mcmc_lr_argument(self):
+        # The trainer passes lr= unconditionally; only MCMC's noise term uses it.
+        import inspect
+
+        signature = inspect.signature(self.adapter.step_post_backward)
+        self.assertIn("lr", signature.parameters)
+
+    def test_pre_backward_is_exposed_because_omitting_it_fails_silently(self):
+        # DefaultStrategy scores by a gradient retained only inside this call.
+        # Without it the criterion never fires and nothing raises.
+        self.assertTrue(callable(self.adapter.step_pre_backward))
+
+    def test_state_dict_records_which_strategy_produced_a_run(self):
+        recorded = self.adapter.state_dict()
+        self.assertEqual(recorded["strategy"], "default_3dgs")
+        self.assertTrue(recorded["absgrad"])
+        self.assertEqual(recorded["grow_grad2d"], 0.0002)
+
+    def test_the_strategy_names_are_the_two_that_exist(self):
+        self.assertEqual(
+            set(DENSIFICATION_STRATEGIES), {"error_weighted_mcmc", "default_3dgs"}
+        )
+
+
+class BackendWiringTests(unittest.TestCase):
+    def test_backend_flags_whether_the_pre_backward_hook_is_required(self):
+        from cloudstudio_3dgs.training.backend import GsplatBackend
+
+        # Class-level default keeps instances built without __init__ (contract
+        # tests do this) from claiming they need a hook they cannot serve.
+        self.assertFalse(GsplatBackend.needs_pre_backward)
+        self.assertTrue(hasattr(GsplatBackend, "strategy_pre_step"))
+
+
+if __name__ == "__main__":
+    unittest.main()

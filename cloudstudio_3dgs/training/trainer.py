@@ -54,6 +54,7 @@ from cloudstudio_3dgs.training.rig_pose import (
     build_pose_refinement_report,
     disabled_pose_refinement_report,
 )
+from cloudstudio_3dgs.training.default_strategy_adapter import DENSIFICATION_STRATEGIES
 from cloudstudio_3dgs.training.error_weighted_mcmc import ErrorScoreConfig
 from cloudstudio_3dgs.training.contribution_attribution import (
     ContributionConfig,
@@ -155,6 +156,12 @@ class TrainerConfig:
     mcmc_refine_every: int = 100
     mcmc_noise_injection_stop_iter: int = -1
     mcmc_noise_lr: float = 500_000.0
+    # "error_weighted_mcmc" is this trainer's homegrown sampler; "default_3dgs"
+    # is gsplat's reference implementation of Kerbl et al., which scores by the
+    # projected-position gradient instead of an image-error map. Measurement on
+    # 2026-08-25 traced the blur to where the error map places births.
+    densification_strategy: str = "error_weighted_mcmc"
+    default_strategy: dict[str, Any] = field(default_factory=dict)
     rig_pose_refinement: RigPoseRefinementConfig = field(
         default_factory=RigPoseRefinementConfig
     )
@@ -290,6 +297,8 @@ class TrainerConfig:
                 "mcmc_refine_every",
                 "mcmc_noise_injection_stop_iter",
                 "mcmc_noise_lr",
+                "densification_strategy",
+                "default_strategy",
                 "learning_rates",
             )
             if key in value
@@ -410,6 +419,10 @@ class TrainerConfig:
             raise ValueError("MCMC refine interval must be positive and noise LR non-negative")
         if self.mcmc_noise_injection_stop_iter < -1:
             raise ValueError("MCMC noise stop must be -1 or non-negative")
+        if self.densification_strategy not in DENSIFICATION_STRATEGIES:
+            raise ValueError(
+                f"densification_strategy must be one of {list(DENSIFICATION_STRATEGIES)}"
+            )
         self.rig_pose_refinement.validate()
         self.exposure_compensation.validate()
         self.geometry_regularization.validate()
@@ -1180,12 +1193,18 @@ def train(
             "noise_lr": float(scale_calibration["effective_noise_lr"]),
         },
         error_score_config=config.error_weighted_sampling,
+        densification_strategy=config.densification_strategy,
+        default_strategy_config={
+            **config.default_strategy,
+            "scene_scale": reference_scale_m,
+        },
     )
-    if admission is not None:
+    classic_densification = config.densification_strategy == "default_3dgs"
+    if admission is not None and not classic_densification:
         # The strategy consults this only inside _relocate_gs / _add_new_gs and
         # falls back to pure error weighting whenever it is stale.
         backend.strategy.admission_state = admission
-    if proposal is not None:
+    if proposal is not None and not classic_densification:
         # Read only inside _add_new_gs, and only for the rows it appends.
         backend.strategy.proposal_state = proposal
     backend.pinhole_rasterize_mode = config.pinhole_rasterize_mode
@@ -1421,6 +1440,15 @@ def train(
             stage=f"step_{step}_loss",
             check_gradients=False,
             check_parameters=False,
+        )
+        # Must precede backward: classic densification scores each Gaussian by
+        # the gradient of the loss with respect to its PROJECTED position, and
+        # that gradient only survives the backward pass if the strategy is given
+        # the chance to retain it here. A no-op under MCMC, which scores from
+        # opacity instead, and silent rather than fatal if skipped - the
+        # criterion would simply never fire.
+        backend.strategy_pre_step(
+            params, optimizers, strategy_state, step=step, info=info
         )
         loss.backward()
         refine_boundary = (
