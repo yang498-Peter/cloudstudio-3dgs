@@ -134,6 +134,28 @@ def masked_rgb_ssim_loss(
     return 1.0 - ssim[valid_windows].mean()
 
 
+def _range_supervision_masks(prediction_range_m, target_range_m, confidence, mask):
+    """Split "no supervision" from "no prediction" - they mean different things.
+
+    An empty mask, target or confidence means the dataset or config is broken
+    and there is genuinely nothing to learn from; that must stay fatal. A
+    degenerate PREDICTION alongside valid supervision is a transient training
+    state - classic 3DGS resets every opacity periodically, so the render is
+    legitimately empty for one step - and raising there rejects a published
+    mechanism rather than catching a bug. Conflating the two made the reference
+    densification path die at exactly its first opacity reset.
+    """
+    supervised = (
+        mask
+        & target_range_m.isfinite()
+        & confidence.isfinite()
+        & (target_range_m > 0.0)
+        & (confidence > 0.0)
+    )
+    predicted = prediction_range_m.isfinite() & (prediction_range_m > 0.0)
+    return supervised, supervised & predicted
+
+
 def confidence_weighted_range_l1(
     prediction_range_m: Any,
     target_range_m: Any,
@@ -144,17 +166,13 @@ def confidence_weighted_range_l1(
         raise ValueError("range prediction and target shapes differ")
     if confidence.shape != target_range_m.shape or mask.shape != target_range_m.shape:
         raise ValueError("range confidence/mask shapes do not match the target")
-    valid = (
-        mask
-        & prediction_range_m.isfinite()
-        & target_range_m.isfinite()
-        & confidence.isfinite()
-        & (prediction_range_m > 0.0)
-        & (target_range_m > 0.0)
-        & (confidence > 0.0)
+    supervised, valid = _range_supervision_masks(
+        prediction_range_m, target_range_m, confidence, mask
     )
-    if not bool(valid.any().item()):
+    if not bool(supervised.any().item()):
         raise ValueError("range mask contains no finite positive supervision")
+    if not bool(valid.any().item()):
+        return (prediction_range_m * 0.0).sum()
     weights = confidence[valid]
     return ((prediction_range_m[valid] - target_range_m[valid]).abs() * weights).sum() / weights.sum()
 
@@ -177,17 +195,15 @@ def confidence_weighted_log_range_huber(
         raise ValueError("range prediction and target shapes differ")
     if confidence.shape != target_range_m.shape or mask.shape != target_range_m.shape:
         raise ValueError("range confidence/mask shapes do not match the target")
-    valid = (
-        mask
-        & prediction_range_m.isfinite()
-        & target_range_m.isfinite()
-        & confidence.isfinite()
-        & (prediction_range_m > 0.0)
-        & (target_range_m > 0.0)
-        & (confidence > 0.0)
+    supervised, valid = _range_supervision_masks(
+        prediction_range_m, target_range_m, confidence, mask
     )
-    if not bool(valid.any().item()):
+    if not bool(supervised.any().item()):
         raise ValueError("range mask contains no finite positive supervision")
+    if not bool(valid.any().item()):
+        # Zero, but still attached to the prediction so the graph and the
+        # downstream finite-checks behave exactly as on a normal step.
+        return (prediction_range_m * 0.0).sum()
     residual = (
         prediction_range_m[valid].log() - target_range_m[valid].log()
     ).abs()
