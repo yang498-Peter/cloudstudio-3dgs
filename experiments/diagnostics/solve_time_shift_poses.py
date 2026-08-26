@@ -1,29 +1,27 @@
 """Solve a per-frame along-trajectory time shift for every image - no frame dropped.
 
-The time-sync probe proved the poison segment's misregistration is explained
-by moving each camera along ITS OWN trajectory: the measured LAS shift
-aligns with the velocity direction and the residual collapses to the audit
-floor (6.7px -> 2.6/4.7px). The offset is not a constant calibration (the
-per-frame dt spread is tens of ms), so this solves dt for EVERY image:
+v2: no temporal smoothing (v1's median window replaced correct per-frame
+solves with neighbours' and the gate showed 24-29px where unsmoothed solves
+left 3-5px). Every correction must EARN its place: apply it, re-measure the
+frame, keep it only if the shift actually drops. Frames whose correction
+fails verification stay at their original pose and are listed as stubborn -
+the surgical exclusion set, not a wholesale segment cut.
 
-    dt_i  =  <measured_shift_i, J_i> / |J_i|^2      (J_i = numeric px/s)
-    pose_i = interpolate(neighbour poses of the same camera, t_i + dt_i)
-
-Slow frames (|J| below the vote floor) keep dt = 0 - they already audit at
-the floor, which is exactly why the error only ever showed on fast passes.
-A light median smoothing along each camera's timeline suppresses single
-frame estimation noise; the fail-closed decile audit then decides whether
-the corrected pose set may exist at all.
+v3: the measurement is embarrassingly parallel (each frame loads its own
+photo and depth and correlates independently), so the three passes - solve,
+verify, audit - run on a process pool. Single-threaded this took ~2h; the
+pool brings it to minutes.
 """
 import json
 import struct
 import sys
+from multiprocessing import Pool
 from pathlib import Path
 
 import numpy as np
-from PIL import Image
 
-sys.path.insert(0, r"C:\Peter\cloudstudio-3dgs-gate1")
+REPO = Path(r"C:\Peter\cloudstudio-3dgs-gate1")
+sys.path.insert(0, str(REPO))
 
 DATASETS = Path(r"C:\Peter\3dgs-datasets")
 RECORDING = Path(r"C:\Peter\testdata\S1\house0305")
@@ -32,8 +30,8 @@ OUTPUT = DATASETS / "house0305_timefix"
 SHIFTS = np.arange(-27, 28, 3)
 PROBE_DT = 0.05
 J_FLOOR = 30.0
-SMOOTH_WINDOW = 5
 GATE_PX = 4.0
+WORKERS = 8
 
 
 def las_sample(stride: int):
@@ -97,7 +95,8 @@ class Solver:
         v = intr["fl_y"] * xy[:, 1] * s + intr["cy"]
         return keep, u, v, np.degrees(theta), rng[keep]
 
-    def measure(self, image, pose, pose_next, gap):
+    def measure(self, image, pose, pose_next=None, gap=1.0):
+        from PIL import Image
         camera = self.cameras[image["camera_id"]]
         entry = self.depth_by_id.get(image["image_id"])
         if entry is None:
@@ -128,6 +127,8 @@ class Solver:
                 if c > best[0]:
                     best = (c, dx, dy)
         measured = np.array([best[1], best[2]], dtype=np.float64)
+        if pose_next is None:
+            return measured, None
 
         probe_pose = interpolate_pose(pose, pose_next, PROBE_DT / gap)
         keep2, u2, v2, _, _ = self.project(camera, probe_pose)
@@ -139,117 +140,150 @@ class Solver:
         dv = table_v[indices] - v.astype(np.float64)[inside][visible]
         good = ~np.isnan(du)
         if good.sum() < 200:
-            return None
+            return measured, None
         jacobian = np.array([np.median(du[good]), np.median(dv[good])]) / PROBE_DT
         return measured, jacobian
 
 
+_WORKER: dict = {}
+
+
+def _init_worker() -> None:
+    _WORKER["solver"] = Solver()
+
+
+def _solve_task(args):
+    key, image, next_image, gap = args
+    found = _WORKER["solver"].measure(
+        image, np.asarray(image["c2w"], dtype=np.float64),
+        np.asarray(next_image["c2w"], dtype=np.float64), gap)
+    if found is None or found[1] is None:
+        return key, None
+    measured, jacobian = found
+    j_norm = float(np.linalg.norm(jacobian))
+    if j_norm < J_FLOOR:
+        return key, None
+    dt = float(measured @ jacobian) / (j_norm ** 2)
+    return key, (dt, float(np.linalg.norm(measured)))
+
+
+def _measure_task(args):
+    key, image, pose = args
+    found = _WORKER["solver"].measure(image, np.asarray(pose, dtype=np.float64))
+    if found is None:
+        return key, None
+    return key, float(np.linalg.norm(found[0]))
+
+
 def main() -> int:
-    solver = Solver()
+    manifest = json.loads(
+        (DATASETS / "house0305_manifest" / "dataset_manifest.json")
+        .read_text(encoding="utf-8"))
     per_camera: dict[str, list[dict]] = {}
-    for image in solver.manifest["images"]:
+    for image in manifest["images"]:
         per_camera.setdefault(str(image["camera_id"]), []).append(image)
     for images in per_camera.values():
         images.sort(key=lambda i: int(i["timestamp_ns"]))
 
-    corrected: dict[str, list] = {}
-    for camera_id, images in per_camera.items():
-        dts = np.zeros(len(images))
-        votes = np.zeros(len(images), dtype=bool)
-        shift_before_px = np.zeros(len(images))
-        for index in range(1, len(images) - 1):
-            image = images[index]
-            pose = np.asarray(image["c2w"], dtype=np.float64)
-            nxt = images[index + 1]
-            gap = (int(nxt["timestamp_ns"]) - int(image["timestamp_ns"])) / 1e9
-            if not (0.1 < gap < 2.0):
-                continue
-            found = solver.measure(image, pose,
-                                   np.asarray(nxt["c2w"], dtype=np.float64), gap)
-            if found is None:
-                continue
-            measured, jacobian = found
-            j_norm = float(np.linalg.norm(jacobian))
-            if j_norm < J_FLOOR:
-                continue
-            dts[index] = float(measured @ jacobian) / (j_norm ** 2)
-            votes[index] = True
-            shift_before_px[index] = float(np.linalg.norm(measured))
-            if index % 60 == 0:
-                print(f"  {camera_id} {index}/{len(images)}: "
-                      f"dt {dts[index]*1000:+.1f}ms", flush=True)
-        # NO temporal smoothing: v1 median-smoothed and the gate showed the
-        # damage (24-29px where per-frame solves had left 3-5px) - the dt
-        # signal jumps a hundred ms between neighbours and is genuinely
-        # per-frame. Instead every correction must EARN its place: apply it,
-        # re-measure the frame, and keep it only if the shift actually drops.
-        print(f"{camera_id}: {votes.sum()} voting frames, verifying "
-              f"per-frame corrections...", flush=True)
-        corrected[camera_id] = []
-        stubborn = 0
-        for index, image in enumerate(images):
-            original = np.asarray(image["c2w"], dtype=np.float64)
-            pose = original
-            dt = float(dts[index]) if votes[index] else 0.0
-            if abs(dt) > 1e-4:
-                candidate = None
-                if dt >= 0 and index + 1 < len(images):
-                    nxt = images[index + 1]
-                    gap = (int(nxt["timestamp_ns"]) - int(image["timestamp_ns"])) / 1e9
-                    if 0.05 < gap < 2.0:
-                        candidate = interpolate_pose(
-                            original, np.asarray(nxt["c2w"], dtype=np.float64),
-                            dt / gap)
-                elif dt < 0 and index > 0:
-                    prv = images[index - 1]
-                    gap = (int(image["timestamp_ns"]) - int(prv["timestamp_ns"])) / 1e9
-                    if 0.05 < gap < 2.0:
-                        candidate = interpolate_pose(
-                            np.asarray(prv["c2w"], dtype=np.float64), original,
-                            1.0 + dt / gap)
-                if candidate is not None:
-                    after = solver.measure(image, candidate, candidate, 1.0)
-                    if after is not None:
-                        shift_before = float(shift_before_px[index])
-                        shift_after = float(np.linalg.norm(after[0]))
-                        if shift_after <= max(4.0, 0.6 * shift_before):
-                            pose = candidate
-                        else:
-                            stubborn += 1
-                            dt = 0.0
-                    else:
-                        dt = 0.0
-            corrected[camera_id].append((image["image_id"], pose, dt))
-        applied = sum(1 for _, _, dt in corrected[camera_id] if abs(dt) > 1e-4)
-        print(f"{camera_id}: {applied} corrections verified and applied, "
-              f"{stubborn} rejected by re-measure (stubborn frames)", flush=True)
+    pool = Pool(processes=WORKERS, initializer=_init_worker)
 
-    # Two audits: the whole population, and the population minus stubborn
-    # frames (those whose correction failed its own re-measure and kept the
-    # original pose). Training excludes ONLY the stubborn list - surgical,
-    # not the wholesale 212-frame cut the user rejected.
-    flat = {}
-    stubborn_ids = set()
-    for rows in corrected.values():
-        for image_id, pose, dt in rows:
-            flat[image_id] = pose
-    # A frame is stubborn if it still misaligns at its final pose.
-    images_sorted = sorted(solver.manifest["images"],
-                           key=lambda i: int(i["timestamp_ns"]))
+    # Pass 1: solve dt for every frame with a usable neighbour.
+    tasks = []
+    for camera_id, images in per_camera.items():
+        for index in range(1, len(images) - 1):
+            image, nxt = images[index], images[index + 1]
+            gap = (int(nxt["timestamp_ns"]) - int(image["timestamp_ns"])) / 1e9
+            if 0.1 < gap < 2.0:
+                tasks.append(((camera_id, index), image, nxt, gap))
+    print(f"pass 1: solving {len(tasks)} frames on {WORKERS} workers", flush=True)
+    solved: dict = {}
+    for done, (key, result) in enumerate(pool.imap_unordered(_solve_task, tasks,
+                                                             chunksize=4), 1):
+        solved[key] = result
+        if done % 200 == 0:
+            print(f"  solve {done}/{len(tasks)}", flush=True)
+
+    # Candidate poses for every voting frame; verification runs in pass 2.
+    verify_tasks = []
+    final_poses: dict = {}
+    dt_by_key: dict = {}
+    for camera_id, images in per_camera.items():
+        for index, image in enumerate(images):
+            final_poses[(camera_id, index)] = np.asarray(image["c2w"],
+                                                         dtype=np.float64)
+        for index in range(1, len(images) - 1):
+            key = (camera_id, index)
+            result = solved.get(key)
+            if result is None:
+                continue
+            dt, shift_before = result
+            if abs(dt) <= 1e-4:
+                continue
+            image = images[index]
+            original = np.asarray(image["c2w"], dtype=np.float64)
+            candidate = None
+            if dt >= 0:
+                nxt = images[index + 1]
+                gap = (int(nxt["timestamp_ns"]) - int(image["timestamp_ns"])) / 1e9
+                if 0.05 < gap < 2.0:
+                    candidate = interpolate_pose(
+                        original, np.asarray(nxt["c2w"], dtype=np.float64),
+                        dt / gap)
+            else:
+                prv = images[index - 1]
+                gap = (int(image["timestamp_ns"]) - int(prv["timestamp_ns"])) / 1e9
+                if 0.05 < gap < 2.0:
+                    candidate = interpolate_pose(
+                        np.asarray(prv["c2w"], dtype=np.float64), original,
+                        1.0 + dt / gap)
+            if candidate is not None:
+                verify_tasks.append((key, image, candidate))
+                dt_by_key[key] = (dt, shift_before, candidate)
+    print(f"pass 2: verifying {len(verify_tasks)} candidate corrections",
+          flush=True)
+    applied = 0
+    stubborn = 0
+    accepted_dt: dict = {}
+    for done, (key, shift_after) in enumerate(
+            pool.imap_unordered(_measure_task, verify_tasks, chunksize=4), 1):
+        dt, shift_before, candidate = dt_by_key[key]
+        if shift_after is not None and shift_after <= max(4.0, 0.6 * shift_before):
+            final_poses[key] = candidate
+            accepted_dt[key] = dt
+            applied += 1
+        else:
+            stubborn += 1
+        if done % 200 == 0:
+            print(f"  verify {done}/{len(verify_tasks)}", flush=True)
+    print(f"verified: {applied} corrections applied, {stubborn} rejected "
+          f"by re-measure", flush=True)
+
+    # Pass 3: the decile audit at final poses, dense (every 4th frame).
+    images_sorted = sorted(manifest["images"], key=lambda i: int(i["timestamp_ns"]))
     t0 = int(images_sorted[0]["timestamp_ns"])
     span = int(images_sorted[-1]["timestamp_ns"]) - t0
-    audit = []
+    index_of: dict = {}
+    for camera_id, images in per_camera.items():
+        for index, image in enumerate(images):
+            index_of[image["image_id"]] = (camera_id, index)
+    audit_tasks = []
     for index in range(0, len(images_sorted), 4):
         image = images_sorted[index]
-        pose = flat[image["image_id"]]
-        found = solver.measure(image, pose, pose, 1.0)
-        if found is None:
-            continue
-        magnitude = float(np.linalg.norm(found[0]))
-        audit.append(((int(image["timestamp_ns"]) - t0) / span,
-                      magnitude, image["image_id"]))
-        if magnitude > 2 * GATE_PX:
-            stubborn_ids.add(image["image_id"])
+        key = index_of[image["image_id"]]
+        audit_tasks.append(((image["image_id"],
+                             (int(image["timestamp_ns"]) - t0) / span),
+                            image, final_poses[key]))
+    print(f"pass 3: auditing {len(audit_tasks)} frames", flush=True)
+    audit = []
+    for (image_id, fraction), magnitude in pool.imap_unordered(
+            _measure_task, audit_tasks, chunksize=4):
+        if magnitude is not None:
+            audit.append((fraction, magnitude, image_id))
+    pool.close()
+    pool.join()
+
+    stubborn_ids = {image_id for _, magnitude, image_id in audit
+                    if magnitude > 2 * GATE_PX}
     print(f"\nstubborn frames (final shift > {2*GATE_PX:.0f}px): "
           f"{len(stubborn_ids)} of {len(audit)} audited")
     print("audit (median px per decile: all / minus-stubborn):")
@@ -273,11 +307,16 @@ def main() -> int:
           f"<= {GATE_PX}px; exclude only the stubborn list from training")
 
     OUTPUT.mkdir(parents=True, exist_ok=True)
-    payload = {image_id: {"c2w": [[float(x) for x in row] for row in pose],
-                          "dt_s": dt}
-               for rows in corrected.values() for image_id, pose, dt in rows}
+    payload = {}
+    for camera_id, images in per_camera.items():
+        for index, image in enumerate(images):
+            key = (camera_id, index)
+            payload[image["image_id"]] = {
+                "c2w": [[float(x) for x in row] for row in final_poses[key]],
+                "dt_s": float(accepted_dt.get(key, 0.0)),
+            }
     (OUTPUT / "timefix_poses.json").write_text(
-        json.dumps({"algorithm_version": "per_frame_time_shift_v2_verified",
+        json.dumps({"algorithm_version": "per_frame_time_shift_v3_verified",
                     "gate_worst_clean_decile_px": worst_clean,
                     "stubborn_image_ids": sorted(stubborn_ids),
                     "poses": payload}), encoding="utf-8")
