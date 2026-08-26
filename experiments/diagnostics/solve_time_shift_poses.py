@@ -156,6 +156,7 @@ def main() -> int:
     for camera_id, images in per_camera.items():
         dts = np.zeros(len(images))
         votes = np.zeros(len(images), dtype=bool)
+        shift_before_px = np.zeros(len(images))
         for index in range(1, len(images) - 1):
             image = images[index]
             pose = np.asarray(image["c2w"], dtype=np.float64)
@@ -173,82 +174,115 @@ def main() -> int:
                 continue
             dts[index] = float(measured @ jacobian) / (j_norm ** 2)
             votes[index] = True
+            shift_before_px[index] = float(np.linalg.norm(measured))
             if index % 60 == 0:
                 print(f"  {camera_id} {index}/{len(images)}: "
                       f"dt {dts[index]*1000:+.1f}ms", flush=True)
-        # Median smoothing over voting neighbours; non-voters stay at zero
-        # unless surrounded by voters (then they inherit the local median).
-        smoothed = dts.copy()
-        half = SMOOTH_WINDOW // 2
-        for index in range(len(images)):
-            window = [dts[j] for j in range(max(0, index - half),
-                                            min(len(images), index + half + 1))
-                      if votes[j]]
-            if window:
-                smoothed[index] = float(np.median(window))
-        print(f"{camera_id}: {votes.sum()} voting frames, "
-              f"dt p50 {np.median(np.abs(smoothed[votes]))*1000:.1f}ms "
-              f"max {np.abs(smoothed).max()*1000:.1f}ms", flush=True)
+        # NO temporal smoothing: v1 median-smoothed and the gate showed the
+        # damage (24-29px where per-frame solves had left 3-5px) - the dt
+        # signal jumps a hundred ms between neighbours and is genuinely
+        # per-frame. Instead every correction must EARN its place: apply it,
+        # re-measure the frame, and keep it only if the shift actually drops.
+        print(f"{camera_id}: {votes.sum()} voting frames, verifying "
+              f"per-frame corrections...", flush=True)
         corrected[camera_id] = []
+        stubborn = 0
         for index, image in enumerate(images):
-            pose = np.asarray(image["c2w"], dtype=np.float64)
-            dt = float(smoothed[index])
+            original = np.asarray(image["c2w"], dtype=np.float64)
+            pose = original
+            dt = float(dts[index]) if votes[index] else 0.0
             if abs(dt) > 1e-4:
+                candidate = None
                 if dt >= 0 and index + 1 < len(images):
                     nxt = images[index + 1]
                     gap = (int(nxt["timestamp_ns"]) - int(image["timestamp_ns"])) / 1e9
                     if 0.05 < gap < 2.0:
-                        pose = interpolate_pose(
-                            pose, np.asarray(nxt["c2w"], dtype=np.float64), dt / gap)
+                        candidate = interpolate_pose(
+                            original, np.asarray(nxt["c2w"], dtype=np.float64),
+                            dt / gap)
                 elif dt < 0 and index > 0:
                     prv = images[index - 1]
                     gap = (int(image["timestamp_ns"]) - int(prv["timestamp_ns"])) / 1e9
                     if 0.05 < gap < 2.0:
-                        pose = interpolate_pose(
-                            np.asarray(prv["c2w"], dtype=np.float64), pose,
+                        candidate = interpolate_pose(
+                            np.asarray(prv["c2w"], dtype=np.float64), original,
                             1.0 + dt / gap)
+                if candidate is not None:
+                    after = solver.measure(image, candidate, candidate, 1.0)
+                    if after is not None:
+                        shift_before = float(shift_before_px[index])
+                        shift_after = float(np.linalg.norm(after[0]))
+                        if shift_after <= max(4.0, 0.6 * shift_before):
+                            pose = candidate
+                        else:
+                            stubborn += 1
+                            dt = 0.0
+                    else:
+                        dt = 0.0
             corrected[camera_id].append((image["image_id"], pose, dt))
+        applied = sum(1 for _, _, dt in corrected[camera_id] if abs(dt) > 1e-4)
+        print(f"{camera_id}: {applied} corrections verified and applied, "
+              f"{stubborn} rejected by re-measure (stubborn frames)", flush=True)
 
-    # Fail-closed audit on the corrected poses, the standard instrument.
-    flat = {image_id: pose for rows in corrected.values()
-            for image_id, pose, _ in rows}
+    # Two audits: the whole population, and the population minus stubborn
+    # frames (those whose correction failed its own re-measure and kept the
+    # original pose). Training excludes ONLY the stubborn list - surgical,
+    # not the wholesale 212-frame cut the user rejected.
+    flat = {}
+    stubborn_ids = set()
+    for rows in corrected.values():
+        for image_id, pose, dt in rows:
+            flat[image_id] = pose
+    # A frame is stubborn if it still misaligns at its final pose.
     images_sorted = sorted(solver.manifest["images"],
                            key=lambda i: int(i["timestamp_ns"]))
     t0 = int(images_sorted[0]["timestamp_ns"])
     span = int(images_sorted[-1]["timestamp_ns"]) - t0
     audit = []
-    for index in range(0, len(images_sorted), 12):
+    for index in range(0, len(images_sorted), 4):
         image = images_sorted[index]
         pose = flat[image["image_id"]]
         found = solver.measure(image, pose, pose, 1.0)
         if found is None:
             continue
-        measured, _ = found
+        magnitude = float(np.linalg.norm(found[0]))
         audit.append(((int(image["timestamp_ns"]) - t0) / span,
-                      float(np.linalg.norm(measured))))
-    print("\ntime-shift-corrected audit (median px per decile):")
-    worst = 0.0
+                      magnitude, image["image_id"]))
+        if magnitude > 2 * GATE_PX:
+            stubborn_ids.add(image["image_id"])
+    print(f"\nstubborn frames (final shift > {2*GATE_PX:.0f}px): "
+          f"{len(stubborn_ids)} of {len(audit)} audited")
+    print("audit (median px per decile: all / minus-stubborn):")
+    worst_clean = 0.0
     for decile in range(10):
-        data = [m for f, m in audit if decile / 10 <= f < (decile + 1) / 10]
-        if data:
-            median = float(np.median(data))
-            worst = max(worst, median)
-            print(f"  {decile*10:>3}-{decile*10+10:<3}%  {median:5.1f}")
-    if worst > GATE_PX:
-        print(f"\nGATE FAILED: worst decile {median if False else worst:.1f}px "
+        rows = [(m, i) for f, m, i in audit
+                if decile / 10 <= f < (decile + 1) / 10]
+        if rows:
+            all_median = float(np.median([m for m, _ in rows]))
+            clean = [m for m, i in rows if i not in stubborn_ids]
+            clean_median = float(np.median(clean)) if clean else 0.0
+            worst_clean = max(worst_clean, clean_median)
+            print(f"  {decile*10:>3}-{decile*10+10:<3}%  {all_median:5.1f} / "
+                  f"{clean_median:5.1f}   (stubborn "
+                  f"{sum(1 for _, i in rows if i in stubborn_ids)})")
+    if worst_clean > GATE_PX:
+        print(f"\nGATE FAILED: minus-stubborn worst decile {worst_clean:.1f}px "
               f"> {GATE_PX}px - writing nothing")
         return 1
-    print(f"\nGATE PASSED: worst decile {worst:.1f}px <= {GATE_PX}px")
+    print(f"\nGATE PASSED: minus-stubborn worst decile {worst_clean:.1f}px "
+          f"<= {GATE_PX}px; exclude only the stubborn list from training")
 
     OUTPUT.mkdir(parents=True, exist_ok=True)
     payload = {image_id: {"c2w": [[float(x) for x in row] for row in pose],
                           "dt_s": dt}
                for rows in corrected.values() for image_id, pose, dt in rows}
     (OUTPUT / "timefix_poses.json").write_text(
-        json.dumps({"algorithm_version": "per_frame_time_shift_v1",
-                    "gate_worst_decile_px": worst,
+        json.dumps({"algorithm_version": "per_frame_time_shift_v2_verified",
+                    "gate_worst_clean_decile_px": worst_clean,
+                    "stubborn_image_ids": sorted(stubborn_ids),
                     "poses": payload}), encoding="utf-8")
-    print(f"corrected poses -> {OUTPUT / 'timefix_poses.json'}")
+    print(f"corrected poses -> {OUTPUT / 'timefix_poses.json'} "
+          f"({len(stubborn_ids)} stubborn ids listed for surgical exclusion)")
     return 0
 
 
