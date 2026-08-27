@@ -431,3 +431,87 @@ def run_bundle_adjustment_stage(
             rig.set_sensor_from_rig(sensor_id, sensor_from_rig)
         return summary
     return adjuster.solve()
+
+
+def run_independent_pose_bundle_adjustment(
+    reconstruction: Any,
+    *,
+    image_ids: set[int] | None = None,
+    position_priors_by_image_id: dict[int, np.ndarray],
+    position_prior_stddev_xyz_m: tuple[float, float, float] = (0.03, 0.03, 0.06),
+    refine_intrinsics: bool = False,
+    max_num_iterations: int = 200,
+) -> Any:
+    """Run POS-prior BA with one independently movable pose per input image.
+
+    The reconstruction must retain COLMAP's trivial one-sensor rigs.  Unlike
+    :func:`apply_fixed_stereo_rig`, this path deliberately does not combine
+    simultaneous left/right images into one rigid frame.  Physical-camera
+    intrinsics remain shared because all images on one side reference the same
+    COLMAP camera.
+
+    Absolute Cartesian position priors anchor the gauge, so no image pose is
+    held constant.  This mirrors the evidence extracted from MipMap's AT output:
+    every image may move while each physical camera has one shared calibration.
+    """
+    pycolmap = _pycolmap()
+    selected_image_ids = (
+        sorted(image_ids) if image_ids is not None else reconstruction.reg_image_ids()
+    )
+    if not selected_image_ids:
+        raise ValueError("independent AT has no selected images")
+    missing = set(selected_image_ids) - set(position_priors_by_image_id)
+    if missing:
+        raise ValueError(
+            f"POS priors are missing selected image IDs: {sorted(missing)[:4]}"
+        )
+    stddev = np.asarray(position_prior_stddev_xyz_m, dtype=np.float64)
+    if stddev.shape != (3,) or not np.all(np.isfinite(stddev)) or np.any(stddev <= 0.0):
+        raise ValueError("position_prior_stddev_xyz_m must contain three positive values")
+    if max_num_iterations <= 0:
+        raise ValueError("max_num_iterations must be positive")
+
+    options = pycolmap.BundleAdjustmentOptions()
+    options.refine_rig_from_world = True
+    options.refine_sensor_from_rig = False
+    options.refine_points3D = True
+    options.refine_focal_length = bool(refine_intrinsics)
+    options.refine_principal_point = bool(refine_intrinsics)
+    options.refine_extra_params = bool(refine_intrinsics)
+    options.print_summary = False
+    options.ceres.loss_function_type = pycolmap.LossFunctionType.HUBER
+    options.ceres.loss_function_scale = 2.0
+    options.ceres.solver_options.max_num_iterations = int(max_num_iterations)
+
+    config = pycolmap.BundleAdjustmentConfig()
+    for image_id in selected_image_ids:
+        config.add_image(image_id)
+    # Each physical camera is represented as a one-sensor trivial rig.  Keep
+    # that identity transform fixed while allowing every frame pose to move.
+    for rig in reconstruction.rigs.values():
+        for sensor_id in rig.sensor_ids():
+            config.set_constant_sensor_from_rig_pose(sensor_id)
+
+    covariance = np.diag(stddev * stddev)
+    priors = []
+    for image_id in selected_image_ids:
+        position = np.asarray(position_priors_by_image_id[image_id], dtype=np.float64)
+        if position.shape != (3,) or not np.all(np.isfinite(position)):
+            raise ValueError(f"POS prior for image {image_id} is not a finite xyz")
+        image = reconstruction.image(image_id)
+        priors.append(
+            pycolmap.PosePrior(
+                corr_data_id=pycolmap.data_t(image.camera.sensor_id, int(image_id)),
+                position=position,
+                position_covariance=covariance,
+                coordinate_system=pycolmap.PosePriorCoordinateSystem.CARTESIAN,
+            )
+        )
+    prior_options = pycolmap.PosePriorBundleAdjustmentOptions()
+    prior_options.prior_position_fallback_stddev = float(np.max(stddev))
+    prior_options.ceres.prior_position_loss_function_type = pycolmap.LossFunctionType.HUBER
+    prior_options.ceres.prior_position_loss_scale = 2.0
+    adjuster = pycolmap.create_pose_prior_bundle_adjuster(
+        options, prior_options, config, priors, reconstruction
+    )
+    return adjuster.solve()
