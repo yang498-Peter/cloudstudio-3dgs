@@ -31,6 +31,7 @@ def export_checkpoint_ply(
     output_path: Path,
     *,
     min_opacity: float = 0.0,
+    layer: str = "all",
 ) -> dict:
     import numpy as np
     import torch
@@ -44,6 +45,8 @@ def export_checkpoint_ply(
     scales_log = params["scales"].detach().float().numpy()
     quats = params["quats"].detach().float().numpy()
     opacity_logits = params["opacities"].detach().float().numpy().reshape(-1)
+    if layer not in {"all", "surface", "sky"}:
+        raise ValueError("layer must be one of: all, surface, sky")
 
     if "sh0" in params:
         f_dc = params["sh0"].detach().float().numpy().reshape(len(means), 3)
@@ -54,8 +57,20 @@ def export_checkpoint_ply(
         sh_rest = np.zeros((len(means), 0, 3), dtype=np.float32)
 
     keep = np.ones(len(means), dtype=bool)
+    if layer != "all":
+        sky_layer = payload.get("sky_layer")
+        if not isinstance(sky_layer, dict):
+            raise ValueError("surface/sky export requires checkpoint sky_layer metadata")
+        sky_start = int(sky_layer.get("sky_gaussian_start", -1))
+        sky_count = int(sky_layer.get("sky_gaussian_count", -1))
+        if sky_start < 0 or sky_count <= 0 or sky_start + sky_count != len(means):
+            raise ValueError("checkpoint sky_layer boundary is inconsistent with params")
+        if layer == "surface":
+            keep[sky_start:] = False
+        else:
+            keep[:sky_start] = False
     if min_opacity > 0.0:
-        keep = 1.0 / (1.0 + np.exp(-opacity_logits)) >= min_opacity
+        keep &= 1.0 / (1.0 + np.exp(-opacity_logits)) >= min_opacity
     count = int(keep.sum())
     if count == 0:
         raise ValueError("opacity filter removed every gaussian")
@@ -94,6 +109,7 @@ def export_checkpoint_ply(
     return {
         "gaussians_written": count,
         "gaussians_total": len(means),
+        "layer": layer,
         "sh_rest_coefficients": rest_coeffs,
         "bytes": output_path.stat().st_size,
         "fields": len(fields),
@@ -110,9 +126,18 @@ def main() -> int:
         default=0.0,
         help="drop gaussians below this sigmoid opacity (0 keeps all)",
     )
+    parser.add_argument(
+        "--layer",
+        choices=("all", "surface", "sky"),
+        default="all",
+        help="export the full checkpoint or one signed sky-layer partition",
+    )
     args = parser.parse_args()
     report = export_checkpoint_ply(
-        args.checkpoint, args.output, min_opacity=args.min_opacity
+        args.checkpoint,
+        args.output,
+        min_opacity=args.min_opacity,
+        layer=args.layer,
     )
     print(
         f"exported {report['gaussians_written']}/{report['gaussians_total']} gaussians, "
