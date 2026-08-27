@@ -176,4 +176,3 @@ def rebind_checkpoint_sampling_identity(
         json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
     )
     return report
-
