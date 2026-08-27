@@ -234,3 +234,19 @@ Face4 sample 必须保留 `parent_image_id`。训练 epoch、验证划分和采�
 - 最终 pose 已达到厘米级、亚度级对位，但不是逐参数完全相同的解；
 - pose-only 版本通过当前 AT 可用门槛；
 - 完整竞品等价版仍需要实现受约束的单焦距 KB4 参数化，并重新验证显式收敛，不能用 `NO_CONVERGENCE` 候选进入签名训练 Manifest。
+
+## 9. pose-only AT 的 raw-fisheye SH0 基线 v22e
+
+2026-08-27 使用 v22c 候选生成了独立签名的 dataset、mask、person-mask、depth 与 evaluation manifest，并通过真实 Trainer 连接测试。正式基线保持 6,158,096 个 LiDAR 初始化高斯、SH0、2912×2912 原始鱼眼、无致密化，训练 2000 步：
+
+- 输出：`training_independent_at_sh0_fullres_formal2000_v22e`；
+- 训练耗时 4583.72 秒，峰值 VRAM 7,050,916,864 bytes；
+- 最佳且交付 checkpoint 为 step 2000；
+- 签名 run manifest SHA256：`a70cb8908645dc5f5da10ff9f2ee53d2947f74d196d48c09c29e7600bb20a586`；
+- 36 视角原始鱼眼评估：PSNR 17.33573 dB、P10 15.18928 dB、SSIM 0.527811、深度 MAE 4.72780 m；
+- 相对旧 B 路线同 step 2000：PSNR -0.24282 dB、P10 +0.06200 dB、SSIM +0.00956、深度 MAE +0.19796 m；
+- 导出 PLY 保留全部 6,158,096 个高斯，418,750,945 bytes，SHA256 `8ddbdd238429efdcda9b5a34bc047d8346ef0b2cb2295ce22b41247a75b7a8ad`。
+
+健康审计没有发现可见高斯中心距离 LiDAR 超过 30 cm，说明新 AT 没有引入明显 floater；但透明度 0.005–0.1 的雾状高斯占 27.44%，另有 470 个最长轴超过 0.5 m 的高不透明异常大高斯。可见高斯最长轴 P50 约 8.8 mm、P95 约 29.3 mm，明显窄于竞品 P95 约 89.6 mm。肉眼结果对应表现为近场雪堆和墙板结构可读，但墙面仍有半透明涂抹、屋檐和远景边缘发虚。
+
+因此 v22e 证明 pose-only AT 能提高结构指标和弱视角下限，却不能单独解决透明拖影。下一受控变量固定为 MipMap-style Face4；训练继续使用 SH0 与同一 LiDAR 拓扑，原始鱼眼全分辨率验证不变。
