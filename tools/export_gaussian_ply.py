@@ -15,6 +15,8 @@ coordinate_transform_manifest.json for georeferencing.
 from __future__ import annotations
 
 import argparse
+import hashlib
+import json
 import struct
 import sys
 from pathlib import Path
@@ -26,12 +28,39 @@ if str(ROOT) not in sys.path:
 SH_C0 = 0.28209479177387814
 
 
+def _sky_layer_from_report(path: Path, payload: dict, gaussian_count: int) -> dict:
+    from cloudstudio_3dgs.data.manifest import canonical_json_bytes
+
+    report = json.loads(Path(path).read_text(encoding="utf-8"))
+    expected = str(report.get("sky_layer_report_sha256", ""))
+    if not expected:
+        raise ValueError("sky layer report has no sky_layer_report_sha256")
+    unsigned = dict(report)
+    unsigned.pop("sky_layer_report_sha256", None)
+    actual = hashlib.sha256(canonical_json_bytes(unsigned)).hexdigest()
+    if actual != expected:
+        raise ValueError("sky layer report SHA256 mismatch")
+    identity = payload.get("identity")
+    if not isinstance(identity, dict):
+        raise ValueError("checkpoint has no identity for sky report validation")
+    nested = identity.get("source_identity", {})
+    dataset_sha = identity.get("dataset_manifest_sha256")
+    if dataset_sha is None and isinstance(nested, dict):
+        dataset_sha = nested.get("dataset_manifest_sha256")
+    if dataset_sha != report.get("dataset_manifest_sha256"):
+        raise ValueError("sky layer report is bound to a different dataset")
+    if int(report.get("total_gaussian_count", -1)) != gaussian_count:
+        raise ValueError("sky layer report total does not match checkpoint params")
+    return report
+
+
 def export_checkpoint_ply(
     checkpoint_path: Path,
     output_path: Path,
     *,
     min_opacity: float = 0.0,
     layer: str = "all",
+    sky_layer_report: Path | None = None,
 ) -> dict:
     import numpy as np
     import torch
@@ -59,8 +88,15 @@ def export_checkpoint_ply(
     keep = np.ones(len(means), dtype=bool)
     if layer != "all":
         sky_layer = payload.get("sky_layer")
+        if not isinstance(sky_layer, dict) and sky_layer_report is not None:
+            sky_layer = _sky_layer_from_report(
+                sky_layer_report, payload, len(means)
+            )
         if not isinstance(sky_layer, dict):
-            raise ValueError("surface/sky export requires checkpoint sky_layer metadata")
+            raise ValueError(
+                "surface/sky export requires checkpoint sky_layer metadata "
+                "or a signed sky layer report"
+            )
         sky_start = int(sky_layer.get("sky_gaussian_start", -1))
         sky_count = int(sky_layer.get("sky_gaussian_count", -1))
         if sky_start < 0 or sky_count <= 0 or sky_start + sky_count != len(means):
@@ -132,12 +168,18 @@ def main() -> int:
         default="all",
         help="export the full checkpoint or one signed sky-layer partition",
     )
+    parser.add_argument(
+        "--sky-layer-report",
+        type=Path,
+        help="signed augmentation report when a trained warm-start omitted layer metadata",
+    )
     args = parser.parse_args()
     report = export_checkpoint_ply(
         args.checkpoint,
         args.output,
         min_opacity=args.min_opacity,
         layer=args.layer,
+        sky_layer_report=args.sky_layer_report,
     )
     print(
         f"exported {report['gaussians_written']}/{report['gaussians_total']} gaussians, "
