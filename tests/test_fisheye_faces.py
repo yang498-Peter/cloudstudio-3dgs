@@ -225,6 +225,13 @@ class MipMapFace4Tests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "square source"):
             plan_mipmap_face4((2912, 1456))
 
+    def test_cross_covers_product_140_degree_diameter_but_not_full_lens(self) -> None:
+        faces = plan_mipmap_face4(S1_IMAGE_SIZE)
+        product_coverage = face_coverage_check(faces, 140.0, samples=20000)
+        full_lens_coverage = face_coverage_check(faces, S1_FOV_DEG, samples=20000)
+        self.assertEqual(product_coverage["uncovered"], 0)
+        self.assertGreater(full_lens_coverage["uncovered_fraction"], 0.05)
+
 
 class FaceWeightTests(unittest.TestCase):
     @staticmethod

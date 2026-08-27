@@ -338,6 +338,7 @@ class FaceCacheRoundTripTest(unittest.TestCase):
         for sample_id in dataset.image_ids:
             self.assertEqual(dataset.exposure_id_for(sample_id), BASE_IMAGE_ID)
         self.assertIn("face_manifest_sha256", dataset.identity)
+        self.assertEqual(dataset.identity["face_plan"], "adaptive_full_fov")
         self.assertEqual(
             dataset.identity["source_identity"],
             {"dataset_manifest_sha256": "synthetic"},

@@ -245,6 +245,7 @@ class FaceCacheDataset:
     def identity(self) -> dict[str, Any]:
         return {
             "face_manifest_sha256": self.face_manifest_sha256,
+            "face_plan": self.manifest.get("face_plan", "adaptive_full_fov"),
             "source_identity": self.manifest.get("source_identity"),
             "fov_deg": self.manifest.get("fov_deg"),
             "split": self.manifest.get("split"),
