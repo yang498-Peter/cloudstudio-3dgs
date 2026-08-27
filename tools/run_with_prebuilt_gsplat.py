@@ -10,6 +10,11 @@ from pathlib import Path
 
 
 def preload_gsplat(extension_path: Path) -> object:
+    # On Windows, importing torch registers its bundled DLL directories before
+    # the extension loader resolves c10/torch CUDA dependencies.  Loading the
+    # prebuilt module first otherwise fails with an unhelpful missing-DLL error.
+    import torch  # noqa: F401
+
     extension_path = Path(extension_path).resolve()
     if not extension_path.is_file():
         raise FileNotFoundError(f"prebuilt gsplat extension is missing: {extension_path}")
