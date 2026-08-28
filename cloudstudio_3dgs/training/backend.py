@@ -221,6 +221,7 @@ class GsplatBackend:
         learning_rates: dict[str, float],
         color_model: str = "rgb_sigmoid",
         sh_degree: int = 2,
+        init_opacity: float = 0.1,
     ) -> tuple[Any, dict[str, Any], Any]:
         torch = self.torch
         if color_model not in ("rgb_sigmoid", "sh"):
@@ -269,7 +270,12 @@ class GsplatBackend:
             "scales": torch.nn.Parameter(scales_m.log()),
             "quats": torch.nn.Parameter(quaternions),
             "opacities": torch.nn.Parameter(
-                torch.full((len(points),), 0.1, device=self.device).logit()
+                # The historical hardcoded 0.1 sits exactly at the exact
+                # MipMap lifecycle's prune gate, which judged fresh
+                # initializations prune-eligible before they could warm up.
+                torch.full(
+                    (len(points),), float(init_opacity), device=self.device
+                ).logit()
             ),
         }
         if color_model == "sh":

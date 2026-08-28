@@ -223,6 +223,10 @@ class TrainerConfig:
     # pending update, so the same thresholds mean different things across the
     # two orders.
     lifecycle_order: str = "post_optimizer"
+    # Initial gaussian opacity. The historical 0.1 sits exactly on the exact
+    # MipMap lifecycle's prune gate; a coherent whole-machine transplant
+    # starts at that machine's reset cap (0.2) instead.
+    init_opacity: float = 0.1
     # What loss the densification criterion differentiates. "rgb_only" scores
     # births from L1+SSIM alone, the way Kerbl et al. trained; under "total_loss"
     # the LiDAR range and normal terms leak into means2d.grad through the shared
@@ -396,6 +400,7 @@ class TrainerConfig:
                 "default_strategy",
                 "densification_gradient_source",
                 "lifecycle_order",
+                "init_opacity",
                 "learning_rates",
                 "warm_start_min_opacity",
                 "warm_start_scale_multiplier",
@@ -642,6 +647,8 @@ class TrainerConfig:
             raise ValueError(
                 "lifecycle_order must be 'post_optimizer' or 'pre_optimizer'"
             )
+        if not 0.0 < float(self.init_opacity) < 1.0:
+            raise ValueError("init_opacity must be within (0, 1)")
         if (
             self.lifecycle_order == "pre_optimizer"
             and self.densification_strategy != "default_3dgs"
@@ -2269,6 +2276,7 @@ def train(
         learning_rates=effective_learning_rates,
         color_model=config.color_model,
         sh_degree=config.sh_degree,
+        init_opacity=config.init_opacity,
     )
     pose_refiner = None
     pose_optimizer = None
