@@ -28,6 +28,9 @@ DA2_DEPTH_READY_STATUS = "DA2_DEPTH_READY"
 SKY_BACKGROUND_READY_STATUS = "SKY_BACKGROUND_READY"
 UPSTREAM_DATA_READY_STATUS = "UPSTREAM_DATA_READY"
 TRAINING_IMPLEMENTATION_READY_STATUS = "TRAINING_IMPLEMENTATION_READY"
+FIXED_TOPOLOGY_EVALUATION_READY_STATUS = "FIXED_TOPOLOGY_EVALUATION_READY"
+ADAPTIVE_GROWTH_BOUNDARY_READY_STATUS = "ADAPTIVE_GROWTH_BOUNDARY_READY"
+ADAPTIVE_GROWTH_EVALUATION_READY_STATUS = "ADAPTIVE_GROWTH_EVALUATION_READY"
 # Compatibility import for callers. Old signed gates whose literal status is
 # ``TRAINING_READY`` are intentionally not accepted by verify_training_gate.
 TRAINING_READY_STATUS = TRAINING_IMPLEMENTATION_READY_STATUS
@@ -35,6 +38,52 @@ TRAINING_IMPLEMENTATION_CONTRACT_SCHEMA_VERSION = 1
 TRAINING_IMPLEMENTATION_CONTRACT_KIND = "mipmap_training_implementation_contract"
 MIPMAP_HIGH_TYPE2_PRESET = "lidar_first_face4_snow_v1"
 INDEPENDENT_AT_ALGORITHM = "independent_pos_prior_shared_single_focal_kb4_at_v2"
+
+# The snow scene uses five LiDAR-first adaptive tiles. V27 keeps a fixed
+# Gaussian capacity per tile, so its signed limits must follow the actual
+# initialization count and view cadence instead of inheriting Tile_1 values.
+V27_SNOW_TILE_PROFILES: dict[int, dict[str, int]] = {
+    0: {
+        "view_count": 476,
+        "gaussian_count": 1_895_788,
+        "cap_max": 1_895_789,
+        "max_steps": 9_520,
+        "review_stop": 3_332,
+        "stabilization_stop": 3_808,
+    },
+    1: {
+        "view_count": 374,
+        "gaussian_count": 971_903,
+        "cap_max": 971_904,
+        "max_steps": 7_480,
+        "review_stop": 2_618,
+        "stabilization_stop": 2_992,
+    },
+    2: {
+        "view_count": 470,
+        "gaussian_count": 1_477_056,
+        "cap_max": 1_477_057,
+        "max_steps": 9_400,
+        "review_stop": 3_290,
+        "stabilization_stop": 3_760,
+    },
+    3: {
+        "view_count": 607,
+        "gaussian_count": 1_850_945,
+        "cap_max": 1_850_946,
+        "max_steps": 12_140,
+        "review_stop": 4_249,
+        "stabilization_stop": 4_856,
+    },
+    4: {
+        "view_count": 505,
+        "gaussian_count": 1_076_290,
+        "cap_max": 1_076_291,
+        "max_steps": 10_100,
+        "review_stop": 3_535,
+        "stabilization_stop": 4_040,
+    },
+}
 
 
 MIPMAP_HIGH_TYPE2_REQUIRED_IMPLEMENTATION: dict[str, Any] = {
@@ -166,6 +215,59 @@ def sign_training_implementation_contract(
         canonical_json_bytes(unsigned)
     ).hexdigest()
     return signed
+
+
+def fixed_topology_evaluation_arm_fingerprint(config: dict[str, Any]) -> str:
+    """Bind a fixed-topology arm without depending on its gate file path."""
+
+    topology = config.get("topology_policy") or {}
+    schedule = config.get("fixed_topology_schedule") or {}
+    payload = {
+        "run_id": config.get("run_id"),
+        "mipmap_tile_id": config.get("mipmap_tile_id"),
+        "topology_policy": {
+            "mode": topology.get("mode", "adaptive_growth"),
+            "opacity_prune_step": topology.get("opacity_prune_step"),
+            "opacity_prune_threshold": topology.get("opacity_prune_threshold", 0.01),
+        },
+        "fixed_topology_schedule": {
+            "enabled": schedule.get("enabled", False),
+            "phase_a_steps": schedule.get("phase_a_steps", 0),
+            "phase_b_steps": schedule.get("phase_b_steps", 0),
+            "phase_b_geometry_lr_scale": schedule.get(
+                "phase_b_geometry_lr_scale", 1.0
+            ),
+            "phase_c_geometry_lr_scale": schedule.get(
+                "phase_c_geometry_lr_scale", 1.0
+            ),
+            "phase_b_range_weight_scale": schedule.get(
+                "phase_b_range_weight_scale", 1.0
+            ),
+            "phase_c_range_weight_scale": schedule.get(
+                "phase_c_range_weight_scale", 1.0
+            ),
+            "phase_b_normal_weight_scale": schedule.get(
+                "phase_b_normal_weight_scale", 1.0
+            ),
+            "phase_c_normal_weight_scale": schedule.get(
+                "phase_c_normal_weight_scale", 1.0
+            ),
+            "audit_steps": list(schedule.get("audit_steps", [])),
+        },
+        "max_steps": config.get("max_steps"),
+        "factor": config.get("factor"),
+        "color_model": config.get("color_model"),
+        "sh_degree": config.get("sh_degree"),
+        "da2_depth_weight": config.get("da2_depth_weight"),
+        "lidar_admission_enabled": bool(
+            (config.get("lidar_admission") or {}).get("enabled", False)
+        ),
+        "tangent_proposal_enabled": bool(
+            (config.get("tangent_proposal") or {}).get("enabled", False)
+        ),
+        "densification_strategy": config.get("densification_strategy"),
+    }
+    return hashlib.sha256(canonical_json_bytes(payload)).hexdigest()
 
 
 def _require_exact_subset(
@@ -623,6 +725,456 @@ def advance_training_implementation_gate(
     return sign_gate(payload)
 
 
+def advance_fixed_topology_evaluation_gate(
+    upstream_gate: dict[str, Any],
+    readiness: dict[str, Any],
+    evaluation_plan: dict[str, Any],
+    arm_configs: dict[str, dict[str, Any]],
+) -> dict[str, Any]:
+    """Authorize only the signed fixed-topology A0/A1 evaluation arms."""
+
+    upstream_sha = verify_gate(upstream_gate)
+    if (
+        upstream_gate.get("status") != UPSTREAM_DATA_READY_STATUS
+        or upstream_gate.get("training_allowed") is not False
+        or tuple(upstream_gate.get("completed_stages", [])) != ORDERED_STAGES[:15]
+    ):
+        raise ValueError(
+            "fixed-topology evaluation requires an exact UPSTREAM_DATA_READY gate"
+        )
+
+    def verify_signed_payload(
+        payload: dict[str, Any], *, hash_key: str, label: str
+    ) -> str:
+        expected = str(payload.get(hash_key, ""))
+        if len(expected) != 64:
+            raise ValueError(f"{label} is unsigned")
+        unsigned = copy.deepcopy(payload)
+        unsigned.pop(hash_key, None)
+        actual = hashlib.sha256(canonical_json_bytes(unsigned)).hexdigest()
+        if actual != expected:
+            raise ValueError(f"{label} signature mismatch")
+        return expected
+
+    readiness_sha = verify_signed_payload(
+        readiness,
+        hash_key="readiness_sha256",
+        label="fixed-topology readiness",
+    )
+    plan_sha = verify_signed_payload(
+        evaluation_plan,
+        hash_key="evaluation_plan_sha256",
+        label="fixed-topology evaluation plan",
+    )
+    if (
+        readiness.get("kind") != "fixed_topology_evaluation_readiness_v1"
+        or readiness.get("status") != "FIXED_TOPOLOGY_EVALUATION_PREPARED"
+        or readiness.get("training_allowed") is not False
+        or readiness.get("adaptive_growth_allowed") is not False
+    ):
+        raise ValueError("fixed-topology readiness is not promotion eligible")
+    if readiness.get("upstream_gate_manifest_sha256") != upstream_sha:
+        raise ValueError("fixed-topology readiness is bound to another upstream gate")
+    if readiness.get("evaluation_plan_sha256") != plan_sha:
+        raise ValueError("fixed-topology readiness is bound to another evaluation plan")
+    evidence = readiness.get("evidence", {})
+    required_true = (
+        "directional_pass",
+        "phase_a_geometry_frozen",
+        "core_only_merge_contract",
+    )
+    if any(evidence.get(key) is not True for key in required_true):
+        raise ValueError("fixed-topology readiness is missing required PASS evidence")
+    if (
+        evaluation_plan.get("kind") != "fixed_topology_evaluation_plan_v1"
+        or evaluation_plan.get("training_allowed") is not False
+        or evaluation_plan.get("adaptive_growth_remains_blocked_by") in (None, [])
+    ):
+        raise ValueError("fixed-topology evaluation plan is not promotion eligible")
+
+    permitted_modes = {"strict_fixed", "opacity_prune_only"}
+    allowed_arms: list[dict[str, Any]] = []
+    for arm in evaluation_plan.get("arms", []):
+        arm_name = str(arm.get("arm", ""))
+        config = arm_configs.get(arm_name)
+        if config is None:
+            raise ValueError(f"fixed-topology arm {arm_name!r} has no config")
+        mode = str(config.get("topology_policy", {}).get("mode", ""))
+        if mode not in permitted_modes:
+            raise ValueError(f"fixed-topology arm {arm_name!r} enables {mode!r}")
+        if config.get("mipmap_tile_id") != evaluation_plan.get("tile_id"):
+            raise ValueError(f"fixed-topology arm {arm_name!r} targets another Tile")
+        if config.get("max_steps") != evaluation_plan.get("steps", {}).get("total"):
+            raise ValueError(f"fixed-topology arm {arm_name!r} has another step count")
+        allowed_arms.append(
+            {
+                "arm": arm_name,
+                "run_id": str(config.get("run_id", "")),
+                "topology_mode": mode,
+                "fingerprint_sha256": fixed_topology_evaluation_arm_fingerprint(config),
+            }
+        )
+    if not allowed_arms:
+        raise ValueError("fixed-topology evaluation plan has no arms")
+
+    payload = copy.deepcopy(upstream_gate)
+    payload.pop("gate_manifest_sha256", None)
+    bindings = dict(payload.get("bindings", {}))
+    bindings.update(
+        {
+            "fixed_topology_readiness_sha256": readiness_sha,
+            "fixed_topology_evaluation_plan_sha256": plan_sha,
+        }
+    )
+    payload.update(
+        {
+            "status": FIXED_TOPOLOGY_EVALUATION_READY_STATUS,
+            "training_allowed": True,
+            "completed_stages": list(ORDERED_STAGES[:15]),
+            "next_required_stage": ORDERED_STAGES[15],
+            "blocking_reasons": [],
+            "bindings": bindings,
+            "fixed_topology_evaluation": {
+                "tile_id": evaluation_plan.get("tile_id"),
+                "allowed_arms": allowed_arms,
+                "adaptive_growth_allowed": False,
+                "core_only_merge_required": True,
+            },
+        }
+    )
+    return sign_gate(payload)
+
+
+def advance_adaptive_growth_gate(
+    upstream_gate: dict[str, Any],
+    signed_config: dict[str, Any],
+    *,
+    stage: str,
+    boundary_report: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Authorize one signed LiDAR-guarded classic-growth V26 arm."""
+
+    upstream_sha = verify_gate(upstream_gate)
+    if (
+        upstream_gate.get("status") != UPSTREAM_DATA_READY_STATUS
+        or upstream_gate.get("training_allowed") is not False
+        or tuple(upstream_gate.get("completed_stages", [])) != ORDERED_STAGES[:15]
+    ):
+        raise ValueError("adaptive growth requires an exact UPSTREAM_DATA_READY gate")
+    if stage not in {"boundary", "evaluation"}:
+        raise ValueError("adaptive growth stage must be boundary or evaluation")
+    config_sha = str(signed_config.get("config_manifest_sha256", ""))
+    unsigned_config = copy.deepcopy(signed_config)
+    unsigned_config.pop("config_manifest_sha256", None)
+    if len(config_sha) != 64 or hashlib.sha256(
+        canonical_json_bytes(unsigned_config)
+    ).hexdigest() != config_sha:
+        raise ValueError("adaptive growth config signature mismatch")
+
+    topology = signed_config.get("topology_policy", {})
+    proposal = signed_config.get("tangent_proposal", {})
+    regularization = signed_config.get("geometry_regularization", {})
+    strategy = signed_config.get("default_strategy", {})
+    required_strategy = {
+        "exact_mipmap_lifecycle": True,
+        "grow_grad2d": 0.00015,
+        "growth_min_opacity": 0.15,
+        "split_scale_m": 0.2,
+        "prune_scale_m": 0.2,
+        "prune_opa": 0.1,
+        "prune_opa_late": 0.05,
+        "prune_switch_step": 3740,
+        "prune_scale2d": 0.15,
+        "reset_every": 300,
+        "reset_opacity_cap": 0.2,
+        "absgrad": True,
+        "revised_opacity": True,
+    }
+    mismatched_strategy = {
+        key: (expected, strategy.get(key))
+        for key, expected in required_strategy.items()
+        if strategy.get(key) != expected
+    }
+    if mismatched_strategy:
+        raise ValueError(
+            f"adaptive growth lifecycle parameters differ: {mismatched_strategy}"
+        )
+    required_regularization = {
+        "enabled": True,
+        "opacity_sparsity_weight": 1e-4,
+        "scale_upper_weight": 1e-4,
+        "anisotropy_weight": 1e-4,
+        "max_scale_ratio_to_reference": 8.0,
+        "max_anisotropy": 10.0,
+    }
+    if any(
+        regularization.get(key) != expected
+        for key, expected in required_regularization.items()
+    ):
+        raise ValueError("adaptive growth geometry regularization differs")
+    if (
+        topology.get("mode") != "adaptive_growth"
+        or signed_config.get("densification_strategy") != "default_3dgs"
+        or signed_config.get("densification_gradient_source") != "rgb_only"
+        or signed_config.get("mcmc_refine_start_iter") != 500
+        or signed_config.get("mcmc_refine_every") != 100
+        or signed_config.get("mcmc_refine_stop_iter") != 5610
+        or signed_config.get("max_steps") != 7480
+        or signed_config.get("factor") != 1
+        or signed_config.get("cap_max") != 2_200_000
+        or signed_config.get("sh_degree") != 0
+        or signed_config.get("da2_depth_weight") != 0.0
+        or signed_config.get("mcmc_noise_lr") != 0.0
+        or signed_config.get("mcmc_noise_injection_stop_iter") != 0
+        or proposal.get("enabled") is not True
+        or proposal.get("reject_unsupported_births") is not True
+        or signed_config.get("error_weighted_sampling", {}).get("enabled", False)
+    ):
+        raise ValueError("adaptive growth config violates the V26 LiDAR-first scope")
+    if stage == "boundary":
+        if signed_config.get("controlled_stop_after_steps") != 502:
+            raise ValueError("adaptive boundary gate requires controlled stop at 502")
+        status = ADAPTIVE_GROWTH_BOUNDARY_READY_STATUS
+        boundary_sha = None
+    else:
+        if signed_config.get("controlled_stop_after_steps") is not None:
+            raise ValueError("adaptive evaluation config must not retain a controlled stop")
+        if not isinstance(boundary_report, dict):
+            raise ValueError("adaptive evaluation requires a boundary report")
+        boundary_sha = str(boundary_report.get("boundary_report_sha256", ""))
+        unsigned_report = copy.deepcopy(boundary_report)
+        unsigned_report.pop("boundary_report_sha256", None)
+        if len(boundary_sha) != 64 or hashlib.sha256(
+            canonical_json_bytes(unsigned_report)
+        ).hexdigest() != boundary_sha:
+            raise ValueError("adaptive boundary report signature mismatch")
+        if (
+            boundary_report.get("status") != "ADAPTIVE_GROWTH_BOUNDARY_PASS"
+        ):
+            raise ValueError("adaptive boundary report is not promotion eligible")
+        for field in ("checkpoint_sha256", "source_trainer_config_sha256"):
+            value = str(boundary_report.get(field, ""))
+            if len(value) != 64:
+                raise ValueError(f"adaptive boundary report has invalid {field}")
+        status = ADAPTIVE_GROWTH_EVALUATION_READY_STATUS
+
+    payload = copy.deepcopy(upstream_gate)
+    payload.pop("gate_manifest_sha256", None)
+    bindings = dict(payload.get("bindings", {}))
+    bindings["adaptive_growth_config_manifest_sha256"] = config_sha
+    if boundary_sha is not None:
+        bindings["adaptive_growth_boundary_report_sha256"] = boundary_sha
+    payload.update(
+        {
+            "status": status,
+            "training_allowed": True,
+            "completed_stages": list(ORDERED_STAGES[:15]),
+            "next_required_stage": ORDERED_STAGES[15],
+            "blocking_reasons": [],
+            "bindings": bindings,
+            "adaptive_growth": {
+                "profile": "v26a_lidar_guarded_classic_growth",
+                "stage": stage,
+                "tile_id": signed_config.get("mipmap_tile_id"),
+                "run_id": signed_config.get("run_id"),
+                "controlled_stop_after_steps": signed_config.get(
+                    "controlled_stop_after_steps"
+                ),
+                "mcmc_allowed": False,
+                "capacity_cap": signed_config.get("cap_max"),
+            },
+        }
+    )
+    if boundary_sha is not None:
+        payload["adaptive_growth"].update(
+            {
+                "resume_checkpoint_sha256": boundary_report.get(
+                    "checkpoint_sha256"
+                ),
+                "resume_source_trainer_config_sha256": boundary_report.get(
+                    "source_trainer_config_sha256"
+                ),
+            }
+        )
+    return sign_gate(payload)
+
+
+def advance_adaptive_reallocation_gate(
+    upstream_gate: dict[str, Any],
+    signed_config: dict[str, Any],
+    *,
+    stage: str,
+    boundary_report: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Authorize the bounded A0-preserving MCMC reallocation arm.
+
+    Unlike V26 classic growth this profile never prunes or increases capacity:
+    it recycles at most two percent of the dense LiDAR cloud per event and
+    admits relocation/addition sources only on trusted LiDAR surface patches.
+    """
+
+    verify_gate(upstream_gate)
+    if (
+        upstream_gate.get("status") != UPSTREAM_DATA_READY_STATUS
+        or upstream_gate.get("training_allowed") is not False
+        or tuple(upstream_gate.get("completed_stages", [])) != ORDERED_STAGES[:15]
+    ):
+        raise ValueError("adaptive reallocation requires an exact UPSTREAM_DATA_READY gate")
+    if stage not in {"boundary", "evaluation", "continuation", "stabilization"}:
+        raise ValueError(
+            "adaptive reallocation stage must be boundary, evaluation, continuation, "
+            "or stabilization"
+        )
+    config_sha = str(signed_config.get("config_manifest_sha256", ""))
+    unsigned_config = copy.deepcopy(signed_config)
+    unsigned_config.pop("config_manifest_sha256", None)
+    if len(config_sha) != 64 or hashlib.sha256(
+        canonical_json_bytes(unsigned_config)
+    ).hexdigest() != config_sha:
+        raise ValueError("adaptive reallocation config signature mismatch")
+
+    topology = signed_config.get("topology_policy", {})
+    proposal = signed_config.get("tangent_proposal", {})
+    admission = signed_config.get("lidar_admission", {})
+    sampling = signed_config.get("error_weighted_sampling", {})
+    tile_id = signed_config.get("mipmap_tile_id")
+    profile = V27_SNOW_TILE_PROFILES.get(tile_id)
+    if profile is None:
+        raise ValueError("adaptive reallocation targets an unknown snow Tile")
+    common_required = (
+        topology.get("mode") == "adaptive_growth"
+        and signed_config.get("densification_strategy") == "error_weighted_mcmc"
+        and signed_config.get("densification_gradient_source") == "total_loss"
+        and signed_config.get("mcmc_refine_start_iter") == 500
+        and signed_config.get("mcmc_refine_every") == 100
+        and signed_config.get("mcmc_refine_stop_iter") == 1000
+        and signed_config.get("max_steps") == profile["max_steps"]
+        and signed_config.get("factor") == 1
+        and signed_config.get("cap_max") == profile["cap_max"]
+        and signed_config.get("checkpoint_every") == profile["view_count"]
+        and signed_config.get("sh_degree") == 0
+        and signed_config.get("da2_depth_weight") == 0.0
+        and signed_config.get("mcmc_noise_lr") == 0.0
+        and signed_config.get("mcmc_noise_injection_stop_iter") == 0
+        and signed_config.get("mcmc_growth_rate") == 0.0
+        and signed_config.get("mcmc_relocation_max_fraction") == 0.02
+        and signed_config.get("mcmc_relocation_max_scale_m") == 0.08
+        and signed_config.get("mcmc_relocation_max_anisotropy") == 8.0
+        and bool(
+            signed_config.get("warm_start_checkpoint")
+            or signed_config.get("resume_checkpoint")
+        )
+    )
+    if stage == "stabilization":
+        learning_rates = signed_config.get("learning_rates", {})
+        required = (
+            common_required
+            and sampling.get("enabled") is False
+            and admission.get("enabled") is False
+            and proposal.get("enabled") is False
+            and signed_config.get("contribution", {}).get("enabled") is False
+            and learning_rates.get("means") == 4e-06
+            and learning_rates.get("scales") == 0.001
+            and learning_rates.get("quats") == 0.0002
+            and learning_rates.get("opacities") == 0.001
+            and learning_rates.get("colors") == 0.0005
+            and signed_config.get("post_refine_geometry_lr_scale") == 0.0
+        )
+    else:
+        required = (
+            common_required
+            and sampling.get("enabled") is True
+            and sampling.get("aggregation") == "contribution"
+            and admission.get("enabled") is True
+            and proposal.get("enabled") is True
+            and proposal.get("reject_unsupported_births") is True
+        )
+    if not required:
+        raise ValueError("adaptive reallocation config violates the V27 A0-safe scope")
+
+    if stage == "boundary":
+        if signed_config.get("controlled_stop_after_steps") != 602:
+            raise ValueError("adaptive reallocation boundary requires stop at 602")
+        status = ADAPTIVE_GROWTH_BOUNDARY_READY_STATUS
+        boundary_sha = None
+    else:
+        controlled_stop = signed_config.get("controlled_stop_after_steps")
+        if stage == "evaluation" and controlled_stop != profile["review_stop"]:
+            raise ValueError(
+                "adaptive reallocation review must stop at "
+                f"{profile['review_stop']} for Tile_{tile_id}"
+            )
+        if stage == "continuation" and controlled_stop is not None:
+            raise ValueError("adaptive reallocation continuation must not stop early")
+        if (
+            stage == "stabilization"
+            and controlled_stop != profile["stabilization_stop"]
+        ):
+            raise ValueError(
+                "adaptive reallocation stabilization must stop at "
+                f"{profile['stabilization_stop']} for Tile_{tile_id}"
+            )
+        if not isinstance(boundary_report, dict):
+            raise ValueError("adaptive reallocation evaluation requires a boundary report")
+        boundary_sha = str(boundary_report.get("boundary_report_sha256", ""))
+        unsigned_report = copy.deepcopy(boundary_report)
+        unsigned_report.pop("boundary_report_sha256", None)
+        if len(boundary_sha) != 64 or hashlib.sha256(
+            canonical_json_bytes(unsigned_report)
+        ).hexdigest() != boundary_sha:
+            raise ValueError("adaptive reallocation boundary signature mismatch")
+        if boundary_report.get("status") != "ADAPTIVE_REALLOCATION_BOUNDARY_PASS":
+            raise ValueError("adaptive reallocation boundary is not promotion eligible")
+        for field in ("checkpoint_sha256", "source_trainer_config_sha256"):
+            if len(str(boundary_report.get(field, ""))) != 64:
+                raise ValueError(f"adaptive reallocation report has invalid {field}")
+        status = ADAPTIVE_GROWTH_EVALUATION_READY_STATUS
+
+    payload = copy.deepcopy(upstream_gate)
+    payload.pop("gate_manifest_sha256", None)
+    bindings = dict(payload.get("bindings", {}))
+    bindings["adaptive_growth_config_manifest_sha256"] = config_sha
+    if boundary_sha is not None:
+        bindings["adaptive_growth_boundary_report_sha256"] = boundary_sha
+    payload.update(
+        {
+            "status": status,
+            "training_allowed": True,
+            "completed_stages": list(ORDERED_STAGES[:15]),
+            "next_required_stage": ORDERED_STAGES[15],
+            "blocking_reasons": [],
+            "bindings": bindings,
+            "adaptive_growth": {
+                "profile": (
+                    "v27c_a0_safe_stabilization"
+                    if stage == "stabilization"
+                    else "v27a_a0_safe_mcmc_reallocation"
+                ),
+                "stage": stage,
+                "tile_id": signed_config.get("mipmap_tile_id"),
+                "run_id": signed_config.get("run_id"),
+                "controlled_stop_after_steps": signed_config.get(
+                    "controlled_stop_after_steps"
+                ),
+                "mcmc_allowed": stage != "stabilization",
+                "capacity_cap": signed_config.get("cap_max"),
+                "growth_rate": 0.0,
+                "relocation_max_fraction": 0.02,
+            },
+        }
+    )
+    if boundary_sha is not None:
+        payload["adaptive_growth"].update(
+            {
+                "resume_checkpoint_sha256": boundary_report.get("checkpoint_sha256"),
+                "resume_source_trainer_config_sha256": boundary_report.get(
+                    "source_trainer_config_sha256"
+                ),
+            }
+        )
+    return sign_gate(payload)
+
+
 def verify_training_gate(
     path: Path,
     *,
@@ -630,6 +1182,8 @@ def verify_training_gate(
     split_manifest_sha256: str,
     face_manifest_sha256: str | None,
     allow_implementation_smoke: bool = False,
+    fixed_topology_arm_fingerprint_sha256: str | None = None,
+    adaptive_growth_config_manifest_sha256: str | None = None,
 ) -> str:
     """Reject training until implementation passed, except an explicit bounded smoke."""
     if face_manifest_sha256 is None:
@@ -641,12 +1195,29 @@ def verify_training_gate(
         gate.get("status") == TRAINING_IMPLEMENTATION_READY_STATUS
         and bool(gate.get("training_allowed", False))
     )
+    fixed_topology_ready = (
+        gate.get("status") == FIXED_TOPOLOGY_EVALUATION_READY_STATUS
+        and bool(gate.get("training_allowed", False))
+    )
+    adaptive_growth_ready = (
+        gate.get("status")
+        in {
+            ADAPTIVE_GROWTH_BOUNDARY_READY_STATUS,
+            ADAPTIVE_GROWTH_EVALUATION_READY_STATUS,
+        }
+        and bool(gate.get("training_allowed", False))
+    )
     smoke_ready = (
         allow_implementation_smoke
         and gate.get("status") == UPSTREAM_DATA_READY_STATUS
         and gate.get("training_allowed") is False
     )
-    if not implementation_ready and not smoke_ready:
+    if (
+        not implementation_ready
+        and not fixed_topology_ready
+        and not adaptive_growth_ready
+        and not smoke_ready
+    ):
         next_stage = gate.get("next_required_stage", "unknown")
         raise ValueError(
             "MipMap-aligned training is blocked: data/implementation gate is only "
@@ -669,11 +1240,37 @@ def verify_training_gate(
             f"MipMap training gate is bound to different inputs: "
             f"expected={expected}, actual={actual}"
         )
-    if (
-        not allow_implementation_smoke
-        and len(str(bindings.get("training_implementation_contract_sha256", ""))) != 64
-    ):
+    if implementation_ready and len(
+        str(bindings.get("training_implementation_contract_sha256", ""))
+    ) != 64:
         raise ValueError(
             "MipMap training gate has no verified training implementation contract"
         )
+    if fixed_topology_ready:
+        allowed = gate.get("fixed_topology_evaluation", {}).get("allowed_arms", [])
+        allowed_fingerprints = {
+            str(arm.get("fingerprint_sha256", "")) for arm in allowed
+        }
+        if fixed_topology_arm_fingerprint_sha256 not in allowed_fingerprints:
+            raise ValueError(
+                "Trainer config is not an authorized fixed-topology evaluation arm"
+            )
+        if gate.get("fixed_topology_evaluation", {}).get(
+            "adaptive_growth_allowed"
+        ) is not False:
+            raise ValueError("fixed-topology evaluation gate must block adaptive growth")
+    if adaptive_growth_ready:
+        expected_config_sha = str(
+            bindings.get("adaptive_growth_config_manifest_sha256", "")
+        )
+        if (
+            len(expected_config_sha) != 64
+            or adaptive_growth_config_manifest_sha256 != expected_config_sha
+        ):
+            raise ValueError(
+                "Trainer config is not the signed adaptive-growth evaluation arm"
+            )
+        adaptive = gate.get("adaptive_growth", {})
+        if adaptive.get("mcmc_allowed") not in {False, True}:
+            raise ValueError("adaptive-growth gate must declare whether MCMC is allowed")
     return gate_sha

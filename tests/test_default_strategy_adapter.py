@@ -212,6 +212,53 @@ class DefaultStrategyAdapterTests(unittest.TestCase):
         self.assertEqual((clone_count, split_count), (1, 1))
         self.assertEqual(len(params["means"]), 5)
 
+    def test_capacity_cap_keeps_only_highest_gradient_births(self):
+        import torch
+
+        adapter = DefaultStrategyAdapter(
+            scene_scale=10.0,
+            refine_start_iter=500,
+            refine_stop_iter=2000,
+            refine_every=100,
+            reset_every=300,
+            grow_grad2d=0.00015,
+            prune_opa=0.1,
+            split_scale_m=0.2,
+            prune_scale_m=0.2,
+            exact_mipmap_lifecycle=True,
+            growth_min_opacity=0.15,
+            prune_opa_late=0.05,
+            prune_switch_step=1000,
+            reset_opacity_cap=0.2,
+            capacity_cap=5,
+        )
+        params = torch.nn.ParameterDict(
+            {
+                "means": torch.nn.Parameter(torch.zeros(3, 3)),
+                "scales": torch.nn.Parameter(torch.full((3, 3), 0.05).log()),
+                "quats": torch.nn.Parameter(
+                    torch.tensor([[1.0, 0.0, 0.0, 0.0]] * 3)
+                ),
+                "opacities": torch.nn.Parameter(torch.full((3,), 0.3).logit()),
+                "colors": torch.nn.Parameter(torch.zeros(3, 3)),
+            }
+        )
+        optimizers = {
+            name: torch.optim.Adam([parameter], lr=1e-3)
+            for name, parameter in params.items()
+        }
+        state = {
+            "grad2d": torch.tensor([0.001, 0.003, 0.002]),
+            "count": torch.ones(3),
+            "radii": torch.zeros(3),
+            "scene_scale": 10.0,
+        }
+        clone_count, split_count = adapter._grow_mipmap(
+            params, optimizers, state
+        )
+        self.assertEqual((clone_count, split_count), (2, 0))
+        self.assertEqual(len(params["means"]), 5)
+
     def test_lidar_birth_guard_blocks_unsupported_parent_and_projects_newborns(self):
         import numpy as np
         import torch
@@ -346,6 +393,23 @@ class PruningInvariantTests(unittest.TestCase):
             self.assertEqual(event["new_gaussian_count"], 200)
             self.assertEqual(event["pruned_gaussian_count"], 0)
 
+    def test_exact_lifecycle_can_refine_on_inclusive_start_boundary(self):
+        from cloudstudio_3dgs.training.runtime_evidence import build_mcmc_step_event
+
+        event = build_mcmc_step_event(
+            step=500,
+            before={"gaussian_count": 1000, "dead_gaussian_count": 0},
+            after={"gaussian_count": 1050, "dead_gaussian_count": 0},
+            refine_start_iter=500,
+            refine_stop_iter=5610,
+            refine_every=100,
+            noise_injection_stop_iter=0,
+            strategy_prunes=True,
+            refine_start_inclusive=True,
+        )
+        self.assertTrue(event["refine_triggered"])
+        self.assertEqual(event["new_gaussian_count"], 50)
+
 
 if __name__ == "__main__":
     unittest.main()
@@ -445,7 +509,7 @@ class GradientSourceTests(unittest.TestCase):
         config.validate()
         self.assertTrue(config.tangent_proposal.reject_unsupported_births)
 
-    def test_hard_birth_guard_is_rejected_on_mcmc_path(self):
+    def test_hard_birth_guard_is_supported_on_mcmc_path(self):
         config = TrainerConfig.from_dict(
             _minimal_config(
                 error_weighted_sampling={"enabled": True},
@@ -455,8 +519,9 @@ class GradientSourceTests(unittest.TestCase):
                 },
             )
         )
-        with self.assertRaisesRegex(ValueError, "requires default_3dgs"):
-            config.validate()
+        config.validate()
+        self.assertNotEqual(config.densification_strategy, "default_3dgs")
+        self.assertTrue(config.tangent_proposal.reject_unsupported_births)
 
 
 class GradientIsolationTests(unittest.TestCase):

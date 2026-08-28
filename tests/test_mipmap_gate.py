@@ -1,4 +1,5 @@
 import copy
+import hashlib
 import json
 import tempfile
 import unittest
@@ -16,17 +17,23 @@ from cloudstudio_3dgs.pipeline.mipmap_gate import (
     TRAINING_IMPLEMENTATION_CONTRACT_KIND,
     TRAINING_IMPLEMENTATION_CONTRACT_SCHEMA_VERSION,
     TRAINING_IMPLEMENTATION_READY_STATUS,
+    FIXED_TOPOLOGY_EVALUATION_READY_STATUS,
+    ADAPTIVE_GROWTH_BOUNDARY_READY_STATUS,
     TRAINING_READY_STATUS,
     UPSTREAM_DATA_READY_STATUS,
     advance_training_implementation_gate,
+    advance_fixed_topology_evaluation_gate,
+    advance_adaptive_growth_gate,
     advance_lidar_depth_gate,
     advance_da2_depth_gate,
     advance_renderer_mask_gate,
     sign_gate,
     sign_training_implementation_contract,
+    fixed_topology_evaluation_arm_fingerprint,
     verify_gate,
     verify_training_gate,
 )
+from cloudstudio_3dgs.data.manifest import canonical_json_bytes
 from cloudstudio_3dgs.data.renderer_masks import sign_renderer_mask_manifest
 from cloudstudio_3dgs.data.mono_depth import sign_mono_depth_manifest
 from cloudstudio_3dgs.training.trainer import TrainerConfig
@@ -118,6 +125,149 @@ def _implementation_contract(*, gpu_smoke: bool = True) -> dict:
 
 
 class MipMapPipelineGateTests(unittest.TestCase):
+    def test_adaptive_boundary_gate_binds_signed_v26_config(self) -> None:
+        config = {
+            "run_id": "v26-boundary",
+            "mipmap_tile_id": 1,
+            "topology_policy": {"mode": "adaptive_growth"},
+            "densification_strategy": "default_3dgs",
+            "densification_gradient_source": "rgb_only",
+            "mcmc_refine_start_iter": 500,
+            "mcmc_refine_every": 100,
+            "mcmc_refine_stop_iter": 5610,
+            "mcmc_noise_injection_stop_iter": 0,
+            "mcmc_noise_lr": 0.0,
+            "max_steps": 7480,
+            "controlled_stop_after_steps": 502,
+            "factor": 1,
+            "cap_max": 2200000,
+            "sh_degree": 0,
+            "da2_depth_weight": 0.0,
+            "error_weighted_sampling": {"enabled": False},
+            "default_strategy": {
+                "exact_mipmap_lifecycle": True,
+                "grow_grad2d": 0.00015,
+                "growth_min_opacity": 0.15,
+                "split_scale_m": 0.2,
+                "prune_scale_m": 0.2,
+                "prune_opa": 0.1,
+                "prune_opa_late": 0.05,
+                "prune_switch_step": 3740,
+                "prune_scale2d": 0.15,
+                "reset_every": 300,
+                "reset_opacity_cap": 0.2,
+                "absgrad": True,
+                "revised_opacity": True,
+            },
+            "tangent_proposal": {
+                "enabled": True,
+                "reject_unsupported_births": True,
+            },
+            "geometry_regularization": {
+                "enabled": True,
+                "opacity_sparsity_weight": 1e-4,
+                "scale_upper_weight": 1e-4,
+                "anisotropy_weight": 1e-4,
+                "max_scale_ratio_to_reference": 8.0,
+                "max_anisotropy": 10.0,
+            },
+        }
+        config["config_manifest_sha256"] = hashlib.sha256(
+            canonical_json_bytes(config)
+        ).hexdigest()
+        gate = advance_adaptive_growth_gate(
+            _upstream_data_gate(), config, stage="boundary"
+        )
+        self.assertEqual(gate["status"], ADAPTIVE_GROWTH_BOUNDARY_READY_STATUS)
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "gate.json"
+            path.write_text(json.dumps(gate), encoding="utf-8")
+            verify_training_gate(
+                path,
+                dataset_manifest_sha256=DATASET_SHA,
+                split_manifest_sha256=SPLIT_SHA,
+                face_manifest_sha256=FACE_SHA,
+                adaptive_growth_config_manifest_sha256=config[
+                    "config_manifest_sha256"
+                ],
+            )
+
+    def test_fixed_topology_evaluation_gate_authorizes_only_signed_arm(self) -> None:
+        arm_config = {
+            "run_id": "tile1-a0",
+            "mipmap_tile_id": 1,
+            "topology_policy": {"mode": "strict_fixed"},
+            "fixed_topology_schedule": {
+                "enabled": True,
+                "phase_a_steps": 5,
+                "phase_b_steps": 10,
+                "audit_steps": [1, 5, 15, 20],
+            },
+            "max_steps": 20,
+            "factor": 1,
+            "color_model": "sh",
+            "sh_degree": 0,
+            "da2_depth_weight": 0.0,
+            "lidar_admission": {"enabled": False},
+            "tangent_proposal": {"enabled": False},
+            "densification_strategy": "default_3dgs",
+        }
+        plan = {
+            "schema_version": 1,
+            "kind": "fixed_topology_evaluation_plan_v1",
+            "tile_id": 1,
+            "steps": {"total": 20},
+            "arms": [{"arm": "A0", "path": "a0.json"}],
+            "training_allowed": False,
+            "adaptive_growth_remains_blocked_by": ["gap evidence"],
+        }
+        plan["evaluation_plan_sha256"] = hashlib.sha256(
+            canonical_json_bytes(plan)
+        ).hexdigest()
+        upstream = _upstream_data_gate()
+        readiness = {
+            "schema_version": 1,
+            "kind": "fixed_topology_evaluation_readiness_v1",
+            "status": "FIXED_TOPOLOGY_EVALUATION_PREPARED",
+            "upstream_gate_manifest_sha256": upstream["gate_manifest_sha256"],
+            "evaluation_plan_sha256": plan["evaluation_plan_sha256"],
+            "evidence": {
+                "directional_pass": True,
+                "phase_a_geometry_frozen": True,
+                "core_only_merge_contract": True,
+            },
+            "training_allowed": False,
+            "adaptive_growth_allowed": False,
+        }
+        readiness["readiness_sha256"] = hashlib.sha256(
+            canonical_json_bytes(readiness)
+        ).hexdigest()
+        gate = advance_fixed_topology_evaluation_gate(
+            upstream, readiness, plan, {"A0": arm_config}
+        )
+        self.assertEqual(gate["status"], FIXED_TOPOLOGY_EVALUATION_READY_STATUS)
+        self.assertTrue(gate["training_allowed"])
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "gate.json"
+            path.write_text(json.dumps(gate), encoding="utf-8")
+            verify_training_gate(
+                path,
+                dataset_manifest_sha256=DATASET_SHA,
+                split_manifest_sha256=SPLIT_SHA,
+                face_manifest_sha256=FACE_SHA,
+                fixed_topology_arm_fingerprint_sha256=(
+                    fixed_topology_evaluation_arm_fingerprint(arm_config)
+                ),
+            )
+            with self.assertRaisesRegex(ValueError, "not an authorized"):
+                verify_training_gate(
+                    path,
+                    dataset_manifest_sha256=DATASET_SHA,
+                    split_manifest_sha256=SPLIT_SHA,
+                    face_manifest_sha256=FACE_SHA,
+                    fixed_topology_arm_fingerprint_sha256="0" * 64,
+                )
+
     def test_frontend_gate_is_valid_but_blocks_training(self) -> None:
         gate = _gate(ready=False)
         self.assertEqual(verify_gate(gate), gate["gate_manifest_sha256"])

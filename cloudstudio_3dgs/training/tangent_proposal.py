@@ -133,9 +133,10 @@ class ProposalConfig:
             surface sample can be fitted without abruptly over-covering the
             image.
         reject_unsupported_births: fail-closed LiDAR mode for classic
-            split/clone densification.  Candidate parents must pass the same
-            planarity/support gates before they are allowed to grow, and every
-            newborn is placed from that measured parent on the local tangent
+            split/clone and MCMC relocation/add. Candidate sources must pass
+            the same planarity/support gates before they may create or replace
+            geometry, and every proposal is placed from that measured source
+            on the local tangent
             surface.  This is intentionally stronger than the visual-only MCMC
             fallback and must be enabled only when LiDAR is the authority
             geometry.

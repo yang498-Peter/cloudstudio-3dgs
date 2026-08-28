@@ -4,12 +4,14 @@ import tempfile
 import unittest
 import hashlib
 import json
+import math
 from pathlib import Path
 
 import torch
 
 from cloudstudio_3dgs.data.manifest import canonical_json_bytes
 from tools.export_gaussian_ply import export_checkpoint_ply
+from tools.gaussian_health import read_ply_records
 
 
 def _vertex_count(path: Path) -> int:
@@ -124,6 +126,23 @@ class ExportGaussianPlyLayerTests(unittest.TestCase):
             torch.save(payload, checkpoint)
             with self.assertRaisesRegex(ValueError, "boundary is inconsistent"):
                 export_checkpoint_ply(checkpoint, root / "surface.ply", layer="surface")
+
+    def test_surface_scale_cap_does_not_shrink_independent_sky(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            checkpoint = root / "model.pt"
+            output = root / "capped.ply"
+            self.make_checkpoint(checkpoint)
+            report = export_checkpoint_ply(
+                checkpoint,
+                output,
+                surface_gaussian_count=3,
+                max_surface_scale_m=0.08,
+            )
+            records = read_ply_records(output)
+            self.assertEqual(report["surface_scale_values_capped"], 9)
+            self.assertAlmostEqual(float(records["scale_0"][0]), math.log(0.08), places=6)
+            self.assertEqual(float(records["scale_0"][3]), 0.0)
 
 
 if __name__ == "__main__":

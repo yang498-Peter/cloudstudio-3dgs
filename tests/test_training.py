@@ -51,6 +51,7 @@ from cloudstudio_3dgs.training.regularization import (
 )
 from cloudstudio_3dgs.training.trainer import (
     TrainerConfig,
+    _range_directionality_audit,
     _render_supervision_loss,
     _warm_start_from_checkpoint,
     active_sh_degree_for_step,
@@ -784,7 +785,7 @@ class TrainingContractTests(unittest.TestCase):
             with self.assertRaisesRegex(FileNotFoundError, "initialization geometry"):
                 config.validate()
 
-    def test_geometry_can_be_frozen_but_appearance_learning_stays_positive(self) -> None:
+    def test_geometry_and_strict_fixed_opacity_can_be_frozen(self) -> None:
         base = {
             "run_id": "fixed-sensor-geometry",
             "dataset_manifest": "dataset.json",
@@ -811,13 +812,26 @@ class TrainingContractTests(unittest.TestCase):
         self.assertEqual(optimizer["configured_learning_rates"]["means"], 0.0)
         self.assertEqual(optimizer["fixed_parameter_groups"], ["means", "quats", "scales"])
 
+        frozen_opacity = TrainerConfig.from_dict(
+            {
+                **base,
+                "learning_rates": {**base["learning_rates"], "opacities": 0.0},
+                "topology_policy": {"mode": "strict_fixed"},
+            }
+        )
+        frozen_opacity.validate()
+        self.assertEqual(
+            frozen_opacity.contract_dict()["optimizer"]["fixed_parameter_groups"],
+            ["means", "opacities", "quats", "scales"],
+        )
+
         no_color_learning = TrainerConfig.from_dict(
             {
                 **base,
                 "learning_rates": {**base["learning_rates"], "colors": 0.0},
             }
         )
-        with self.assertRaisesRegex(ValueError, "appearance learning rates"):
+        with self.assertRaisesRegex(ValueError, "colour learning rate"):
             no_color_learning.validate()
 
     def test_trainer_contract_v5_records_enabled_linear_lidar_auxiliary_loss(self) -> None:
@@ -1022,6 +1036,37 @@ class TrainingContractTests(unittest.TestCase):
 
 @unittest.skipUnless(HAS_TORCH, "torch is an optional training dependency")
 class TorchTrainingContractTests(unittest.TestCase):
+    def test_range_directionality_moves_prediction_toward_lidar(self) -> None:
+        import torch
+
+        config = TrainerConfig.from_dict(
+            {
+                "run_id": "range-directionality",
+                "trainer_preset": "custom",
+                "dataset_manifest": "dataset.json",
+                "recording_root": "recording",
+                "mask_manifest": "masks.json",
+                "mask_root": "masks",
+                "split_manifest": "split.json",
+                "initialization_ply": "init.ply",
+                "output_dir": "run",
+                "gsplat_lock": "upstream/gsplat.lock.json",
+                "require_person_masks": False,
+            }
+        )
+        report = _range_directionality_audit(
+            rendered_range=torch.tensor([[1.8, 3.2], [4.0, 5.5]]),
+            tensors={
+                "range_m": torch.tensor([[2.0, 3.0], [4.0, 5.0]]),
+                "confidence": torch.ones((2, 2)),
+                "depth_mask": torch.ones((2, 2), dtype=torch.bool),
+            },
+            config=config,
+        )
+        self.assertTrue(report["directional_pass"])
+        self.assertLessEqual(report["toward_surface_loss"], report["baseline_loss"])
+        self.assertGreater(report["away_from_surface_loss"], report["baseline_loss"])
+
     def test_lidar_supported_rgb_boost_targets_only_depth_pixels(self) -> None:
         import torch
         from types import SimpleNamespace
@@ -1074,6 +1119,61 @@ class TorchTrainingContractTests(unittest.TestCase):
             float(info["cloudstudio_lidar_rgb_l1"].detach()), 1.0, places=6
         )
         self.assertAlmostEqual(float(loss.detach()), 2.2, places=6)
+
+    def test_eval3d_euclidean_range_is_not_scaled_twice(self) -> None:
+        import torch
+        from types import SimpleNamespace
+
+        rendered = torch.zeros((2, 2, 3), dtype=torch.float32, requires_grad=True)
+        rendered_range = torch.full((2, 2), 2.0, dtype=torch.float32)
+
+        class Backend:
+            @staticmethod
+            def render(*args, **kwargs):
+                return (
+                    rendered,
+                    rendered_range,
+                    None,
+                    {"cloudstudio_range_semantics": "euclidean_ray_range_m"},
+                )
+
+        Backend.torch = torch
+        config = TrainerConfig.from_dict(
+            {
+                "run_id": "eval3d-range-semantics",
+                "trainer_preset": "custom",
+                "dataset_manifest": "dataset.json",
+                "recording_root": "recording",
+                "mask_manifest": "masks.json",
+                "mask_root": "masks",
+                "split_manifest": "split.json",
+                "initialization_ply": "sparse_pc.ply",
+                "output_dir": "run",
+                "gsplat_lock": "upstream/gsplat.lock.json",
+                "require_person_masks": False,
+                "rgb_ssim_weight": 0.0,
+                "lidar_range_weight": 1.0,
+                "lidar_range_loss_mode": "linear_l1",
+            }
+        )
+        tensors = {
+            "rgb": torch.zeros((2, 2, 3)),
+            "rgb_mask": torch.ones((2, 2), dtype=torch.bool),
+            "range_m": torch.full((2, 2), 2.0),
+            "confidence": torch.ones((2, 2)),
+            "depth_mask": torch.ones((2, 2), dtype=torch.bool),
+        }
+        _, _, _, range_loss, _ = _render_supervision_loss(
+            backend=Backend(),
+            params={},
+            sample=SimpleNamespace(
+                camera_model="pinhole",
+                depth_to_range_scale=np.full((2, 2), 2.0, dtype=np.float32),
+            ),
+            tensors=tensors,
+            config=config,
+        )
+        self.assertEqual(float(range_loss.detach()), 0.0)
 
     def test_masked_losses_ignore_invalid_pixels_and_use_range_confidence(self) -> None:
         import torch
@@ -1559,7 +1659,7 @@ class TorchTrainingContractTests(unittest.TestCase):
                 return (
                     torch.zeros((2, 3, 3), dtype=torch.float32),
                     torch.ones((2, 3), dtype=torch.float32),
-                    None,
+                    torch.full((2, 3), 0.75, dtype=torch.float32),
                     None,
                 )
 
@@ -1587,6 +1687,12 @@ class TorchTrainingContractTests(unittest.TestCase):
                 "factor_crop_mask_adjusted_euclidean_ray_range_m",
             )
             self.assertEqual((first / relative).read_bytes(), (second / relative).read_bytes())
+            alpha = np.load(first / frames[0]["rendered_alpha_path"])
+            np.testing.assert_allclose(alpha, np.full((2, 3), 0.75, dtype=np.float32))
+            self.assertEqual(
+                frames[0]["rendered_alpha_semantics"],
+                "accumulated_foreground_opacity_0_to_1",
+            )
 
 
 @unittest.skipUnless(HAS_TORCH, "torch is an optional training dependency")

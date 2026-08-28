@@ -83,6 +83,7 @@ class DefaultStrategyAdapter:
         prune_opa_late: float | None = None,
         prune_switch_step: int | None = None,
         reset_opacity_cap: float | None = None,
+        capacity_cap: int | None = None,
         surface_birth_proposal: Any | None = None,
     ) -> None:
         from gsplat.strategy import DefaultStrategy
@@ -99,6 +100,9 @@ class DefaultStrategyAdapter:
         self.prune_opa_late = prune_opa_late
         self.prune_switch_step = prune_switch_step
         self.reset_opacity_cap = reset_opacity_cap
+        self.capacity_cap = None if capacity_cap is None else int(capacity_cap)
+        if self.capacity_cap is not None and self.capacity_cap <= 4:
+            raise ValueError("capacity_cap must be greater than four")
         self.surface_birth_proposal = surface_birth_proposal
         self.last_lifecycle_event: dict[str, Any] | None = None
         self._last_surface_birth_event: dict[str, Any] | None = None
@@ -253,6 +257,22 @@ class DefaultStrategyAdapter:
                 params["means"]
             )
         supported_candidate_count = int(eligible.sum().item())
+        capacity_rejected_count = 0
+        if self.capacity_cap is not None:
+            available = max(0, self.capacity_cap - len(params["means"]))
+            if supported_candidate_count > available:
+                candidate_indices = torch.where(eligible)[0]
+                limited = torch.zeros_like(eligible)
+                if available > 0:
+                    keep_local = torch.topk(
+                        gradients[candidate_indices],
+                        k=available,
+                        largest=True,
+                        sorted=False,
+                    ).indices
+                    limited[candidate_indices[keep_local]] = True
+                capacity_rejected_count = supported_candidate_count - available
+                eligible = limited
         maximum_scale = torch.exp(params["scales"]).max(dim=-1).values
         small = maximum_scale <= float(self.split_scale_m)
         duplicate_mask = eligible & small
@@ -328,6 +348,7 @@ class DefaultStrategyAdapter:
                 "supported_parents": supported_candidate_count,
                 "rejected_parents": growth_candidate_count
                 - supported_candidate_count,
+                "capacity_rejected_parents": capacity_rejected_count,
                 "newborns": duplicate_count + 2 * split_count,
                 "proposal": dict(self.surface_birth_proposal.last_stats),
             }
@@ -459,6 +480,7 @@ class DefaultStrategyAdapter:
             "prune_opa_late": self.prune_opa_late,
             "prune_switch_step": self.prune_switch_step,
             "reset_opacity_cap": self.reset_opacity_cap,
+            "capacity_cap": self.capacity_cap,
             "surface_birth_guard": (
                 None
                 if self.surface_birth_proposal is None

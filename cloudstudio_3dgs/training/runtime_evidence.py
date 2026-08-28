@@ -559,11 +559,20 @@ def snapshot_gaussians(
 
 
 def _refine_triggered(
-    *, step: int, refine_start_iter: int, refine_stop_iter: int, refine_every: int
+    *,
+    step: int,
+    refine_start_iter: int,
+    refine_stop_iter: int,
+    refine_every: int,
+    refine_start_inclusive: bool = False,
 ) -> bool:
     return (
         step < refine_stop_iter
-        and step > refine_start_iter
+        and (
+            step >= refine_start_iter
+            if refine_start_inclusive
+            else step > refine_start_iter
+        )
         and step % refine_every == 0
     )
 
@@ -579,6 +588,7 @@ def build_mcmc_step_event(
     noise_injection_stop_iter: int,
     noise_position_delta_max_m: float | None = None,
     strategy_prunes: bool = False,
+    refine_start_inclusive: bool = False,
 ) -> dict[str, Any]:
     """Describe one completed strategy call without overstating visual quality."""
     refine = _refine_triggered(
@@ -586,6 +596,7 @@ def build_mcmc_step_event(
         refine_start_iter=refine_start_iter,
         refine_stop_iter=refine_stop_iter,
         refine_every=refine_every,
+        refine_start_inclusive=refine_start_inclusive,
     )
     if refine and (before is None or after is None):
         raise ValueError("refine telemetry requires before and after snapshots")

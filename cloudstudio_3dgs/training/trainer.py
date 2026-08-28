@@ -33,6 +33,7 @@ from cloudstudio_3dgs.training.checkpoint import (
 )
 from cloudstudio_3dgs.training.contracts import build_coordinate_transform_manifest
 from cloudstudio_3dgs.training.dataset import S1TrainingDataset, TrainingSample
+from cloudstudio_3dgs.training.face_dataset import verify_face_manifest
 from cloudstudio_3dgs.training.losses import (
     confidence_weighted_log_range_huber,
     confidence_weighted_range_l1,
@@ -47,6 +48,7 @@ from cloudstudio_3dgs.training.presets import (
 )
 from cloudstudio_3dgs.pipeline.mipmap_gate import (
     INDEPENDENT_AT_ALGORITHM,
+    fixed_topology_evaluation_arm_fingerprint,
     load_and_verify_gate,
     verify_training_gate,
 )
@@ -66,6 +68,7 @@ from cloudstudio_3dgs.training.scale_calibration import (
 )
 from cloudstudio_3dgs.training.surface_initialization import (
     SurfaceInitializationConfig,
+    cap_surface_initialization_scales,
     build_surface_aligned_initialization,
     load_initialization_geometry,
 )
@@ -110,9 +113,22 @@ from cloudstudio_3dgs.training.regularization import (
 )
 from cloudstudio_3dgs.training.runtime_evidence import (
     append_mcmc_telemetry,
+    build_mcmc_step_event,
     initialize_mcmc_telemetry,
     require_finite_training_tensors,
     snapshot_gaussians,
+)
+from cloudstudio_3dgs.training.topology_policy import (
+    FixedTopologyScheduleConfig,
+    TopologyPolicyConfig,
+    topology_count_transition,
+)
+from cloudstudio_3dgs.training.optimization_audit import (
+    component_gradient_audit,
+    gradient_norms,
+    parameter_update_norms,
+    point_to_plane_drift_summary,
+    shortest_axis_normals,
 )
 
 
@@ -153,6 +169,7 @@ class TrainerConfig:
     warm_start_fresh_auxiliary: tuple[str, ...] = ()
     face_cache_manifest: Path | None = None
     face_cache_root: Path | None = None
+    raw_fisheye_post_refine_face_manifest: Path | None = None
     renderer_mask_manifest: Path | None = None
     tile_inputs_manifest: Path | None = None
     tile_inputs_root: Path | None = None
@@ -161,7 +178,13 @@ class TrainerConfig:
     face_lidar_geometry_manifest: Path | None = None
     face_lidar_geometry_root: Path | None = None
     mipmap_pipeline_gate: Path | None = None
+    config_manifest_sha256: str | None = None
+    controlled_stop_after_steps: int | None = None
     implementation_smoke_only: bool = False
+    topology_policy: TopologyPolicyConfig = field(default_factory=TopologyPolicyConfig)
+    fixed_topology_schedule: FixedTopologyScheduleConfig = field(
+        default_factory=FixedTopologyScheduleConfig
+    )
     final_evaluation_artifacts: bool = True
     require_person_masks: bool = True
     trainer_preset: str = "custom"
@@ -199,6 +222,7 @@ class TrainerConfig:
     decoupled_ssim: bool = False
     sh_regularization_weight: float = 0.0
     pinhole_rasterize_mode: str = "classic"
+    pinhole_with_ut: bool = False
     color_model: str = "rgb_sigmoid"
     sh_degree: int = 2
     background_color: tuple[float, float, float] | None = None
@@ -209,6 +233,11 @@ class TrainerConfig:
     mcmc_refine_every: int = 100
     mcmc_noise_injection_stop_iter: int = -1
     mcmc_noise_lr: float = 500_000.0
+    mcmc_growth_rate: float = 0.05
+    mcmc_relocation_max_fraction: float = 1.0
+    mcmc_relocation_max_scale_m: float | None = None
+    mcmc_relocation_max_anisotropy: float | None = None
+    post_refine_geometry_lr_scale: float = 1.0
     # "error_weighted_mcmc" is this trainer's homegrown sampler; "default_3dgs"
     # is gsplat's reference implementation of Kerbl et al., which scores by the
     # projected-position gradient instead of an image-error map. Measurement on
@@ -275,6 +304,7 @@ class TrainerConfig:
                 "warm_start_checkpoint",
                 "face_cache_manifest",
                 "face_cache_root",
+                "raw_fisheye_post_refine_face_manifest",
                 "renderer_mask_manifest",
                 "tile_inputs_manifest",
                 "tile_inputs_root",
@@ -337,6 +367,22 @@ class TrainerConfig:
         surface_initialization = SurfaceInitializationConfig(
             **surface_initialization_value
         )
+        topology_value = value.get("topology_policy", {})
+        if not isinstance(topology_value, dict):
+            raise ValueError("topology_policy must be an object")
+        topology_policy = TopologyPolicyConfig(**topology_value)
+        fixed_schedule_value = value.get("fixed_topology_schedule", {})
+        if not isinstance(fixed_schedule_value, dict):
+            raise ValueError("fixed_topology_schedule must be an object")
+        audit_steps_value = fixed_schedule_value.get("audit_steps", [])
+        if not isinstance(audit_steps_value, list):
+            raise ValueError("fixed_topology_schedule.audit_steps must be a list")
+        fixed_topology_schedule = FixedTopologyScheduleConfig(
+            **{
+                **fixed_schedule_value,
+                "audit_steps": tuple(audit_steps_value),
+            }
+        )
         fresh_auxiliary_value = value.get("warm_start_fresh_auxiliary", [])
         if not isinstance(fresh_auxiliary_value, list) or not all(
             isinstance(name, str) and name for name in fresh_auxiliary_value
@@ -373,6 +419,7 @@ class TrainerConfig:
                 "decoupled_ssim",
                 "sh_regularization_weight",
                 "pinhole_rasterize_mode",
+                "pinhole_with_ut",
                 "contribution_every",
                 "color_model",
                 "sh_degree",
@@ -384,6 +431,11 @@ class TrainerConfig:
                 "mcmc_refine_every",
                 "mcmc_noise_injection_stop_iter",
                 "mcmc_noise_lr",
+                "mcmc_growth_rate",
+                "mcmc_relocation_max_fraction",
+                "mcmc_relocation_max_scale_m",
+                "mcmc_relocation_max_anisotropy",
+                "post_refine_geometry_lr_scale",
                 "densification_strategy",
                 "default_strategy",
                 "densification_gradient_source",
@@ -393,6 +445,8 @@ class TrainerConfig:
                 "final_evaluation_artifacts",
                 "mipmap_tile_id",
                 "implementation_smoke_only",
+                "config_manifest_sha256",
+                "controlled_stop_after_steps",
             )
             if key in value
         }
@@ -404,6 +458,8 @@ class TrainerConfig:
             warm_start_fresh_auxiliary=tuple(fresh_auxiliary_value),
             metric_scale_calibration=scale_calibration,
             surface_initialization=surface_initialization,
+            topology_policy=topology_policy,
+            fixed_topology_schedule=fixed_topology_schedule,
             exposure_compensation=exposure,
             geometry_regularization=regularization,
             golden_evaluation=golden_evaluation,
@@ -424,22 +480,63 @@ class TrainerConfig:
             raise ValueError("3DGUT training requires an explicit CUDA device")
         if self.max_steps <= 0 or self.checkpoint_every <= 0:
             raise ValueError("max_steps and checkpoint_every must be positive")
+        if self.controlled_stop_after_steps is not None and not (
+            0 < int(self.controlled_stop_after_steps) < self.max_steps
+        ):
+            raise ValueError(
+                "controlled_stop_after_steps must be between zero and max_steps"
+            )
+        self.topology_policy.validate(max_steps=self.max_steps)
+        self.fixed_topology_schedule.validate(
+            max_steps=self.max_steps, topology_mode=self.topology_policy.mode
+        )
+        if not self.topology_policy.strategy_enabled and (
+            self.error_weighted_sampling.enabled
+            or self.lidar_admission.enabled
+            or self.tangent_proposal.enabled
+        ):
+            raise ValueError(
+                "no-birth topology forbids densification sampling, admission, and proposal"
+            )
+        if (
+            self.topology_policy.mode == "opacity_prune_only"
+            and self.fixed_topology_schedule.enabled
+            and int(self.topology_policy.opacity_prune_step or 0)
+            < self.fixed_topology_schedule.phase_a_steps
+        ):
+            raise ValueError("opacity prune must occur after the appearance warm-up")
         if self.implementation_smoke_only:
             if self.max_steps > 2:
                 raise ValueError("implementation_smoke_only is limited to at most 2 steps")
-            if self.factor < 2:
-                raise ValueError("implementation_smoke_only requires factor >= 2")
+            if self.factor < 2 and not (
+                self.factor == 1
+                and self.max_steps == 1
+                and self.topology_policy.mode == "strict_fixed"
+            ):
+                raise ValueError(
+                    "factor=1 implementation smoke is limited to one strict-fixed step"
+                )
             if self.final_evaluation_artifacts or self.golden_evaluation.enabled:
                 raise ValueError(
                     "implementation_smoke_only forbids final or golden evaluation"
                 )
-            if self.resume_checkpoint is not None or self.warm_start_checkpoint is not None:
-                raise ValueError("implementation_smoke_only forbids resume and warm start")
+            if self.resume_checkpoint is not None or (
+                self.warm_start_checkpoint is not None
+                and self.raw_fisheye_post_refine_face_manifest is None
+            ):
+                raise ValueError(
+                    "implementation_smoke_only forbids resume and permits warm start "
+                    "only for signed raw-fisheye post-refine lineage"
+                )
             if self.checkpoint_every != self.max_steps:
                 raise ValueError(
                     "implementation_smoke_only must checkpoint only at the final step"
                 )
-            if int(self.default_strategy.get("refine_start_iter", 0)) <= self.max_steps:
+            if (
+                self.topology_policy.strategy_enabled
+                and int(self.default_strategy.get("refine_start_iter", 0))
+                <= self.max_steps
+            ):
                 raise ValueError(
                     "implementation_smoke_only forbids densification during the smoke"
                 )
@@ -457,7 +554,8 @@ class TrainerConfig:
         ):
             raise ValueError("warm_start_fresh_auxiliary names must be unique")
         unsupported_fresh_auxiliary = set(self.warm_start_fresh_auxiliary) - {
-            "rig_pose_deltas"
+            "rig_pose_deltas",
+            "exposure_log_gains",
         }
         if unsupported_fresh_auxiliary:
             raise ValueError(
@@ -475,6 +573,13 @@ class TrainerConfig:
             ):
                 raise ValueError(
                     "fresh rig_pose_deltas requires rig_pose_refinement.enabled"
+                )
+            if (
+                "exposure_log_gains" in self.warm_start_fresh_auxiliary
+                and not self.exposure_compensation.enabled
+            ):
+                raise ValueError(
+                    "fresh exposure_log_gains requires exposure compensation"
                 )
         if not 0.0 <= float(self.warm_start_min_opacity) < 1.0:
             raise ValueError("warm_start_min_opacity must be within [0, 1)")
@@ -562,6 +667,8 @@ class TrainerConfig:
             raise ValueError("sh_regularization_weight must be non-negative")
         if self.pinhole_rasterize_mode not in ("classic", "antialiased"):
             raise ValueError("pinhole_rasterize_mode must be 'classic' or 'antialiased'")
+        if self.pinhole_with_ut and self.pinhole_rasterize_mode != "classic":
+            raise ValueError("pinhole_with_ut requires classic rasterization")
         self.ppisp.validate()
         self.contribution.validate()
         if self.contribution_every <= 0:
@@ -593,13 +700,9 @@ class TrainerConfig:
             raise ValueError(
                 "MCMC tangent_proposal requires error_weighted_sampling to be enabled"
             )
-        if (
-            self.tangent_proposal.reject_unsupported_births
-            and self.densification_strategy != "default_3dgs"
-        ):
-            raise ValueError(
-                "reject_unsupported_births requires default_3dgs densification"
-            )
+        # In the MCMC route reject_unsupported_births hard-filters relocation
+        # and addition source parents, then falls back to that supported parent
+        # if a random tangent proposal itself misses the trusted surface patch.
         if self.ppisp.enabled and self.exposure_compensation.enabled:
             raise ValueError(
                 "ppisp replaces scalar exposure compensation; enable only one"
@@ -612,17 +715,42 @@ class TrainerConfig:
         if set(self.learning_rates) != expected_lrs:
             raise ValueError(f"learning_rates must contain exactly {sorted(expected_lrs)}")
         geometry_groups = ("means", "scales", "quats")
-        appearance_groups = ("opacities", "colors")
         if any(float(self.learning_rates[name]) < 0.0 for name in geometry_groups):
             raise ValueError("geometry learning rates must be non-negative")
-        if any(float(self.learning_rates[name]) <= 0.0 for name in appearance_groups):
-            raise ValueError("appearance learning rates must be positive")
+        if float(self.learning_rates["colors"]) <= 0.0:
+            raise ValueError("colour learning rate must be positive")
+        if float(self.learning_rates["opacities"]) < 0.0:
+            raise ValueError("opacity learning rate must be non-negative")
+        if (
+            float(self.learning_rates["opacities"]) == 0.0
+            and self.topology_policy.mode != "strict_fixed"
+        ):
+            raise ValueError(
+                "frozen opacity requires strict_fixed topology so births and culls "
+                "cannot create an untrained opacity population"
+            )
         if self.mcmc_refine_start_iter < 0 or self.mcmc_refine_stop_iter <= 0:
             raise ValueError("MCMC refine bounds must be non-negative/positive")
         if self.mcmc_refine_start_iter >= self.mcmc_refine_stop_iter:
             raise ValueError("MCMC refine start must be smaller than refine stop")
         if self.mcmc_refine_every <= 0 or self.mcmc_noise_lr < 0.0:
             raise ValueError("MCMC refine interval must be positive and noise LR non-negative")
+        if not 0.0 <= self.mcmc_growth_rate <= 1.0:
+            raise ValueError("mcmc_growth_rate must be within [0, 1]")
+        if not 0.0 < self.mcmc_relocation_max_fraction <= 1.0:
+            raise ValueError("mcmc_relocation_max_fraction must be within (0, 1]")
+        if (
+            self.mcmc_relocation_max_scale_m is not None
+            and self.mcmc_relocation_max_scale_m <= 0.0
+        ):
+            raise ValueError("mcmc_relocation_max_scale_m must be positive")
+        if (
+            self.mcmc_relocation_max_anisotropy is not None
+            and self.mcmc_relocation_max_anisotropy <= 1.0
+        ):
+            raise ValueError("mcmc_relocation_max_anisotropy must exceed one")
+        if not 0.0 <= self.post_refine_geometry_lr_scale <= 1.0:
+            raise ValueError("post_refine_geometry_lr_scale must be within [0, 1]")
         if self.mcmc_noise_injection_stop_iter < -1:
             raise ValueError("MCMC noise stop must be -1 or non-negative")
         if self.densification_strategy not in DENSIFICATION_STRATEGIES:
@@ -662,7 +790,7 @@ class TrainerConfig:
                 "prune_scale2d": 0.15,
                 "reset_every": 300,
                 "reset_opacity_cap": 0.2,
-                "refine_scale2d_stop_iter": self.max_steps,
+                "refine_scale2d_stop_iter": self.mcmc_refine_stop_iter,
             }
             mismatched = {
                 key: (expected, self.default_strategy.get(key))
@@ -676,11 +804,11 @@ class TrainerConfig:
             if (
                 self.mcmc_refine_start_iter != 500
                 or self.mcmc_refine_every != 100
-                or self.mcmc_refine_stop_iter != self.max_steps
+                or self.mcmc_refine_stop_iter > self.max_steps
             ):
                 raise ValueError(
                     "exact MipMap lifecycle requires start=500, interval=100, "
-                    "and stop=max_steps"
+                    "and stop no later than max_steps"
                 )
         self.rig_pose_refinement.validate()
         self.exposure_compensation.validate()
@@ -711,6 +839,34 @@ class TrainerConfig:
         if (self.face_cache_manifest is None) != (self.face_cache_root is None):
             raise ValueError(
                 "face_cache_manifest and face_cache_root must be provided together"
+            )
+        if self.raw_fisheye_post_refine_face_manifest is not None:
+            if self.face_cache_manifest is not None:
+                raise ValueError(
+                    "raw-fisheye post-refine lineage cannot also consume Face4"
+                )
+            if self.warm_start_checkpoint is None:
+                raise ValueError("raw-fisheye post-refine requires a warm start")
+            if self.topology_policy.mode != "strict_fixed":
+                raise ValueError("raw-fisheye post-refine requires strict topology")
+            if any(
+                float(self.learning_rates[name]) != 0.0
+                for name in ("means", "scales", "quats")
+            ):
+                raise ValueError(
+                    "raw-fisheye post-refine requires frozen geometry learning rates"
+                )
+            if not self.raw_fisheye_post_refine_face_manifest.is_file():
+                raise FileNotFoundError(
+                    "raw-fisheye post-refine Face4 lineage is missing: "
+                    f"{self.raw_fisheye_post_refine_face_manifest}"
+                )
+            verify_face_manifest(
+                json.loads(
+                    self.raw_fisheye_post_refine_face_manifest.read_text(
+                        encoding="utf-8"
+                    )
+                )
             )
         if self.renderer_mask_manifest is not None and self.face_cache_manifest is None:
             raise ValueError("renderer mask consumption requires face-cache training")
@@ -767,10 +923,13 @@ class TrainerConfig:
         if self.da2_depth_weight > 0.0 and self.mono_depth_manifest is None:
             raise ValueError("positive DA2 depth weight requires a DA2 manifest and root")
         if not self.final_evaluation_artifacts:
-            if self.face_cache_manifest is None:
+            if self.face_cache_manifest is None and not (
+                self.implementation_smoke_only
+                and self.raw_fisheye_post_refine_face_manifest is not None
+            ):
                 raise ValueError(
                     "final_evaluation_artifacts may be disabled only for "
-                    "face-cache training"
+                    "face-cache training or a bounded raw-fisheye post-refine smoke"
                 )
             if self.golden_evaluation.enabled:
                 raise ValueError(
@@ -934,6 +1093,13 @@ class TrainerConfig:
                         self.face_cache_manifest.read_text(encoding="utf-8")
                     )
                     face_sha = str(face.get("face_manifest_sha256", ""))
+                elif self.raw_fisheye_post_refine_face_manifest is not None:
+                    face = json.loads(
+                        self.raw_fisheye_post_refine_face_manifest.read_text(
+                            encoding="utf-8"
+                        )
+                    )
+                    face_sha = verify_face_manifest(face)
                 verify_training_gate(
                     self.mipmap_pipeline_gate,
                     dataset_manifest_sha256=str(dataset.get("manifest_sha256", "")),
@@ -942,6 +1108,33 @@ class TrainerConfig:
                     ),
                     face_manifest_sha256=face_sha,
                     allow_implementation_smoke=self.implementation_smoke_only,
+                    fixed_topology_arm_fingerprint_sha256=(
+                        fixed_topology_evaluation_arm_fingerprint(
+                            {
+                                "run_id": self.run_id,
+                                "mipmap_tile_id": self.mipmap_tile_id,
+                                "topology_policy": self.topology_policy.to_dict(),
+                                "fixed_topology_schedule": (
+                                    self.fixed_topology_schedule.to_dict()
+                                ),
+                                "max_steps": self.max_steps,
+                                "factor": self.factor,
+                                "color_model": self.color_model,
+                                "sh_degree": self.sh_degree,
+                                "da2_depth_weight": self.da2_depth_weight,
+                                "lidar_admission": self.lidar_admission.to_dict(),
+                                "tangent_proposal": self.tangent_proposal.to_dict(),
+                                "densification_strategy": self.densification_strategy,
+                            }
+                        )
+                        if self.topology_policy.mode != "adaptive_growth"
+                        else None
+                    ),
+                    adaptive_growth_config_manifest_sha256=(
+                        self.config_manifest_sha256
+                        if self.topology_policy.mode == "adaptive_growth"
+                        else None
+                    ),
                 )
                 gate, _ = load_and_verify_gate(self.mipmap_pipeline_gate)
                 if self.renderer_mask_manifest is not None:
@@ -1052,7 +1245,15 @@ class TrainerConfig:
                 "noise_injection_stop_iter": self.mcmc_noise_injection_stop_iter,
                 "noise_lr": self.mcmc_noise_lr,
                 "noise_std_fraction": self.metric_scale_calibration.noise_std_fraction,
+                "growth_rate": self.mcmc_growth_rate,
+                "relocation_max_fraction": self.mcmc_relocation_max_fraction,
+                "relocation_max_scale_m": self.mcmc_relocation_max_scale_m,
+                "relocation_max_anisotropy": self.mcmc_relocation_max_anisotropy,
             }
+            if self.post_refine_geometry_lr_scale != 1.0:
+                strategy_contract["post_refine_geometry_lr_scale"] = (
+                    self.post_refine_geometry_lr_scale
+                )
         if self.error_weighted_sampling.enabled:
             strategy_contract["error_weighted_sampling"] = (
                 self.error_weighted_sampling.to_dict()
@@ -1069,18 +1270,31 @@ class TrainerConfig:
             # Same conditional rule and the same reason: an unconditional key
             # would rewrite trainer_config_sha256 for every pre-WP-5 config.
             strategy_contract["tangent_proposal"] = self.tangent_proposal.to_dict()
+        if (
+            self.topology_policy.mode != "adaptive_growth"
+            or self.fixed_topology_schedule.enabled
+        ):
+            strategy_contract["topology_policy"] = self.topology_policy.to_dict()
+            strategy_contract["active"] = self.topology_policy.strategy_enabled
 
         contract = {
             "schema_version": 2,
-            "algorithm_version": "cloudstudio_gsplat_trainer_v7"
-            if uses_rgb_gradient
-            else (
-                "cloudstudio_gsplat_trainer_v6"
-                if uses_lidar_rgb_boost
+            "algorithm_version": (
+                "cloudstudio_gsplat_trainer_v8_fixed_topology"
+                if self.topology_policy.mode != "adaptive_growth"
+                or self.fixed_topology_schedule.enabled
                 else (
-                    "cloudstudio_gsplat_trainer_v5"
-                    if uses_lidar_linear_aux
-                    else "cloudstudio_gsplat_trainer_v4"
+                    "cloudstudio_gsplat_trainer_v7"
+                    if uses_rgb_gradient
+                    else (
+                        "cloudstudio_gsplat_trainer_v6"
+                        if uses_lidar_rgb_boost
+                        else (
+                            "cloudstudio_gsplat_trainer_v5"
+                            if uses_lidar_linear_aux
+                            else "cloudstudio_gsplat_trainer_v4"
+                        )
+                    )
                 )
             ),
             "trainer_preset": self.trainer_preset,
@@ -1159,7 +1373,7 @@ class TrainerConfig:
                 "configured_learning_rates": dict(sorted(self.learning_rates.items())),
                 "fixed_parameter_groups": sorted(
                     name
-                    for name in ("means", "scales", "quats")
+                    for name in ("means", "scales", "quats", "opacities")
                     if float(self.learning_rates[name]) == 0.0
                 ),
                 "means_step_fraction": self.metric_scale_calibration.means_step_fraction,
@@ -1168,7 +1382,19 @@ class TrainerConfig:
                 "enabled": self.face_cache_manifest is not None,
                 "supervision": "pinhole_faces" if self.face_cache_manifest else "raw_fisheye",
                 "validation": "raw_fisheye",
+                "post_refine_face_lineage_sha256": (
+                    verify_face_manifest(
+                        json.loads(
+                            self.raw_fisheye_post_refine_face_manifest.read_text(
+                                encoding="utf-8"
+                            )
+                        )
+                    )
+                    if self.raw_fisheye_post_refine_face_manifest is not None
+                    else None
+                ),
                 "pinhole_rasterize_mode": self.pinhole_rasterize_mode,
+                "pinhole_with_ut": self.pinhole_with_ut,
             },
             "renderer": {
                 "camera_model": "fisheye",
@@ -1193,6 +1419,14 @@ class TrainerConfig:
             "golden_evaluation": self.golden_evaluation.to_dict(),
             "viewer": False,
         }
+        if (
+            self.topology_policy.mode != "adaptive_growth"
+            or self.fixed_topology_schedule.enabled
+        ):
+            contract["topology_policy"] = self.topology_policy.to_dict()
+            contract["fixed_topology_schedule"] = (
+                self.fixed_topology_schedule.to_dict()
+            )
         if self.mipmap_pipeline_gate is not None:
             gate, gate_sha = load_and_verify_gate(self.mipmap_pipeline_gate)
             contract["mipmap_pipeline_gate"] = {
@@ -1347,6 +1581,16 @@ def _atomic_json(path: Path, value: dict[str, Any]) -> None:
     except BaseException:
         temporary.unlink(missing_ok=True)
         raise
+
+
+def _append_monitor_event(path: Path, value: dict[str, Any]) -> None:
+    """Append non-authoritative telemetry without touching checkpoint state."""
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a", encoding="utf-8", newline="\n") as stream:
+        stream.write(json.dumps(value, ensure_ascii=False, separators=(",", ":")))
+        stream.write("\n")
+        stream.flush()
 
 
 def _write_golden_history(
@@ -1626,6 +1870,7 @@ def _render_supervision_loss(
     rgb_gain: Any | None = None,
     ppisp: Any | None = None,
     active_sh_degree: int | None = None,
+    range_weight_scale: float = 1.0,
 ) -> tuple[Any, Any, Any, Any, dict[str, Any]]:
     has_range = "range_m" in tensors and (
         config.lidar_range_weight > 0.0 or config.lidar_linear_aux_weight > 0.0
@@ -1726,9 +1971,18 @@ def _render_supervision_loss(
         if not bool(supervised.any()):
             has_range = False
     depth_scale = getattr(sample, "depth_to_range_scale", None)
-    if (has_range or has_da2) and rendered_range is not None and depth_scale is not None:
+    range_semantics = (
+        info.get("cloudstudio_range_semantics") if isinstance(info, dict) else None
+    )
+    if (
+        (has_range or has_da2)
+        and rendered_range is not None
+        and depth_scale is not None
+        and range_semantics != "euclidean_ray_range_m"
+    ):
         # Pinhole faces render z-depth; both LiDAR and aligned DA2 targets use
-        # Euclidean ray range.
+        # Euclidean ray range. eval3d already returns that Euclidean range and
+        # must not be scaled a second time.
         rendered_range = rendered_range * backend.torch.as_tensor(
             depth_scale, dtype=rendered_range.dtype, device=rendered_range.device
         )
@@ -1749,7 +2003,7 @@ def _render_supervision_loss(
                 tensors["depth_mask"],
                 delta=config.lidar_log_range_huber_delta,
             )
-        loss = loss + config.lidar_range_weight * range_loss
+        loss = loss + float(range_weight_scale) * config.lidar_range_weight * range_loss
         if config.lidar_linear_aux_weight > 0.0:
             linear_range_aux_loss = confidence_weighted_range_l1(
                 rendered_range,
@@ -1757,7 +2011,12 @@ def _render_supervision_loss(
                 tensors["confidence"],
                 tensors["depth_mask"],
             )
-            loss = loss + config.lidar_linear_aux_weight * linear_range_aux_loss
+            loss = (
+                loss
+                + float(range_weight_scale)
+                * config.lidar_linear_aux_weight
+                * linear_range_aux_loss
+            )
     da2_depth_loss = None
     if has_da2:
         assert rendered_range is not None
@@ -1787,10 +2046,60 @@ def _render_supervision_loss(
         if lidar_rgb_l1 is None
         else lidar_rgb_mask.to(dtype=rendered.dtype).mean().detach()
     )
+    info["cloudstudio_rendered_range_tensor"] = rendered_range
     # Stashed for the error-weighted MCMC score update; detached, so it never
     # extends the autograd graph.
     info["cloudstudio_rendered_rgb"] = rendered.detach()
     return loss, l1, ssim, range_loss, info
+
+
+def _range_directionality_audit(
+    *,
+    rendered_range: Any,
+    tensors: dict[str, Any],
+    config: TrainerConfig,
+    perturbation_m: float = 0.01,
+) -> dict[str, Any]:
+    """Check that a range prediction moved toward LiDAR lowers the loss."""
+
+    prediction = rendered_range.detach()
+    target = tensors["range_m"]
+    confidence = tensors["confidence"]
+    mask = tensors["depth_mask"]
+    residual = prediction - target
+    direction = residual.sign()
+    direction = direction.where(direction != 0.0, direction.new_ones(()))
+    toward = prediction - direction * residual.abs().clamp_max(float(perturbation_m))
+    away = prediction + direction * float(perturbation_m)
+
+    def evaluate(value: Any) -> Any:
+        if config.lidar_range_loss_mode == "linear_l1":
+            return confidence_weighted_range_l1(value, target, confidence, mask)
+        return confidence_weighted_log_range_huber(
+            value,
+            target,
+            confidence,
+            mask,
+            delta=config.lidar_log_range_huber_delta,
+        )
+
+    baseline = float(evaluate(prediction).cpu())
+    toward_loss = float(evaluate(toward).cpu())
+    away_loss = float(evaluate(away).cpu())
+    tolerance = 1e-10
+    return {
+        "perturbation_m": float(perturbation_m),
+        "baseline_loss": baseline,
+        "toward_surface_loss": toward_loss,
+        "away_from_surface_loss": away_loss,
+        "toward_nonincreasing": toward_loss <= baseline + tolerance,
+        "away_nondecreasing": away_loss + tolerance >= baseline,
+        "directional_pass": (
+            toward_loss <= baseline + tolerance
+            and away_loss + tolerance >= baseline
+            and away_loss > toward_loss + tolerance
+        ),
+    }
 
 
 def _compare_pose_candidate(
@@ -1857,13 +2166,15 @@ def _save_evaluation_artifacts(
             render_options = {"with_range": has_range}
             if background_rgb is not None:
                 render_options["background_rgb"] = background_rgb
-            rendered, rendered_range, _, _ = backend.render(
+            rendered, rendered_range, rendered_alpha, _ = backend.render(
                 params, sample, **render_options
             )
             prefix = artifact_root / sample.image_id
             reference_path = prefix.with_name(f"{sample.image_id}_reference.png")
             render_path = prefix.with_name(f"{sample.image_id}_rendered.png")
             mask_path = prefix.with_name(f"{sample.image_id}_mask.png")
+            alpha_path = prefix.with_name(f"{sample.image_id}_alpha.npy")
+            alpha_preview_path = prefix.with_name(f"{sample.image_id}_alpha.png")
             Image.fromarray(sample.image).save(reference_path, format="PNG", optimize=False)
             rendered_u8 = (
                 rendered.detach().clamp(0.0, 1.0).mul(255.0).round().to(torch.uint8).cpu().numpy()
@@ -1872,12 +2183,22 @@ def _save_evaluation_artifacts(
             Image.fromarray(sample.rgb_mask.astype(np.uint8) * 255).save(
                 mask_path, format="PNG", optimize=False
             )
+            alpha = rendered_alpha.detach().clamp(0.0, 1.0).cpu().numpy().astype(np.float32)
+            np.save(alpha_path, alpha)
+            Image.fromarray(np.rint(alpha * 255.0).astype(np.uint8)).save(
+                alpha_preview_path, format="PNG", optimize=False
+            )
             frame: dict[str, Any] = {
                 "image_id": sample.image_id,
                 "split": "val",
                 "reference_rgb_path": reference_path.relative_to(output_dir).as_posix(),
                 "rendered_rgb_path": render_path.relative_to(output_dir).as_posix(),
                 "combined_mask_path": mask_path.relative_to(output_dir).as_posix(),
+                "rendered_alpha_path": alpha_path.relative_to(output_dir).as_posix(),
+                "rendered_alpha_preview_path": alpha_preview_path.relative_to(
+                    output_dir
+                ).as_posix(),
+                "rendered_alpha_semantics": "accumulated_foreground_opacity_0_to_1",
             }
             if has_range:
                 assert rendered_range is not None and sample.depth_cache_path is not None
@@ -1943,6 +2264,8 @@ def train(
     config.validate()
     import torch
 
+    if controlled_stop_after_steps is None:
+        controlled_stop_after_steps = config.controlled_stop_after_steps
     if controlled_stop_after_steps is not None:
         controlled_stop_after_steps = int(controlled_stop_after_steps)
         if not 0 < controlled_stop_after_steps < config.max_steps:
@@ -2150,6 +2473,11 @@ def train(
                 geometry_eigenvalues,
                 config=config.surface_initialization,
             )
+        initial_scales_m, scale_cap_report = cap_surface_initialization_scales(
+            initial_scales_m,
+            maximum_scale_m=config.surface_initialization.maximum_scale_m,
+        )
+        surface_initialization_report["scale_cap"] = scale_cap_report
         surface_initialization_report["geometry_sha256"] = (
             initialization_geometry_sha256
         )
@@ -2183,6 +2511,10 @@ def train(
             "refine_every": config.mcmc_refine_every,
             "noise_injection_stop_iter": config.mcmc_noise_injection_stop_iter,
             "noise_lr": float(scale_calibration["effective_noise_lr"]),
+            "growth_rate": config.mcmc_growth_rate,
+            "relocation_max_fraction": config.mcmc_relocation_max_fraction,
+            "relocation_max_scale_m": config.mcmc_relocation_max_scale_m,
+            "relocation_max_anisotropy": config.mcmc_relocation_max_anisotropy,
         },
         error_score_config=config.error_weighted_sampling,
         densification_strategy=config.densification_strategy,
@@ -2213,6 +2545,7 @@ def train(
         # perturbations.
         backend.strategy.surface_birth_proposal = proposal
     backend.pinhole_rasterize_mode = config.pinhole_rasterize_mode
+    backend.pinhole_with_ut = config.pinhole_with_ut
     runtime_contract = {
         key: backend.runtime.get(key)
         for key in ("package", "version", "locked_commit", "source_kind", "commit", "wheel_sha256")
@@ -2246,6 +2579,18 @@ def train(
         color_model=config.color_model,
         sh_degree=config.sh_degree,
     )
+    audit_initial_means = None
+    audit_initial_normals = None
+    if config.fixed_topology_schedule.audit_steps:
+        audit_initial_means = np.ascontiguousarray(xyz, dtype=np.float32)
+        audit_quaternions = (
+            np.tile(np.asarray([[1.0, 0.0, 0.0, 0.0]], dtype=np.float32), (len(xyz), 1))
+            if initial_quaternions is None
+            else np.asarray(initial_quaternions, dtype=np.float32)
+        )
+        audit_initial_normals = shortest_axis_normals(
+            np.asarray(initial_scales_m, dtype=np.float32), audit_quaternions
+        )
     pose_refiner = None
     pose_optimizer = None
     auxiliary_params: dict[str, Any] = {}
@@ -2312,6 +2657,13 @@ def train(
     golden_floater_rejections = 0
     # Last proposal batch already folded into the telemetry; see the fold site.
     proposal_batches = 0
+    topology_events: list[dict[str, Any]] = []
+    phase_history: list[dict[str, Any]] = []
+    optimization_audits: list[dict[str, Any]] = []
+    initial_topology_count = int(len(params["means"]))
+    strategy_active = (
+        config.topology_policy.strategy_enabled and not config.implementation_smoke_only
+    )
     last_metrics: dict[str, Any] = {}
     initial_loss: float | None = None
     best_loss = float("inf")
@@ -2334,18 +2686,34 @@ def train(
                 }
             }
         else:
+            lineage_keys = (
+                "dataset_manifest_sha256",
+                "mask_manifest_sha256",
+                "person_mask_manifest_sha256",
+                "split_manifest_sha256",
+                "depth_manifest_sha256",
+                "coordinate_transform_sha256",
+                "initialization_ply_sha256",
+                "gsplat_runtime",
+            )
+            if config.raw_fisheye_post_refine_face_manifest is not None:
+                # A core-owner merge is intentionally multi-Tile, so it cannot
+                # inherit one Tile's initialization hash. Raw depth and Face4
+                # sidecars also have different manifests while sharing the
+                # signed dataset, split, masks, coordinate frame and Face4
+                # lineage verified above.
+                lineage_keys = tuple(
+                    key
+                    for key in lineage_keys
+                    if key
+                    not in {
+                        "depth_manifest_sha256",
+                        "initialization_ply_sha256",
+                    }
+                )
             warm_start_lineage = {
                 key: checkpoint_identity[key]
-                for key in (
-                    "dataset_manifest_sha256",
-                    "mask_manifest_sha256",
-                    "person_mask_manifest_sha256",
-                    "split_manifest_sha256",
-                    "depth_manifest_sha256",
-                    "coordinate_transform_sha256",
-                    "initialization_ply_sha256",
-                    "gsplat_runtime",
-                )
+                for key in lineage_keys
                 if key in checkpoint_identity
             }
         warm_start = _warm_start_from_checkpoint(
@@ -2364,6 +2732,25 @@ def train(
                 min_opacity=config.warm_start_min_opacity,
             )
     if config.resume_checkpoint is not None:
+        allowed_source_trainer_config_sha256 = None
+        if config.mipmap_pipeline_gate is not None:
+            resume_gate, _ = load_and_verify_gate(config.mipmap_pipeline_gate)
+            adaptive_resume = resume_gate.get("adaptive_growth", {})
+            if adaptive_resume.get("stage") in {
+                "evaluation",
+                "continuation",
+                "stabilization",
+            }:
+                expected_checkpoint_sha = adaptive_resume.get(
+                    "resume_checkpoint_sha256"
+                )
+                if _sha256_file(config.resume_checkpoint) != expected_checkpoint_sha:
+                    raise ValueError(
+                        "adaptive evaluation resume checkpoint signature mismatch"
+                    )
+                allowed_source_trainer_config_sha256 = adaptive_resume.get(
+                    "resume_source_trainer_config_sha256"
+                )
         completed_steps, strategy_state, sampler_state, training_state = load_checkpoint(
             config.resume_checkpoint,
             expected_identity=checkpoint_identity,
@@ -2372,6 +2759,9 @@ def train(
             map_location=config.device,
             auxiliary_params=auxiliary_params,
             auxiliary_optimizers=auxiliary_optimizers,
+            allowed_source_trainer_config_sha256=(
+                allowed_source_trainer_config_sha256
+            ),
         )
         sampler.set_state(sampler_state.cpu())
         last_metrics = dict(training_state["last_metrics"])
@@ -2397,6 +2787,15 @@ def train(
             raise ValueError("full-MCMC checkpoint has no MCMC telemetry state")
         if restored_telemetry is not None:
             mcmc_telemetry = dict(restored_telemetry)
+        topology_events = [
+            dict(event) for event in training_state.get("topology_events", [])
+        ]
+        phase_history = [
+            dict(event) for event in training_state.get("phase_history", [])
+        ]
+        optimization_audits = [
+            dict(event) for event in training_state.get("optimization_audits", [])
+        ]
         error_score_state = getattr(backend, "error_score_state", None)
         restored_error_scores = training_state.get("error_weighted_sampling")
         if error_score_state is not None:
@@ -2421,6 +2820,7 @@ def train(
     checkpoint_path = output_dir / "checkpoints" / "latest.pt"
     best_checkpoint_path = output_dir / "checkpoints" / "best_golden.pt"
     golden_history_path = output_dir / "evaluation" / "golden_history.json"
+    monitor_progress_path = output_dir / "monitor" / "progress.jsonl"
     full_evaluation_history_path = (
         output_dir / "evaluation" / "full_evaluation_history.json"
     )
@@ -2432,6 +2832,9 @@ def train(
             "initial_loss": initial_loss,
             "best_loss": best_loss,
             "mcmc_telemetry": mcmc_telemetry,
+            "topology_events": topology_events,
+            "phase_history": phase_history,
+            "optimization_audits": optimization_audits,
             "golden_evaluation": {
                 "history": golden_history,
                 "best": best_golden,
@@ -2447,6 +2850,50 @@ def train(
     sampled_epoch = -1
     sampled_order: tuple[int, ...] = ()
     for step in range(completed_steps, config.max_steps):
+        phase = config.fixed_topology_schedule.phase_for_step(step)
+        if not phase_history or phase_history[-1]["name"] != phase["name"]:
+            phase_history.append(
+                {
+                    "name": phase["name"],
+                    "first_step": step + 1,
+                    "geometry_lr_scale": phase["geometry_lr_scale"],
+                    "range_weight_scale": phase["range_weight_scale"],
+                    "normal_weight_scale": phase["normal_weight_scale"],
+                    "emit_gap_analysis": phase["emit_gap_analysis"],
+                }
+            )
+        prune_due = (
+            config.topology_policy.mode == "opacity_prune_only"
+            and step == int(config.topology_policy.opacity_prune_step or -1)
+        )
+        if prune_due:
+            before_prune = int(len(params["means"]))
+            prune_report = backend.prune_below_opacity(
+                params,
+                optimizers,
+                min_opacity=config.topology_policy.opacity_prune_threshold,
+            )
+            topology_count_transition(
+                mode=config.topology_policy.mode,
+                before_count=before_prune,
+                after_count=int(len(params["means"])),
+                prune_due=True,
+            )
+            topology_events.append(
+                {"completed_steps_before_event": step, "kind": "opacity_prune", **prune_report}
+            )
+            if normal_anchors is not None:
+                normal_anchors.refresh(params["means"])
+        step_topology_count = int(len(params["means"]))
+        audit_due = step + 1 in config.fixed_topology_schedule.audit_steps
+        audit_before = (
+            {
+                name: params[name].detach().clone()
+                for name in ("means", "scales", "quats", "opacities")
+            }
+            if audit_due
+            else None
+        )
         if (
             config.view_sampling_mode
             == "fisher_yates_without_replacement_per_epoch"
@@ -2469,6 +2916,7 @@ def train(
             if pose_refiner is None
             else pose_refiner.apply(sample.rig_frame_id, sample.c2w)
         )
+        effective_means_lr = float(effective_learning_rates["means"])
         if config.means_lr_final_factor < 1.0:
             # Deterministic function of the step (no scheduler state), so an
             # interrupted resume lands on exactly the same learning rate.
@@ -2478,8 +2926,28 @@ def train(
                 step=step,
                 max_steps=config.max_steps,
             )
-            for group in optimizers["means"].param_groups:
-                group["lr"] = decayed
+            effective_means_lr = decayed
+        # ``Optimizer.load_state_dict`` restores the source checkpoint's
+        # param-group learning rates. Re-apply every signed rate on every step
+        # so a stabilization resume can actually freeze geometry and lower
+        # opacity/colour rates instead of silently retaining the old values.
+        geometry_lr_scale = float(phase["geometry_lr_scale"])
+        if step >= config.mcmc_refine_stop_iter:
+            geometry_lr_scale *= float(config.post_refine_geometry_lr_scale)
+        for name, optimizer in optimizers.items():
+            if name == "means":
+                base_lr = effective_means_lr
+                scale = geometry_lr_scale
+            elif name in {"scales", "quats"}:
+                base_lr = float(effective_learning_rates[name])
+                scale = geometry_lr_scale
+            elif name in effective_learning_rates:
+                base_lr = float(effective_learning_rates[name])
+                scale = 1.0
+            else:
+                continue
+            for group in optimizer.param_groups:
+                group["lr"] = base_lr * scale
         active_sh_degree = active_sh_degree_for_step(config, step)
         loss, l1, ssim, range_loss, info = _render_supervision_loss(
             backend=backend,
@@ -2493,7 +2961,19 @@ def train(
             else exposure.gain(sample.image_id.split("::")[0]),
             ppisp=ppisp,
             active_sh_degree=active_sh_degree,
+            range_weight_scale=float(phase["range_weight_scale"]),
         )
+        range_directionality = None
+        if (
+            audit_due
+            and range_loss is not None
+            and info.get("cloudstudio_rendered_range_tensor") is not None
+        ):
+            range_directionality = _range_directionality_audit(
+                rendered_range=info["cloudstudio_rendered_range_tensor"],
+                tensors=tensors,
+                config=config,
+            )
         pose_prior = None
         if pose_refiner is not None:
             pose_prior = pose_refiner.prior_loss()
@@ -2514,6 +2994,7 @@ def train(
             config=config.geometry_regularization,
         )
         loss = loss + regularization["total"]
+        normal_terms = None
         if normal_anchors is not None:
             if (
                 normal_anchors.stale
@@ -2521,12 +3002,38 @@ def train(
                 or step % config.lidar_normal_alignment.refresh_every == 0
             ):
                 normal_anchors.refresh(params["means"])
-            loss = loss + normal_anchors.loss(params)["total"]
+            normal_terms = normal_anchors.loss(params)
+            loss = loss + float(phase["normal_weight_scale"]) * normal_terms["total"]
             normal_loss_steps_total += 1
             # loss() re-flags itself stale when the cached table no longer
             # matches the Gaussian count and contributes zero for that step.
             if normal_anchors.stale:
                 normal_loss_steps_stale += 1
+        component_audit = None
+        if audit_due:
+            rgb_component = config.rgb_l1_weight * l1 + config.rgb_ssim_weight * ssim
+            if info["cloudstudio_rgb_gradient_l1"] is not None:
+                rgb_component = (
+                    rgb_component
+                    + config.rgb_gradient_weight * info["cloudstudio_rgb_gradient_l1"]
+                )
+            if info["cloudstudio_lidar_rgb_l1"] is not None:
+                rgb_component = (
+                    rgb_component
+                    + config.lidar_rgb_l1_weight * info["cloudstudio_lidar_rgb_l1"]
+                )
+            component_audit = component_gradient_audit(
+                params,
+                {
+                    "rgb": rgb_component,
+                    "range_config_weighted": None
+                    if range_loss is None
+                    else config.lidar_range_weight * range_loss,
+                    "normal_config_weighted": None
+                    if normal_terms is None
+                    else normal_terms["total"],
+                },
+            )
         require_finite_training_tensors(
             params=params,
             loss=loss,
@@ -2540,17 +3047,23 @@ def train(
         # the chance to retain it here. A no-op under MCMC, which scores from
         # opacity instead, and silent rather than fatal if skipped - the
         # criterion would simply never fire.
-        backend.strategy_pre_step(
-            params, optimizers, strategy_state, step=step, info=info
-        )
+        if strategy_active:
+            backend.strategy_pre_step(
+                params, optimizers, strategy_state, step=step, info=info
+            )
         if (
+            strategy_active
+            and
             backend.needs_pre_backward
             and config.densification_gradient_source == "rgb_only"
         ):
             # Two-pass backward so the densification criterion sees the gradient
             # of L1+SSIM alone, as Kerbl et al. trained. One backward over the
             # total loss would let the LiDAR range and normal terms leak into
-            # means2d.grad through the shared rasterization. The photometric
+            # means2d.grad through the shared rasterization. Implementation
+            # smoke runs explicitly forbid densification and use one backward,
+            # because eval3d does not expose the classic means2d gradient.
+            # The photometric
             # pass runs FIRST and its means2d gradients are snapshotted, because
             # .grad accumulates across passes while gsplat overwrites .absgrad
             # on each - only a snapshot survives both semantics. The optimizer
@@ -2577,7 +3090,8 @@ def train(
             backend.strategy_restore_gradient(info)
         else:
             loss.backward()
-        refine_boundary = (
+        audited_gradients = gradient_norms(params) if audit_due else None
+        refine_boundary = strategy_active and (
             backend.strategy.is_refine_step(step)
             if hasattr(backend.strategy, "is_refine_step")
             else (
@@ -2600,6 +3114,24 @@ def train(
         for optimizer in optimizers.values():
             optimizer.step()
             optimizer.zero_grad(set_to_none=True)
+        if audit_due:
+            assert audit_before is not None
+            assert audit_initial_means is not None and audit_initial_normals is not None
+            optimization_audits.append(
+                {
+                    "completed_step": step + 1,
+                    "phase": phase["name"],
+                    "gradient_norms": audited_gradients,
+                    "component_gradients": component_audit,
+                    "parameter_updates": parameter_update_norms(audit_before, params),
+                    "point_to_plane_drift": point_to_plane_drift_summary(
+                        params["means"].detach().cpu().numpy(),
+                        audit_initial_means,
+                        audit_initial_normals,
+                    ),
+                    "range_directionality": range_directionality,
+                }
+            )
         if pose_optimizer is not None:
             pose_optimizer.step()
             pose_optimizer.zero_grad(set_to_none=True)
@@ -2682,14 +3214,38 @@ def train(
                     ),
                 ),
             )
-        mcmc_event = backend.strategy_post_step(
-            params,
-            optimizers,
-            strategy_state,
-            step=step,
-            info=info,
-        )
+        if not strategy_active:
+            mcmc_event = build_mcmc_step_event(
+                step=step,
+                before=None,
+                after=None,
+                refine_start_iter=config.max_steps,
+                refine_stop_iter=config.max_steps + 1,
+                refine_every=1,
+                noise_injection_stop_iter=0,
+                strategy_prunes=backend.strategy_prunes,
+            )
+            mcmc_event["strategy_skipped"] = True
+            mcmc_event["strategy_skip_reason"] = (
+                "implementation_smoke_only"
+                if config.implementation_smoke_only
+                else f"topology_policy={config.topology_policy.mode}"
+            )
+        else:
+            mcmc_event = backend.strategy_post_step(
+                params,
+                optimizers,
+                strategy_state,
+                step=step,
+                info=info,
+            )
         append_mcmc_telemetry(mcmc_telemetry, mcmc_event)
+        topology_count_transition(
+            mode=config.topology_policy.mode,
+            before_count=step_topology_count,
+            after_count=int(len(params["means"])),
+            prune_due=False,
+        )
         if mcmc_event["refine_triggered"] and normal_anchors is not None:
             # Relocation/densification changed the gaussian set; re-anchor
             # before the next normal-alignment loss uses stale indices.
@@ -2718,6 +3274,15 @@ def train(
             )
         last_metrics = {
             "loss": float(loss.detach().cpu()),
+            "optimization_phase": phase["name"],
+            "topology_mode": config.topology_policy.mode,
+            "effective_geometry_lr_scale": geometry_lr_scale,
+            "effective_lidar_range_weight": float(
+                config.lidar_range_weight * phase["range_weight_scale"]
+            ),
+            "effective_lidar_normal_weight_scale": float(
+                phase["normal_weight_scale"]
+            ),
             "rgb_l1": float(l1.detach().cpu()),
             "rgb_gradient_l1": None
             if info["cloudstudio_rgb_gradient_l1"] is None
@@ -2759,11 +3324,39 @@ def train(
                 regularization["scale_upper_tail_count"]
             ),
             "anisotropy": float(regularization["anisotropy"].detach().cpu()),
+            "lidar_normal_align_raw": None
+            if normal_terms is None
+            else float(normal_terms["align_raw"].detach().cpu()),
+            "lidar_normal_flatten_raw": None
+            if normal_terms is None
+            else float(normal_terms["flatten_raw"].detach().cpu()),
         }
         if initial_loss is None:
             initial_loss = last_metrics["loss"]
         best_loss = min(best_loss, last_metrics["loss"])
         completed = step + 1
+        if completed == 1 or completed % 10 == 0 or audit_due:
+            _append_monitor_event(
+                monitor_progress_path,
+                {
+                    "schema_version": 1,
+                    "kind": "cloudstudio_training_progress",
+                    "timestamp_unix": time.time(),
+                    "run_id": config.run_id,
+                    "completed_steps": completed,
+                    "max_steps": config.max_steps,
+                    "gaussian_count": int(len(params["means"])),
+                    "phase": phase["name"],
+                    "topology_mode": config.topology_policy.mode,
+                    "metrics": last_metrics,
+                    "peak_vram_bytes": int(torch.cuda.max_memory_allocated(config.device)),
+                    "latest_optimization_audit": (
+                        optimization_audits[-1]
+                        if audit_due and optimization_audits
+                        else None
+                    ),
+                },
+            )
         golden_artifact_due = config.golden_evaluation.enabled and (
             completed % config.golden_evaluation.artifact_every == 0
             or completed == config.max_steps
@@ -3104,11 +3697,24 @@ def train(
                 # normalised gate resolved to - the scene_scale incident showed
                 # the config alone cannot expose a wrong resolution.
                 "densification": {
+                    "active": strategy_active,
+                    "topology_mode": config.topology_policy.mode,
                     "strategy": config.densification_strategy,
                     "gradient_source": config.densification_gradient_source,
                     "resolved": backend.strategy.state_dict()
                     if config.densification_strategy == "default_3dgs"
                     else None,
+                },
+                "topology": {
+                    "policy": config.topology_policy.to_dict(),
+                    "initial_gaussian_count": initial_topology_count,
+                    "final_gaussian_count": final_gaussian_count,
+                    "events": topology_events,
+                },
+                "optimization_phases": {
+                    "configuration": config.fixed_topology_schedule.to_dict(),
+                    "history": phase_history,
+                    "audits": optimization_audits,
                 },
                 "mcmc_telemetry": mcmc_telemetry,
                 "warm_start": warm_start,
@@ -3121,4 +3727,13 @@ def train(
 
 def train_from_json(path: Path) -> dict[str, Any]:
     value = json.loads(Path(path).read_text(encoding="utf-8"))
+    expected = value.get("config_manifest_sha256")
+    if expected is not None:
+        if len(str(expected)) != 64:
+            raise ValueError("trainer config manifest SHA256 is invalid")
+        unsigned = dict(value)
+        unsigned.pop("config_manifest_sha256", None)
+        actual = hashlib.sha256(canonical_json_bytes(unsigned)).hexdigest()
+        if actual != expected:
+            raise ValueError("trainer config manifest signature mismatch")
     return train(TrainerConfig.from_dict(value))

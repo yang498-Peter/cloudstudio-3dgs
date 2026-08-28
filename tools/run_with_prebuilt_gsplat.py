@@ -18,11 +18,19 @@ def preload_gsplat(extension_path: Path) -> object:
     extension_path = Path(extension_path).resolve()
     if not extension_path.is_file():
         raise FileNotFoundError(f"prebuilt gsplat extension is missing: {extension_path}")
-    spec = importlib.util.spec_from_file_location("gsplat_cuda", extension_path)
+    # JIT-linked artifacts export ``PyInit_gsplat_cuda`` while packaged
+    # build_ext artifacts export ``PyInit_csrc``.  Loading either one under
+    # the wrong name fails before we can bind it to gsplat.csrc.
+    module_name = (
+        "gsplat.csrc"
+        if extension_path.name.lower().startswith("csrc")
+        else "gsplat_cuda"
+    )
+    spec = importlib.util.spec_from_file_location(module_name, extension_path)
     if spec is None or spec.loader is None:
         raise RuntimeError(f"cannot load prebuilt gsplat extension: {extension_path}")
     module = importlib.util.module_from_spec(spec)
-    sys.modules["gsplat_cuda"] = module
+    sys.modules[module_name] = module
     spec.loader.exec_module(module)
     # gsplat's normal import first asks for the packaged `gsplat.csrc` and only
     # then falls back to JIT. Alias the verified JIT module so no Ninja cache

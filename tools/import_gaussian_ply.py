@@ -51,7 +51,7 @@ def import_ply(ply_path: Path, output_path: Path) -> dict:
     means = stack("x", "y", "z")
     scales = stack("scale_0", "scale_1", "scale_2")  # log domain, kept as-is
     quats = stack("rot_0", "rot_1", "rot_2", "rot_3")
-    opacities = np.asarray(records["opacity"], dtype=np.float32)  # logit, as-is
+    opacities = np.asarray(records["opacity"], dtype=np.float32).copy()
     sh0 = stack("f_dc_0", "f_dc_1", "f_dc_2").reshape(count, 1, 3)
 
     rest_fields = sorted(
@@ -90,6 +90,7 @@ def import_ply(ply_path: Path, output_path: Path) -> dict:
         "imported": True,
         "sh_rest_coeffs": rest_coeffs,
     }
+    output_path.parent.mkdir(parents=True, exist_ok=True)
     torch.save(payload, output_path)
     return {
         "count": count,

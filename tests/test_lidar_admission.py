@@ -536,7 +536,7 @@ class StrategyAdmissionWiringTests(unittest.TestCase):
         return admission
 
     def test_relocate_multiplies_probs_by_admission(self) -> None:
-        opacities = torch.tensor([0.5, 0.001, 0.8, 0.002])
+        opacities = torch.tensor([0.5, 0.2, 0.8, 0.002])
         params = self._params(opacities)
         state = ErrorScoreState(4, ErrorScoreConfig(enabled=True))
         state.scores = torch.tensor([0.2, 0.4, 0.9, 0.1])
@@ -563,10 +563,14 @@ class StrategyAdmissionWiringTests(unittest.TestCase):
         expected = state.sampling_weights(
             real_opac, admission=admission.admission_weights()
         )
+        expected = expected.clone()
+        expected[real_opac <= strategy.min_opacity] = 0.0
         self.assertTrue(torch.allclose(probs, expected))
         # And it is genuinely different from the un-admitted distribution.
+        unadmitted = state.sampling_weights(real_opac).clone()
+        unadmitted[real_opac <= strategy.min_opacity] = 0.0
         self.assertFalse(
-            torch.allclose(probs, state.sampling_weights(real_opac))
+            torch.allclose(probs, unadmitted)
         )
 
     def test_add_new_gs_multiplies_probs_by_admission(self) -> None:
@@ -618,14 +622,16 @@ class StrategyAdmissionWiringTests(unittest.TestCase):
         ) as relocate_mock:
             strategy._relocate_gs(params, {}, binoms)
         real_opac = torch.sigmoid(params["opacities"].flatten())
+        expected = state.sampling_weights(real_opac).clone()
+        expected[real_opac <= strategy.min_opacity] = 0.0
         self.assertTrue(
             torch.equal(
                 relocate_mock.call_args.kwargs["probs"],
-                state.sampling_weights(real_opac),
+                expected,
             )
         )
 
-    def test_absent_admission_state_is_the_unchanged_strategy(self) -> None:
+    def test_absent_admission_uses_error_weights_for_eligible_sources(self) -> None:
         opacities = torch.tensor([0.5, 0.001, 0.8])
         params = self._params(opacities)
         state = ErrorScoreState(3, ErrorScoreConfig(enabled=True))
@@ -639,10 +645,12 @@ class StrategyAdmissionWiringTests(unittest.TestCase):
         ) as relocate_mock:
             strategy._relocate_gs(params, {}, binoms)
         real_opac = torch.sigmoid(params["opacities"].flatten())
+        expected = state.sampling_weights(real_opac).clone()
+        expected[real_opac <= strategy.min_opacity] = 0.0
         self.assertTrue(
             torch.equal(
                 relocate_mock.call_args.kwargs["probs"],
-                state.sampling_weights(real_opac),
+                expected,
             )
         )
 

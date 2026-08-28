@@ -299,8 +299,60 @@ class StrategyWiringTests(unittest.TestCase):
             torch.equal(kwargs["mask"], real_opac <= strategy.min_opacity)
         )
         expected_probs = state.sampling_weights(real_opac)
+        expected_probs = expected_probs.clone()
+        expected_probs[real_opac <= strategy.min_opacity] = 0.0
         self.assertTrue(torch.allclose(kwargs["probs"], expected_probs))
         self.assertEqual(kwargs["probs"].shape[0], 4)  # full-length [N]
+
+    def test_adaptive_relocation_is_capped_and_includes_shape_failures(self) -> None:
+        opacities = torch.full((100,), 0.5)
+        opacities[:10] = 0.001
+        params = self._params(opacities)
+        params["scales"].data.fill_(float(torch.tensor(0.04).log()))
+        # A high-opacity giant is not caught by the opacity rule, but is still
+        # a recyclable slot. The 2% cap protects the rest of the dense cloud.
+        params["scales"].data[50] = torch.log(torch.tensor([1.0, 1.0, 1.0]))
+        state = ErrorScoreState(100, ErrorScoreConfig(enabled=True))
+        strategy = ErrorWeightedMCMCStrategy(
+            score_state=state,
+            error_config=state.config,
+            relocation_max_fraction=0.02,
+            relocation_max_scale_m=0.08,
+        )
+        binoms = strategy.initialize_state()["binoms"]
+        with mock.patch(
+            "cloudstudio_3dgs.training.error_weighted_mcmc.relocate_weighted",
+            return_value=(torch.tensor([0, 50]), torch.tensor([20, 21])),
+        ) as relocate_mock:
+            relocated = strategy._relocate_gs(params, {}, binoms)
+        self.assertEqual(relocated, 2)
+        mask = relocate_mock.call_args.kwargs["mask"]
+        self.assertEqual(int(mask.sum()), 2)
+        self.assertTrue(bool(mask[50]))
+        probs = relocate_mock.call_args.kwargs["probs"]
+        self.assertTrue(bool((probs[:10] == 0).all()))
+        self.assertEqual(float(probs[50]), 0.0)
+        self.assertEqual(strategy.last_relocation_event["candidate_count"], 11)
+        self.assertEqual(strategy.last_relocation_event["selected_count"], 2)
+
+    def test_zero_growth_rate_keeps_fixed_capacity(self) -> None:
+        params = self._params(torch.full((40,), 0.5))
+        state = ErrorScoreState(40, ErrorScoreConfig(enabled=True))
+        strategy = ErrorWeightedMCMCStrategy(
+            cap_max=1000,
+            score_state=state,
+            error_config=state.config,
+            growth_rate=0.0,
+        )
+        with mock.patch(
+            "cloudstudio_3dgs.training.error_weighted_mcmc.sample_add_weighted"
+        ) as add_mock:
+            added = strategy._add_new_gs(
+                params, {}, strategy.initialize_state()["binoms"]
+            )
+        self.assertEqual(added, 0)
+        add_mock.assert_not_called()
+        self.assertEqual(len(params["means"]), 40)
 
     def test_add_new_gs_uses_weights_and_resizes_state(self) -> None:
         opacities = torch.full((40,), 0.5)

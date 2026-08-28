@@ -176,6 +176,7 @@ class GsplatBackend:
                                 (mcmc_config or {}).get("refine_stop_iter", 15000))
             settings.setdefault("refine_every",
                                 (mcmc_config or {}).get("refine_every", 100))
+            settings.setdefault("capacity_cap", int(cap_max) if cap_max else None)
             self.strategy = DefaultStrategyAdapter(**settings)
             self.needs_pre_backward = True
             self.needs_absgrad = bool(settings.get("absgrad", False))
@@ -384,6 +385,9 @@ class GsplatBackend:
             if camera_model == "pinhole"
             else torch.as_tensor(sample.radial_coeffs, device=self.device)[None]
         )
+        pinhole_with_ut = camera_model == "pinhole" and bool(
+            getattr(self, "pinhole_with_ut", False)
+        )
         render, alpha, info = self.rasterization(
             means=params["means"],
             quats=params["quats"],
@@ -420,14 +424,14 @@ class GsplatBackend:
             # rasterizer was asked to accumulate it - without this the strategy
             # raises on its first refine rather than silently degrading.
             **({"absgrad": True} if self.needs_absgrad else {}),
-            # Fisheye+eval3d "RGB-Ed" is expected HIT DISTANCE (Euclidean ray
-            # range, the supervision semantics). The classic pinhole path only
-            # offers Gaussian z-depth ("RGB+ED"); the per-face
-            # depth_to_range_scale factor converts it at the loss. Earlier
-            # face runs rendered RGB-Ed hit distance AND applied the factor -
-            # a double scaling of the depth supervision, fixed by this split.
+            # eval3d "RGB-Ed" is expected HIT DISTANCE (Euclidean ray range,
+            # the supervision semantics). The classic pinhole path only offers
+            # Gaussian z-depth ("RGB+ED"); the per-face depth_to_range_scale
+            # factor converts it at the loss. The UT pinhole compatibility path
+            # must use eval3d because the supported wheel does not expose the
+            # classic 2D raster operator.
             render_mode=(
-                ("RGB-Ed" if camera_model == "fisheye" else "RGB+ED")
+                ("RGB-Ed" if camera_model == "fisheye" or pinhole_with_ut else "RGB+ED")
                 if with_range
                 else "RGB"
             ),
@@ -437,13 +441,18 @@ class GsplatBackend:
             # are linear so UT adds nothing, and turning it off unlocks
             # gsplat's Mip-Splatting antialiased compensation, which the
             # 3DGUT path explicitly rejects.
-            with_ut=camera_model == "fisheye",
-            with_eval3d=camera_model == "fisheye",
+            with_ut=camera_model == "fisheye" or pinhole_with_ut,
+            with_eval3d=camera_model == "fisheye" or pinhole_with_ut,
             # gsplat requires standard global depth sorting whenever UT is off.
             global_z_order=camera_model != "fisheye",
             rasterize_mode="classic"
             if camera_model == "fisheye"
             else getattr(self, "pinhole_rasterize_mode", "classic"),
+        )
+        info["cloudstudio_range_semantics"] = (
+            "euclidean_ray_range_m"
+            if camera_model == "fisheye" or pinhole_with_ut
+            else "pinhole_z_depth_m"
         )
         rgb = render[0, ..., :3]
         if background_rgb is not None:
@@ -603,8 +612,19 @@ class GsplatBackend:
             noise_injection_stop_iter=self.strategy.noise_injection_stop_iter,
             noise_position_delta_max_m=noise_position_delta_max_m,
             strategy_prunes=self.strategy_prunes,
+            refine_start_inclusive=bool(
+                getattr(self.strategy, "exact_mipmap_lifecycle", False)
+            ),
         )
         lifecycle = getattr(self.strategy, "last_lifecycle_event", None)
         if lifecycle is not None:
             event["classic_lifecycle"] = dict(lifecycle)
+        relocation = getattr(self.strategy, "last_relocation_event", None)
+        if refine and relocation is not None:
+            event["adaptive_relocation"] = dict(relocation)
+            # The generic MCMC event infers relocation from the number of
+            # opacity-dead rows before refinement. Bounded adaptive relocation
+            # deliberately processes only a subset, so the strategy's exact
+            # selected count is authoritative.
+            event["relocated_count"] = int(relocation.get("selected_count", 0))
         return event

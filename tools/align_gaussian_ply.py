@@ -212,9 +212,11 @@ def main() -> int:
         "median_nn_distance_m": residual_m,
         "coarse_yaw_deg": float(np.rad2deg(yaw)),
     }
+    args.output.parent.mkdir(parents=True, exist_ok=True)
     torch.save(payload, args.output)
     print(f"aligned checkpoint -> {args.output}")
     if args.report:
+        args.report.parent.mkdir(parents=True, exist_ok=True)
         args.report.write_text(
             json.dumps(payload["alignment"], indent=1), encoding="utf-8"
         )
