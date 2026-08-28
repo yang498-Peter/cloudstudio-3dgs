@@ -215,6 +215,14 @@ class TrainerConfig:
     # 2026-08-25 traced the blur to where the error map places births.
     densification_strategy: str = "error_weighted_mcmc"
     default_strategy: dict[str, Any] = field(default_factory=dict)
+    # When the topology lifecycle runs relative to the Adam step.
+    # "post_optimizer" is this trainer's historical order; "pre_optimizer" is
+    # upstream gsplat's (backward -> step_post_backward -> optimizer.step) and
+    # the order the competitor's audited lifecycle constants were measured in -
+    # it changes when opacity/scale are judged and whether newborns skip the
+    # pending update, so the same thresholds mean different things across the
+    # two orders.
+    lifecycle_order: str = "post_optimizer"
     # What loss the densification criterion differentiates. "rgb_only" scores
     # births from L1+SSIM alone, the way Kerbl et al. trained; under "total_loss"
     # the LiDAR range and normal terms leak into means2d.grad through the shared
@@ -387,6 +395,7 @@ class TrainerConfig:
                 "densification_strategy",
                 "default_strategy",
                 "densification_gradient_source",
+                "lifecycle_order",
                 "learning_rates",
                 "warm_start_min_opacity",
                 "warm_start_scale_multiplier",
@@ -628,6 +637,21 @@ class TrainerConfig:
         if self.densification_strategy not in DENSIFICATION_STRATEGIES:
             raise ValueError(
                 f"densification_strategy must be one of {list(DENSIFICATION_STRATEGIES)}"
+            )
+        if self.lifecycle_order not in ("post_optimizer", "pre_optimizer"):
+            raise ValueError(
+                "lifecycle_order must be 'post_optimizer' or 'pre_optimizer'"
+            )
+        if (
+            self.lifecycle_order == "pre_optimizer"
+            and self.densification_strategy != "default_3dgs"
+        ):
+            # The MCMC path's relocation/noise math was built and validated
+            # against the historical order; only the classic adapter matches
+            # upstream gsplat's calling convention.
+            raise ValueError(
+                "lifecycle_order='pre_optimizer' requires "
+                "densification_strategy='default_3dgs'"
             )
         if self.densification_gradient_source not in ("total_loss", "rgb_only"):
             raise ValueError(
@@ -2597,19 +2621,28 @@ def train(
                 stage=f"step_{step}_backward",
                 check_gradients=True,
             )
-        for optimizer in optimizers.values():
-            optimizer.step()
-            optimizer.zero_grad(set_to_none=True)
-        if pose_optimizer is not None:
-            pose_optimizer.step()
-            pose_optimizer.zero_grad(set_to_none=True)
-        if exposure_optimizer is not None:
-            exposure_optimizer.step()
-            exposure_optimizer.zero_grad(set_to_none=True)
-            exposure.project_zero_mean()
-        if ppisp_optimizer is not None:
-            ppisp_optimizer.step()
-            ppisp_optimizer.zero_grad(set_to_none=True)
+        def _step_optimizers() -> None:
+            for optimizer in optimizers.values():
+                optimizer.step()
+                optimizer.zero_grad(set_to_none=True)
+            if pose_optimizer is not None:
+                pose_optimizer.step()
+                pose_optimizer.zero_grad(set_to_none=True)
+            if exposure_optimizer is not None:
+                exposure_optimizer.step()
+                exposure_optimizer.zero_grad(set_to_none=True)
+                exposure.project_zero_mean()
+            if ppisp_optimizer is not None:
+                ppisp_optimizer.step()
+                ppisp_optimizer.zero_grad(set_to_none=True)
+
+        if config.lifecycle_order == "post_optimizer":
+            # Historical order: parameters advance first, then the lifecycle
+            # judges the post-update state. Under "pre_optimizer" the call
+            # moves below the lifecycle block, matching upstream gsplat -
+            # split/clone there rebuild the parameter tensors, so refine
+            # steps intentionally discard the pending gradient update.
+            _step_optimizers()
         if getattr(backend, "error_score_state", None) is not None:
             # Feed the per-pixel residual of this step's view into the
             # relocation/densification sampling scores while the projected
@@ -2716,6 +2749,8 @@ def train(
                 stage=f"step_{step}_mcmc_refine",
                 check_gradients=False,
             )
+        if config.lifecycle_order == "pre_optimizer":
+            _step_optimizers()
         last_metrics = {
             "loss": float(loss.detach().cpu()),
             "rgb_l1": float(l1.detach().cpu()),
