@@ -78,6 +78,12 @@ class DefaultStrategyAdapter:
         absgrad: bool = False,
         revised_opacity: bool = False,
         verbose: bool = False,
+        exact_mipmap_lifecycle: bool = False,
+        growth_min_opacity: float | None = None,
+        prune_opa_late: float | None = None,
+        prune_switch_step: int | None = None,
+        reset_opacity_cap: float | None = None,
+        surface_birth_proposal: Any | None = None,
     ) -> None:
         from gsplat.strategy import DefaultStrategy
 
@@ -88,6 +94,27 @@ class DefaultStrategyAdapter:
         # in metres instead of in units of a scale factor it cannot see.
         self.split_scale_m = split_scale_m
         self.prune_scale_m = prune_scale_m
+        self.exact_mipmap_lifecycle = bool(exact_mipmap_lifecycle)
+        self.growth_min_opacity = growth_min_opacity
+        self.prune_opa_late = prune_opa_late
+        self.prune_switch_step = prune_switch_step
+        self.reset_opacity_cap = reset_opacity_cap
+        self.surface_birth_proposal = surface_birth_proposal
+        self.last_lifecycle_event: dict[str, Any] | None = None
+        self._last_surface_birth_event: dict[str, Any] | None = None
+        if self.exact_mipmap_lifecycle:
+            if growth_min_opacity is None or not 0.0 < growth_min_opacity < 1.0:
+                raise ValueError("exact MipMap lifecycle requires growth_min_opacity")
+            if prune_opa_late is None or not 0.0 < prune_opa_late < 1.0:
+                raise ValueError("exact MipMap lifecycle requires prune_opa_late")
+            if prune_switch_step is None or prune_switch_step <= 0:
+                raise ValueError("exact MipMap lifecycle requires prune_switch_step")
+            if reset_opacity_cap is None or not 0.0 < reset_opacity_cap < 1.0:
+                raise ValueError("exact MipMap lifecycle requires reset_opacity_cap")
+            if split_scale_m is None or prune_scale_m is None:
+                raise ValueError(
+                    "exact MipMap lifecycle requires metric split/prune scales"
+                )
         if split_scale_m is not None:
             grow_scale3d = float(split_scale_m) / self.scene_scale
         if prune_scale_m is not None:
@@ -173,9 +200,234 @@ class DefaultStrategyAdapter:
         **kwargs: Any,
     ) -> None:
         """``lr`` is accepted and dropped: only MCMC's noise term consumes it."""
+        if self.exact_mipmap_lifecycle:
+            self._step_post_backward_mipmap(
+                params=params,
+                optimizers=optimizers,
+                state=state,
+                step=step,
+                info=info,
+            )
+            return
         self.inner.step_post_backward(
             params=params, optimizers=optimizers, state=state, step=step, info=info
         )
+
+    def is_refine_step(self, step: int) -> bool:
+        if self.exact_mipmap_lifecycle:
+            return (
+                step < self.refine_stop_iter
+                and step >= self.refine_start_iter
+                and step % self.refine_every == 0
+            )
+        return (
+            step < self.refine_stop_iter
+            and step > self.refine_start_iter
+            and step % self.refine_every == 0
+        )
+
+    def _grow_mipmap(
+        self,
+        params: Any,
+        optimizers: dict[str, Any],
+        state: dict[str, Any],
+        *,
+        scene: Any | None = None,
+    ) -> tuple[int, int]:
+        """Classic split/clone with the recovered opacity eligibility gate."""
+
+        import torch
+        from gsplat.strategy.ops import duplicate, split
+
+        gradients = state["grad2d"] / state["count"].clamp_min(1)
+        opacity = torch.sigmoid(params["opacities"].flatten())
+        eligible = gradients > float(self.inner.grow_grad2d)
+        eligible &= opacity > float(self.growth_min_opacity)
+        growth_candidate_count = int(eligible.sum().item())
+        guarded_births = bool(
+            self.surface_birth_proposal is not None
+            and self.surface_birth_proposal.config.reject_unsupported_births
+        )
+        if guarded_births:
+            eligible &= self.surface_birth_proposal.eligible_parent_mask(
+                params["means"]
+            )
+        supported_candidate_count = int(eligible.sum().item())
+        maximum_scale = torch.exp(params["scales"]).max(dim=-1).values
+        small = maximum_scale <= float(self.split_scale_m)
+        duplicate_mask = eligible & small
+        split_mask = eligible & ~small
+        duplicate_count = int(duplicate_mask.sum().item())
+        split_count = int(split_mask.sum().item())
+        parent_means = None
+        if guarded_births and (duplicate_count or split_count):
+            clone_indices = torch.where(duplicate_mask)[0]
+            split_indices = torch.where(split_mask)[0]
+            parent_means = torch.cat(
+                [
+                    params["means"][clone_indices].detach().clone(),
+                    params["means"][split_indices].detach().clone().repeat(2, 1),
+                ],
+                dim=0,
+            )
+        if duplicate_count:
+            duplicate(
+                params=params,
+                optimizers=optimizers,
+                state=state,
+                mask=duplicate_mask,
+                scene=scene,
+            )
+        if split_count:
+            split_mask = torch.cat(
+                [
+                    split_mask,
+                    torch.zeros(
+                        duplicate_count,
+                        dtype=torch.bool,
+                        device=split_mask.device,
+                    ),
+                ]
+            )
+            split(
+                params=params,
+                optimizers=optimizers,
+                state=state,
+                mask=split_mask,
+                revised_opacity=self.inner.revised_opacity,
+                scene=scene,
+            )
+        if parent_means is not None:
+            # ``split`` removes its parents, keeps all non-split rows, then
+            # appends two children per parent.  Duplicates therefore precede
+            # split children in one contiguous newborn tail beginning at
+            # ``old_count - split_count``.
+            newborn_count = duplicate_count + 2 * split_count
+            newborn_start = len(params["means"]) - newborn_count
+            proposed = self.surface_birth_proposal.propose(
+                parent_means,
+                params["quats"][newborn_start:],
+                params["scales"][newborn_start:],
+            )
+            if not bool(torch.all(proposed["applied"]).item()):
+                raise RuntimeError(
+                    "LiDAR surface birth guard rejected a parent that passed "
+                    "the pre-growth gate"
+                )
+            with torch.no_grad():
+                params["means"][newborn_start:].copy_(proposed["means"])
+                if "quats" in proposed:
+                    params["quats"][newborn_start:].copy_(proposed["quats"])
+                if "scales" in proposed:
+                    params["scales"][newborn_start:].copy_(proposed["scales"])
+        self._last_surface_birth_event = (
+            None
+            if not guarded_births
+            else {
+                "growth_candidates": growth_candidate_count,
+                "supported_parents": supported_candidate_count,
+                "rejected_parents": growth_candidate_count
+                - supported_candidate_count,
+                "newborns": duplicate_count + 2 * split_count,
+                "proposal": dict(self.surface_birth_proposal.last_stats),
+            }
+        )
+        return duplicate_count, split_count
+
+    def _prune_mipmap(
+        self,
+        params: Any,
+        optimizers: dict[str, Any],
+        state: dict[str, Any],
+        *,
+        step: int,
+        scene: Any | None = None,
+    ) -> int:
+        """Apply recovered early/late opacity, world, and screen cull gates."""
+
+        import torch
+        from gsplat.strategy.ops import remove
+
+        opacity_threshold = (
+            float(self.prune_opa_late)
+            if step >= int(self.prune_switch_step)
+            else float(self.inner.prune_opa)
+        )
+        remove_mask = torch.sigmoid(params["opacities"].flatten()) < opacity_threshold
+        maximum_scale = torch.exp(params["scales"]).max(dim=-1).values
+        remove_mask |= maximum_scale > float(self.prune_scale_m)
+        radii = state.get("radii")
+        if radii is not None:
+            remove_mask |= radii > float(self.inner.prune_scale2d)
+        prune_count = int(remove_mask.sum().item())
+        if prune_count:
+            remove(
+                params=params,
+                optimizers=optimizers,
+                state=state,
+                mask=remove_mask,
+                scene=scene,
+            )
+        return prune_count
+
+    def _step_post_backward_mipmap(
+        self,
+        *,
+        params: Any,
+        optimizers: dict[str, Any],
+        state: dict[str, Any],
+        step: int,
+        info: dict[str, Any],
+    ) -> None:
+        import torch
+        from gsplat.strategy.ops import reset_opa
+
+        self.last_lifecycle_event = None
+        self._last_surface_birth_event = None
+        if step >= self.refine_stop_iter:
+            return
+        self.inner._update_state(params, state, info, packed=False)
+        if not self.is_refine_step(step):
+            return
+        before = len(params["means"])
+        clone_count, split_count = self._grow_mipmap(
+            params, optimizers, state
+        )
+        cull_count = self._prune_mipmap(
+            params, optimizers, state, step=step
+        )
+        reset = step % int(self.inner.reset_every) == 0
+        if reset:
+            reset_opa(
+                params=params,
+                optimizers=optimizers,
+                state=state,
+                value=float(self.reset_opacity_cap),
+            )
+        state["grad2d"].zero_()
+        state["count"].zero_()
+        if state.get("radii") is not None:
+            state["radii"].zero_()
+        self.last_lifecycle_event = {
+            "before_count": int(before),
+            "clone_count": clone_count,
+            "split_parent_count": split_count,
+            "split_child_count": 2 * split_count,
+            "cull_count": cull_count,
+            "opacity_reset": reset,
+            "after_count": int(len(params["means"])),
+            "cull_opacity_threshold": (
+                float(self.prune_opa_late)
+                if step >= int(self.prune_switch_step)
+                else float(self.inner.prune_opa)
+            ),
+        }
+        if self._last_surface_birth_event is not None:
+            self.last_lifecycle_event["surface_birth_guard"] = dict(
+                self._last_surface_birth_event
+            )
+        if params["means"].is_cuda:
+            torch.cuda.empty_cache()
 
     def state_dict(self) -> dict[str, Any]:
         """Every knob, plus the metres each normalised threshold resolves to.
@@ -202,6 +454,16 @@ class DefaultStrategyAdapter:
             "refine_start_iter": int(self.inner.refine_start_iter),
             "refine_stop_iter": int(self.inner.refine_stop_iter),
             "refine_every": int(self.inner.refine_every),
+            "exact_mipmap_lifecycle": self.exact_mipmap_lifecycle,
+            "growth_min_opacity": self.growth_min_opacity,
+            "prune_opa_late": self.prune_opa_late,
+            "prune_switch_step": self.prune_switch_step,
+            "reset_opacity_cap": self.reset_opacity_cap,
+            "surface_birth_guard": (
+                None
+                if self.surface_birth_proposal is None
+                else self.surface_birth_proposal.config.to_dict()
+            ),
             # The resolved metric meaning of the two normalised scale gates.
             "effective_split_scale_m": float(
                 self.inner.grow_scale3d * self.scene_scale

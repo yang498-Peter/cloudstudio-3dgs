@@ -16,6 +16,7 @@ from cloudstudio_3dgs.evaluation.quality_report import (
     _periodic_full_evaluation,
     _safe_path,
     build_quality_report,
+    finalize_deferred_run_manifest,
     sign_run_manifest,
     verify_quality_report,
     verify_run_manifest,
@@ -27,6 +28,68 @@ from tests.test_splits import dataset_fixture
 
 
 class QualityReportTests(unittest.TestCase):
+    def test_finalize_deferred_run_manifest_binds_source_and_evaluator(self) -> None:
+        source = sign_run_manifest(
+            {
+                "schema_version": 1,
+                "run_id": "face-stage",
+                "final_evaluation_artifacts": {
+                    "enabled": False,
+                    "status": "DEFERRED",
+                    "reason": "separate_3dgut_evaluation_required",
+                },
+                "frames": [],
+            }
+        )
+        final = finalize_deferred_run_manifest(
+            source,
+            frames=[{"image_id": "camera_a"}],
+            evaluation_runtime={"projection": "3DGUT"},
+            checkpoint_sha256="checkpoint-sha",
+        )
+        self.assertEqual(verify_run_manifest(final), final["run_manifest_sha256"])
+        self.assertEqual(
+            final["final_evaluation_artifacts"],
+            {
+                "enabled": True,
+                "status": "COMPLETE",
+                "reason": None,
+                "source_face_stage_run_manifest_sha256": source[
+                    "run_manifest_sha256"
+                ],
+                "evaluation_runtime": {"projection": "3DGUT"},
+                "checkpoint_sha256": "checkpoint-sha",
+            },
+        )
+
+    def test_signed_face_stage_manifest_allows_only_explicit_deferred_frames(self) -> None:
+        deferred = sign_run_manifest(
+            {
+                "schema_version": 1,
+                "run_id": "face-stage",
+                "final_evaluation_artifacts": {
+                    "enabled": False,
+                    "status": "DEFERRED",
+                    "reason": "separate_3dgut_evaluation_required",
+                },
+                "frames": [],
+            }
+        )
+        self.assertEqual(
+            verify_run_manifest(deferred),
+            deferred["run_manifest_sha256"],
+        )
+
+        incomplete = sign_run_manifest(
+            {
+                "schema_version": 1,
+                "run_id": "invalid-face-stage",
+                "frames": [],
+            }
+        )
+        with self.assertRaisesRegex(ValueError, "invalid or duplicate image IDs"):
+            verify_run_manifest(incomplete)
+
     def test_artifact_paths_cannot_escape_run_root_on_windows(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

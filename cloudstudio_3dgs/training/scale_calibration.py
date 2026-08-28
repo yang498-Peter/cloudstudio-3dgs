@@ -24,6 +24,7 @@ class MetricScaleCalibrationConfig:
 
     mode: str = "knn"
     knn_neighbors: int = 3
+    knn_reduction: str = "rms"
     scale_multiplier: float = 1.0
     clamp_min_ratio: float = 0.25
     clamp_max_ratio: float = 4.0
@@ -31,8 +32,10 @@ class MetricScaleCalibrationConfig:
     noise_std_fraction: float | None = 0.25
 
     def validate(self) -> None:
-        if self.mode not in {"fixed", "knn"}:
-            raise ValueError("metric scale mode must be 'fixed' or 'knn'")
+        if self.mode not in {"fixed", "knn", "precomputed"}:
+            raise ValueError("metric scale mode must be 'fixed', 'knn', or 'precomputed'")
+        if self.knn_reduction not in {"rms", "arithmetic_mean"}:
+            raise ValueError("KNN scale reduction must be 'rms' or 'arithmetic_mean'")
         if self.knn_neighbors <= 0:
             raise ValueError("KNN scale neighbors must be positive")
         if self.scale_multiplier <= 0.0:
@@ -49,6 +52,7 @@ class MetricScaleCalibrationConfig:
         return {
             "mode": self.mode,
             "knn_neighbors": self.knn_neighbors,
+            "knn_reduction": self.knn_reduction,
             "scale_multiplier": self.scale_multiplier,
             "clamp_min_ratio": self.clamp_min_ratio,
             "clamp_max_ratio": self.clamp_max_ratio,
@@ -78,7 +82,10 @@ def _knn_scales(points: np.ndarray, policy: MetricScaleCalibrationConfig) -> tup
         workers=1,
     )
     neighbor_distances = np.asarray(distances[:, 1:], dtype=np.float64)
-    raw = np.sqrt(np.mean(np.square(neighbor_distances), axis=1))
+    if policy.knn_reduction == "arithmetic_mean":
+        raw = np.mean(neighbor_distances, axis=1)
+    else:
+        raw = np.sqrt(np.mean(np.square(neighbor_distances), axis=1))
     positive = raw[np.isfinite(raw) & (raw > 0.0)]
     if not len(positive):
         raise ValueError("KNN scale calibration found no positive neighbor spacing")
@@ -106,6 +113,7 @@ def build_metric_scale_calibration(
     fixed_scale_m: float,
     configured_means_lr: float,
     configured_noise_lr: float,
+    precomputed_scales_m: np.ndarray | None = None,
 ) -> tuple[np.ndarray, dict[str, Any]]:
     """Return per-Gaussian metric scales and a signed effective-parameter report."""
 
@@ -115,11 +123,28 @@ def build_metric_scale_calibration(
         raise ValueError("metric scale calibration expects at least four XYZ points")
     if not np.all(np.isfinite(points)):
         raise ValueError("metric scale calibration XYZ must be finite")
-    if fixed_scale_m <= 0.0 or configured_means_lr <= 0.0 or configured_noise_lr < 0.0:
-        raise ValueError("fixed scale/means LR must be positive and noise LR non-negative")
+    if fixed_scale_m <= 0.0 or configured_means_lr < 0.0 or configured_noise_lr < 0.0:
+        raise ValueError("fixed scale must be positive and means/noise LR non-negative")
 
     diagnostics: dict[str, Any]
-    if policy.mode == "fixed":
+    if policy.mode == "precomputed":
+        if precomputed_scales_m is None:
+            raise ValueError("precomputed metric scale mode requires precomputed_scales_m")
+        scales = np.asarray(precomputed_scales_m, dtype=np.float32)
+        if scales.shape != (len(points), 3):
+            raise ValueError("precomputed scales must have shape [N, 3]")
+        if not np.isfinite(scales).all() or np.any(scales <= 0.0):
+            raise ValueError("precomputed scales must be finite and positive")
+        tangent = np.asarray(scales[:, 0], dtype=np.float64)
+        diagnostics = {
+            "invalid_replaced_count": 0,
+            "clipped_count": 0,
+            "raw_scale_distribution_m": _distribution(tangent),
+            "normal_scale_distribution_m": _distribution(scales[:, 2]),
+            "clamp_min_m": None,
+            "clamp_max_m": None,
+        }
+    elif policy.mode == "fixed":
         scales = np.full(len(points), float(fixed_scale_m), dtype=np.float32)
         diagnostics = {
             "invalid_replaced_count": 0,
@@ -129,14 +154,19 @@ def build_metric_scale_calibration(
             "clamp_max_m": None,
         }
     else:
+        if precomputed_scales_m is not None:
+            raise ValueError("precomputed_scales_m requires metric scale mode 'precomputed'")
         scales, diagnostics = _knn_scales(points, policy)
 
-    reference_scale_m = float(np.median(scales))
+    reference_values = scales[:, 0] if scales.ndim == 2 else scales
+    reference_scale_m = float(np.median(reference_values))
     effective_means_lr = (
         float(configured_means_lr)
         if policy.means_step_fraction is None
         else reference_scale_m * float(policy.means_step_fraction)
     )
+    if effective_means_lr == 0.0 and policy.noise_std_fraction is not None:
+        raise ValueError("noise_std_fraction must be null when means learning is frozen")
     effective_noise_lr = (
         float(configured_noise_lr)
         if policy.noise_std_fraction is None
@@ -183,10 +213,14 @@ def verify_metric_scale_calibration_report(report: dict[str, Any]) -> str:
     noise_lr = float(unsigned.get("effective_noise_lr", -1.0))
     nominal_m = float(unsigned.get("nominal_noise_std_m", -1.0))
     nominal_fraction = float(unsigned.get("nominal_noise_std_fraction", -1.0))
-    if point_count < 4 or min(reference, means_lr, nominal_m, nominal_fraction) <= 0.0:
-        raise ValueError("metric scale calibration contains non-positive effective values")
-    if noise_lr < 0.0:
-        raise ValueError("metric scale calibration noise LR is negative")
+    if point_count < 4 or reference <= 0.0:
+        raise ValueError("metric scale calibration contains an invalid point count or scale")
+    if min(means_lr, noise_lr, nominal_m, nominal_fraction) < 0.0:
+        raise ValueError("metric scale calibration contains negative effective values")
+    if means_lr == 0.0 and any(
+        value != 0.0 for value in (noise_lr, nominal_m, nominal_fraction)
+    ):
+        raise ValueError("frozen means require zero noise calibration")
     recomputed_m = reference * reference * means_lr * noise_lr
     if not np.isclose(nominal_m, recomputed_m, rtol=1e-12, atol=0.0):
         raise ValueError("metric scale calibration nominal noise distance is inconsistent")

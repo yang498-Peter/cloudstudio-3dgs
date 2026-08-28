@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import importlib.metadata
 import json
 import subprocess
@@ -19,10 +20,9 @@ from cloudstudio_3dgs.training.runtime_evidence import (
 def verify_gsplat_runtime(lock_path: Path) -> dict[str, Any]:
     """Require the locked version and, for VCS installs, the exact clean commit."""
     lock = json.loads(Path(lock_path).read_text(encoding="utf-8"))
-    if lock.get("patch") not in (None, ""):
-        raise ValueError("CloudStudio trainer lock must not require a gsplat source patch")
-    if lock.get("source_policy") != "clean_vcs_commit":
-        raise ValueError("CloudStudio trainer currently requires clean_vcs_commit provenance")
+    patch_name = lock.get("patch")
+    if patch_name in (None, "") and lock.get("source_policy") != "clean_vcs_commit":
+        raise ValueError("an unpatched CloudStudio trainer requires clean_vcs_commit provenance")
     installed_version = importlib.metadata.version("gsplat")
     if installed_version != str(lock["version"]):
         raise RuntimeError(
@@ -47,25 +47,56 @@ def verify_gsplat_runtime(lock_path: Path) -> dict[str, Any]:
         capture_output=True,
         text=True,
     ).stdout.strip()
-    dirty = subprocess.run(
-        ["git", "status", "--porcelain"],
+    checkout_diff = subprocess.run(
+        ["git", "diff", "HEAD", "--binary", "--no-ext-diff"],
+        cwd=repository,
+        check=True,
+        capture_output=True,
+    ).stdout
+    untracked = subprocess.run(
+        ["git", "ls-files", "--others", "--exclude-standard"],
         cwd=repository,
         check=True,
         capture_output=True,
         text=True,
-    ).stdout.strip()
+    ).stdout.splitlines()
     if head != str(lock["commit"]):
         raise RuntimeError(f"gsplat commit mismatch: expected {lock['commit']}, got {head}")
-    if dirty:
-        raise RuntimeError("gsplat checkout has local modifications")
-    evidence.update(
-        {
-            "source_kind": "clean_vcs",
-            "repository_path": str(repository),
-            "commit": head,
-            "clean": True,
-        }
-    )
+    if untracked:
+        raise RuntimeError("gsplat checkout has untracked files")
+    if patch_name not in (None, ""):
+        project_root = Path(lock_path).resolve().parent.parent
+        patch_path = project_root / str(patch_name)
+        if not patch_path.is_file():
+            raise FileNotFoundError(f"locked gsplat patch is missing: {patch_path}")
+        patch_sha256 = hashlib.sha256(patch_path.read_bytes()).hexdigest()
+        if patch_sha256 != str(lock.get("patch_sha256", "")):
+            raise RuntimeError("gsplat patch artifact SHA256 mismatch")
+        checkout_diff_sha256 = hashlib.sha256(checkout_diff).hexdigest()
+        if checkout_diff_sha256 != str(lock.get("checkout_diff_sha256", "")):
+            raise RuntimeError("gsplat patched checkout diff SHA256 mismatch")
+        evidence.update(
+            {
+                "source_kind": "locked_patch",
+                "repository_path": str(repository),
+                "commit": head,
+                "clean": False,
+                "patch": str(patch_name),
+                "patch_sha256": patch_sha256,
+                "checkout_diff_sha256": checkout_diff_sha256,
+            }
+        )
+    else:
+        if checkout_diff:
+            raise RuntimeError("gsplat checkout has local modifications")
+        evidence.update(
+            {
+                "source_kind": "clean_vcs",
+                "repository_path": str(repository),
+                "commit": head,
+                "clean": True,
+            }
+        )
     return evidence
 
 
@@ -186,6 +217,7 @@ class GsplatBackend:
         *,
         init_scale_m: float | None = None,
         init_scales_m: Any | None = None,
+        init_quaternions: Any | None = None,
         learning_rates: dict[str, float],
         color_model: str = "rgb_sigmoid",
         sh_degree: int = 2,
@@ -219,8 +251,19 @@ class GsplatBackend:
                 raise ValueError("init_scales_m must have shape [N] or [N, 3]")
             if not bool(torch.isfinite(scales_m).all()) or not bool((scales_m > 0.0).all()):
                 raise ValueError("init_scales_m must be finite and positive")
-        quaternions = torch.zeros((len(points), 4), device=self.device)
-        quaternions[:, 0] = 1.0
+        if init_quaternions is None:
+            quaternions = torch.zeros((len(points), 4), device=self.device)
+            quaternions[:, 0] = 1.0
+        else:
+            quaternions = torch.as_tensor(
+                init_quaternions, dtype=torch.float32, device=self.device
+            )
+            if quaternions.shape != (len(points), 4):
+                raise ValueError("init_quaternions must have shape [N, 4]")
+            norms = quaternions.norm(dim=1, keepdim=True)
+            if not bool(torch.isfinite(quaternions).all()) or not bool((norms > 0.0).all()):
+                raise ValueError("init_quaternions must be finite and non-zero")
+            quaternions = quaternions / norms
         entries = {
             "means": torch.nn.Parameter(points),
             "scales": torch.nn.Parameter(scales_m.log()),
@@ -259,6 +302,62 @@ class GsplatBackend:
         }
         self.strategy.check_sanity(params, optimizers)
         return params, optimizers, self.strategy.initialize_state()
+
+    def prune_below_opacity(
+        self,
+        params: Any,
+        optimizers: dict[str, Any],
+        *,
+        min_opacity: float,
+    ) -> dict[str, Any]:
+        """Remove weak warm-start rows before the new optimization phase.
+
+        This is deliberately independent of gradient-driven densification. Raw
+        fisheye 3DGUT does not expose the projected-mean gradient required by
+        ``DefaultStrategy``, but opacity pruning itself needs no image-space
+        gradient. Optimizers are fresh at warm start, so gsplat's canonical
+        row-removal helper can update every parameter group atomically.
+        """
+        threshold = float(min_opacity)
+        if not 0.0 < threshold < 1.0:
+            raise ValueError("min_opacity must be within (0, 1)")
+        if "opacities" not in params:
+            raise ValueError("opacity pruning requires opacity parameters")
+        torch = self.torch
+        with torch.no_grad():
+            probabilities = torch.sigmoid(params["opacities"]).reshape(-1)
+            before_count = int(probabilities.numel())
+            remove_mask = probabilities < threshold
+            removed_count = int(remove_mask.sum().item())
+            after_count = before_count - removed_count
+            if after_count < 4:
+                raise ValueError(
+                    "opacity pruning would leave fewer than four Gaussians"
+                )
+            before_p50 = float(torch.quantile(probabilities.float(), 0.5).item())
+            if removed_count:
+                from gsplat.strategy.ops import remove
+
+                # MCMC's strategy state contains a 51x51 binomial table rather
+                # than per-Gaussian rows, so it must not be indexed by the mask.
+                remove(params, optimizers, {}, remove_mask)
+            kept_probabilities = torch.sigmoid(params["opacities"]).reshape(-1)
+            after_p50 = float(
+                torch.quantile(kept_probabilities.float(), 0.5).item()
+            )
+        if self.error_score_state is not None:
+            # This is a fresh optimizer phase; no score history has been earned
+            # yet, and resetting keeps every lifecycle column index-aligned.
+            self.error_score_state.reset(after_count)
+        return {
+            "threshold": threshold,
+            "before_count": before_count,
+            "after_count": after_count,
+            "removed_count": removed_count,
+            "removed_fraction": removed_count / before_count,
+            "opacity_p50_before": before_p50,
+            "opacity_p50_after": after_p50,
+        }
 
     def render(
         self,
@@ -448,9 +547,13 @@ class GsplatBackend:
         info: dict[str, Any],
     ) -> dict[str, Any]:
         refine = (
-            step < self.strategy.refine_stop_iter
-            and step > self.strategy.refine_start_iter
-            and step % self.strategy.refine_every == 0
+            self.strategy.is_refine_step(step)
+            if hasattr(self.strategy, "is_refine_step")
+            else (
+                step < self.strategy.refine_stop_iter
+                and step > self.strategy.refine_start_iter
+                and step % self.strategy.refine_every == 0
+            )
         )
         before = (
             snapshot_gaussians(params, min_opacity=self.strategy.min_opacity)
@@ -490,7 +593,7 @@ class GsplatBackend:
             if refine
             else None
         )
-        return build_mcmc_step_event(
+        event = build_mcmc_step_event(
             step=step,
             before=before,
             after=after,
@@ -501,3 +604,7 @@ class GsplatBackend:
             noise_position_delta_max_m=noise_position_delta_max_m,
             strategy_prunes=self.strategy_prunes,
         )
+        lifecycle = getattr(self.strategy, "last_lifecycle_event", None)
+        if lifecycle is not None:
+            event["classic_lifecycle"] = dict(lifecycle)
+        return event

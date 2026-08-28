@@ -9,6 +9,7 @@ Output layout (what gsplat's colmap Parser expects):
       sparse/0/
         cameras.txt          OPENCV_FISHEYE, one camera per unique intrinsics (2: left/right)
         images.txt           world-to-camera quaternion/translation, OpenCV axes
+        *.bin                COLMAP 4 binary model, including trivial rigs/frames
         points3D.bin         LiDAR cloud subsample with RGB (init + no SfM tracks)
 
 Pose math: solver transform_matrix is camera-to-world with OpenGL axes
@@ -137,6 +138,47 @@ def write_points3d_bin(path: Path, xyz: np.ndarray, rgb: np.ndarray) -> None:
         rec.tofile(fh)
 
 
+def write_pycolmap_binary_model(
+    path: Path,
+    cameras: dict[tuple, int],
+    images: list[tuple[int, str, int, np.ndarray, np.ndarray]],
+) -> None:
+    """Write COLMAP 4 rigs/cameras/frames/images; points are added separately."""
+    try:
+        import pycolmap
+    except ImportError as exc:
+        raise RuntimeError(
+            "pycolmap is required to emit the COLMAP 4 binary model; "
+            "run train/setup_new_machine.cmd first"
+        ) from exc
+
+    reconstruction = pycolmap.Reconstruction()
+    for key, camera_id in sorted(cameras.items(), key=lambda item: item[1]):
+        model = key[0]
+        if model == "OPENCV_FISHEYE":
+            params = list(key[3:7]) + list(key[7:11])
+            width, height = int(key[1]), int(key[2])
+        else:
+            _model, width, height, fx, fy, cx, cy = key
+            params = [fx, fy, cx, cy]
+        camera = pycolmap.Camera(
+            model=model,
+            width=width,
+            height=height,
+            params=params,
+            camera_id=camera_id,
+        )
+        reconstruction.add_camera_with_trivial_rig(camera)
+
+    for image_id, name, camera_id, rotation, translation in images:
+        image = pycolmap.Image(name=name, camera_id=camera_id, image_id=image_id)
+        cam_from_world = pycolmap.Rigid3d(
+            np.column_stack((rotation, translation))
+        )
+        reconstruction.add_image_with_trivial_frame(image, cam_from_world)
+    reconstruction.write_binary(path)
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--run-dir", required=True, type=Path)
@@ -198,6 +240,7 @@ def main() -> int:
     # group frames by intrinsics -> COLMAP cameras (expect one per fisheye side)
     cameras: dict[tuple, int] = {}
     image_lines = []
+    binary_images: list[tuple[int, str, int, np.ndarray, np.ndarray]] = []
     copied = 0
     for i, f in enumerate(sorted(frames, key=lambda f: str(f["file_path"])), start=1):
         rel = str(f["file_path"]).replace("\\", "/")
@@ -230,6 +273,7 @@ def main() -> int:
             f"{i} {qw:.12g} {qx:.12g} {qy:.12g} {qz:.12g} {tx:.12g} {ty:.12g} {tz:.12g} {cam_id} {name}"
         )
         image_lines.append("")  # no 2D point observations
+        binary_images.append((i, name, cam_id, r_w2c, t_w2c))
 
     cam_lines = ["# CAMERA_ID MODEL WIDTH HEIGHT PARAMS[]"]
     for key, cam_id in sorted(cameras.items(), key=lambda kv: kv[1]):
@@ -248,6 +292,10 @@ def main() -> int:
             )
     (sparse / "cameras.txt").write_text("\n".join(cam_lines) + "\n", encoding="ascii")
     (sparse / "images.txt").write_text("\n".join(image_lines) + "\n", encoding="ascii")
+
+    # pycolmap 4 requires rigs and frames in addition to the legacy camera/image
+    # files. Write a complete binary model with one trivial rig/frame per image.
+    write_pycolmap_binary_model(sparse, cameras, binary_images)
 
     xyz, rgb = subsample_las(args.run_dir, args.init_points)
     write_points3d_bin(sparse / "points3D.bin", xyz, rgb)

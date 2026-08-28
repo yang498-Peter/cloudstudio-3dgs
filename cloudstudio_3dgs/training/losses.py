@@ -19,6 +19,30 @@ def masked_rgb_l1(prediction: Any, target: Any, mask: Any) -> Any:
     return (prediction - target).abs()[mask].mean()
 
 
+def masked_rgb_gradient_l1(prediction: Any, target: Any, mask: Any) -> Any:
+    """Match horizontal and vertical RGB finite differences inside the mask."""
+
+    _validate_masked_pair(prediction, target, mask, "RGB gradient")
+    horizontal_mask = mask[:, 1:] & mask[:, :-1]
+    vertical_mask = mask[1:, :] & mask[:-1, :]
+    valid_pairs = int(horizontal_mask.sum().item() + vertical_mask.sum().item())
+    if valid_pairs == 0:
+        raise ValueError("RGB gradient mask contains no valid neighboring pixels")
+    horizontal_error = (
+        (prediction[:, 1:] - prediction[:, :-1])
+        - (target[:, 1:] - target[:, :-1])
+    ).abs()
+    vertical_error = (
+        (prediction[1:, :] - prediction[:-1, :])
+        - (target[1:, :] - target[:-1, :])
+    ).abs()
+    channels = prediction.shape[-1]
+    return (
+        horizontal_error[horizontal_mask].sum()
+        + vertical_error[vertical_mask].sum()
+    ) / (valid_pairs * channels)
+
+
 def global_masked_rgb_ssim_loss(prediction: Any, target: Any, mask: Any) -> Any:
     """Global masked SSIM loss with channel-wise moments.
 

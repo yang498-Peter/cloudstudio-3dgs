@@ -32,6 +32,14 @@ def main() -> int:
     parser.add_argument("--min-range-m", type=float, default=0.2)
     parser.add_argument("--max-range-m", type=float, default=80.0)
     parser.add_argument("--max-theta-deg", type=float, default=95.0)
+    parser.add_argument(
+        "--compact-provenance",
+        action="store_true",
+        help=(
+            "omit source_index/support_count arrays and reconstruct their unused "
+            "-1/0 sentinels while loading"
+        ),
+    )
     parser.add_argument("--force", action="store_true")
     args = parser.parse_args()
 
@@ -51,6 +59,7 @@ def main() -> int:
         workers=args.workers,
         max_images=args.max_images,
         max_points=args.max_points,
+        compact_provenance=args.compact_provenance,
         force=args.force,
     )
     print(

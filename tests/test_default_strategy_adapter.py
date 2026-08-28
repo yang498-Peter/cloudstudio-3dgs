@@ -141,6 +141,158 @@ class DefaultStrategyAdapterTests(unittest.TestCase):
             set(DENSIFICATION_STRATEGIES), {"error_weighted_mcmc", "default_3dgs"}
         )
 
+    def test_exact_mipmap_schedule_is_inclusive_at_step_500(self):
+        adapter = DefaultStrategyAdapter(
+            scene_scale=10.0,
+            refine_start_iter=500,
+            refine_stop_iter=2000,
+            refine_every=100,
+            reset_every=300,
+            grow_grad2d=0.00015,
+            prune_opa=0.1,
+            split_scale_m=0.2,
+            prune_scale_m=0.2,
+            prune_scale2d=0.15,
+            refine_scale2d_stop_iter=2000,
+            exact_mipmap_lifecycle=True,
+            growth_min_opacity=0.15,
+            prune_opa_late=0.05,
+            prune_switch_step=1000,
+            reset_opacity_cap=0.2,
+        )
+        self.assertTrue(adapter.is_refine_step(500))
+        self.assertFalse(adapter.is_refine_step(501))
+        self.assertTrue(adapter.is_refine_step(600))
+
+    def test_exact_mipmap_growth_requires_gradient_and_opacity(self):
+        import torch
+
+        adapter = DefaultStrategyAdapter(
+            scene_scale=10.0,
+            refine_start_iter=500,
+            refine_stop_iter=2000,
+            refine_every=100,
+            reset_every=300,
+            grow_grad2d=0.00015,
+            prune_opa=0.1,
+            split_scale_m=0.2,
+            prune_scale_m=0.2,
+            prune_scale2d=0.15,
+            refine_scale2d_stop_iter=2000,
+            exact_mipmap_lifecycle=True,
+            growth_min_opacity=0.15,
+            prune_opa_late=0.05,
+            prune_switch_step=1000,
+            reset_opacity_cap=0.2,
+        )
+        params = torch.nn.ParameterDict(
+            {
+                "means": torch.nn.Parameter(torch.zeros(3, 3)),
+                "scales": torch.nn.Parameter(
+                    torch.tensor([[0.1, 0.1, 0.1], [0.3, 0.3, 0.3], [0.1, 0.1, 0.1]]).log()
+                ),
+                "quats": torch.nn.Parameter(torch.tensor([[1.0, 0.0, 0.0, 0.0]] * 3)),
+                "opacities": torch.nn.Parameter(torch.tensor([0.2, 0.2, 0.1]).logit()),
+                "colors": torch.nn.Parameter(torch.zeros(3, 3)),
+            }
+        )
+        optimizers = {
+            name: torch.optim.Adam([parameter], lr=1e-3)
+            for name, parameter in params.items()
+        }
+        state = {
+            "grad2d": torch.tensor([0.001, 0.001, 0.001]),
+            "count": torch.ones(3),
+            "radii": torch.zeros(3),
+            "scene_scale": 10.0,
+        }
+        clone_count, split_count = adapter._grow_mipmap(
+            params, optimizers, state
+        )
+        self.assertEqual((clone_count, split_count), (1, 1))
+        self.assertEqual(len(params["means"]), 5)
+
+    def test_lidar_birth_guard_blocks_unsupported_parent_and_projects_newborns(self):
+        import numpy as np
+        import torch
+
+        from cloudstudio_3dgs.geometry.lidar_surface_field import build_surface_field
+        from cloudstudio_3dgs.training.tangent_proposal import (
+            ProposalConfig,
+            TangentProposal,
+        )
+
+        xx, yy = np.meshgrid(
+            np.linspace(-0.2, 0.2, 9), np.linspace(-0.2, 0.2, 9)
+        )
+        surface = np.column_stack(
+            [xx.reshape(-1), yy.reshape(-1), np.zeros(xx.size)]
+        )
+        proposal = TangentProposal(
+            build_surface_field(surface, knn=12),
+            ProposalConfig(
+                enabled=True,
+                planarity_gate=0.6,
+                support_gate=0.1,
+                tangent_sigma_factor=0.25,
+                normal_offset_factor=0.0,
+                reject_unsupported_births=True,
+            ),
+            seed=7,
+        )
+        adapter = DefaultStrategyAdapter(
+            scene_scale=10.0,
+            refine_start_iter=500,
+            refine_stop_iter=2000,
+            refine_every=100,
+            reset_every=300,
+            grow_grad2d=0.00015,
+            prune_opa=0.1,
+            split_scale_m=0.2,
+            prune_scale_m=0.2,
+            exact_mipmap_lifecycle=True,
+            growth_min_opacity=0.15,
+            prune_opa_late=0.05,
+            prune_switch_step=1000,
+            reset_opacity_cap=0.2,
+            surface_birth_proposal=proposal,
+        )
+        params = torch.nn.ParameterDict(
+            {
+                # Row 0 is measured surface, row 1 is an unsupported floater.
+                "means": torch.nn.Parameter(
+                    torch.tensor([[0.0, 0.0, 0.0], [0.0, 0.0, 1.0]])
+                ),
+                "scales": torch.nn.Parameter(
+                    torch.tensor([[0.05, 0.05, 0.02]] * 2).log()
+                ),
+                "quats": torch.nn.Parameter(
+                    torch.tensor([[1.0, 0.0, 0.0, 0.0]] * 2)
+                ),
+                "opacities": torch.nn.Parameter(torch.tensor([0.3, 0.3]).logit()),
+                "colors": torch.nn.Parameter(torch.zeros(2, 3)),
+            }
+        )
+        optimizers = {
+            name: torch.optim.Adam([parameter], lr=1e-3)
+            for name, parameter in params.items()
+        }
+        state = {
+            "grad2d": torch.tensor([0.001, 0.001]),
+            "count": torch.ones(2),
+            "radii": torch.zeros(2),
+            "scene_scale": 10.0,
+        }
+        clone_count, split_count = adapter._grow_mipmap(
+            params, optimizers, state
+        )
+        self.assertEqual((clone_count, split_count), (1, 0))
+        self.assertEqual(len(params["means"]), 3)
+        self.assertAlmostEqual(
+            float(params["means"][-1, 2].detach()), 0.0, places=6
+        )
+        self.assertEqual(proposal.last_stats["applied"], 1)
+
 
 class BackendWiringTests(unittest.TestCase):
     def test_backend_flags_whether_the_pre_backward_hook_is_required(self):
@@ -278,6 +430,32 @@ class GradientSourceTests(unittest.TestCase):
             )
         )
         with self.assertRaises(ValueError):
+            config.validate()
+
+    def test_classic_lidar_birth_guard_does_not_require_error_weighted_mcmc(self):
+        config = TrainerConfig.from_dict(
+            _minimal_config(
+                densification_strategy="default_3dgs",
+                tangent_proposal={
+                    "enabled": True,
+                    "reject_unsupported_births": True,
+                },
+            )
+        )
+        config.validate()
+        self.assertTrue(config.tangent_proposal.reject_unsupported_births)
+
+    def test_hard_birth_guard_is_rejected_on_mcmc_path(self):
+        config = TrainerConfig.from_dict(
+            _minimal_config(
+                error_weighted_sampling={"enabled": True},
+                tangent_proposal={
+                    "enabled": True,
+                    "reject_unsupported_births": True,
+                },
+            )
+        )
+        with self.assertRaisesRegex(ValueError, "requires default_3dgs"):
             config.validate()
 
 

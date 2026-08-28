@@ -178,6 +178,7 @@ class ProposalConfigTests(unittest.TestCase):
             {"planarity_gate": -0.1},
             {"support_gate": 0.0},
             {"support_gate": 1.5},
+            {"support_tangent_factor": 0.0},
             {"sigma_perp_factor": 0.0},
             {"tangent_sigma_factor": -1.0},
             {"normal_offset_factor": -0.5},
@@ -261,6 +262,38 @@ class ProjectionTests(unittest.TestCase):
         )
         nearest = self.field.xyz[self.field.tree.query(parents)[1][0]]
         np.testing.assert_allclose(result.means[0], nearest, atol=1e-9)
+
+    def test_strict_lidar_birth_falls_back_when_scatter_leaves_measured_patch(self) -> None:
+        parents = np.zeros((64, 3))
+        result = propose_positions(
+            parents,
+            self.field,
+            _config(
+                tangent_sigma_factor=100.0,
+                normal_offset_factor=0.0,
+                reject_unsupported_births=True,
+            ),
+            np.random.default_rng(9),
+        )
+        self.assertTrue(bool(result.applied.all()))
+        self.assertGreater(int(result.fallback_to_parent.sum()), 0)
+        np.testing.assert_array_equal(
+            result.means[result.fallback_to_parent],
+            parents[result.fallback_to_parent],
+        )
+
+    def test_parent_gate_rejects_unbounded_plane_extension(self) -> None:
+        proposal = TangentProposal(
+            self.field,
+            _config(reject_unsupported_births=True),
+            seed=1,
+        )
+        import torch
+
+        eligible = proposal.eligible_parent_mask(
+            torch.tensor([[0.0, 0.0, 0.0], [20.0, 20.0, 0.0]])
+        )
+        self.assertEqual(eligible.tolist(), [True, False])
 
     def test_proposal_is_a_pass_through_when_inactive(self) -> None:
         parents = np.array([[0.02, 0.02, 0.01], [0.1, -0.1, -0.03]])
@@ -839,6 +872,32 @@ class IndexSpaceTests(unittest.TestCase):
         # The pre-existing rows are untouched by the proposal.
         torch.testing.assert_close(params["means"][:3], before)
         self.assertEqual(int(sampled.numel()), 4)
+
+    def test_additive_births_preserve_parent_opacity_and_scale(self) -> None:
+        params = self._params(np.zeros((3, 3)))
+        optimizers = self._optimizers(params)
+        before_opacity = params["opacities"].detach().clone()
+        before_scale = params["scales"].detach().clone()
+        proposal = TangentProposal(
+            _field(_grid_plane()),
+            _config(additive_births=True, birth_opacity=0.03),
+            seed=7,
+        )
+        out: dict = {}
+        with mock.patch(
+            "cloudstudio_3dgs.training.error_weighted_mcmc._multinomial_sample",
+            return_value=torch.tensor([1, 1, 0]),
+        ):
+            self._run_sample_add(
+                params, optimizers, 3, torch.ones(3), proposal, out
+            )
+        torch.testing.assert_close(params["opacities"][:3], before_opacity)
+        torch.testing.assert_close(params["scales"][:3], before_scale)
+        torch.testing.assert_close(
+            torch.sigmoid(params["opacities"][3:]), torch.full((3,), 0.03)
+        )
+        self.assertTrue(out["additive_births"])
+        self.assertEqual(out["birth_opacity"], 0.03)
 
     def test_appended_rows_follow_the_sampled_parent_order(self) -> None:
         # Row 0 is a hopeless floater (falls back), rows 1-2 sit on the plane.

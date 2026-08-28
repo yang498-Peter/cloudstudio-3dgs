@@ -31,15 +31,26 @@ set MSSdk=1
 rem Some localized MSVC installs ignore VSLANG. Make torch's compiler probe
 rem decode non-ASCII banners lossily while preserving the ASCII version number.
 set PYTHONPATH=%ROOT%\train\build_compat;%PYTHONPATH%
-rem Compile only for this GPU arch (RTX 5070 = Blackwell sm_120). This is the
-rem difference between a ~10 min build and a >60 min all-arch build.
+rem Compile only modules/channels used by the S1 RGB 3DGUT+MCMC trainer.
+set BUILD_EXPERIMENTAL=0
+set BUILD_3DGUT=1
+set BUILD_ADAM=1
+set BUILD_RELOC=1
+set NUM_CHANNELS=3,4
+rem Compile only for this GPU arch (RTX 5070 = Blackwell sm_120).
 set TORCH_CUDA_ARCH_LIST=12.0
-set MAX_JOBS=%NUMBER_OF_PROCESSORS%
+set MAX_JOBS=2
 
 cd /d "%ROOT%\external\gsplat"
 echo === building gsplat (CUDA, sm_120 only) ===
-pip install -e . --no-build-isolation --disable-pip-version-check
+python setup.py build_ext --inplace
 if errorlevel 1 (echo GSPLAT_BUILD_FAILED & exit /b 1)
+
+rem Install metadata without rebuilding inside a disposable pip temp directory.
+set BUILD_NO_CUDA=1
+pip install -e . --no-build-isolation --disable-pip-version-check
+if errorlevel 1 (echo GSPLAT_INSTALL_FAILED & exit /b 1)
+set BUILD_NO_CUDA=0
 
 echo === installing curated example deps (do NOT use examples\requirements.txt: it pins torch==2.9.1) ===
 pip install viser nerfview pycolmap torchmetrics tyro pyyaml tensorboard imageio[ffmpeg] opencv-python-headless scipy scikit-learn matplotlib tqdm piexif splines tensorly laspy Pillow --disable-pip-version-check

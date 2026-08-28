@@ -80,17 +80,28 @@ class GoldenEvaluationTests(unittest.TestCase):
                 if with_range:
                     raise AssertionError("fixture does not contain depth")
 
+        class GeometryTree:
+            @staticmethod
+            def query(centers, *, k, workers):
+                del k, workers
+                return np.full(len(centers), 0.4), np.zeros(len(centers), dtype=int)
+
         backend = Backend()
+        params = {
+            "means": torch.zeros((1, 3)),
+            "opacities": torch.zeros(1),
+        }
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             report = evaluate_golden_views(
                 backend=backend,
-                params=None,
+                params=params,
                 dataset=Dataset(),
                 split_manifest=_split_manifest(),
                 completed_steps=10,
                 background_rgb=(1.0, 1.0, 1.0),
                 artifact_output_dir=root,
+                geometry_tree=GeometryTree(),
             )
             for frame in report["frames"]:
                 for key in ("rendered_path", "reference_path", "mask_path"):
@@ -99,6 +110,10 @@ class GoldenEvaluationTests(unittest.TestCase):
         self.assertEqual([frame["image_id"] for frame in report["frames"]], report["image_ids"])
         self.assertGreater(float(report["summary"]["psnr_db_mean"]), 20.0)
         self.assertEqual(backend.backgrounds, [(1.0, 1.0, 1.0)] * 2)
+        self.assertEqual(report["summary"]["floater_count"], 1)
+        signed = dict(report)
+        signature = signed.pop("golden_evaluation_sha256")
+        self.assertEqual(signature, hashlib.sha256(canonical_json_bytes(signed)).hexdigest())
         self.assertTrue(is_golden_improvement(report, None, min_psnr_improvement_db=0.001))
         self.assertFalse(is_golden_improvement(report, report, min_psnr_improvement_db=0.001))
 
@@ -434,6 +449,45 @@ class GoldenEvaluationTests(unittest.TestCase):
 
         accepted = signed_record(1000, 20.0, 4.9)
         rejected = signed_record(2000, 20.2, 5.1)
+        history = {
+            "schema_version": 1,
+            "configuration": config.to_dict(),
+            "history": [accepted, rejected],
+            "best": accepted,
+        }
+        history["golden_history_sha256"] = hashlib.sha256(
+            canonical_json_bytes(history)
+        ).hexdigest()
+        self.assertEqual(
+            verify_golden_history(history),
+            history["golden_history_sha256"],
+        )
+
+    def test_signed_history_replays_floater_budget_selection(self) -> None:
+        config = GoldenEvaluationConfig(max_floater_count=1000)
+
+        def signed_record(step: int, psnr: float, floaters: int) -> dict:
+            record = {
+                "schema_version": 1,
+                "algorithm_version": "golden_validation_v3",
+                "evaluation_kind": "golden",
+                "completed_steps": step,
+                "split_manifest_sha256": "split-sha",
+                "image_ids": ["golden"],
+                "frames": [{"image_id": "golden"}],
+                "summary": {
+                    "selection_metric": "masked_rgb_psnr_db_mean",
+                    "psnr_db_mean": psnr,
+                    "floater_count": floaters,
+                },
+            }
+            record["golden_evaluation_sha256"] = hashlib.sha256(
+                canonical_json_bytes(record)
+            ).hexdigest()
+            return record
+
+        accepted = signed_record(1000, 20.0, 900)
+        rejected = signed_record(2000, 20.2, 1100)
         history = {
             "schema_version": 1,
             "configuration": config.to_dict(),

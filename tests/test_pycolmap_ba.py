@@ -19,6 +19,10 @@ from cloudstudio_3dgs.ba.pycolmap_adapter import (
     run_independent_pose_bundle_adjustment,
 )
 from cloudstudio_3dgs.ba.report import build_ba_report
+from cloudstudio_3dgs.ba.single_focal_kb4 import (
+    enforce_single_focal_kb4,
+    refine_shared_single_focal_kb4_intrinsics,
+)
 from cloudstudio_3dgs.data.manifest import canonical_json_bytes
 from tools import run_rig_ba
 
@@ -392,6 +396,31 @@ class PycolmapRigBaTests(unittest.TestCase):
                 reconstruction,
                 position_priors_by_image_id=position_priors,
                 position_prior_stddev_xyz_m=(0.03, 0.0, 0.06),
+            )
+
+    def test_shared_single_focal_kb4_refinement_recovers_focal_constraint(self) -> None:
+        reconstruction, _dataset = synthetic_problem()
+        for camera in reconstruction.cameras.values():
+            camera.params = np.asarray(
+                [760.0, 840.0, 407.0, 394.0, 0.01, -0.005, 0.001, 0.0],
+                dtype=np.float64,
+            )
+
+        enforced = enforce_single_focal_kb4(reconstruction, focal_source="mean")
+        summary = refine_shared_single_focal_kb4_intrinsics(
+            reconstruction,
+            max_nfev=80,
+        )
+
+        self.assertEqual(set(enforced), {1, 2})
+        self.assertEqual(set(summary["cameras"]), {"1", "2"})
+        for camera in reconstruction.cameras.values():
+            self.assertAlmostEqual(float(camera.params[0]), float(camera.params[1]), places=12)
+            self.assertLess(abs(float(camera.params[0]) - 800.0), 10.0)
+        for camera_summary in summary["cameras"].values():
+            self.assertLess(
+                camera_summary["component_rmse_px_after"],
+                camera_summary["component_rmse_px_before"],
             )
 
 

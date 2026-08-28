@@ -20,6 +20,11 @@ from cloudstudio_3dgs.ba.pycolmap_adapter import (
     reconstruction_snapshot,
     run_independent_pose_bundle_adjustment,
 )
+from cloudstudio_3dgs.ba.single_focal_kb4 import (
+    enforce_single_focal_kb4,
+    refine_shared_single_focal_kb4_intrinsics,
+)
+from cloudstudio_3dgs.ba.runtime_lock import verify_signed_runtime_manifest
 from cloudstudio_3dgs.data.manifest import canonical_json_bytes
 from cloudstudio_3dgs.data.mask_manifest import verify_dataset_manifest
 from cloudstudio_3dgs.geometry.rig import distribution, rotation_error_rad
@@ -77,11 +82,24 @@ def main() -> int:
     parser.add_argument("--pose-iterations", type=int, default=150)
     parser.add_argument("--full-iterations", type=int, default=250)
     parser.add_argument(
+        "--intrinsic-mode",
+        choices=("single_focal_kb4", "pycolmap_fx_fy"),
+        default="single_focal_kb4",
+    )
+    parser.add_argument("--intrinsic-outer-iterations", type=int, default=8)
+    parser.add_argument("--intrinsic-max-nfev", type=int, default=50)
+    parser.add_argument("--outer-pose-iterations", type=int, default=50)
+    parser.add_argument("--intrinsic-convergence-tol", type=float, default=1e-7)
+    parser.add_argument("--outer-relative-cost-tol", type=float, default=1e-5)
+    parser.add_argument("--pose-function-tolerance", type=float, default=1e-7)
+    parser.add_argument("--pose-parameter-tolerance", type=float, default=1e-8)
+    parser.add_argument(
         "--skip-intrinsics",
         action="store_true",
         help="publish the converged pose-and-points stage without intrinsic refinement",
     )
     parser.add_argument("--mipmap-summary", type=Path)
+    parser.add_argument("--triangulation-runtime-manifest", type=Path)
     args = parser.parse_args()
 
     if not args.model.is_dir():
@@ -97,6 +115,23 @@ def main() -> int:
 
     dataset = json.loads(args.manifest.read_text(encoding="utf-8"))
     dataset_sha = verify_dataset_manifest(dataset)
+    input_model_sha = _directory_sha256(args.model)
+    triangulation_identity = None
+    if args.triangulation_runtime_manifest is not None:
+        triangulation = json.loads(
+            args.triangulation_runtime_manifest.read_text(encoding="utf-8")
+        )
+        triangulation_sha = verify_signed_runtime_manifest(
+            triangulation, "triangulation_manifest_sha256"
+        )
+        if triangulation.get("output", {}).get("sfm_model_sha256") != input_model_sha:
+            raise ValueError("triangulation runtime manifest does not bind the input model")
+        triangulation_identity = {
+            "triangulation_manifest_sha256": triangulation_sha,
+            "feature_runtime_manifest_sha256": triangulation.get("inputs", {}).get(
+                "feature_runtime_manifest_sha256"
+            ),
+        }
     import pycolmap
 
     reconstruction = pycolmap.Reconstruction(args.model)
@@ -151,6 +186,13 @@ def main() -> int:
         args.position_sigma_z,
     )
     summaries = []
+    focal_constraint = None
+    if not args.skip_intrinsics and args.intrinsic_mode == "single_focal_kb4":
+        focal_constraint = enforce_single_focal_kb4(
+            reconstruction,
+            image_ids=selected_ids,
+            focal_source="fx",
+        )
     pose_summary = run_independent_pose_bundle_adjustment(
         reconstruction,
         image_ids=selected_ids,
@@ -158,6 +200,8 @@ def main() -> int:
         position_prior_stddev_xyz_m=sigma,
         refine_intrinsics=False,
         max_num_iterations=args.pose_iterations,
+        function_tolerance=args.pose_function_tolerance,
+        parameter_tolerance=args.pose_parameter_tolerance,
     )
     summaries.append(
         {
@@ -166,7 +210,13 @@ def main() -> int:
             "brief_report": pose_summary.brief_report(),
         }
     )
-    if pose_summary.is_solution_usable() and not args.skip_intrinsics:
+    intrinsic_history: list[dict[str, Any]] = []
+    intrinsic_outer_converged = args.skip_intrinsics
+    if (
+        pose_summary.is_solution_usable()
+        and not args.skip_intrinsics
+        and args.intrinsic_mode == "pycolmap_fx_fy"
+    ):
         full_summary = run_independent_pose_bundle_adjustment(
             reconstruction,
             image_ids=selected_ids,
@@ -174,6 +224,8 @@ def main() -> int:
             position_prior_stddev_xyz_m=sigma,
             refine_intrinsics=True,
             max_num_iterations=args.full_iterations,
+            function_tolerance=args.pose_function_tolerance,
+            parameter_tolerance=args.pose_parameter_tolerance,
         )
         summaries.append(
             {
@@ -182,12 +234,82 @@ def main() -> int:
                 "brief_report": full_summary.brief_report(),
             }
         )
+        intrinsic_outer_converged = "Termination: CONVERGENCE" in full_summary.brief_report()
+    elif pose_summary.is_solution_usable() and not args.skip_intrinsics:
+        if args.intrinsic_outer_iterations <= 0:
+            raise ValueError("intrinsic_outer_iterations must be positive")
+        if args.intrinsic_convergence_tol <= 0.0:
+            raise ValueError("intrinsic_convergence_tol must be positive")
+        if args.outer_relative_cost_tol <= 0.0:
+            raise ValueError("outer_relative_cost_tol must be positive")
+        previous_outer_cost = None
+        for outer_iteration in range(1, args.intrinsic_outer_iterations + 1):
+            intrinsic_summary = refine_shared_single_focal_kb4_intrinsics(
+                reconstruction,
+                image_ids=selected_ids,
+                max_nfev=args.intrinsic_max_nfev,
+            )
+            outer_pose_summary = run_independent_pose_bundle_adjustment(
+                reconstruction,
+                image_ids=selected_ids,
+                position_priors_by_image_id=position_priors,
+                position_prior_stddev_xyz_m=sigma,
+                refine_intrinsics=False,
+                max_num_iterations=args.outer_pose_iterations,
+                function_tolerance=args.pose_function_tolerance,
+                parameter_tolerance=args.pose_parameter_tolerance,
+            )
+            outer_cost = float(outer_pose_summary.ceres_summary.final_cost)
+            relative_cost_improvement = (
+                None
+                if previous_outer_cost is None
+                else max(previous_outer_cost - outer_cost, 0.0)
+                / max(abs(previous_outer_cost), 1e-12)
+            )
+            record = {
+                "outer_iteration": outer_iteration,
+                "intrinsics": intrinsic_summary,
+                "pose_points_is_solution_usable": bool(
+                    outer_pose_summary.is_solution_usable()
+                ),
+                "pose_points_brief_report": outer_pose_summary.brief_report(),
+                "pose_points_final_cost": outer_cost,
+                "relative_cost_improvement": relative_cost_improvement,
+            }
+            intrinsic_history.append(record)
+            summaries.append(
+                {
+                    "stage": f"single_focal_kb4_outer_{outer_iteration}",
+                    "is_solution_usable": bool(outer_pose_summary.is_solution_usable()),
+                    "brief_report": outer_pose_summary.brief_report(),
+                    "max_scaled_parameter_step": intrinsic_summary[
+                        "max_scaled_parameter_step"
+                    ],
+                    "relative_cost_improvement": relative_cost_improvement,
+                }
+            )
+            if not outer_pose_summary.is_solution_usable():
+                break
+            if (
+                intrinsic_summary["max_scaled_parameter_step"]
+                <= args.intrinsic_convergence_tol
+                and relative_cost_improvement is not None
+                and relative_cost_improvement <= args.outer_relative_cost_tol
+                and "Termination: CONVERGENCE"
+                in outer_pose_summary.brief_report()
+            ):
+                intrinsic_outer_converged = True
+                break
+            previous_outer_cost = outer_cost
     candidate_dir = args.output / "candidate_model"
     candidate_dir.mkdir()
     reconstruction.write(candidate_dir)
     solver_usable = all(item["is_solution_usable"] for item in summaries)
-    solver_converged = all(
-        "Termination: CONVERGENCE" in item["brief_report"] for item in summaries
+    solver_converged = (
+        all(item["is_solution_usable"] for item in summaries)
+        and "Termination: CONVERGENCE" in summaries[0]["brief_report"]
+        and intrinsic_outer_converged
+        and "Termination: CONVERGENCE" in summaries[-1]["brief_report"]
     )
     after = reconstruction_snapshot(
         reconstruction,
@@ -253,9 +375,10 @@ def main() -> int:
 
     report: dict[str, Any] = {
         "schema_version": 1,
-        "algorithm_version": "independent_pos_prior_shared_kb4_at_v1",
+        "algorithm_version": "independent_pos_prior_shared_single_focal_kb4_at_v2",
         "dataset_manifest_sha256": dataset_sha,
         "input_model_sha256": before["model_sha256"],
+        "triangulation_identity": triangulation_identity,
         "candidate_model_sha256": after["model_sha256"],
         "counts": {
             "images": reconstruction.num_reg_images(),
@@ -267,6 +390,17 @@ def main() -> int:
         "solver_usable": solver_usable,
         "solver_converged": solver_converged,
         "intrinsics_refined": not args.skip_intrinsics,
+        "intrinsic_mode": args.intrinsic_mode,
+        "single_focal_constraint": focal_constraint,
+        "intrinsic_outer_converged": intrinsic_outer_converged,
+        "intrinsic_history": intrinsic_history,
+        "convergence_policy": {
+            "pose_function_tolerance": args.pose_function_tolerance,
+            "pose_parameter_tolerance": args.pose_parameter_tolerance,
+            "intrinsic_scaled_step_tolerance": args.intrinsic_convergence_tol,
+            "outer_relative_cost_tolerance": args.outer_relative_cost_tol,
+            "requires_last_pose_convergence": True,
+        },
         "reprojection_error_px": {
             "before": _snapshot_distribution(before),
             "after": _snapshot_distribution(after),
@@ -300,7 +434,7 @@ def main() -> int:
         f"solver_usable={solver_usable}, reprojection_p50="
         f"{report['reprojection_error_px']['after']['p50']:.6f}px -> {args.output}"
     )
-    return 0 if solver_usable else 2
+    return 0 if solver_usable and solver_converged else 2
 
 
 if __name__ == "__main__":

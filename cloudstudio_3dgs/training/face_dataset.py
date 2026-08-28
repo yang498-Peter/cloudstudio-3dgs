@@ -38,6 +38,10 @@ from PIL import Image
 
 from cloudstudio_3dgs.data.depth_cache import load_sparse_depth
 from cloudstudio_3dgs.data.manifest import canonical_json_bytes
+from cloudstudio_3dgs.data.mono_depth import (
+    sample_bilinear_at_source_pixels,
+    verify_mono_depth_manifest,
+)
 from cloudstudio_3dgs.geometry.fisheye_faces import FaceSpec
 from cloudstudio_3dgs.training.dataset import TrainingSample
 
@@ -134,7 +138,23 @@ class FaceCacheDataset:
         *,
         verify_artifacts: bool = True,
         dataset_manifest_path: Path | None = None,
+        tile_views: list[dict[str, Any]] | None = None,
+        renderer_mask_manifest_path: Path | None = None,
+        mono_depth_manifest_path: Path | None = None,
+        mono_depth_root: Path | None = None,
+        face_lidar_geometry_manifest_path: Path | None = None,
+        face_lidar_geometry_root: Path | None = None,
     ) -> None:
+        if (mono_depth_manifest_path is None) != (mono_depth_root is None):
+            raise ValueError(
+                "mono_depth_manifest_path and mono_depth_root must be provided together"
+            )
+        if (face_lidar_geometry_manifest_path is None) != (
+            face_lidar_geometry_root is None
+        ):
+            raise ValueError(
+                "face_lidar_geometry_manifest_path and root must be provided together"
+            )
         face_manifest_path = Path(face_manifest_path)
         self.manifest = json.loads(face_manifest_path.read_text(encoding="utf-8"))
         self.face_manifest_sha256 = verify_face_manifest(self.manifest)
@@ -169,6 +189,128 @@ class FaceCacheDataset:
         # depth_to_range_scale is pure face geometry: cache one float32 map per
         # (camera_id, face_id) for the whole process lifetime.
         self._range_scale_cache: dict[tuple[str, str], np.ndarray] = {}
+        self.renderer_mask_manifest = None
+        self.renderer_mask_manifest_sha256 = None
+        self._renderer_mask_by_face: dict[tuple[str, str], dict[str, Any]] = {}
+        if renderer_mask_manifest_path is not None:
+            # Local import avoids the module cycle: renderer_masks reuses the
+            # Face4 manifest verifier from this module.
+            from cloudstudio_3dgs.data.renderer_masks import (
+                verify_renderer_mask_manifest,
+            )
+
+            self.renderer_mask_manifest = json.loads(
+                Path(renderer_mask_manifest_path).read_text(encoding="utf-8")
+            )
+            self.renderer_mask_manifest_sha256 = verify_renderer_mask_manifest(
+                self.renderer_mask_manifest
+            )
+            if (
+                self.renderer_mask_manifest.get("source_face_manifest_sha256")
+                != self.face_manifest_sha256
+            ):
+                raise ValueError(
+                    "renderer mask manifest is bound to a different Face4 cache"
+                )
+            if self.renderer_mask_manifest.get("split") != self.manifest.get("split"):
+                raise ValueError("renderer mask and Face4 manifests use different splits")
+            self._renderer_mask_by_face = {
+                (str(record["image_id"]), str(record["face_id"])): record
+                for record in self.renderer_mask_manifest.get("masks", [])
+            }
+            if len(self._renderer_mask_by_face) != len(
+                self.renderer_mask_manifest.get("masks", [])
+            ):
+                raise ValueError("renderer mask manifest contains duplicate samples")
+        self.mono_depth_manifest = None
+        self.mono_depth_manifest_sha256 = None
+        self.mono_depth_root = (
+            None if mono_depth_root is None else Path(mono_depth_root)
+        )
+        self._mono_by_sample: dict[str, dict[str, Any]] = {}
+        if mono_depth_manifest_path is not None:
+            self.mono_depth_manifest = json.loads(
+                Path(mono_depth_manifest_path).read_text(encoding="utf-8")
+            )
+            self.mono_depth_manifest_sha256 = verify_mono_depth_manifest(
+                self.mono_depth_manifest
+            )
+            if self.mono_depth_manifest.get("source_face_manifest_sha256") != self.face_manifest_sha256:
+                raise ValueError("DA2 manifest is bound to a different Face4 cache")
+            if self.mono_depth_manifest.get("split") != self.manifest.get("split"):
+                raise ValueError("DA2 and Face4 manifests use different splits")
+            if self.mono_depth_manifest.get("complete_face_cache") is not True:
+                raise ValueError("DA2 manifest is incomplete")
+            self._mono_by_sample = {
+                str(record["sample_id"]): record
+                for record in self.mono_depth_manifest.get("records", [])
+            }
+            if len(self._mono_by_sample) != len(
+                self.mono_depth_manifest.get("records", [])
+            ):
+                raise ValueError("DA2 manifest contains duplicate sample IDs")
+        self.face_lidar_geometry_manifest_sha256 = None
+        self.face_lidar_geometry_root = (
+            None
+            if face_lidar_geometry_root is None
+            else Path(face_lidar_geometry_root)
+        )
+        self._lidar_geometry_by_sample: dict[str, dict[str, Any]] = {}
+        if face_lidar_geometry_manifest_path is not None:
+            from cloudstudio_3dgs.data.face_lidar_geometry import (
+                verify_face_lidar_geometry_manifest,
+            )
+
+            lidar_geometry = json.loads(
+                Path(face_lidar_geometry_manifest_path).read_text(encoding="utf-8")
+            )
+            self.face_lidar_geometry_manifest_sha256 = (
+                verify_face_lidar_geometry_manifest(lidar_geometry)
+            )
+            if (
+                lidar_geometry.get("source_face_manifest_sha256")
+                != self.face_manifest_sha256
+            ):
+                raise ValueError(
+                    "Face4 LiDAR geometry is bound to a different RGB cache"
+                )
+            if lidar_geometry.get("split") != self.manifest.get("split"):
+                raise ValueError("Face4 LiDAR geometry and RGB cache use different splits")
+            self._lidar_geometry_by_sample = {
+                str(record["sample_id"]): record
+                for record in lidar_geometry["records"]
+            }
+            assert self.face_lidar_geometry_root is not None
+            missing_geometry: list[str] = []
+            for record in lidar_geometry["records"]:
+                relative = record.get("path")
+                if relative is None:
+                    continue
+                artifact = _safe_artifact(
+                    self.face_lidar_geometry_root, str(relative)
+                )
+                if not artifact.is_file():
+                    missing_geometry.append(str(record["sample_id"]))
+            if missing_geometry:
+                raise FileNotFoundError(
+                    "Face4 LiDAR geometry has missing independent artifacts: "
+                    f"{missing_geometry[:4]}"
+                )
+
+        tile_by_sample: dict[str, dict[str, int]] | None = None
+        if tile_views is not None:
+            tile_by_sample = {}
+            for raw in tile_views:
+                sample_id = str(raw.get("sample_id", ""))
+                if not sample_id or sample_id in tile_by_sample:
+                    raise ValueError("Tile views contain missing or duplicate sample IDs")
+                crop = {
+                    key: int(raw[key])
+                    for key in ("x", "y", "width", "height")
+                }
+                if min(crop.values()) < 0 or crop["width"] <= 0 or crop["height"] <= 0:
+                    raise ValueError(f"Tile crop is invalid for {sample_id}")
+                tile_by_sample[sample_id] = crop
 
         self._faces: dict[tuple[str, str], FaceSpec] = {}
         for camera_id, camera_entry in self.manifest["cameras"].items():
@@ -180,7 +322,10 @@ class FaceCacheDataset:
                 self._faces[key] = spec
 
         self.filtered_empty_mask_count = 0
-        self._samples: list[tuple[dict[str, Any], dict[str, Any]]] = []
+        self._samples: list[
+            tuple[dict[str, Any], dict[str, Any], dict[str, int] | None]
+        ] = []
+        accepted_tile_samples: set[str] = set()
         for image_record in self.manifest["images"]:
             camera_id = str(image_record["camera_id"])
             c2w = np.asarray(image_record["c2w"], dtype=np.float64)
@@ -190,15 +335,78 @@ class FaceCacheDataset:
                 )
             for face_entry in image_record["faces"]:
                 face_id = str(face_entry["face_id"])
+                # Tile planning and Trainer sampling use the public
+                # ``base::face`` identity.  DA2 cache filenames deliberately
+                # retain ``base__face`` below; the two namespaces must not be
+                # mixed or every real Tile view is rejected as unknown.
+                manifest_sample_id = (
+                    f"{image_record['image_id']}{SAMPLE_ID_SEPARATOR}{face_id}"
+                )
+                if tile_by_sample is not None and manifest_sample_id not in tile_by_sample:
+                    continue
                 if (camera_id, face_id) not in self._faces:
                     raise ValueError(
                         f"face entry {face_id!r} references an unplanned face "
                         f"for camera {camera_id!r}"
                     )
+                renderer_record = self._renderer_mask_by_face.get(
+                    (str(image_record["image_id"]), face_id)
+                )
+                if self.renderer_mask_manifest is not None:
+                    if renderer_record is None:
+                        raise ValueError(
+                            f"renderer mask manifest does not cover {manifest_sample_id}"
+                        )
+                    if (
+                        str(renderer_record["mask_path"])
+                        != str(face_entry["mask_path"])
+                        or str(renderer_record["mask_sha256"])
+                        != str(face_entry["mask_sha256"])
+                        or int(renderer_record["keep_pixels"])
+                        != int(face_entry.get("mask_true_pixels", -1))
+                    ):
+                        raise ValueError(
+                            f"renderer mask record differs from Face4 for {manifest_sample_id}"
+                        )
                 if int(face_entry.get("mask_true_pixels", -1)) == 0:
                     self.filtered_empty_mask_count += 1
                     continue
-                self._samples.append((image_record, face_entry))
+                crop = None if tile_by_sample is None else tile_by_sample[manifest_sample_id]
+                if crop is not None:
+                    face = self._faces[(camera_id, face_id)]
+                    if (
+                        crop["x"] + crop["width"] > face.width
+                        or crop["y"] + crop["height"] > face.height
+                    ):
+                        raise ValueError(f"Tile crop exceeds Face4 bounds for {manifest_sample_id}")
+                    accepted_tile_samples.add(manifest_sample_id)
+                self._samples.append((image_record, face_entry, crop))
+        if tile_by_sample is not None and accepted_tile_samples != set(tile_by_sample):
+            missing = sorted(set(tile_by_sample) - accepted_tile_samples)
+            raise ValueError(f"Tile views reference unknown Face4 samples: {missing[:4]}")
+        if self.mono_depth_manifest is not None:
+            selected_mono_ids = {
+                f"{record['image_id']}__{entry['face_id']}"
+                for record, entry, _crop in self._samples
+            }
+            missing_mono = sorted(selected_mono_ids - set(self._mono_by_sample))
+            if missing_mono:
+                raise ValueError(
+                    f"DA2 manifest does not cover selected Tile views: {missing_mono[:4]}"
+                )
+        if self._lidar_geometry_by_sample:
+            selected_ids = {
+                f"{record['image_id']}{SAMPLE_ID_SEPARATOR}{entry['face_id']}"
+                for record, entry, _crop in self._samples
+            }
+            missing_lidar = sorted(
+                selected_ids - set(self._lidar_geometry_by_sample)
+            )
+            if missing_lidar:
+                raise ValueError(
+                    "Face4 LiDAR geometry does not cover selected views: "
+                    f"{missing_lidar[:4]}"
+                )
         if not self._samples:
             raise ValueError("face cache contains no usable face samples")
 
@@ -209,7 +417,7 @@ class FaceCacheDataset:
         """All face-sample IDs (``base::face``) in manifest (split) order."""
         return [
             f"{record['image_id']}{SAMPLE_ID_SEPARATOR}{entry['face_id']}"
-            for record, entry in self._samples
+            for record, entry, _crop in self._samples
         ]
 
     @property
@@ -221,7 +429,7 @@ class FaceCacheDataset:
         """
         seen: set[str] = set()
         ordered: list[str] = []
-        for record, _entry in self._samples:
+        for record, _entry, _crop in self._samples:
             image_id = str(record["image_id"])
             if image_id not in seen:
                 seen.add(image_id)
@@ -233,7 +441,7 @@ class FaceCacheDataset:
         """Physical camera for each base image ID (exposure anchor groups)."""
         return {
             str(record["image_id"]): str(record["camera_id"])
-            for record, _entry in self._samples
+            for record, _entry, _crop in self._samples
         }
 
     @staticmethod
@@ -250,6 +458,12 @@ class FaceCacheDataset:
             "fov_deg": self.manifest.get("fov_deg"),
             "split": self.manifest.get("split"),
             "min_face_weight": self.manifest.get("min_face_weight"),
+            "mono_depth_manifest_sha256": self.mono_depth_manifest_sha256,
+            "renderer_mask_manifest_sha256": self.renderer_mask_manifest_sha256,
+            "face_lidar_geometry_manifest_sha256": (
+                self.face_lidar_geometry_manifest_sha256
+            ),
+            "tile_cropped": any(crop is not None for _, _, crop in self._samples),
         }
 
     @property
@@ -344,16 +558,18 @@ class FaceCacheDataset:
         return cached
 
     def __getitem__(self, index: int) -> TrainingSample:
-        image_record, face_entry = self._samples[index]
+        image_record, face_entry, crop = self._samples[index]
         base_image_id = str(image_record["image_id"])
         camera_id = str(image_record["camera_id"])
         face_id = str(face_entry["face_id"])
         face = self._faces[(camera_id, face_id)]
 
         rgb_path = _safe_artifact(self.cache_root, str(face_entry["rgb_path"]))
-        mask_path = _safe_artifact(self.cache_root, str(face_entry["mask_path"]))
+        renderer_record = self._renderer_mask_by_face.get((base_image_id, face_id))
+        mask_entry = face_entry if renderer_record is None else renderer_record
+        mask_path = _safe_artifact(self.cache_root, str(mask_entry["mask_path"]))
         self._verify(rgb_path, str(face_entry["rgb_sha256"]), "face rgb")
-        self._verify(mask_path, str(face_entry["mask_sha256"]), "face mask")
+        self._verify(mask_path, str(mask_entry["mask_sha256"]), "renderer mask")
 
         with Image.open(rgb_path) as source:
             image = np.asarray(source.convert("RGB"), dtype=np.uint8)
@@ -374,12 +590,26 @@ class FaceCacheDataset:
         depth_confidence = None
         depth_mask = None
         depth_cache_path = None
-        if face_entry.get("depth_path"):
+        lidar_record = self._lidar_geometry_by_sample.get(
+            f"{base_image_id}{SAMPLE_ID_SEPARATOR}{face_id}"
+        )
+        depth_entry = face_entry if lidar_record is None else lidar_record
+        depth_root = (
+            self.cache_root
+            if lidar_record is None
+            else self.face_lidar_geometry_root
+        )
+        if depth_entry.get("path") or depth_entry.get("depth_path"):
+            relative_depth_path = depth_entry.get("path", depth_entry.get("depth_path"))
+            expected_depth_sha = depth_entry.get(
+                "sha256", depth_entry.get("depth_sha256")
+            )
+            assert depth_root is not None
             depth_cache_path = _safe_artifact(
-                self.cache_root, str(face_entry["depth_path"])
+                depth_root, str(relative_depth_path)
             )
             self._verify(
-                depth_cache_path, str(face_entry["depth_sha256"]), "face depth"
+                depth_cache_path, str(expected_depth_sha), "face depth"
             )
             sparse = load_sparse_depth(depth_cache_path)
             if tuple(sparse.shape) != expected_shape:
@@ -389,10 +619,72 @@ class FaceCacheDataset:
             depth_range, depth_confidence, depth_valid = sparse.to_dense()
             depth_mask = rgb_mask & depth_valid
 
+        mono_depth_range = None
+        mono_depth_mask = None
+        mono_depth_cache_path = None
+        mono_record = self._mono_by_sample.get(f"{base_image_id}__{face_id}")
+        if mono_record is not None and bool(mono_record.get("alignment", {}).get("valid")):
+            assert self.mono_depth_root is not None
+            mono_depth_cache_path = _safe_artifact(
+                self.mono_depth_root, str(mono_record["path"])
+            )
+            self._verify(
+                mono_depth_cache_path,
+                str(mono_record["sha256"]),
+                "DA2 relative depth",
+            )
+            with np.load(mono_depth_cache_path, allow_pickle=False) as payload:
+                if "relative_depth" not in payload:
+                    raise ValueError("DA2 cache has no relative_depth array")
+                relative = np.asarray(payload["relative_depth"], dtype=np.float32)
+            yy, xx = np.meshgrid(
+                np.arange(face.height, dtype=np.float64),
+                np.arange(face.width, dtype=np.float64),
+                indexing="ij",
+            )
+            relative_full = sample_bilinear_at_source_pixels(
+                relative,
+                xx,
+                yy,
+                source_shape=(face.height, face.width),
+            )
+            alignment = mono_record["alignment"]
+            mono_depth_range = (
+                float(alignment["scale"]) * relative_full
+                + float(alignment["shift"])
+            ).astype(np.float32)
+            mono_depth_mask = (
+                rgb_mask
+                & np.isfinite(mono_depth_range)
+                & (mono_depth_range > 0.0)
+            )
+
         c2w_base = np.asarray(image_record["c2w"], dtype=np.float64)
         face_to_base = np.eye(4, dtype=np.float64)
         face_to_base[:3, :3] = face.R_face
         c2w = (c2w_base @ face_to_base).astype(np.float32)
+
+        K = face.K_face.astype(np.float32).copy()
+        range_scale = self._depth_to_range_scale(camera_id, face)
+        sensor_coords = self._sensor_pixel_coords(camera_id, face)
+        if crop is not None:
+            x = crop["x"]
+            y = crop["y"]
+            right = x + crop["width"]
+            bottom = y + crop["height"]
+            image = np.ascontiguousarray(image[y:bottom, x:right])
+            rgb_mask = np.ascontiguousarray(rgb_mask[y:bottom, x:right])
+            depth_range = None if depth_range is None else np.ascontiguousarray(depth_range[y:bottom, x:right])
+            depth_confidence = None if depth_confidence is None else np.ascontiguousarray(depth_confidence[y:bottom, x:right])
+            depth_mask = None if depth_mask is None else np.ascontiguousarray(depth_mask[y:bottom, x:right])
+            mono_depth_range = None if mono_depth_range is None else np.ascontiguousarray(mono_depth_range[y:bottom, x:right])
+            mono_depth_mask = None if mono_depth_mask is None else np.ascontiguousarray(mono_depth_mask[y:bottom, x:right])
+            range_scale = np.ascontiguousarray(range_scale[y:bottom, x:right])
+            sensor_coords = None if sensor_coords is None else np.ascontiguousarray(sensor_coords[y:bottom, x:right])
+            K[0, 2] -= float(x)
+            K[1, 2] -= float(y)
+        if not np.any(rgb_mask):
+            raise ValueError(f"cropped face {base_image_id}/{face_id} has an empty mask")
 
         return TrainingSample(
             image_id=f"{base_image_id}{SAMPLE_ID_SEPARATOR}{face_id}",
@@ -405,16 +697,19 @@ class FaceCacheDataset:
             depth_mask=depth_mask,
             depth_cache_path=depth_cache_path,
             c2w=c2w,
-            K=face.K_face.astype(np.float32),
+            K=K,
             radial_coeffs=np.zeros(4, dtype=np.float32),
-            width=face.width,
-            height=face.height,
+            width=int(image.shape[1]),
+            height=int(image.shape[0]),
             camera_model="pinhole",
-            depth_to_range_scale=self._depth_to_range_scale(camera_id, face),
-            sensor_pixel_coords=self._sensor_pixel_coords(camera_id, face),
+            depth_to_range_scale=range_scale,
+            sensor_pixel_coords=sensor_coords,
             sensor_resolution=(
                 self._sensor_cameras[camera_id]["resolution"]
                 if camera_id in self._sensor_cameras
                 else None
             ),
+            mono_depth_range_m=mono_depth_range,
+            mono_depth_mask=mono_depth_mask,
+            mono_depth_cache_path=mono_depth_cache_path,
         )

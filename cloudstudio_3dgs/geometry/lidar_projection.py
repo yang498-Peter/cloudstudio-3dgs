@@ -85,6 +85,126 @@ class SparseDepthMap:
         return depth, confidence, valid
 
 
+def project_camera_points_to_face(
+    points_camera: np.ndarray,
+    face: Any,
+    *,
+    source_index: np.ndarray | None = None,
+    supervision_mask: np.ndarray | None = None,
+    config: DepthProjectionConfig = DepthProjectionConfig(),
+) -> SparseDepthMap:
+    """Project exact camera-frame LiDAR points directly into one pinhole face.
+
+    Pixel coordinates are rounded only in the destination Face4 raster.  This
+    deliberately avoids reconstructing rays from an intermediate integer
+    fisheye depth map.  ``source_index`` remains bound to the original LAS
+    point so downstream audits can prove where every retained sample came from.
+    """
+    config.validate()
+    points = np.asarray(points_camera, dtype=np.float64)
+    if points.ndim != 2 or points.shape[1] != 3:
+        raise ValueError("points_camera must have shape [N, 3]")
+    if not np.all(np.isfinite(points)):
+        raise ValueError("points_camera contains non-finite coordinates")
+    if source_index is None:
+        sources = np.arange(len(points), dtype=np.int64)
+    else:
+        sources = np.asarray(source_index, dtype=np.int64)
+        if sources.shape != (len(points),):
+            raise ValueError("source_index must have shape [N]")
+        if np.any(sources < 0):
+            raise ValueError("source_index must identify original nonnegative points")
+
+    width = int(face.width)
+    height = int(face.height)
+    if min(width, height) <= 0:
+        raise ValueError("face dimensions must be positive")
+    if supervision_mask is not None:
+        allowed = np.asarray(supervision_mask, dtype=bool)
+        if allowed.shape != (height, width):
+            raise ValueError("supervision_mask shape does not match face")
+    else:
+        allowed = None
+    if not len(points):
+        return SparseDepthMap(
+            (height, width),
+            np.empty(0, dtype=np.int32),
+            np.empty(0, dtype=np.float32),
+            np.empty(0, dtype=np.float32),
+            np.empty(0, dtype=np.int64),
+            np.empty(0, dtype=np.int32),
+        )
+
+    ranges = np.linalg.norm(points, axis=1)
+    pixels, inside = face.directions_to_pixels(points)
+    finite_pixels = np.isfinite(pixels).all(axis=1)
+    rounded = np.zeros_like(pixels, dtype=np.int64)
+    rounded[finite_pixels] = np.rint(pixels[finite_pixels]).astype(np.int64)
+    valid = inside & finite_pixels & np.isfinite(ranges)
+    valid &= (ranges >= config.min_range_m) & (ranges <= config.max_range_m)
+    valid &= (
+        (rounded[:, 0] >= 0)
+        & (rounded[:, 0] < width)
+        & (rounded[:, 1] >= 0)
+        & (rounded[:, 1] < height)
+    )
+    selected = np.flatnonzero(valid).astype(np.int64)
+    if not len(selected):
+        return SparseDepthMap(
+            (height, width),
+            np.empty(0, dtype=np.int32),
+            np.empty(0, dtype=np.float32),
+            np.empty(0, dtype=np.float32),
+            np.empty(0, dtype=np.int64),
+            np.empty(0, dtype=np.int32),
+        )
+
+    selected_pixels = pixels[selected]
+    selected_xy = rounded[selected]
+    pixel_index = selected_xy[:, 1] * width + selected_xy[:, 0]
+    selected_range = ranges[selected]
+    selected_sources = sources[selected]
+    subpixel_error_squared = np.einsum(
+        "ij,ij->i", selected_pixels - selected_xy, selected_pixels - selected_xy
+    )
+    order = np.lexsort((selected_sources, selected_range, pixel_index))
+    ordered_pixels = pixel_index[order]
+    starts = np.r_[True, ordered_pixels[1:] != ordered_pixels[:-1]]
+    first = np.flatnonzero(starts)
+    support_count = np.diff(np.r_[first, len(order)]).astype(np.int32)
+    chosen = order[first]
+
+    output_pixels = pixel_index[chosen].astype(np.int32)
+    output_ranges = selected_range[chosen].astype(np.float32)
+    output_sources = selected_sources[chosen].astype(np.int64, copy=False)
+    sigma = config.confidence_subpixel_sigma_px
+    spatial_confidence = np.exp(-subpixel_error_squared[chosen] / (2.0 * sigma * sigma))
+    support_confidence = np.minimum(
+        1.0,
+        np.log1p(support_count) / np.log1p(config.confidence_support_points),
+    )
+    output_confidence = (spatial_confidence * support_confidence).astype(np.float32)
+
+    if allowed is not None:
+        allowed_output = allowed[selected_xy[chosen, 1], selected_xy[chosen, 0]]
+        output_pixels = output_pixels[allowed_output]
+        output_ranges = output_ranges[allowed_output]
+        output_confidence = output_confidence[allowed_output]
+        output_sources = output_sources[allowed_output]
+        support_count = support_count[allowed_output]
+
+    result = SparseDepthMap(
+        (height, width),
+        output_pixels,
+        output_ranges,
+        output_confidence,
+        output_sources,
+        support_count,
+    )
+    result.validate()
+    return result
+
+
 def _camera_parameters(camera: dict[str, Any]) -> tuple[dict[str, float], dict[str, float]]:
     distortion = camera.get("distortion", {})
     if distortion.get("camera_model") != "OPENCV_FISHEYE":

@@ -1,28 +1,36 @@
 diff --git a/examples/datasets/colmap.py b/examples/datasets/colmap.py
-index 2e9db27..5d9905d 100644
+index 2e9db27..f3630a9 100644
 --- a/examples/datasets/colmap.py
 +++ b/examples/datasets/colmap.py
-@@ -127,12 +127,17 @@ class Parser:
-         normalize: bool = False,
-         test_every: int = 8,
+@@ -129,2 +129,6 @@ class Parser:
          load_exposure: bool = False,
 +        # S1 patch (2026-07-02): keep raw fisheye images for 3DGUT (--with_ut);
 +        # loads circular valid-region masks from <data_dir>/masks/ instead of
 +        # undistorting to pinhole.
 +        keep_distortion: bool = False,
      ):
-         self.data_dir = data_dir
-         self.factor = factor
-         self.normalize = normalize
-         self.test_every = test_every
+@@ -135,2 +139,3 @@ class Parser:
          self.load_exposure = load_exposure
 +        self.keep_distortion = keep_distortion
-
-         colmap_dir = os.path.join(data_dir, "sparse/0/")
-         if not os.path.exists(colmap_dir):
-@@ -372,6 +377,22 @@ class Parser:
-             if len(params) == 0:
-                 continue  # no distortion
+ 
+@@ -225,5 +230,13 @@ class Parser:
+         image_dir = os.path.join(data_dir, "images" + image_dir_suffix)
+-        for d in [image_dir, colmap_image_dir]:
+-            if not os.path.exists(d):
+-                raise ValueError(f"Image folder {d} does not exist.")
++        if not os.path.exists(colmap_image_dir):
++            raise ValueError(f"Image folder {colmap_image_dir} does not exist.")
++        if not os.path.exists(image_dir):
++            if factor <= 1:
++                raise ValueError(f"Image folder {image_dir} does not exist.")
++            # S1 patch (2026-08-20): raw recordings do not ship pre-scaled
++            # images_<factor> folders. Materialize the requested PNG pyramid
++            # directly from images/ so first-run training is self-contained.
++            image_dir = _resize_image_folder(
++                colmap_image_dir, image_dir + "_png", factor=factor
++            )
+ 
+@@ -374,2 +387,18 @@ class Parser:
              camtype = camtype_dict[camera_id]
 +            if self.keep_distortion and camtype == "fisheye":
 +                # S1 patch: skip undistortion — 3DGUT rasterizes the distorted
@@ -41,33 +49,21 @@ index 2e9db27..5d9905d 100644
 +                    print(f"[Parser] keep_distortion: no mask found at {mask_path}")
 +                continue
              assert camera_id in self.Ks_dict, f"Missing K for camera {camera_id}"
-             assert (
-                 camera_id in self.params_dict
-@@ -472,7 +493,7 @@ class Dataset:
-         camtoworlds = self.parser.camtoworlds[index]
-         mask = self.parser.mask_dict[camera_id]
-
+@@ -474,3 +503,3 @@ class Dataset:
+ 
 -        if len(params) > 0:
 +        if len(params) > 0 and not getattr(self.parser, "keep_distortion", False):
              # Images are distorted. Undistort them.
-             mapx, mapy = (
-                 self.parser.mapx_dict[camera_id],
 diff --git a/examples/simple_trainer.py b/examples/simple_trainer.py
 index 7da3f9f..0495708 100644
 --- a/examples/simple_trainer.py
 +++ b/examples/simple_trainer.py
-@@ -444,6 +444,8 @@ class Runner:
-                 normalize=cfg.normalize_world_space,
-                 test_every=cfg.test_every,
+@@ -446,2 +446,4 @@ class Runner:
                  load_exposure=cfg.load_exposure,
 +                # S1 patch (2026-07-02): opt-in raw-fisheye route for 3DGUT
 +                keep_distortion=os.environ.get("S1_KEEP_FISHEYE", "") == "1",
              )
-             self.trainset = Dataset(
-                 self.parser,
-@@ -452,6 +454,29 @@ class Runner:
-                 load_depths=cfg.depth_loss,
-             )
+@@ -454,2 +456,25 @@ class Runner:
              self.valset = Dataset(self.parser, split="val")
 +            if getattr(self.parser, "keep_distortion", False):
 +                # S1 patch: feed fisheye distortion into the UT rasterization
@@ -93,15 +89,48 @@ index 7da3f9f..0495708 100644
 +                    "fisheye cameras routed to UT rasterization"
 +                )
          self.scene_scale = self.parser.scene_scale * 1.1 * cfg.global_scale
-         print("Scene scale:", self.scene_scale)
-
+diff --git a/gsplat/cuda/build.py b/gsplat/cuda/build.py
+index 1a3cbbf..d37e0f8 100644
+--- a/gsplat/cuda/build.py
++++ b/gsplat/cuda/build.py
+@@ -221,2 +221,10 @@ def get_build_parameters():
+ 
++    if sys.platform == "win32":
++        # ParallelBatch forward is not used by the default MixedBatch trainer
++        # and does not link reliably with the Windows CUDA 12.8 toolchain.
++        sources = [
++            s for s in sources
++            if not s.endswith("csrc/RasterizeToPixelsFromWorld3DGSParallelBatchFwd.cu")
++        ]
++
+     extra_ldflags += [] if WITH_SYMBOLS or sys.platform == "win32" else ["-s"]
+diff --git a/gsplat/cuda/csrc/Rasterization.cpp b/gsplat/cuda/csrc/Rasterization.cpp
+index 204e218..ee87270 100644
+--- a/gsplat/cuda/csrc/Rasterization.cpp
++++ b/gsplat/cuda/csrc/Rasterization.cpp
+@@ -961,2 +961,9 @@ RasterizeToPixelsFromWorld3DGSFwdResult rasterize_to_pixels_from_world_3dgs_fwd(
+     } else {
++#if defined(_WIN32)
++        TORCH_CHECK(
++            false,
++            "ParallelBatch 3DGUT rendering is not available in this Windows build; "
++            "use the default MixedBatch renderer"
++        );
++#else
+         // The batch-parallel forward needs a transient per-batch summary
+@@ -1027,2 +1034,3 @@ RasterizeToPixelsFromWorld3DGSFwdResult rasterize_to_pixels_from_world_3dgs_fwd(
+         );
++#endif
+     }
 diff --git a/gsplat/cuda/csrc/RasterizeToPixelsFromWorld3DGSParallelBatchBwd.cu b/gsplat/cuda/csrc/RasterizeToPixelsFromWorld3DGSParallelBatchBwd.cu
-index abbbe6e..f547dfb 100644
+index abbbe6e..1dc30d6 100644
 --- a/gsplat/cuda/csrc/RasterizeToPixelsFromWorld3DGSParallelBatchBwd.cu
 +++ b/gsplat/cuda/csrc/RasterizeToPixelsFromWorld3DGSParallelBatchBwd.cu
-@@ -186,7 +186,15 @@ uint32_t ceil_log2_u64(uint64_t x) {
-     if (x <= 1) {
-         return 0;
+@@ -156,2 +156,3 @@ std::tuple<at::Tensor, at::Tensor, int64_t> compute_batch_csr(
+ 
++#if !defined(_WIN32)
+ static __global__ void emit_round_major_pairs_kernel(
+@@ -188,3 +189,11 @@ uint32_t ceil_log2_u64(uint64_t x) {
      }
 +#if defined(_MSC_VER)
 +    // S1 patch (2026-07-02): __builtin_clzll is a GCC/Clang builtin; MSVC
@@ -113,5 +142,7 @@ index abbbe6e..f547dfb 100644
      return 64u - static_cast<uint32_t>(__builtin_clzll(x - 1));
 +#endif
  }
-
- } // namespace
+@@ -250,2 +259,3 @@ at::Tensor compute_bid_to_slot(
+ }
++#endif
+ 

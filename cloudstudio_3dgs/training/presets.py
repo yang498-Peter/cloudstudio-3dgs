@@ -37,6 +37,7 @@ _REGULARIZATION_ENABLED = {**_REGULARIZATION_DISABLED, "enabled": True}
 _FIXED_SCALE = {
     "mode": "fixed",
     "knn_neighbors": 3,
+    "knn_reduction": "rms",
     "scale_multiplier": 1.0,
     "clamp_min_ratio": 0.25,
     "clamp_max_ratio": 4.0,
@@ -47,6 +48,7 @@ _FIXED_SCALE = {
 _KNN_SCALE = {
     "mode": "knn",
     "knn_neighbors": 3,
+    "knn_reduction": "rms",
     "scale_multiplier": 1.0,
     "clamp_min_ratio": 0.25,
     "clamp_max_ratio": 4.0,

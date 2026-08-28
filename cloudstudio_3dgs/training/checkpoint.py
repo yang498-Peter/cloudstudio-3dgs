@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import math
 import os
+import shutil
 import tempfile
 from pathlib import Path
 from typing import Any
@@ -234,6 +235,36 @@ def save_checkpoint(
             os.fsync(stream.fileno())
         os.replace(temporary, path)
     except BaseException:
+        temporary.unlink(missing_ok=True)
+        raise
+
+
+def retain_checkpoint(source: Path, destination: Path) -> None:
+    """Atomically preserve the exact bytes of an already-written checkpoint."""
+    source = Path(source)
+    destination = Path(destination)
+    if not source.is_file():
+        raise FileNotFoundError(f"checkpoint source is missing: {source}")
+    if destination.exists():
+        raise FileExistsError(f"refusing to replace retained checkpoint: {destination}")
+    if source.resolve() == destination.resolve():
+        raise ValueError("retained checkpoint destination must differ from source")
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    descriptor, name = tempfile.mkstemp(
+        prefix=f".{destination.name}.", suffix=".tmp", dir=destination.parent
+    )
+    temporary = Path(name)
+    try:
+        with source.open("rb") as input_stream, os.fdopen(descriptor, "wb") as output_stream:
+            shutil.copyfileobj(input_stream, output_stream, length=4 * 1024 * 1024)
+            output_stream.flush()
+            os.fsync(output_stream.fileno())
+        os.replace(temporary, destination)
+    except BaseException:
+        try:
+            os.close(descriptor)
+        except OSError:
+            pass
         temporary.unlink(missing_ok=True)
         raise
 

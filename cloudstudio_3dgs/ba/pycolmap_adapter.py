@@ -441,6 +441,8 @@ def run_independent_pose_bundle_adjustment(
     position_prior_stddev_xyz_m: tuple[float, float, float] = (0.03, 0.03, 0.06),
     refine_intrinsics: bool = False,
     max_num_iterations: int = 200,
+    function_tolerance: float = 1e-7,
+    parameter_tolerance: float = 1e-8,
 ) -> Any:
     """Run POS-prior BA with one independently movable pose per input image.
 
@@ -470,6 +472,8 @@ def run_independent_pose_bundle_adjustment(
         raise ValueError("position_prior_stddev_xyz_m must contain three positive values")
     if max_num_iterations <= 0:
         raise ValueError("max_num_iterations must be positive")
+    if function_tolerance <= 0.0 or parameter_tolerance <= 0.0:
+        raise ValueError("Ceres function and parameter tolerances must be positive")
 
     options = pycolmap.BundleAdjustmentOptions()
     options.refine_rig_from_world = True
@@ -482,6 +486,8 @@ def run_independent_pose_bundle_adjustment(
     options.ceres.loss_function_type = pycolmap.LossFunctionType.HUBER
     options.ceres.loss_function_scale = 2.0
     options.ceres.solver_options.max_num_iterations = int(max_num_iterations)
+    options.ceres.solver_options.function_tolerance = float(function_tolerance)
+    options.ceres.solver_options.parameter_tolerance = float(parameter_tolerance)
 
     config = pycolmap.BundleAdjustmentConfig()
     for image_id in selected_image_ids:

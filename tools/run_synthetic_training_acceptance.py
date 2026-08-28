@@ -282,6 +282,12 @@ def main() -> int:
     )
     parser.add_argument("--steps", type=int, default=80)
     parser.add_argument(
+        "--checkpoint-keep-every",
+        type=int,
+        default=0,
+        help="atomically retain an immutable checkpoint every N completed steps",
+    )
+    parser.add_argument(
         "--full-mcmc",
         action="store_true",
         help=(
@@ -312,6 +318,8 @@ def main() -> int:
         parser.error("--resume-equivalence requires --full-mcmc")
     if args.error_weighted_sampling and not args.full_mcmc:
         parser.error("--error-weighted-sampling requires --full-mcmc")
+    if args.checkpoint_keep_every < 0:
+        parser.error("--checkpoint-keep-every must be non-negative")
     if args.full_mcmc and args.steps < 40:
         parser.error("--full-mcmc requires at least 40 steps to enter a refine window")
     if args.output.exists() and any(args.output.iterdir()):
@@ -381,6 +389,7 @@ def main() -> int:
             require_person_masks=False,
             max_steps=args.steps,
             checkpoint_every=max(1, args.steps // 2),
+            checkpoint_keep_every=args.checkpoint_keep_every,
             factor=1,
             cap_max=64,
             init_scale_m=0.16,
@@ -481,6 +490,7 @@ def main() -> int:
         "peak_vram_bytes": training["peak_vram_bytes"],
         "final_lidar_range_l1_m": training["last_metrics"]["lidar_range_l1_m"],
         "gaussian_count": training["gaussian_count"],
+        "retained_checkpoints": training["retained_checkpoints"],
         "converged": improvement >= 0.20,
     }
     if args.full_mcmc:
