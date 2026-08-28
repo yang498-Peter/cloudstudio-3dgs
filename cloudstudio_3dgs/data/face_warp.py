@@ -292,6 +292,31 @@ def warp_mask_to_face(
     return face_mask, valid
 
 
+def unproject_sparse_depth_pixels(
+    depth_range_m: np.ndarray,
+    valid: np.ndarray,
+    K: np.ndarray,
+    radial_coeffs: Sequence[float],
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Unproject every valid sparse-depth pixel once, for reuse across faces.
+
+    The KB4 inversion is the dominant cost of ``warp_sparse_depth_to_face``
+    and depends only on the pixel set and the camera - not on the face - so a
+    caller warping one image onto N faces can hoist it instead of paying it N
+    times. Returns ``(ys, xs, dirs_cam)`` computed with exactly the pixel
+    predicate the face warp applies.
+    """
+    depth = np.asarray(depth_range_m, dtype=np.float64)
+    valid = np.asarray(valid).astype(bool, copy=False)
+    ys, xs = np.nonzero(valid & np.isfinite(depth) & (depth > 0.0))
+    if ys.size == 0:
+        return ys, xs, np.zeros((0, 3), dtype=np.float64)
+    uv = np.stack(
+        [xs.astype(np.float64) + 0.5, ys.astype(np.float64) + 0.5], axis=1
+    )
+    return ys, xs, kb4_unproject_pixels(uv, K, radial_coeffs)
+
+
 def warp_sparse_depth_to_face(
     depth_range_m: np.ndarray,
     confidence: np.ndarray,
@@ -299,6 +324,8 @@ def warp_sparse_depth_to_face(
     K: np.ndarray,
     radial_coeffs: Sequence[float],
     face,
+    *,
+    unprojected: Optional[Tuple[np.ndarray, np.ndarray, np.ndarray]] = None,
 ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Forward-splat a sparse fisheye range map onto a face raster.
 
@@ -328,18 +355,22 @@ def warp_sparse_depth_to_face(
     face_conf = np.zeros((height, width), dtype=np.float64)
     face_valid = np.zeros((height, width), dtype=bool)
 
-    ys, xs = np.nonzero(valid & np.isfinite(depth) & (depth > 0.0))
+    if unprojected is None:
+        # Array index (x, y) -> pixel-center coordinate (+0.5) before
+        # unprojecting, and the face-plane projection comes back in center
+        # coordinates, so the nearest array index is rint(coord - 0.5). Keeps
+        # the splat on the same pixel-center convention as the planner, the
+        # warp grid, and gsplat.
+        ys, xs, dirs_cam = unproject_sparse_depth_pixels(
+            depth, valid, K, radial_coeffs
+        )
+    else:
+        # The KB4 inversion depends only on the pixel set and camera, so a
+        # caller warping the same image onto many faces hoists it (it measures
+        # as ~70% of this function) instead of paying it once per face.
+        ys, xs, dirs_cam = unprojected
     if ys.size == 0:
         return face_range, face_conf, face_valid
-
-    # Array index (x, y) -> pixel-center coordinate (+0.5) before unprojecting,
-    # and the face-plane projection comes back in center coordinates, so the
-    # nearest array index is rint(coord - 0.5). Keeps the splat on the same
-    # pixel-center convention as the planner, the warp grid, and gsplat.
-    uv = np.stack(
-        [xs.astype(np.float64) + 0.5, ys.astype(np.float64) + 0.5], axis=1
-    )
-    dirs_cam = kb4_unproject_pixels(uv, K, radial_coeffs)
     dirs_face = dirs_cam @ R_face  # dir_face = R_face.T @ dir_cam, row-vector form
     z = dirs_face[:, 2]
     front = z > _EPS

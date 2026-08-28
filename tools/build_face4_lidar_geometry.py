@@ -38,7 +38,10 @@ from cloudstudio_3dgs.data.face_lidar_geometry import (
     sign_face_lidar_geometry_manifest,
     verify_face_lidar_geometry_manifest,
 )
-from cloudstudio_3dgs.data.face_warp import warp_sparse_depth_to_face
+from cloudstudio_3dgs.data.face_warp import (
+    unproject_sparse_depth_pixels,
+    warp_sparse_depth_to_face,
+)
 from cloudstudio_3dgs.data.mask_manifest import verify_dataset_manifest
 from cloudstudio_3dgs.geometry.fisheye_faces import FaceSpec
 from cloudstudio_3dgs.geometry.lidar_projection import (
@@ -210,6 +213,11 @@ def build_face4_lidar_geometry(
             sparse = load_sparse_depth(source_path)
             source_range, source_confidence, source_valid = sparse.to_dense()
             K, radial = _camera_calibration(cameras[camera_id])
+            # The KB4 inversion is ~70% of each face warp and depends only on
+            # the image's pixel set, so pay it once here, not once per face.
+            unprojected = unproject_sparse_depth_pixels(
+                source_range, source_valid, K, radial
+            )
         records: list[dict[str, Any]] = []
         for face_entry in image["faces"]:
             face_id = str(face_entry["face_id"])
@@ -244,6 +252,7 @@ def build_face4_lidar_geometry(
                     K,
                     radial,
                     spec,
+                    unprojected=unprojected,
                 )
                 face_valid &= supervision_mask
                 keep = face_valid & np.isfinite(face_range) & (face_range > 0.0)
