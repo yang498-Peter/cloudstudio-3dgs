@@ -13,7 +13,9 @@ import numpy as np
 sys.path.insert(0, r"C:\Peter\cloudstudio-3dgs-gate1")
 sys.path.insert(0, r"C:\Peter\cloudstudio-3dgs-gate1\experiments\diagnostics")
 
-from floater_census import las_xyz, CHECKPOINT, SH0  # noqa: E402
+from floater_census import las_xyz, SH0  # noqa: E402
+from floater_census import CHECKPOINT as DEFAULT_CHECKPOINT  # noqa: E402
+CHECKPOINT = Path(sys.argv[1]) if len(sys.argv) > 1 else DEFAULT_CHECKPOINT
 
 
 def main() -> int:
