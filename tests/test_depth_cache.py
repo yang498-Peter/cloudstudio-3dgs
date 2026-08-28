@@ -13,6 +13,7 @@ from cloudstudio_3dgs.data.depth_cache import (
     build_depth_cache,
     load_sparse_depth,
     load_xyz_point_cloud,
+    sparse_depth_npz_bytes,
     verify_depth_manifest,
 )
 from cloudstudio_3dgs.data.image_sample import CropWindow, load_image_sample
@@ -20,7 +21,12 @@ from cloudstudio_3dgs.data.manifest import canonical_json_bytes
 from cloudstudio_3dgs.data.mask_manifest import build_per_image_masks
 from cloudstudio_3dgs.data.point_cloud import write_binary_ply
 from cloudstudio_3dgs.geometry.kb4 import unproject_kb4
-from cloudstudio_3dgs.geometry.lidar_projection import DepthProjectionConfig
+from cloudstudio_3dgs.geometry.lidar_projection import (
+    DepthProjectionConfig,
+    SparseDepthMap,
+    project_camera_points_to_face,
+)
+from cloudstudio_3dgs.geometry.fisheye_faces import FaceSpec
 
 
 def dataset_fixture() -> dict:
@@ -55,6 +61,93 @@ def dataset_fixture() -> dict:
 
 
 class DepthCacheTests(unittest.TestCase):
+    def test_direct_face_projection_keeps_nearest_original_las_source(self) -> None:
+        face = FaceSpec(
+            face_id="front",
+            R_face=np.eye(3),
+            K_face=np.array(
+                [[2.0, 0.0, 2.0], [0.0, 2.0, 2.0], [0.0, 0.0, 1.0]],
+                dtype=np.float64,
+            ),
+            width=5,
+            height=5,
+            half_fov_deg=60.0,
+        )
+        points_camera = np.array(
+            [
+                [0.0, 0.0, 2.0],
+                [0.0, 0.0, 3.0],
+                [1.0, 0.0, 2.0],
+            ],
+            dtype=np.float64,
+        )
+        mask = np.ones((5, 5), dtype=bool)
+        mask[2, 3] = False
+
+        depth = project_camera_points_to_face(
+            points_camera,
+            face,
+            source_index=np.array([41, 42, 43], dtype=np.int64),
+            supervision_mask=mask,
+        )
+
+        np.testing.assert_array_equal(depth.pixel_index, [12])
+        np.testing.assert_allclose(depth.range_m, [2.0])
+        np.testing.assert_array_equal(depth.source_index, [41])
+        np.testing.assert_array_equal(depth.support_count, [2])
+        self.assertGreater(float(depth.confidence[0]), 0.0)
+
+    def test_compact_cache_reconstructs_unused_provenance_sentinels(self) -> None:
+        depth = SparseDepthMap(
+            shape=(4, 4),
+            pixel_index=np.array([1, 7], dtype=np.int32),
+            range_m=np.array([2.0, 3.0], dtype=np.float32),
+            confidence=np.array([0.5, 0.75], dtype=np.float32),
+            source_index=np.array([11, 12], dtype=np.int64),
+            support_count=np.array([2, 3], dtype=np.int32),
+        )
+        compact = sparse_depth_npz_bytes(depth, include_provenance=False)
+        explicit = sparse_depth_npz_bytes(depth)
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "compact.npz"
+            path.write_bytes(compact)
+            loaded = load_sparse_depth(path)
+
+        self.assertLess(len(compact), len(explicit))
+        np.testing.assert_array_equal(loaded.pixel_index, depth.pixel_index)
+        np.testing.assert_array_equal(loaded.range_m, depth.range_m)
+        np.testing.assert_array_equal(loaded.confidence, depth.confidence)
+        np.testing.assert_array_equal(loaded.source_index, [-1, -1])
+        np.testing.assert_array_equal(loaded.support_count, [0, 0])
+
+    def test_trainer_compact_confidence_keeps_range_exact(self) -> None:
+        depth = SparseDepthMap(
+            shape=(4, 4),
+            pixel_index=np.array([1, 7], dtype=np.int32),
+            range_m=np.array([2.125, 79.875], dtype=np.float32),
+            confidence=np.array([0.321, 0.999], dtype=np.float32),
+            source_index=np.array([11, 12], dtype=np.int64),
+            support_count=np.array([2, 3], dtype=np.int32),
+        )
+        payload = sparse_depth_npz_bytes(
+            depth,
+            include_provenance=False,
+            confidence_encoding="uint8",
+        )
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "compact-u8.npz"
+            path.write_bytes(payload)
+            loaded = load_sparse_depth(path)
+            with np.load(path, allow_pickle=False) as archive:
+                names = set(archive.files)
+
+        self.assertIn("confidence_u8", names)
+        self.assertNotIn("confidence", names)
+        np.testing.assert_array_equal(loaded.range_m, depth.range_m)
+        np.testing.assert_allclose(loaded.confidence, depth.confidence, atol=1.0 / 255.0)
+        np.testing.assert_array_equal(loaded.source_index, [-1, -1])
+        np.testing.assert_array_equal(loaded.support_count, [0, 0])
+
     def test_ecef_scale_point_cloud_is_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             path = Path(temporary) / "ecef.npy"

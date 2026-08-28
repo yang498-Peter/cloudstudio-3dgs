@@ -16,8 +16,13 @@ from cloudstudio_3dgs.ba.pycolmap_adapter import (
     build_training_reference_model,
     reconstruction_snapshot,
     run_bundle_adjustment_stage,
+    run_independent_pose_bundle_adjustment,
 )
 from cloudstudio_3dgs.ba.report import build_ba_report
+from cloudstudio_3dgs.ba.single_focal_kb4 import (
+    enforce_single_focal_kb4,
+    refine_shared_single_focal_kb4_intrinsics,
+)
 from cloudstudio_3dgs.data.manifest import canonical_json_bytes
 from tools import run_rig_ba
 
@@ -359,6 +364,64 @@ class PycolmapRigBaTests(unittest.TestCase):
         self.assertTrue(report["candidate_accepted"])
         self.assertEqual(report["gates"]["rig_baseline_fixed"]["status"], "PASS")
         self.assertEqual(report["gates"]["scene_scale_fixed"]["status"], "PASS")
+
+    def test_independent_pose_ba_keeps_one_frame_per_image(self) -> None:
+        reconstruction, _dataset = synthetic_problem()
+        position_priors = {
+            int(image.image_id): np.asarray(image.projection_center(), dtype=np.float64)
+            for image in reconstruction.images.values()
+        }
+
+        summary = run_independent_pose_bundle_adjustment(
+            reconstruction,
+            position_priors_by_image_id=position_priors,
+            position_prior_stddev_xyz_m=(0.03, 0.03, 0.06),
+            max_num_iterations=20,
+        )
+
+        self.assertTrue(summary.is_solution_usable(), summary.brief_report())
+        self.assertEqual(reconstruction.num_frames(), reconstruction.num_images())
+        self.assertEqual(reconstruction.num_rigs(), 2)
+        self.assertTrue(all(len(rig.sensor_ids()) == 1 for rig in reconstruction.rigs.values()))
+
+    def test_independent_pose_ba_rejects_invalid_position_sigma(self) -> None:
+        reconstruction, _dataset = synthetic_problem()
+        position_priors = {
+            int(image.image_id): np.asarray(image.projection_center(), dtype=np.float64)
+            for image in reconstruction.images.values()
+        }
+
+        with self.assertRaisesRegex(ValueError, "three positive values"):
+            run_independent_pose_bundle_adjustment(
+                reconstruction,
+                position_priors_by_image_id=position_priors,
+                position_prior_stddev_xyz_m=(0.03, 0.0, 0.06),
+            )
+
+    def test_shared_single_focal_kb4_refinement_recovers_focal_constraint(self) -> None:
+        reconstruction, _dataset = synthetic_problem()
+        for camera in reconstruction.cameras.values():
+            camera.params = np.asarray(
+                [760.0, 840.0, 407.0, 394.0, 0.01, -0.005, 0.001, 0.0],
+                dtype=np.float64,
+            )
+
+        enforced = enforce_single_focal_kb4(reconstruction, focal_source="mean")
+        summary = refine_shared_single_focal_kb4_intrinsics(
+            reconstruction,
+            max_nfev=80,
+        )
+
+        self.assertEqual(set(enforced), {1, 2})
+        self.assertEqual(set(summary["cameras"]), {"1", "2"})
+        for camera in reconstruction.cameras.values():
+            self.assertAlmostEqual(float(camera.params[0]), float(camera.params[1]), places=12)
+            self.assertLess(abs(float(camera.params[0]) - 800.0), 10.0)
+        for camera_summary in summary["cameras"].values():
+            self.assertLess(
+                camera_summary["component_rmse_px_after"],
+                camera_summary["component_rmse_px_before"],
+            )
 
 
 if __name__ == "__main__":

@@ -25,7 +25,8 @@ def _fixture(root: Path) -> tuple[dict, Path]:
         "sparse_pc.ply",
         "gsplat.lock.json",
     ):
-        (root / name).write_text(name, encoding="utf-8")
+        content = "{}" if name.endswith(".json") else name
+        (root / name).write_text(content, encoding="utf-8")
     base = {
         "dataset_manifest": "dataset.json",
         "recording_root": "recording",

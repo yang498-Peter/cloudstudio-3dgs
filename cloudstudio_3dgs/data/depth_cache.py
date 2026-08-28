@@ -175,43 +175,79 @@ def deterministic_npz_bytes(arrays: dict[str, np.ndarray]) -> bytes:
     return output.getvalue()
 
 
-def sparse_depth_npz_bytes(depth: SparseDepthMap) -> bytes:
+def sparse_depth_npz_bytes(
+    depth: SparseDepthMap,
+    *,
+    include_provenance: bool = True,
+    confidence_encoding: str = "float32",
+) -> bytes:
     depth.validate()
-    return deterministic_npz_bytes(
-        {
-            "confidence": depth.confidence.astype("<f4", copy=False),
-            "pixel_index": depth.pixel_index.astype("<i4", copy=False),
-            "range_m": depth.range_m.astype("<f4", copy=False),
-            "shape": np.asarray(depth.shape, dtype="<i4"),
-            "source_index": depth.source_index.astype("<i8", copy=False),
-            "support_count": depth.support_count.astype("<i4", copy=False),
-        }
-    )
+    arrays = {
+        "pixel_index": depth.pixel_index.astype("<i4", copy=False),
+        "range_m": depth.range_m.astype("<f4", copy=False),
+        "shape": np.asarray(depth.shape, dtype="<i4"),
+    }
+    if confidence_encoding == "float32":
+        arrays["confidence"] = depth.confidence.astype("<f4", copy=False)
+    elif confidence_encoding == "uint8":
+        arrays["confidence_u8"] = np.clip(
+            np.rint(depth.confidence.astype(np.float64) * 255.0), 1.0, 255.0
+        ).astype("u1")
+    else:
+        raise ValueError("confidence_encoding must be 'float32' or 'uint8'")
+    if include_provenance:
+        arrays.update(
+            {
+                "source_index": depth.source_index.astype("<i8", copy=False),
+                "support_count": depth.support_count.astype("<i4", copy=False),
+            }
+        )
+    return deterministic_npz_bytes(arrays)
 
 
 def load_sparse_depth(path: Path) -> SparseDepthMap:
     with np.load(path, allow_pickle=False) as archive:
-        required = {
-            "shape",
-            "pixel_index",
-            "range_m",
-            "confidence",
-            "source_index",
-            "support_count",
-        }
+        required = {"shape", "pixel_index", "range_m"}
         missing = required - set(archive.files)
         if missing:
             raise KeyError(f"depth cache is missing arrays: {', '.join(sorted(missing))}")
+        has_confidence = "confidence" in archive.files
+        has_confidence_u8 = "confidence_u8" in archive.files
+        if has_confidence == has_confidence_u8:
+            raise KeyError(
+                "depth cache must contain exactly one confidence encoding"
+            )
         shape_values = np.asarray(archive["shape"], dtype=np.int64)
         if shape_values.shape != (2,):
             raise ValueError("depth cache shape must contain height and width")
+        pixel_index = np.asarray(archive["pixel_index"], dtype=np.int32)
+        has_source = "source_index" in archive.files
+        has_support = "support_count" in archive.files
+        if has_source != has_support:
+            raise KeyError(
+                "depth cache provenance must contain both source_index and support_count"
+            )
+        source_index = (
+            np.asarray(archive["source_index"], dtype=np.int64)
+            if has_source
+            else np.full(len(pixel_index), -1, dtype=np.int64)
+        )
+        support_count = (
+            np.asarray(archive["support_count"], dtype=np.int32)
+            if has_support
+            else np.zeros(len(pixel_index), dtype=np.int32)
+        )
         result = SparseDepthMap(
             (int(shape_values[0]), int(shape_values[1])),
-            np.asarray(archive["pixel_index"], dtype=np.int32),
+            pixel_index,
             np.asarray(archive["range_m"], dtype=np.float32),
-            np.asarray(archive["confidence"], dtype=np.float32),
-            np.asarray(archive["source_index"], dtype=np.int64),
-            np.asarray(archive["support_count"], dtype=np.int32),
+            (
+                np.asarray(archive["confidence"], dtype=np.float32)
+                if has_confidence
+                else np.asarray(archive["confidence_u8"], dtype=np.float32) / 255.0
+            ),
+            source_index,
+            support_count,
         )
     result.validate()
     return result
@@ -263,6 +299,7 @@ def build_depth_cache(
     workers: int = 1,
     max_images: int | None = None,
     max_points: int | None = None,
+    compact_provenance: bool = False,
     force: bool = False,
 ) -> dict[str, Any]:
     """Generate deterministic sparse caches, optionally in parallel threads."""
@@ -298,6 +335,7 @@ def build_depth_cache(
         "point_cloud_sha256": point_cloud_sha,
         "point_cloud_points": len(points),
         "point_cloud_max_points": max_points,
+        "provenance_mode": "implicit_sentinel" if compact_provenance else "explicit",
         "projection": config.to_dict(),
         "selected_image_ids": selected_ids,
     }
@@ -333,7 +371,9 @@ def build_depth_cache(
                 supervision_mask=mask_for_image[image_id],
                 config=config,
             )
-            payload = sparse_depth_npz_bytes(depth)
+            payload = sparse_depth_npz_bytes(
+                depth, include_provenance=not compact_provenance
+            )
             relative = f"depth/{image_id}.npz"
             destination = staging / _safe_relative_path(relative)
             destination.parent.mkdir(parents=True, exist_ok=True)
@@ -367,6 +407,11 @@ def build_depth_cache(
             "cache_key": cache_key,
             "coordinate_frame": "s1_local",
             "depth_semantics": "euclidean_ray_range_m",
+            "provenance_mode": (
+                "implicit_source_index_minus1_support_count_0"
+                if compact_provenance
+                else "explicit_source_index_and_support_count"
+            ),
             "z_buffer": "nearest_range_per_rounded_pixel",
             "confidence": "subpixel_alignment_times_log_support",
             "complete_dataset": len(selected) == len(images_by_id),

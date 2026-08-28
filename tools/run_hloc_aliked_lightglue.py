@@ -27,6 +27,8 @@ from cloudstudio_3dgs.ba.hloc_artifacts import (
     RUNTIME_MANIFEST_NAME,
     prepare_hloc_output,
 )
+from cloudstudio_3dgs.ba.hloc_mask_filter import filter_hloc_features_by_masks
+from cloudstudio_3dgs.ba.runtime_lock import verify_signed_runtime_manifest
 from cloudstudio_3dgs.data.manifest import canonical_json_bytes
 
 
@@ -60,6 +62,13 @@ def main() -> int:
     parser.add_argument("--pairs", required=True, type=Path)
     parser.add_argument("--output", required=True, type=Path)
     parser.add_argument("--require-cuda", action="store_true")
+    parser.add_argument("--base-features", type=Path)
+    parser.add_argument("--base-feature-runtime-manifest", type=Path)
+    parser.add_argument("--dataset-manifest", type=Path)
+    parser.add_argument("--mask-manifest", type=Path)
+    parser.add_argument("--mask-root", type=Path)
+    parser.add_argument("--person-mask-manifest", type=Path)
+    parser.add_argument("--person-mask-root", type=Path)
     output_mode = parser.add_mutually_exclusive_group()
     output_mode.add_argument("--overwrite", action="store_true")
     output_mode.add_argument(
@@ -87,6 +96,21 @@ def main() -> int:
         raise FileNotFoundError(f"Rig BA runtime lock does not exist: {args.runtime_lock}")
     if args.output.resolve().is_relative_to(args.image_dir.resolve()):
         raise ValueError("HLoc output cannot be inside the immutable image directory")
+    masked_values = (
+        args.base_features,
+        args.base_feature_runtime_manifest,
+        args.dataset_manifest,
+        args.mask_manifest,
+        args.mask_root,
+        args.person_mask_manifest,
+        args.person_mask_root,
+    )
+    if any(value is not None for value in masked_values) and not all(
+        value is not None for value in masked_values
+    ):
+        raise ValueError(
+            "masked feature reuse requires base features/runtime, dataset, geometric masks, and person masks"
+        )
     lock = load_runtime_lock(args.runtime_lock)
     runtime_evidence = collect_runtime_evidence(
         lock, allow_unverified_vcs=args.allow_unverified_vcs
@@ -121,13 +145,36 @@ def main() -> int:
         raise FileNotFoundError(f"HLoc image list has missing files: {missing[:4]}")
     features_path = args.output / FEATURES_NAME
     matches_path = args.output / MATCHES_NAME
-    extract_features.main(
-        extract_features.confs["aliked-n16"],
-        args.image_dir,
-        image_list=names,
-        feature_path=features_path,
-        overwrite=upstream_overwrite,
-    )
+    feature_filter = None
+    if args.base_features is None:
+        extract_features.main(
+            extract_features.confs["aliked-n16"],
+            args.image_dir,
+            image_list=names,
+            feature_path=features_path,
+            overwrite=upstream_overwrite,
+        )
+    else:
+        base_runtime = json.loads(
+            args.base_feature_runtime_manifest.read_text(encoding="utf-8")
+        )
+        base_runtime_sha = verify_signed_runtime_manifest(
+            base_runtime, "runtime_manifest_sha256"
+        )
+        if base_runtime.get("features_sha256") != sha256_file(args.base_features):
+            raise ValueError("base feature runtime does not bind the source feature H5")
+        feature_filter = filter_hloc_features_by_masks(
+            args.base_features,
+            features_path,
+            dataset_manifest=json.loads(args.dataset_manifest.read_text(encoding="utf-8")),
+            mask_manifest=json.loads(args.mask_manifest.read_text(encoding="utf-8")),
+            mask_root=args.mask_root,
+            person_mask_manifest=json.loads(
+                args.person_mask_manifest.read_text(encoding="utf-8")
+            ),
+            person_mask_root=args.person_mask_root,
+        )
+        feature_filter["base_feature_runtime_manifest_sha256"] = base_runtime_sha
     match_features.main(
         match_features.confs["aliked+lightglue"],
         args.pairs,
@@ -148,6 +195,7 @@ def main() -> int:
         "hloc_version": importlib.metadata.version("hloc"),
         "runtime_lock_sha256": runtime_lock_sha256(lock),
         "runtime": runtime_evidence,
+        "feature_filter": feature_filter,
     }
     runtime["runtime_manifest_sha256"] = hashlib.sha256(
         canonical_json_bytes(runtime)

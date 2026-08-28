@@ -11,7 +11,10 @@ param(
 
     [switch]$LinkExistingObjects,
 
-    [switch]$ErrorWeightedSampling
+    [switch]$ErrorWeightedSampling,
+
+    [ValidateRange(0, [int]::MaxValue)]
+    [int]$CheckpointKeepEvery = 0
 )
 
 $ErrorActionPreference = "Stop"
@@ -227,6 +230,9 @@ if ($Output -and $TrainerConfig) {
 if ($TrainerConfig -and $ErrorWeightedSampling) {
     throw "ErrorWeightedSampling is only valid for the synthetic acceptance path"
 }
+if ($TrainerConfig -and $CheckpointKeepEvery -gt 0) {
+    throw "CheckpointKeepEvery is only valid for the synthetic acceptance path"
+}
 if (-not $Output -and -not $TrainerConfig) {
     throw "Output or TrainerConfig is required unless -ProbeOnly is used"
 }
@@ -291,6 +297,9 @@ $acceptanceArguments = @(
 )
 if ($ErrorWeightedSampling) {
     $acceptanceArguments += "--error-weighted-sampling"
+}
+if ($CheckpointKeepEvery -gt 0) {
+    $acceptanceArguments += @("--checkpoint-keep-every", "$CheckpointKeepEvery")
 }
 $exitCode = Invoke-ConfiguredProcess -FilePath $python -Arguments $acceptanceArguments
 exit $exitCode

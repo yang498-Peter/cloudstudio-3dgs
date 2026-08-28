@@ -60,7 +60,10 @@ def verify_mask_manifest(manifest: dict[str, Any]) -> str:
 
 
 def generate_fisheye_valid_mask(
-    camera: dict[str, Any], *, theta_max_deg: float = 95.0
+    camera: dict[str, Any],
+    *,
+    theta_max_deg: float = 95.0,
+    radius_px: float | None = None,
 ) -> np.ndarray:
     if camera.get("camera_type") != "fisheye":
         raise ValueError(f"camera {camera.get('camera_id')} is not fisheye")
@@ -83,6 +86,13 @@ def generate_fisheye_valid_mask(
     if min(width, height) <= 0 or min(fx, fy) <= 0.0:
         raise ValueError("camera dimensions and focal lengths must be positive")
 
+    yy, xx = np.mgrid[0:height, 0:width]
+    if radius_px is not None:
+        radius_px = float(radius_px)
+        if not np.isfinite(radius_px) or radius_px <= 0.0:
+            raise ValueError("radius_px must be finite and positive")
+        return np.hypot(xx - cx, yy - cy) <= radius_px
+
     theta = np.deg2rad(theta_max_deg)
     theta2 = theta * theta
     distorted_radius = theta * (
@@ -94,7 +104,6 @@ def generate_fisheye_valid_mask(
     )
     if not np.isfinite(distorted_radius) or distorted_radius <= 0.0:
         raise ValueError("camera distortion produces an invalid FoV radius")
-    yy, xx = np.mgrid[0:height, 0:width]
     normalized_radius = np.hypot((xx - cx) / fx, (yy - cy) / fy)
     return normalized_radius <= distorted_radius
 
@@ -128,6 +137,7 @@ def build_per_image_masks(
     output_dir: Path,
     *,
     theta_max_deg: float = 95.0,
+    valid_radius_px: float | None = None,
     force: bool = False,
 ) -> dict[str, Any]:
     """Write one independently addressable valid mask for every posed image."""
@@ -147,7 +157,11 @@ def build_per_image_masks(
         raise ValueError("dataset manifest contains duplicate camera IDs")
     templates: dict[str, tuple[bytes, float, str]] = {}
     for camera_id, camera in sorted(cameras.items()):
-        mask = generate_fisheye_valid_mask(camera, theta_max_deg=theta_max_deg)
+        mask = generate_fisheye_valid_mask(
+            camera,
+            theta_max_deg=theta_max_deg,
+            radius_px=valid_radius_px,
+        )
         payload = _png_bytes(mask)
         templates[camera_id] = (
             payload,
@@ -199,7 +213,13 @@ def build_per_image_masks(
         "schema_version": 1,
         "dataset_manifest_sha256": dataset_sha256,
         "mask_composition": "fisheye_valid & static_mask & optional_depth_valid",
-        "theta_max_deg": theta_max_deg,
+        "valid_mask_profile": (
+            "principal_point_circle_v1"
+            if valid_radius_px is not None
+            else "analytic_kb4_theta_cap_v1"
+        ),
+        "theta_max_deg": None if valid_radius_px is not None else theta_max_deg,
+        "valid_radius_px": valid_radius_px,
         "path_root": "mask_output",
         "images": records,
         "summary": {
@@ -224,6 +244,11 @@ def main() -> int:
     parser.add_argument("--manifest", required=True, type=Path)
     parser.add_argument("--output", required=True, type=Path)
     parser.add_argument("--theta-max-deg", type=float, default=95.0)
+    parser.add_argument(
+        "--valid-radius-px",
+        type=float,
+        help="circular valid-region radius in full-resolution source pixels",
+    )
     parser.add_argument("--force", action="store_true")
     args = parser.parse_args()
 
@@ -232,6 +257,7 @@ def main() -> int:
         manifest,
         args.output,
         theta_max_deg=args.theta_max_deg,
+        valid_radius_px=args.valid_radius_px,
         force=args.force,
     )
     print(

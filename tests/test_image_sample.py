@@ -225,6 +225,26 @@ class ImageSampleTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "SHA256 mismatch"):
             verify_mask_manifest(first)
 
+    def test_principal_point_circle_is_generated_and_signed(self) -> None:
+        source = signed_mask_fixture_manifest()
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            output = build_per_image_masks(
+                source,
+                root / "masks",
+                valid_radius_px=2.0,
+            )
+            with Image.open(root / "masks" / output["images"][0]["valid_mask_path"]) as opened:
+                actual = np.asarray(opened, dtype=np.uint8) > 0
+
+        yy, xx = np.mgrid[0:8, 0:8]
+        expected = np.hypot(xx - 3.5, yy - 3.5) <= 2.0
+        np.testing.assert_array_equal(actual, expected)
+        self.assertEqual(output["valid_mask_profile"], "principal_point_circle_v1")
+        self.assertIsNone(output["theta_max_deg"])
+        self.assertEqual(output["valid_radius_px"], 2.0)
+        self.assertEqual(verify_mask_manifest(output), output["mask_manifest_sha256"])
+
 
 if __name__ == "__main__":
     unittest.main()

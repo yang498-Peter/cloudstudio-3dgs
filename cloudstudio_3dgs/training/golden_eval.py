@@ -281,6 +281,10 @@ def evaluate_golden_views(
     if geometry_tree is not None:
         report["summary"]["floater_count"] = count_floaters(params, geometry_tree)
         report["summary"]["floater_threshold_m"] = FLOATER_DISTANCE_THRESHOLD_M
+        report.pop("golden_evaluation_sha256", None)
+        report["golden_evaluation_sha256"] = hashlib.sha256(
+            canonical_json_bytes(report)
+        ).hexdigest()
     return report
 
 
@@ -441,6 +445,16 @@ def verify_golden_history(payload: dict[str, Any]) -> str:
             if configuration.get("max_depth_regression_m") is None
             else float(configuration["max_depth_regression_m"])
         ),
+        max_floater_growth_ratio=(
+            None
+            if configuration.get("max_floater_growth_ratio") is None
+            else float(configuration["max_floater_growth_ratio"])
+        ),
+        max_floater_count=(
+            None
+            if configuration.get("max_floater_count") is None
+            else int(configuration["max_floater_count"])
+        ),
     )
     config.validate()
     if configuration != config.to_dict():
@@ -467,6 +481,8 @@ def verify_golden_history(payload: dict[str, Any]) -> str:
             best,
             min_psnr_improvement_db=config.min_psnr_improvement_db,
             max_depth_regression_m=config.max_depth_regression_m,
+            max_floater_growth_ratio=config.max_floater_growth_ratio,
+            max_floater_count=config.max_floater_count,
         ):
             best = record
     if not config.enabled and history:

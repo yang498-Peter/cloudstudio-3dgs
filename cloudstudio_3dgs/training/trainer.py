@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import os
 import tempfile
 import time
@@ -17,22 +18,37 @@ from PIL import Image
 from cloudstudio_3dgs.data.depth_cache import sparse_depth_npz_bytes
 from cloudstudio_3dgs.data.image_sample import CropWindow
 from cloudstudio_3dgs.data.manifest import canonical_json_bytes
+from cloudstudio_3dgs.data.mono_depth import verify_mono_depth_manifest
+from cloudstudio_3dgs.data.face_lidar_geometry import (
+    verify_face_lidar_geometry_manifest,
+)
+from cloudstudio_3dgs.data.renderer_masks import verify_renderer_mask_manifest
 from cloudstudio_3dgs.geometry.lidar_projection import SparseDepthMap
 from cloudstudio_3dgs.evaluation.quality_report import sign_run_manifest
 from cloudstudio_3dgs.training.backend import GsplatBackend
-from cloudstudio_3dgs.training.checkpoint import load_checkpoint, save_checkpoint
+from cloudstudio_3dgs.training.checkpoint import (
+    load_checkpoint,
+    retain_checkpoint,
+    save_checkpoint,
+)
 from cloudstudio_3dgs.training.contracts import build_coordinate_transform_manifest
 from cloudstudio_3dgs.training.dataset import S1TrainingDataset, TrainingSample
 from cloudstudio_3dgs.training.losses import (
     confidence_weighted_log_range_huber,
     confidence_weighted_range_l1,
     global_masked_rgb_ssim_loss,
+    masked_rgb_gradient_l1,
     masked_rgb_l1,
     masked_rgb_ssim_loss,
 )
 from cloudstudio_3dgs.training.presets import (
     assert_trainer_preset_matches,
     expand_trainer_preset,
+)
+from cloudstudio_3dgs.pipeline.mipmap_gate import (
+    INDEPENDENT_AT_ALGORITHM,
+    load_and_verify_gate,
+    verify_training_gate,
 )
 from cloudstudio_3dgs.training.exposure import (
     ExposureCompensationConfig,
@@ -48,6 +64,16 @@ from cloudstudio_3dgs.training.scale_calibration import (
     MetricScaleCalibrationConfig,
     build_metric_scale_calibration,
 )
+from cloudstudio_3dgs.training.surface_initialization import (
+    SurfaceInitializationConfig,
+    build_surface_aligned_initialization,
+    load_initialization_geometry,
+)
+from cloudstudio_3dgs.training.mipmap_tile_geometry import (
+    load_mipmap_tile_geometry,
+    verify_tile_geometry_manifest,
+)
+from cloudstudio_3dgs.training.tile_inputs import verify_tile_inputs_manifest
 from cloudstudio_3dgs.training.rig_pose import (
     RigPoseRefinementConfig,
     RigPoseRefiner,
@@ -113,19 +139,39 @@ class TrainerConfig:
     initialization_ply: Path
     output_dir: Path
     gsplat_lock: Path
+    initialization_geometry: Path | None = None
+    initialization_geometry_manifest: Path | None = None
+    mipmap_tile_id: int | None = None
     person_mask_manifest: Path | None = None
     person_mask_root: Path | None = None
     depth_manifest: Path | None = None
     depth_root: Path | None = None
     resume_checkpoint: Path | None = None
+    warm_start_checkpoint: Path | None = None
+    warm_start_min_opacity: float = 0.0
+    warm_start_scale_multiplier: float = 1.0
+    warm_start_fresh_auxiliary: tuple[str, ...] = ()
     face_cache_manifest: Path | None = None
     face_cache_root: Path | None = None
+    renderer_mask_manifest: Path | None = None
+    tile_inputs_manifest: Path | None = None
+    tile_inputs_root: Path | None = None
+    mono_depth_manifest: Path | None = None
+    mono_depth_root: Path | None = None
+    face_lidar_geometry_manifest: Path | None = None
+    face_lidar_geometry_root: Path | None = None
+    mipmap_pipeline_gate: Path | None = None
+    implementation_smoke_only: bool = False
+    final_evaluation_artifacts: bool = True
     require_person_masks: bool = True
     trainer_preset: str = "custom"
     device: str = "cuda:0"
     seed: int = 42
+    view_sampling_mode: str = "with_replacement"
     max_steps: int = 3_000
     checkpoint_every: int = 500
+    checkpoint_keep_every: int = 0
+    cuda_empty_cache_interval_steps: int = 0
     factor: int = 4
     crop: CropWindow | None = None
     cap_max: int = 1_000_000
@@ -133,10 +179,17 @@ class TrainerConfig:
     metric_scale_calibration: MetricScaleCalibrationConfig = field(
         default_factory=MetricScaleCalibrationConfig
     )
+    surface_initialization: SurfaceInitializationConfig = field(
+        default_factory=SurfaceInitializationConfig
+    )
     rgb_l1_weight: float = 0.8
     rgb_ssim_weight: float = 0.2
+    rgb_gradient_weight: float = 0.0
+    lidar_rgb_l1_weight: float = 0.0
+    lidar_rgb_dilation_radius_px: int = 0
     rgb_ssim_mode: str = "local_gaussian"
     lidar_range_weight: float = 0.05
+    da2_depth_weight: float = 0.0
     ssim_window_size: int = 11
     ssim_sigma: float = 1.5
     ssim_min_valid_fraction: float = 0.8
@@ -210,6 +263,8 @@ class TrainerConfig:
                 "mask_root",
                 "split_manifest",
                 "initialization_ply",
+                "initialization_geometry",
+                "initialization_geometry_manifest",
                 "output_dir",
                 "gsplat_lock",
                 "person_mask_manifest",
@@ -217,8 +272,17 @@ class TrainerConfig:
                 "depth_manifest",
                 "depth_root",
                 "resume_checkpoint",
+                "warm_start_checkpoint",
                 "face_cache_manifest",
                 "face_cache_root",
+                "renderer_mask_manifest",
+                "tile_inputs_manifest",
+                "tile_inputs_root",
+                "mono_depth_manifest",
+                "mono_depth_root",
+                "face_lidar_geometry_manifest",
+                "face_lidar_geometry_root",
+                "mipmap_pipeline_gate",
             )
         }
         crop_value = value.get("crop")
@@ -267,21 +331,39 @@ class TrainerConfig:
         if not isinstance(scale_value, dict):
             raise ValueError("metric_scale_calibration must be an object")
         scale_calibration = MetricScaleCalibrationConfig(**scale_value)
+        surface_initialization_value = value.get("surface_initialization", {})
+        if not isinstance(surface_initialization_value, dict):
+            raise ValueError("surface_initialization must be an object")
+        surface_initialization = SurfaceInitializationConfig(
+            **surface_initialization_value
+        )
+        fresh_auxiliary_value = value.get("warm_start_fresh_auxiliary", [])
+        if not isinstance(fresh_auxiliary_value, list) or not all(
+            isinstance(name, str) and name for name in fresh_auxiliary_value
+        ):
+            raise ValueError("warm_start_fresh_auxiliary must be a list of non-empty strings")
         options = {
             key: value[key]
             for key in (
                 "device",
                 "require_person_masks",
                 "seed",
+                "view_sampling_mode",
                 "max_steps",
                 "checkpoint_every",
+                "checkpoint_keep_every",
+                "cuda_empty_cache_interval_steps",
                 "factor",
                 "cap_max",
                 "init_scale_m",
                 "rgb_l1_weight",
                 "rgb_ssim_weight",
+                "rgb_gradient_weight",
+                "lidar_rgb_l1_weight",
+                "lidar_rgb_dilation_radius_px",
                 "rgb_ssim_mode",
                 "lidar_range_weight",
+                "da2_depth_weight",
                 "ssim_window_size",
                 "ssim_sigma",
                 "ssim_min_valid_fraction",
@@ -306,6 +388,11 @@ class TrainerConfig:
                 "default_strategy",
                 "densification_gradient_source",
                 "learning_rates",
+                "warm_start_min_opacity",
+                "warm_start_scale_multiplier",
+                "final_evaluation_artifacts",
+                "mipmap_tile_id",
+                "implementation_smoke_only",
             )
             if key in value
         }
@@ -314,7 +401,9 @@ class TrainerConfig:
             trainer_preset=str(value["trainer_preset"]),
             crop=crop,
             rig_pose_refinement=pose_refinement,
+            warm_start_fresh_auxiliary=tuple(fresh_auxiliary_value),
             metric_scale_calibration=scale_calibration,
+            surface_initialization=surface_initialization,
             exposure_compensation=exposure,
             geometry_regularization=regularization,
             golden_evaluation=golden_evaluation,
@@ -335,11 +424,89 @@ class TrainerConfig:
             raise ValueError("3DGUT training requires an explicit CUDA device")
         if self.max_steps <= 0 or self.checkpoint_every <= 0:
             raise ValueError("max_steps and checkpoint_every must be positive")
+        if self.implementation_smoke_only:
+            if self.max_steps > 2:
+                raise ValueError("implementation_smoke_only is limited to at most 2 steps")
+            if self.factor < 2:
+                raise ValueError("implementation_smoke_only requires factor >= 2")
+            if self.final_evaluation_artifacts or self.golden_evaluation.enabled:
+                raise ValueError(
+                    "implementation_smoke_only forbids final or golden evaluation"
+                )
+            if self.resume_checkpoint is not None or self.warm_start_checkpoint is not None:
+                raise ValueError("implementation_smoke_only forbids resume and warm start")
+            if self.checkpoint_every != self.max_steps:
+                raise ValueError(
+                    "implementation_smoke_only must checkpoint only at the final step"
+                )
+            if int(self.default_strategy.get("refine_start_iter", 0)) <= self.max_steps:
+                raise ValueError(
+                    "implementation_smoke_only forbids densification during the smoke"
+                )
+        if self.view_sampling_mode not in {
+            "with_replacement",
+            "fisher_yates_without_replacement_per_epoch",
+        }:
+            raise ValueError("unsupported training view sampling mode")
+        if self.cuda_empty_cache_interval_steps < 0:
+            raise ValueError("cuda_empty_cache_interval_steps must be non-negative")
+        if self.resume_checkpoint is not None and self.warm_start_checkpoint is not None:
+            raise ValueError("resume_checkpoint and warm_start_checkpoint are mutually exclusive")
+        if len(set(self.warm_start_fresh_auxiliary)) != len(
+            self.warm_start_fresh_auxiliary
+        ):
+            raise ValueError("warm_start_fresh_auxiliary names must be unique")
+        unsupported_fresh_auxiliary = set(self.warm_start_fresh_auxiliary) - {
+            "rig_pose_deltas"
+        }
+        if unsupported_fresh_auxiliary:
+            raise ValueError(
+                "unsupported warm_start_fresh_auxiliary names: "
+                + ", ".join(sorted(unsupported_fresh_auxiliary))
+            )
+        if self.warm_start_fresh_auxiliary:
+            if self.warm_start_checkpoint is None:
+                raise ValueError(
+                    "warm_start_fresh_auxiliary requires warm_start_checkpoint"
+                )
+            if (
+                "rig_pose_deltas" in self.warm_start_fresh_auxiliary
+                and not self.rig_pose_refinement.enabled
+            ):
+                raise ValueError(
+                    "fresh rig_pose_deltas requires rig_pose_refinement.enabled"
+                )
+        if not 0.0 <= float(self.warm_start_min_opacity) < 1.0:
+            raise ValueError("warm_start_min_opacity must be within [0, 1)")
+        if (
+            not math.isfinite(float(self.warm_start_scale_multiplier))
+            or self.warm_start_scale_multiplier <= 0.0
+        ):
+            raise ValueError("warm_start_scale_multiplier must be finite and positive")
+        if self.warm_start_scale_multiplier != 1.0 and self.warm_start_checkpoint is None:
+            raise ValueError("warm_start_scale_multiplier requires warm_start_checkpoint")
+        if self.warm_start_min_opacity > 0.0:
+            if self.warm_start_checkpoint is None:
+                raise ValueError(
+                    "warm_start_min_opacity requires warm_start_checkpoint"
+                )
+            if (
+                self.lidar_normal_alignment.enabled
+                or self.lidar_admission.enabled
+                or self.tangent_proposal.enabled
+            ):
+                raise ValueError(
+                    "warm-start opacity pruning currently requires normal alignment, "
+                    "LiDAR admission, and tangent proposal to be disabled"
+                )
+        if self.checkpoint_keep_every < 0:
+            raise ValueError("checkpoint_keep_every must be non-negative")
         if self.cap_max <= 4:
             raise ValueError("cap_max must be greater than four")
         if self.init_scale_m <= 0.0:
             raise ValueError("init_scale_m must be positive")
         self.metric_scale_calibration.validate()
+        self.surface_initialization.validate()
         if self.color_model not in ("rgb_sigmoid", "sh"):
             raise ValueError("color_model must be 'rgb_sigmoid' or 'sh'")
         if not 0 <= self.sh_degree <= 3:
@@ -355,6 +522,8 @@ class TrainerConfig:
         weights = (
             self.rgb_l1_weight,
             self.rgb_ssim_weight,
+            self.rgb_gradient_weight,
+            self.lidar_rgb_l1_weight,
             self.lidar_range_weight,
             self.lidar_linear_aux_weight,
         )
@@ -362,6 +531,16 @@ class TrainerConfig:
             raise ValueError("loss weights must be non-negative")
         if self.rgb_l1_weight + self.rgb_ssim_weight <= 0.0:
             raise ValueError("at least one RGB loss weight must be positive")
+        if (
+            not isinstance(self.lidar_rgb_dilation_radius_px, int)
+            or isinstance(self.lidar_rgb_dilation_radius_px, bool)
+            or not 0 <= self.lidar_rgb_dilation_radius_px <= 64
+        ):
+            raise ValueError("lidar_rgb_dilation_radius_px must be an integer within [0, 64]")
+        if self.lidar_rgb_dilation_radius_px > 0 and self.lidar_rgb_l1_weight <= 0.0:
+            raise ValueError(
+                "lidar_rgb_dilation_radius_px requires positive lidar_rgb_l1_weight"
+            )
         if self.rgb_ssim_mode not in {"local_gaussian", "global_moments"}:
             raise ValueError("rgb_ssim_mode must be local_gaussian or global_moments")
         if self.ssim_window_size <= 0 or self.ssim_window_size % 2 == 0:
@@ -397,12 +576,29 @@ class TrainerConfig:
                 "lidar_admission requires error_weighted_sampling to be enabled"
             )
         self.tangent_proposal.validate()
-        if self.tangent_proposal.enabled and not self.error_weighted_sampling.enabled:
-            # The proposal only runs inside the weighted _add_new_gs path; the
-            # plain-opacity fallback calls upstream sample_add, which has no
-            # hook for it, so enabling it alone would silently do nothing.
+        if (
+            self.tangent_proposal.reject_unsupported_births
+            and not self.tangent_proposal.enabled
+        ):
             raise ValueError(
-                "tangent_proposal requires error_weighted_sampling to be enabled"
+                "reject_unsupported_births requires tangent_proposal.enabled"
+            )
+        if (
+            self.tangent_proposal.enabled
+            and self.densification_strategy != "default_3dgs"
+            and not self.error_weighted_sampling.enabled
+        ):
+            # The MCMC proposal runs inside the weighted _add_new_gs path.  The
+            # classic split/clone adapter has its own explicit birth hook.
+            raise ValueError(
+                "MCMC tangent_proposal requires error_weighted_sampling to be enabled"
+            )
+        if (
+            self.tangent_proposal.reject_unsupported_births
+            and self.densification_strategy != "default_3dgs"
+        ):
+            raise ValueError(
+                "reject_unsupported_births requires default_3dgs densification"
             )
         if self.ppisp.enabled and self.exposure_compensation.enabled:
             raise ValueError(
@@ -415,8 +611,12 @@ class TrainerConfig:
         expected_lrs = {"means", "scales", "quats", "opacities", "colors"}
         if set(self.learning_rates) != expected_lrs:
             raise ValueError(f"learning_rates must contain exactly {sorted(expected_lrs)}")
-        if any(float(value) <= 0.0 for value in self.learning_rates.values()):
-            raise ValueError("all learning rates must be positive")
+        geometry_groups = ("means", "scales", "quats")
+        appearance_groups = ("opacities", "colors")
+        if any(float(self.learning_rates[name]) < 0.0 for name in geometry_groups):
+            raise ValueError("geometry learning rates must be non-negative")
+        if any(float(self.learning_rates[name]) <= 0.0 for name in appearance_groups):
+            raise ValueError("appearance learning rates must be positive")
         if self.mcmc_refine_start_iter < 0 or self.mcmc_refine_stop_iter <= 0:
             raise ValueError("MCMC refine bounds must be non-negative/positive")
         if self.mcmc_refine_start_iter >= self.mcmc_refine_stop_iter:
@@ -444,6 +644,44 @@ class TrainerConfig:
                 "densification_gradient_source='rgb_only' requires "
                 "densification_strategy='default_3dgs'"
             )
+        if self.default_strategy.get("exact_mipmap_lifecycle") is True:
+            if self.densification_strategy != "default_3dgs":
+                raise ValueError("exact MipMap lifecycle requires classic 3DGS")
+            if self.renderer_mask_manifest is None:
+                raise ValueError(
+                    "exact MipMap lifecycle requires a signed renderer mask manifest"
+                )
+            expected_lifecycle = {
+                "grow_grad2d": 0.00015,
+                "growth_min_opacity": 0.15,
+                "split_scale_m": 0.2,
+                "prune_scale_m": 0.2,
+                "prune_opa": 0.1,
+                "prune_opa_late": 0.05,
+                "prune_switch_step": self.max_steps // 2,
+                "prune_scale2d": 0.15,
+                "reset_every": 300,
+                "reset_opacity_cap": 0.2,
+                "refine_scale2d_stop_iter": self.max_steps,
+            }
+            mismatched = {
+                key: (expected, self.default_strategy.get(key))
+                for key, expected in expected_lifecycle.items()
+                if self.default_strategy.get(key) != expected
+            }
+            if mismatched:
+                raise ValueError(
+                    f"exact MipMap lifecycle parameters differ: {mismatched}"
+                )
+            if (
+                self.mcmc_refine_start_iter != 500
+                or self.mcmc_refine_every != 100
+                or self.mcmc_refine_stop_iter != self.max_steps
+            ):
+                raise ValueError(
+                    "exact MipMap lifecycle requires start=500, interval=100, "
+                    "and stop=max_steps"
+                )
         self.rig_pose_refinement.validate()
         self.exposure_compensation.validate()
         self.geometry_regularization.validate()
@@ -474,6 +712,71 @@ class TrainerConfig:
             raise ValueError(
                 "face_cache_manifest and face_cache_root must be provided together"
             )
+        if self.renderer_mask_manifest is not None and self.face_cache_manifest is None:
+            raise ValueError("renderer mask consumption requires face-cache training")
+        if self.renderer_mask_manifest is not None:
+            if not self.renderer_mask_manifest.is_file():
+                raise FileNotFoundError(
+                    f"renderer mask manifest is missing: {self.renderer_mask_manifest}"
+                )
+            if not self.face_cache_manifest.is_file():
+                raise FileNotFoundError(
+                    f"face cache manifest is missing: {self.face_cache_manifest}"
+                )
+            renderer_mask = json.loads(
+                self.renderer_mask_manifest.read_text(encoding="utf-8")
+            )
+            verify_renderer_mask_manifest(renderer_mask)
+            face_cache = json.loads(
+                self.face_cache_manifest.read_text(encoding="utf-8")
+            )
+            if renderer_mask.get("source_face_manifest_sha256") != face_cache.get(
+                "face_manifest_sha256"
+            ):
+                raise ValueError(
+                    "renderer mask manifest is bound to different Face4 inputs"
+                )
+        if (self.tile_inputs_manifest is None) != (self.tile_inputs_root is None):
+            raise ValueError(
+                "tile_inputs_manifest and tile_inputs_root must be provided together"
+            )
+        if self.tile_inputs_manifest is not None and self.face_cache_manifest is None:
+            raise ValueError("Tile Face4 crops require face-cache training")
+        if (self.mono_depth_manifest is None) != (self.mono_depth_root is None):
+            raise ValueError(
+                "mono_depth_manifest and mono_depth_root must be provided together"
+            )
+        if (self.face_lidar_geometry_manifest is None) != (
+            self.face_lidar_geometry_root is None
+        ):
+            raise ValueError(
+                "Face4 LiDAR geometry manifest and root must be provided together"
+            )
+        if (
+            self.face_lidar_geometry_manifest is not None
+            and self.face_cache_manifest is None
+        ):
+            raise ValueError("Face4 LiDAR geometry requires face-cache training")
+        if self.lidar_range_weight > 0.0 and self.face_cache_manifest is not None:
+            if self.face_lidar_geometry_manifest is None:
+                raise ValueError(
+                    "positive LiDAR range weight on Face4 requires signed Face4 geometry"
+                )
+        if self.da2_depth_weight < 0.0:
+            raise ValueError("DA2 depth weight must be non-negative")
+        if self.da2_depth_weight > 0.0 and self.mono_depth_manifest is None:
+            raise ValueError("positive DA2 depth weight requires a DA2 manifest and root")
+        if not self.final_evaluation_artifacts:
+            if self.face_cache_manifest is None:
+                raise ValueError(
+                    "final_evaluation_artifacts may be disabled only for "
+                    "face-cache training"
+                )
+            if self.golden_evaluation.enabled:
+                raise ValueError(
+                    "golden_evaluation must be disabled when "
+                    "final_evaluation_artifacts is false"
+                )
         if (self.person_mask_manifest is None) != (self.person_mask_root is None):
             raise ValueError(
                 "person_mask_manifest and person_mask_root must be provided together"
@@ -482,11 +785,110 @@ class TrainerConfig:
             raise ValueError(
                 "production 3DGS training requires person_mask_manifest and person_mask_root"
             )
+        if self.surface_initialization.enabled:
+            if self.initialization_geometry is None:
+                raise ValueError(
+                    "surface_initialization requires initialization_geometry"
+                )
+            if not self.initialization_geometry.is_file():
+                raise FileNotFoundError(
+                    f"initialization geometry is missing: {self.initialization_geometry}"
+                )
+            if self.surface_initialization.mode == "mipmap_k7_k30":
+                if self.metric_scale_calibration.mode != "precomputed":
+                    raise ValueError(
+                        "mipmap_k7_k30 initialization requires precomputed metric scales"
+                    )
+                if self.initialization_geometry_manifest is None:
+                    raise ValueError(
+                        "mipmap_k7_k30 initialization requires a signed geometry manifest"
+                    )
+                if self.mipmap_tile_id is None or self.mipmap_tile_id < 0:
+                    raise ValueError(
+                        "mipmap_k7_k30 initialization requires mipmap_tile_id"
+                    )
+                if not self.initialization_geometry_manifest.is_file():
+                    raise FileNotFoundError(
+                        "initialization geometry manifest is missing: "
+                        f"{self.initialization_geometry_manifest}"
+                    )
+                geometry_manifest = json.loads(
+                    self.initialization_geometry_manifest.read_text(encoding="utf-8")
+                )
+                verify_tile_geometry_manifest(
+                    geometry_manifest,
+                    root=self.initialization_geometry_manifest.parent,
+                    verify_artifacts=True,
+                )
+                matches = [
+                    tile
+                    for tile in geometry_manifest["tiles"]
+                    if int(tile["tile_id"]) == int(self.mipmap_tile_id)
+                ]
+                if len(matches) != 1:
+                    raise ValueError("geometry manifest does not contain the selected Tile")
+                selected = matches[0]
+                expected_geometry = (
+                    self.initialization_geometry_manifest.parent
+                    / selected["geometry"]["path"]
+                ).resolve()
+                if self.initialization_geometry.resolve() != expected_geometry:
+                    raise ValueError(
+                        "initialization geometry path differs from the signed Tile artifact"
+                    )
+                if _sha256_file(self.initialization_ply) != selected.get(
+                    "initialization_ply_sha256"
+                ):
+                    raise ValueError(
+                        "initialization PLY differs from the geometry manifest binding"
+                    )
+                if self.tile_inputs_manifest is None or self.tile_inputs_root is None:
+                    raise ValueError(
+                        "mipmap_k7_k30 initialization requires signed Tile inputs"
+                    )
+                if not self.tile_inputs_manifest.is_file():
+                    raise FileNotFoundError(
+                        f"Tile inputs manifest is missing: {self.tile_inputs_manifest}"
+                    )
+                tile_inputs = json.loads(
+                    self.tile_inputs_manifest.read_text(encoding="utf-8")
+                )
+                tile_inputs_sha = verify_tile_inputs_manifest(
+                    tile_inputs,
+                    root=self.tile_inputs_root,
+                    verify_artifacts=True,
+                )
+                if geometry_manifest.get("tile_inputs_manifest_sha256") != tile_inputs_sha:
+                    raise ValueError(
+                        "Tile geometry manifest is bound to different Tile inputs"
+                    )
+                input_matches = [
+                    tile
+                    for tile in tile_inputs["tiles"]
+                    if int(tile["tile_id"]) == int(self.mipmap_tile_id)
+                ]
+                if len(input_matches) != 1:
+                    raise ValueError("Tile inputs do not contain the selected Tile")
+                expected_ply = (
+                    self.tile_inputs_root / input_matches[0]["initialization"]["path"]
+                ).resolve()
+                if self.initialization_ply.resolve() != expected_ply:
+                    raise ValueError(
+                        "initialization PLY path differs from the signed Tile input"
+                    )
+        elif self.metric_scale_calibration.mode == "precomputed":
+            raise ValueError(
+                "precomputed metric scales require enabled mipmap_k7_k30 initialization"
+            )
         if (
             self.lidar_range_weight > 0.0 or self.lidar_linear_aux_weight > 0.0
         ) and self.depth_manifest is None:
             raise ValueError(
                 "positive LiDAR loss weight requires depth_manifest and depth_root"
+            )
+        if self.lidar_rgb_l1_weight > 0.0 and self.depth_manifest is None:
+            raise ValueError(
+                "positive LiDAR-supported RGB weight requires depth_manifest and depth_root"
             )
         required_paths = {
             "dataset_manifest": self.dataset_manifest,
@@ -501,14 +903,122 @@ class TrainerConfig:
         missing = [name for name, path in required_paths.items() if path is None]
         if missing:
             raise ValueError(f"trainer config is missing paths: {', '.join(sorted(missing))}")
+        if self.warm_start_checkpoint is not None and not self.warm_start_checkpoint.is_file():
+            raise FileNotFoundError(
+                f"warm-start checkpoint is missing: {self.warm_start_checkpoint}"
+            )
+        if self.dataset_manifest.is_file():
+            dataset = json.loads(self.dataset_manifest.read_text(encoding="utf-8"))
+            lineage = dataset.get("training_lineage", {})
+            if (
+                lineage.get("independent_at_algorithm_version")
+                == INDEPENDENT_AT_ALGORITHM
+            ):
+                if self.mipmap_pipeline_gate is None:
+                    raise ValueError(
+                        "shared-single-focal KB4 data requires mipmap_pipeline_gate; "
+                        "the Face4/semantic/depth/Tile sequence may not be skipped"
+                    )
+                if not self.split_manifest.is_file():
+                    raise FileNotFoundError(
+                        f"split manifest is missing: {self.split_manifest}"
+                    )
+                split = json.loads(self.split_manifest.read_text(encoding="utf-8"))
+                face_sha = None
+                if self.face_cache_manifest is not None:
+                    if not self.face_cache_manifest.is_file():
+                        raise FileNotFoundError(
+                            f"face cache manifest is missing: {self.face_cache_manifest}"
+                        )
+                    face = json.loads(
+                        self.face_cache_manifest.read_text(encoding="utf-8")
+                    )
+                    face_sha = str(face.get("face_manifest_sha256", ""))
+                verify_training_gate(
+                    self.mipmap_pipeline_gate,
+                    dataset_manifest_sha256=str(dataset.get("manifest_sha256", "")),
+                    split_manifest_sha256=str(
+                        split.get("split_manifest_sha256", "")
+                    ),
+                    face_manifest_sha256=face_sha,
+                    allow_implementation_smoke=self.implementation_smoke_only,
+                )
+                gate, _ = load_and_verify_gate(self.mipmap_pipeline_gate)
+                if self.renderer_mask_manifest is not None:
+                    renderer_mask = json.loads(
+                        self.renderer_mask_manifest.read_text(encoding="utf-8")
+                    )
+                    renderer_mask_sha = verify_renderer_mask_manifest(renderer_mask)
+                    if renderer_mask_sha != gate.get("bindings", {}).get(
+                        "renderer_mask_train_manifest_sha256"
+                    ):
+                        raise ValueError(
+                            "renderer mask manifest is bound to a different pipeline gate"
+                        )
+                if self.tile_inputs_manifest is not None:
+                    tile_inputs = json.loads(
+                        self.tile_inputs_manifest.read_text(encoding="utf-8")
+                    )
+                    if tile_inputs.get("tile_plan_manifest_sha256") != gate.get(
+                        "bindings", {}
+                    ).get("spatial_tile_plan_manifest_sha256"):
+                        raise ValueError(
+                            "Tile inputs are bound to a different pipeline gate"
+                        )
+                if self.mono_depth_manifest is not None:
+                    mono = json.loads(
+                        self.mono_depth_manifest.read_text(encoding="utf-8")
+                    )
+                    mono_sha = verify_mono_depth_manifest(mono)
+                    if mono_sha != gate.get("bindings", {}).get(
+                        "da2_train_manifest_sha256"
+                    ):
+                        raise ValueError(
+                            "DA2 manifest is bound to a different pipeline gate"
+                        )
+                    if mono.get("source_face_manifest_sha256") != face_sha:
+                        raise ValueError(
+                            "DA2 manifest is bound to different Face4 inputs"
+                        )
+                if self.face_lidar_geometry_manifest is not None:
+                    lidar_geometry = json.loads(
+                        self.face_lidar_geometry_manifest.read_text(encoding="utf-8")
+                    )
+                    verify_face_lidar_geometry_manifest(lidar_geometry)
+                    if lidar_geometry.get("source_face_manifest_sha256") != face_sha:
+                        raise ValueError(
+                            "Face4 LiDAR geometry is bound to different Face4 inputs"
+                        )
+                    if lidar_geometry.get("source_depth_manifest_sha256") != gate.get(
+                        "bindings", {}
+                    ).get("lidar_depth_manifest_sha256"):
+                        raise ValueError(
+                            "Face4 LiDAR geometry is bound to a different LiDAR depth gate"
+                        )
 
     def contract_dict(self) -> dict[str, Any]:
         uses_lidar_linear_aux = self.lidar_linear_aux_weight > 0.0
+        uses_lidar_rgb_boost = self.lidar_rgb_l1_weight > 0.0
+        uses_rgb_gradient = self.rgb_gradient_weight > 0.0
         loss_weights = {
             "rgb_l1": self.rgb_l1_weight,
             "rgb_ssim": self.rgb_ssim_weight,
             "lidar_range": self.lidar_range_weight,
+            "da2_depth": self.da2_depth_weight,
         }
+        view_sampling_contract = {
+            "mode": self.view_sampling_mode,
+            "resume_identity": (
+                "seed_epoch_and_step"
+                if self.view_sampling_mode
+                == "fisher_yates_without_replacement_per_epoch"
+                else "torch_generator_state"
+            ),
+        }
+        if self.lidar_rgb_l1_weight > 0.0:
+            loss_weights["lidar_rgb_l1"] = self.lidar_rgb_l1_weight
+        if uses_rgb_gradient:
+            loss_weights["rgb_gradient_l1"] = self.rgb_gradient_weight
         lidar_range_contract = {
             "mode": self.lidar_range_loss_mode,
             "semantics": "euclidean_ray_range_m",
@@ -518,15 +1028,31 @@ class TrainerConfig:
         if uses_lidar_linear_aux:
             loss_weights["lidar_linear_aux"] = self.lidar_linear_aux_weight
             lidar_range_contract["linear_aux_weight"] = self.lidar_linear_aux_weight
-        strategy_contract = {
-            "name": "MCMC",
-            "refine_start_iter": self.mcmc_refine_start_iter,
-            "refine_stop_iter": self.mcmc_refine_stop_iter,
-            "refine_every": self.mcmc_refine_every,
-            "noise_injection_stop_iter": self.mcmc_noise_injection_stop_iter,
-            "noise_lr": self.mcmc_noise_lr,
-            "noise_std_fraction": self.metric_scale_calibration.noise_std_fraction,
-        }
+        if self.densification_strategy == "default_3dgs":
+            default_configuration = dict(self.default_strategy)
+            default_configuration.setdefault(
+                "refine_start_iter", self.mcmc_refine_start_iter
+            )
+            default_configuration.setdefault(
+                "refine_stop_iter", self.mcmc_refine_stop_iter
+            )
+            default_configuration.setdefault("refine_every", self.mcmc_refine_every)
+            strategy_contract = {
+                "name": "DefaultStrategy",
+                "implementation": "gsplat.strategy.DefaultStrategy",
+                "gradient_source": self.densification_gradient_source,
+                "configuration": dict(sorted(default_configuration.items())),
+            }
+        else:
+            strategy_contract = {
+                "name": "MCMC",
+                "refine_start_iter": self.mcmc_refine_start_iter,
+                "refine_stop_iter": self.mcmc_refine_stop_iter,
+                "refine_every": self.mcmc_refine_every,
+                "noise_injection_stop_iter": self.mcmc_noise_injection_stop_iter,
+                "noise_lr": self.mcmc_noise_lr,
+                "noise_std_fraction": self.metric_scale_calibration.noise_std_fraction,
+            }
         if self.error_weighted_sampling.enabled:
             strategy_contract["error_weighted_sampling"] = (
                 self.error_weighted_sampling.to_dict()
@@ -544,14 +1070,27 @@ class TrainerConfig:
             # would rewrite trainer_config_sha256 for every pre-WP-5 config.
             strategy_contract["tangent_proposal"] = self.tangent_proposal.to_dict()
 
-        return {
+        contract = {
             "schema_version": 2,
-            "algorithm_version": "cloudstudio_gsplat_trainer_v5"
-            if uses_lidar_linear_aux
-            else "cloudstudio_gsplat_trainer_v4",
+            "algorithm_version": "cloudstudio_gsplat_trainer_v7"
+            if uses_rgb_gradient
+            else (
+                "cloudstudio_gsplat_trainer_v6"
+                if uses_lidar_rgb_boost
+                else (
+                    "cloudstudio_gsplat_trainer_v5"
+                    if uses_lidar_linear_aux
+                    else "cloudstudio_gsplat_trainer_v4"
+                )
+            ),
             "trainer_preset": self.trainer_preset,
             "seed": self.seed,
             "max_steps": self.max_steps,
+            "evidence_scope": (
+                "IMPLEMENTATION_SMOKE_ONLY_NOT_TRAINING_READY"
+                if self.implementation_smoke_only
+                else "TRAINING_RUN"
+            ),
             "factor": self.factor,
             "crop": None
             if self.crop is None
@@ -568,6 +1107,7 @@ class TrainerConfig:
                 **self.metric_scale_calibration.to_dict(),
             },
             "loss_weights": loss_weights,
+            "view_sampling": view_sampling_contract,
             "color_model": {
                 "mode": self.color_model,
                 "sh_degree": self.sh_degree if self.color_model == "sh" else None,
@@ -583,6 +1123,11 @@ class TrainerConfig:
             "means_lr_schedule": {
                 "mode": "exponential_to_final_factor",
                 "final_factor": self.means_lr_final_factor,
+            },
+            "cuda_memory_management": {
+                "empty_cache_interval_steps": self.cuda_empty_cache_interval_steps,
+                "enabled": self.cuda_empty_cache_interval_steps > 0,
+                "tile_compatibility_value": 2,
             },
             "loss_contract": {
                 "rgb_ssim": {
@@ -612,6 +1157,11 @@ class TrainerConfig:
             "learning_rates": dict(sorted(self.learning_rates.items())),
             "optimizer": {
                 "configured_learning_rates": dict(sorted(self.learning_rates.items())),
+                "fixed_parameter_groups": sorted(
+                    name
+                    for name in ("means", "scales", "quats")
+                    if float(self.learning_rates[name]) == 0.0
+                ),
                 "means_step_fraction": self.metric_scale_calibration.means_step_fraction,
             },
             "face_split": {
@@ -643,6 +1193,102 @@ class TrainerConfig:
             "golden_evaluation": self.golden_evaluation.to_dict(),
             "viewer": False,
         }
+        if self.mipmap_pipeline_gate is not None:
+            gate, gate_sha = load_and_verify_gate(self.mipmap_pipeline_gate)
+            contract["mipmap_pipeline_gate"] = {
+                "profile": gate["profile"],
+                "status": gate["status"],
+                "gate_manifest_sha256": gate_sha,
+            }
+        if not self.final_evaluation_artifacts:
+            contract["face_split"]["final_raw_evaluation_artifacts"] = (
+                "deferred_to_separate_3dgut_stage"
+            )
+        if self.checkpoint_keep_every > 0:
+            contract["checkpoint_retention"] = {
+                "keep_every_steps": self.checkpoint_keep_every,
+                "path_pattern": "checkpoints/step_{step:08d}.pt",
+            }
+        if uses_lidar_rgb_boost:
+            contract["loss_contract"]["lidar_rgb_support"] = {
+                "source": "depth_mask",
+                "dilation_radius_px": self.lidar_rgb_dilation_radius_px,
+            }
+        if uses_rgb_gradient:
+            contract["loss_contract"]["rgb_gradient"] = {
+                "mode": "masked_forward_difference_l1",
+                "directions": ["horizontal", "vertical"],
+            }
+        if self.warm_start_checkpoint is not None:
+            contract["warm_start"] = {
+                "mode": "parameters_and_auxiliary_fresh_optimizers",
+                "checkpoint_sha256": _sha256_file(self.warm_start_checkpoint),
+                "min_opacity": float(self.warm_start_min_opacity),
+                "fresh_auxiliary_names": list(self.warm_start_fresh_auxiliary),
+            }
+            if self.warm_start_scale_multiplier != 1.0:
+                contract["warm_start"]["scale_multiplier"] = float(
+                    self.warm_start_scale_multiplier
+                )
+        if self.surface_initialization.enabled:
+            contract["initialization"]["surface_alignment"] = {
+                **self.surface_initialization.to_dict(),
+                "geometry_sha256": _sha256_file(self.initialization_geometry),
+            }
+            if self.surface_initialization.mode == "mipmap_k7_k30":
+                geometry_manifest = json.loads(
+                    self.initialization_geometry_manifest.read_text(encoding="utf-8")
+                )
+                contract["initialization"]["surface_alignment"].update(
+                    {
+                        "geometry_manifest_sha256": verify_tile_geometry_manifest(
+                            geometry_manifest
+                        ),
+                        "mipmap_tile_id": int(self.mipmap_tile_id),
+                    }
+                )
+        if self.tile_inputs_manifest is not None:
+            tile_inputs = json.loads(
+                self.tile_inputs_manifest.read_text(encoding="utf-8")
+            )
+            contract["tile_inputs"] = {
+                "manifest_sha256": verify_tile_inputs_manifest(tile_inputs),
+                "tile_id": self.mipmap_tile_id,
+                "face4_crop_consumed": self.face_cache_manifest is not None,
+                "principal_point_shifted_by_crop_origin": True,
+            }
+        if self.mono_depth_manifest is not None:
+            mono = json.loads(self.mono_depth_manifest.read_text(encoding="utf-8"))
+            contract["da2_depth"] = {
+                "manifest_sha256": verify_mono_depth_manifest(mono),
+                "valid_view_weight": self.da2_depth_weight,
+                "invalid_alignment_policy": "skip_da2_loss_for_view",
+            }
+        if self.face_lidar_geometry_manifest is not None:
+            lidar_geometry = json.loads(
+                self.face_lidar_geometry_manifest.read_text(encoding="utf-8")
+            )
+            contract["face4_lidar_geometry"] = {
+                "manifest_sha256": verify_face_lidar_geometry_manifest(
+                    lidar_geometry
+                ),
+                "source_depth_manifest_sha256": lidar_geometry.get(
+                    "source_depth_manifest_sha256"
+                ),
+                "sparse_metric_range_consumed_by_dataset": True,
+                "mesh_interpolation": False,
+            }
+        if self.renderer_mask_manifest is not None:
+            renderer_mask = json.loads(
+                self.renderer_mask_manifest.read_text(encoding="utf-8")
+            )
+            contract["renderer_mask"] = {
+                "manifest_sha256": verify_renderer_mask_manifest(renderer_mask),
+                "manifest_consumed_by_dataset": True,
+                "source_face_manifest_bound": True,
+                "policy": renderer_mask.get("policy"),
+            }
+        return contract
 
 
 def load_initialization_ply(path: Path) -> tuple[np.ndarray, np.ndarray]:
@@ -748,6 +1394,135 @@ def _sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 
+def _warm_start_from_checkpoint(
+    path: Path,
+    *,
+    expected_lineage: dict[str, Any],
+    params: Any,
+    auxiliary_params: dict[str, Any],
+    fresh_auxiliary_names: tuple[str, ...] = (),
+    scale_multiplier: float = 1.0,
+    map_location: str,
+) -> dict[str, Any]:
+    """Load only model state from a compatible completed run.
+
+    A warm start intentionally does not restore optimizer, sampler, strategy,
+    evaluation history, or RNG state. It permits a new resolution/loss phase
+    while requiring the same signed inputs, initialization, coordinate frame,
+    and locked renderer.
+    """
+    import torch
+
+    path = Path(path)
+    payload = torch.load(path, map_location=map_location, weights_only=False)
+    if payload.get("schema_version") != 1:
+        raise ValueError("unsupported warm-start checkpoint schema")
+    source_identity = payload.get("identity")
+    if not isinstance(source_identity, dict):
+        raise ValueError("warm-start checkpoint has no identity")
+    nested_source_identity = source_identity.get("source_identity", {})
+    if not isinstance(nested_source_identity, dict):
+        raise ValueError("warm-start checkpoint source_identity is invalid")
+    for key, expected in expected_lineage.items():
+        actual = (
+            source_identity[key]
+            if key in source_identity
+            else nested_source_identity.get(key)
+        )
+        if actual != expected:
+            raise ValueError(f"warm-start checkpoint lineage mismatch for {key}")
+
+    checkpoint_params = payload.get("params")
+    if not isinstance(checkpoint_params, dict) or set(checkpoint_params) != set(params):
+        raise ValueError("warm-start checkpoint parameter names do not match")
+    topology_changed = False
+    target_gaussian_count = len(next(iter(params.values())))
+    source_gaussian_count = len(next(iter(checkpoint_params.values())))
+    for name, parameter in params.items():
+        value = checkpoint_params[name]
+        if parameter.shape != value.shape:
+            if parameter.ndim == 0 or parameter.shape[1:] != value.shape[1:]:
+                raise ValueError(
+                    f"warm-start checkpoint parameter shape mismatch for {name}"
+                )
+            topology_changed = True
+        with torch.no_grad():
+            # Fresh optimizers already reference this Parameter object. Replacing
+            # its data (rather than the Parameter) permits a densified/pruned
+            # topology to start a new phase without leaving optimizer groups
+            # pointing at the old initialization row count.
+            parameter.data = value.to(map_location).detach().clone()
+    if not math.isfinite(float(scale_multiplier)) or scale_multiplier <= 0.0:
+        raise ValueError("warm-start scale multiplier must be finite and positive")
+    if scale_multiplier != 1.0:
+        if "scales" not in params:
+            raise ValueError("warm-start scale multiplier requires scales parameters")
+        with torch.no_grad():
+            params["scales"].add_(math.log(float(scale_multiplier)))
+
+    checkpoint_auxiliary = payload.get("auxiliary_params", {})
+    fresh_names = set(fresh_auxiliary_names)
+    target_names = set(auxiliary_params)
+    if not fresh_names <= target_names:
+        raise ValueError("warm-start fresh auxiliary names are missing from target parameters")
+    expected_source_names = target_names - fresh_names
+    if (
+        not isinstance(checkpoint_auxiliary, dict)
+        or set(checkpoint_auxiliary) != expected_source_names
+    ):
+        raise ValueError("warm-start checkpoint auxiliary parameter names do not match")
+    for name, parameter in auxiliary_params.items():
+        if name in fresh_names:
+            if not bool(torch.isfinite(parameter).all()) or bool(
+                torch.count_nonzero(parameter).item()
+            ):
+                raise ValueError(
+                    f"warm-start fresh auxiliary parameter {name} must be zero-initialized"
+                )
+            continue
+        value = checkpoint_auxiliary[name]
+        if parameter.shape != value.shape:
+            raise ValueError(f"warm-start checkpoint auxiliary parameter shape mismatch for {name}")
+        with torch.no_grad():
+            parameter.copy_(value.to(map_location))
+
+    return {
+        "mode": "parameters_and_auxiliary_fresh_optimizers",
+        "checkpoint_sha256": _sha256_file(path),
+        "source_step": int(payload.get("step", 0)),
+        "source_trainer_config_sha256": source_identity.get("trainer_config_sha256"),
+        "fresh_auxiliary_names": sorted(fresh_names),
+        "topology_changed": topology_changed,
+        "target_gaussian_count_before_load": target_gaussian_count,
+        "source_gaussian_count": source_gaussian_count,
+        "scale_multiplier": float(scale_multiplier),
+    }
+
+
+def _retained_checkpoint_records(
+    output_dir: Path,
+    *,
+    keep_every_steps: int,
+    completed_steps: int,
+) -> list[dict[str, Any]]:
+    if keep_every_steps <= 0:
+        return []
+    records: list[dict[str, Any]] = []
+    for step in range(keep_every_steps, completed_steps + 1, keep_every_steps):
+        path = Path(output_dir) / "checkpoints" / f"step_{step:08d}.pt"
+        if not path.is_file():
+            raise FileNotFoundError(f"retained checkpoint is missing: {path}")
+        records.append(
+            {
+                "step": step,
+                "path": path.relative_to(output_dir).as_posix(),
+                "sha256": _sha256_file(path),
+                "byte_count": path.stat().st_size,
+            }
+        )
+    return records
+
+
 def means_lr_for_step(
     base_learning_rate: float,
     final_factor: float,
@@ -756,13 +1531,36 @@ def means_lr_for_step(
     max_steps: int,
 ) -> float:
     """Australian parity schedule as a pure function for resume equivalence."""
-    if base_learning_rate <= 0.0:
-        raise ValueError("base means learning rate must be positive")
+    if base_learning_rate < 0.0:
+        raise ValueError("base means learning rate must be non-negative")
     if not 0.0 < final_factor <= 1.0:
         raise ValueError("means LR final factor must be in (0, 1]")
     if step < 0 or max_steps <= 0:
         raise ValueError("means LR schedule requires non-negative step and max_steps")
+    if base_learning_rate == 0.0:
+        return 0.0
     return float(base_learning_rate * (final_factor ** (step / max(1, max_steps))))
+
+
+def fisher_yates_epoch_order(
+    count: int,
+    *,
+    seed: int,
+    epoch: int,
+) -> tuple[int, ...]:
+    """Return one resume-stable, no-replacement Fisher-Yates permutation."""
+
+    if count <= 0 or epoch < 0:
+        raise ValueError("Fisher-Yates sampling requires positive count and epoch >= 0")
+    # SeedSequence keeps each epoch independent while making the permutation a
+    # pure function of (run seed, epoch).  A resumed run therefore does not
+    # need a partially consumed permutation in its checkpoint.
+    rng = np.random.default_rng(np.random.SeedSequence([int(seed), int(epoch)]))
+    order = list(range(int(count)))
+    for upper in range(count - 1, 0, -1):
+        selected = int(rng.integers(0, upper + 1))
+        order[upper], order[selected] = order[selected], order[upper]
+    return tuple(order)
 
 
 def active_sh_degree_for_step(config: TrainerConfig, step: int) -> int | None:
@@ -799,6 +1597,21 @@ def _tensor_sample(sample: TrainingSample, torch: Any, device: str) -> dict[str,
                 "depth_mask": torch.as_tensor(np.array(sample.depth_mask, copy=True), dtype=torch.bool, device=device),
             }
         )
+    if sample.mono_depth_range_m is not None:
+        result.update(
+            {
+                "da2_range_m": torch.as_tensor(
+                    np.array(sample.mono_depth_range_m, copy=True),
+                    dtype=torch.float32,
+                    device=device,
+                ),
+                "da2_mask": torch.as_tensor(
+                    np.array(sample.mono_depth_mask, copy=True),
+                    dtype=torch.bool,
+                    device=device,
+                ),
+            }
+        )
     return result
 
 
@@ -817,10 +1630,11 @@ def _render_supervision_loss(
     has_range = "range_m" in tensors and (
         config.lidar_range_weight > 0.0 or config.lidar_linear_aux_weight > 0.0
     )
+    has_da2 = "da2_range_m" in tensors and config.da2_depth_weight > 0.0
     rendered, rendered_range, _, info = backend.render(
         params,
         sample,
-        with_range=has_range,
+        with_range=has_range or has_da2,
         c2w_override=c2w_override,
         active_sh_degree=active_sh_degree,
         background_rgb=config.background_color,
@@ -846,6 +1660,31 @@ def _render_supervision_loss(
         # and validation renders stay at gain 1.0.
         rendered = rendered * rgb_gain
     l1 = masked_rgb_l1(rendered, tensors["rgb"], tensors["rgb_mask"])
+    rgb_gradient_l1 = None
+    if config.rgb_gradient_weight > 0.0:
+        rgb_gradient_l1 = masked_rgb_gradient_l1(
+            rendered, tensors["rgb"], tensors["rgb_mask"]
+        )
+    lidar_rgb_l1 = None
+    if config.lidar_rgb_l1_weight > 0.0:
+        if "depth_mask" not in tensors:
+            raise ValueError("LiDAR-supported RGB loss requires depth supervision")
+        lidar_rgb_mask = tensors["depth_mask"]
+        if config.lidar_rgb_dilation_radius_px > 0:
+            radius = config.lidar_rgb_dilation_radius_px
+            lidar_rgb_mask = backend.torch.nn.functional.max_pool2d(
+                lidar_rgb_mask[None, None].to(dtype=rendered.dtype),
+                kernel_size=2 * radius + 1,
+                stride=1,
+                padding=radius,
+            )[0, 0].to(dtype=backend.torch.bool)
+        lidar_rgb_mask = tensors["rgb_mask"] & lidar_rgb_mask
+        if bool(lidar_rgb_mask.any()):
+            lidar_rgb_l1 = masked_rgb_l1(
+                rendered, tensors["rgb"], lidar_rgb_mask
+            )
+        else:
+            lidar_rgb_l1 = rendered.new_zeros(())
     if config.rgb_ssim_weight <= 0.0:
         ssim = rendered.new_zeros(())
     elif config.rgb_ssim_mode == "local_gaussian":
@@ -866,6 +1705,10 @@ def _render_supervision_loss(
             rendered, tensors["rgb"], tensors["rgb_mask"]
         )
     loss = config.rgb_l1_weight * l1 + config.rgb_ssim_weight * ssim
+    if rgb_gradient_l1 is not None:
+        loss = loss + config.rgb_gradient_weight * rgb_gradient_l1
+    if lidar_rgb_l1 is not None:
+        loss = loss + config.lidar_rgb_l1_weight * lidar_rgb_l1
     range_loss = None
     linear_range_aux_loss = None
     if has_range and getattr(sample, "camera_model", "fisheye") == "pinhole":
@@ -882,15 +1725,15 @@ def _render_supervision_loss(
         )
         if not bool(supervised.any()):
             has_range = False
+    depth_scale = getattr(sample, "depth_to_range_scale", None)
+    if (has_range or has_da2) and rendered_range is not None and depth_scale is not None:
+        # Pinhole faces render z-depth; both LiDAR and aligned DA2 targets use
+        # Euclidean ray range.
+        rendered_range = rendered_range * backend.torch.as_tensor(
+            depth_scale, dtype=rendered_range.dtype, device=rendered_range.device
+        )
     if has_range:
         assert rendered_range is not None
-        depth_scale = getattr(sample, "depth_to_range_scale", None)
-        if depth_scale is not None:
-            # Pinhole faces render z-depth; LiDAR supervision is Euclidean
-            # ray range. The per-pixel ||K^-1 [u,v,1]|| factor converts.
-            rendered_range = rendered_range * backend.torch.as_tensor(
-                depth_scale, dtype=rendered_range.dtype, device=rendered_range.device
-            )
         if config.lidar_range_loss_mode == "linear_l1":
             range_loss = confidence_weighted_range_l1(
                 rendered_range,
@@ -915,8 +1758,34 @@ def _render_supervision_loss(
                 tensors["depth_mask"],
             )
             loss = loss + config.lidar_linear_aux_weight * linear_range_aux_loss
+    da2_depth_loss = None
+    if has_da2:
+        assert rendered_range is not None
+        da2_valid = (
+            tensors["da2_mask"]
+            & backend.torch.isfinite(tensors["da2_range_m"])
+            & (tensors["da2_range_m"] > 0.0)
+        )
+        if bool(da2_valid.any()):
+            da2_depth_loss = confidence_weighted_range_l1(
+                rendered_range,
+                tensors["da2_range_m"],
+                backend.torch.ones_like(tensors["da2_range_m"]),
+                da2_valid,
+            )
+            loss = loss + config.da2_depth_weight * da2_depth_loss
+    info["cloudstudio_da2_depth_loss"] = da2_depth_loss
     info["cloudstudio_linear_range_aux_loss"] = (
         None if linear_range_aux_loss is None else linear_range_aux_loss.detach()
+    )
+    info["cloudstudio_lidar_rgb_l1"] = (
+        lidar_rgb_l1
+    )
+    info["cloudstudio_rgb_gradient_l1"] = rgb_gradient_l1
+    info["cloudstudio_lidar_rgb_support_fraction"] = (
+        None
+        if lidar_rgb_l1 is None
+        else lidar_rgb_mask.to(dtype=rendered.dtype).mean().detach()
     )
     # Stashed for the error-weighted MCMC score update; detached, so it never
     # extends the autograd graph.
@@ -1088,6 +1957,20 @@ def train(
         raise FileExistsError(f"training output is not empty: {output_dir}")
     output_dir.mkdir(parents=True, exist_ok=True)
 
+    tile_views = None
+    if config.tile_inputs_manifest is not None:
+        tile_inputs = json.loads(
+            config.tile_inputs_manifest.read_text(encoding="utf-8")
+        )
+        selected_tiles = [
+            tile
+            for tile in tile_inputs["tiles"]
+            if int(tile["tile_id"]) == int(config.mipmap_tile_id)
+        ]
+        if len(selected_tiles) != 1:
+            raise ValueError("Tile inputs do not contain a unique selected Tile")
+        tile_views = selected_tiles[0]["views"]
+
     if config.face_cache_manifest is not None:
         # Fisheye face-split training: supervision comes from pre-warped
         # zero-distortion pinhole faces at full source resolution, bypassing
@@ -1101,6 +1984,14 @@ def train(
             face_manifest_path=config.face_cache_manifest,
             cache_root=config.face_cache_root,
             dataset_manifest_path=config.dataset_manifest,
+            tile_views=tile_views,
+            renderer_mask_manifest_path=config.renderer_mask_manifest,
+            mono_depth_manifest_path=config.mono_depth_manifest,
+            mono_depth_root=config.mono_depth_root,
+            face_lidar_geometry_manifest_path=(
+                config.face_lidar_geometry_manifest
+            ),
+            face_lidar_geometry_root=config.face_lidar_geometry_root,
         )
     else:
         trainset = S1TrainingDataset(
@@ -1134,6 +2025,14 @@ def train(
     train_dataset_sha = getattr(trainset, "dataset_sha256", None)
     if train_dataset_sha is not None and train_dataset_sha != valset.dataset_sha256:
         raise ValueError("train and validation datasets have different identities")
+    if (
+        config.view_sampling_mode
+        == "fisher_yates_without_replacement_per_epoch"
+        and config.max_steps != 20 * len(trainset)
+    ):
+        raise ValueError(
+            "MipMap epoch-permutation sampling requires exactly 20 complete view epochs"
+        )
     coordinate = build_coordinate_transform_manifest(trainset.dataset_sha256)
     _atomic_json(output_dir / "coordinate_transform_manifest.json", coordinate)
     contract = config.contract_dict()
@@ -1190,13 +2089,78 @@ def train(
         raise ValueError(
             f"initialization has {len(xyz)} Gaussians but cap_max is {config.cap_max}"
         )
+    exact_geometry: tuple[np.ndarray, np.ndarray, dict[str, Any]] | None = None
+    if (
+        config.surface_initialization.enabled
+        and config.surface_initialization.mode == "mipmap_k7_k30"
+    ):
+        if config.initialization_geometry is None:
+            raise ValueError("MipMap initialization geometry is unavailable")
+        exact_geometry = load_mipmap_tile_geometry(
+            config.initialization_geometry_manifest,
+            config.initialization_geometry_manifest.parent,
+            tile_id=int(config.mipmap_tile_id),
+            expected_initialization_ply_sha256=initialization_sha256,
+            expected_count=len(xyz),
+        )
     initial_scales_m, scale_calibration = build_metric_scale_calibration(
         xyz,
         policy=config.metric_scale_calibration,
         fixed_scale_m=config.init_scale_m,
         configured_means_lr=float(config.learning_rates["means"]),
         configured_noise_lr=config.mcmc_noise_lr,
+        precomputed_scales_m=(
+            None if exact_geometry is None else exact_geometry[0]
+        ),
     )
+    initial_quaternions = None
+    surface_initialization_report: dict[str, Any] = {"enabled": False}
+    initialization_geometry_sha256 = None
+    if config.surface_initialization.enabled:
+        if config.initialization_geometry is None:
+            raise ValueError("surface initialization geometry is unavailable")
+        initialization_geometry_sha256 = _sha256_file(
+            config.initialization_geometry
+        )
+        if exact_geometry is not None:
+            exact_scales, exact_quats, exact_geometry_report = exact_geometry
+            initial_scales_m = exact_scales
+            initial_quaternions = exact_quats
+            surface_initialization_report = {
+                "schema_version": 1,
+                "configuration": config.surface_initialization.to_dict(),
+                "surface_aligned_count": int(len(xyz)),
+                "surface_aligned_fraction": 1.0,
+                "tangent_scale_median": float(np.median(exact_scales[:, 0])),
+                "normal_scale_median": float(np.median(exact_scales[:, 2])),
+                **exact_geometry_report,
+            }
+        else:
+            geometry_normals, geometry_eigenvalues = load_initialization_geometry(
+                config.initialization_geometry,
+                expected_count=len(xyz),
+            )
+            (
+                initial_scales_m,
+                initial_quaternions,
+                surface_initialization_report,
+            ) = build_surface_aligned_initialization(
+                initial_scales_m,
+                geometry_normals,
+                geometry_eigenvalues,
+                config=config.surface_initialization,
+            )
+        surface_initialization_report["geometry_sha256"] = (
+            initialization_geometry_sha256
+        )
+        surface_unsigned = dict(surface_initialization_report)
+        surface_initialization_report["surface_initialization_sha256"] = (
+            hashlib.sha256(canonical_json_bytes(surface_unsigned)).hexdigest()
+        )
+        _atomic_json(
+            output_dir / "surface_initialization_report.json",
+            surface_initialization_report,
+        )
     effective_learning_rates = appearance_learning_rates(
         config, config.learning_rates
     )
@@ -1242,6 +2206,12 @@ def train(
     if proposal is not None and not classic_densification:
         # Read only inside _add_new_gs, and only for the rows it appends.
         backend.strategy.proposal_state = proposal
+    if proposal is not None and classic_densification:
+        # The LiDAR-first route keeps the recovered gradient split/clone/cull
+        # lifecycle, but candidate parents and newborn positions are now
+        # checked by the measured surface field instead of being free 3-D
+        # perturbations.
+        backend.strategy.surface_birth_proposal = proposal
     backend.pinhole_rasterize_mode = config.pinhole_rasterize_mode
     runtime_contract = {
         key: backend.runtime.get(key)
@@ -1256,6 +2226,13 @@ def train(
         "scale_calibration_sha256": scale_calibration["scale_calibration_sha256"],
         "gsplat_runtime": runtime_contract,
     }
+    if initialization_geometry_sha256 is not None:
+        checkpoint_identity["initialization_geometry_sha256"] = (
+            initialization_geometry_sha256
+        )
+        checkpoint_identity["surface_initialization_sha256"] = (
+            surface_initialization_report["surface_initialization_sha256"]
+        )
     torch.manual_seed(config.seed)
     torch.cuda.manual_seed_all(config.seed)
     sampler = torch.Generator(device="cpu")
@@ -1264,6 +2241,7 @@ def train(
         xyz,
         rgb,
         init_scales_m=initial_scales_m,
+        init_quaternions=initial_quaternions,
         learning_rates=effective_learning_rates,
         color_model=config.color_model,
         sh_degree=config.sh_degree,
@@ -1341,6 +2319,50 @@ def train(
     golden_history: list[dict[str, Any]] = []
     best_golden: dict[str, Any] | None = None
     full_evaluation_history: list[dict[str, Any]] = []
+    warm_start: dict[str, Any] | None = None
+    if config.warm_start_checkpoint is not None:
+        if "source_identity" in checkpoint_identity:
+            warm_start_lineage = {
+                key: value
+                for key, value in checkpoint_identity.items()
+                if key
+                not in {
+                    "trainer_config_sha256",
+                    "scale_calibration_sha256",
+                    "initialization_geometry_sha256",
+                    "surface_initialization_sha256",
+                }
+            }
+        else:
+            warm_start_lineage = {
+                key: checkpoint_identity[key]
+                for key in (
+                    "dataset_manifest_sha256",
+                    "mask_manifest_sha256",
+                    "person_mask_manifest_sha256",
+                    "split_manifest_sha256",
+                    "depth_manifest_sha256",
+                    "coordinate_transform_sha256",
+                    "initialization_ply_sha256",
+                    "gsplat_runtime",
+                )
+                if key in checkpoint_identity
+            }
+        warm_start = _warm_start_from_checkpoint(
+            config.warm_start_checkpoint,
+            expected_lineage=warm_start_lineage,
+            params=params,
+            auxiliary_params=auxiliary_params,
+            fresh_auxiliary_names=config.warm_start_fresh_auxiliary,
+            scale_multiplier=config.warm_start_scale_multiplier,
+            map_location=config.device,
+        )
+        if config.warm_start_min_opacity > 0.0:
+            warm_start["opacity_pruning"] = backend.prune_below_opacity(
+                params,
+                optimizers,
+                min_opacity=config.warm_start_min_opacity,
+            )
     if config.resume_checkpoint is not None:
         completed_steps, strategy_state, sampler_state, training_state = load_checkpoint(
             config.resume_checkpoint,
@@ -1422,8 +2444,24 @@ def train(
             ),
         }
 
+    sampled_epoch = -1
+    sampled_order: tuple[int, ...] = ()
     for step in range(completed_steps, config.max_steps):
-        index = int(torch.randint(len(trainset), (1,), generator=sampler).item())
+        if (
+            config.view_sampling_mode
+            == "fisher_yates_without_replacement_per_epoch"
+        ):
+            epoch = step // len(trainset)
+            if epoch != sampled_epoch:
+                sampled_order = fisher_yates_epoch_order(
+                    len(trainset), seed=config.seed, epoch=epoch
+                )
+                sampled_epoch = epoch
+            index = sampled_order[step % len(trainset)]
+        else:
+            index = int(
+                torch.randint(len(trainset), (1,), generator=sampler).item()
+            )
         sample = trainset[index]
         tensors = _tensor_sample(sample, torch, config.device)
         c2w_override = (
@@ -1519,6 +2557,18 @@ def train(
             # still steps on the full total-loss gradient (the two passes sum
             # in the leaf parameters).
             rgb_loss = config.rgb_l1_weight * l1 + config.rgb_ssim_weight * ssim
+            if info["cloudstudio_rgb_gradient_l1"] is not None:
+                rgb_loss = (
+                    rgb_loss
+                    + config.rgb_gradient_weight
+                    * info["cloudstudio_rgb_gradient_l1"]
+                )
+            if info["cloudstudio_lidar_rgb_l1"] is not None:
+                rgb_loss = (
+                    rgb_loss
+                    + config.lidar_rgb_l1_weight
+                    * info["cloudstudio_lidar_rgb_l1"]
+                )
             rest_loss = loss - rgb_loss
             rgb_loss.backward(retain_graph=True)
             backend.strategy_isolate_gradient(info)
@@ -1528,9 +2578,13 @@ def train(
         else:
             loss.backward()
         refine_boundary = (
-            step < config.mcmc_refine_stop_iter
-            and step > config.mcmc_refine_start_iter
-            and step % config.mcmc_refine_every == 0
+            backend.strategy.is_refine_step(step)
+            if hasattr(backend.strategy, "is_refine_step")
+            else (
+                step < config.mcmc_refine_stop_iter
+                and step > config.mcmc_refine_start_iter
+                and step % config.mcmc_refine_every == 0
+            )
         )
         checkpoint_boundary = (
             (step + 1) % config.checkpoint_every == 0
@@ -1665,6 +2719,15 @@ def train(
         last_metrics = {
             "loss": float(loss.detach().cpu()),
             "rgb_l1": float(l1.detach().cpu()),
+            "rgb_gradient_l1": None
+            if info["cloudstudio_rgb_gradient_l1"] is None
+            else float(info["cloudstudio_rgb_gradient_l1"].detach().cpu()),
+            "lidar_rgb_l1": None
+            if info["cloudstudio_lidar_rgb_l1"] is None
+            else float(info["cloudstudio_lidar_rgb_l1"].detach().cpu()),
+            "lidar_rgb_support_fraction": None
+            if info["cloudstudio_lidar_rgb_support_fraction"] is None
+            else float(info["cloudstudio_lidar_rgb_support_fraction"].cpu()),
             "rgb_ssim_loss": float(ssim.detach().cpu()),
             "rgb_ssim_mode": config.rgb_ssim_mode,
             "rgb_local_ssim_loss": None
@@ -1773,6 +2836,10 @@ def train(
             or completed == controlled_stop_after_steps
             or golden_due
             or full_evaluation_due
+            or (
+                config.checkpoint_keep_every > 0
+                and completed % config.checkpoint_keep_every == 0
+            )
         )
         if checkpoint_due:
             mcmc_telemetry["last_snapshot"] = snapshot_gaussians(
@@ -1796,6 +2863,14 @@ def train(
                 auxiliary_params=auxiliary_params,
                 auxiliary_optimizers=auxiliary_optimizers,
             )
+            if (
+                config.checkpoint_keep_every > 0
+                and completed % config.checkpoint_keep_every == 0
+            ):
+                retain_checkpoint(
+                    checkpoint_path,
+                    checkpoint_path.parent / f"step_{completed:08d}.pt",
+                )
             if golden_promoted:
                 save_checkpoint(
                     best_checkpoint_path,
@@ -1815,6 +2890,13 @@ def train(
                 completed_steps=completed,
                 checkpoint_path=checkpoint_path,
             )
+        if (
+            config.cuda_empty_cache_interval_steps > 0
+            and step % config.cuda_empty_cache_interval_steps == 0
+        ):
+            # Release cached allocator blocks for serial tile runs. Live
+            # tensors remain resident; non-tiled runs leave this disabled.
+            torch.cuda.empty_cache()
 
     torch.cuda.synchronize(config.device)
     duration_seconds = time.perf_counter() - started
@@ -1890,17 +2972,26 @@ def train(
         if selected_model_step != int(best_golden["completed_steps"]):
             raise ValueError("best checkpoint step does not match golden selection")
         selected_model_path = best_checkpoint_path
-    frames = _save_evaluation_artifacts(
-        backend=backend,
-        params=params,
-        dataset=valset,
-        output_dir=output_dir,
-        background_rgb=config.background_color,
+    if config.final_evaluation_artifacts:
+        frames = _save_evaluation_artifacts(
+            backend=backend,
+            params=params,
+            dataset=valset,
+            output_dir=output_dir,
+            background_rgb=config.background_color,
+        )
+    else:
+        frames = []
+    retained_checkpoints = _retained_checkpoint_records(
+        output_dir,
+        keep_every_steps=config.checkpoint_keep_every,
+        completed_steps=config.max_steps,
     )
     run_manifest = sign_run_manifest(
         {
             "schema_version": 1,
             "run_id": config.run_id,
+            "implementation_smoke_only": config.implementation_smoke_only,
             "dataset_manifest_sha256": trainset.dataset_sha256,
             "mask_manifest_sha256": trainset.mask_sha256,
             "person_mask_manifest_sha256": trainset.person_mask_sha256,
@@ -1912,6 +3003,7 @@ def train(
             "gsplat_runtime": backend.runtime,
             "initialization_ply_sha256": initialization_sha256,
             "metric_scale_calibration": scale_calibration,
+            "surface_initialization": surface_initialization_report,
             "rig_pose_refinement": pose_report,
             "exposure_compensation": None if exposure is None else exposure.report(),
             "ppisp": None if ppisp is None else ppisp.report(),
@@ -1940,9 +3032,22 @@ def train(
                 if not full_evaluation_history
                 else full_evaluation_history[-1],
             },
+            "final_evaluation_artifacts": {
+                "enabled": config.final_evaluation_artifacts,
+                "status": "COMPLETE"
+                if config.final_evaluation_artifacts
+                else "DEFERRED",
+                "reason": None
+                if config.final_evaluation_artifacts
+                else "separate_3dgut_evaluation_required",
+            },
             "frames": frames,
             "training": {
-                "status": "COMPLETE",
+                "status": (
+                    "IMPLEMENTATION_SMOKE_COMPLETE"
+                    if config.implementation_smoke_only
+                    else "COMPLETE"
+                ),
                 "completed_steps": config.max_steps,
                 "duration_seconds": duration_seconds,
                 "peak_vram_bytes": peak_vram_bytes,
@@ -1964,6 +3069,7 @@ def train(
                 "latest_checkpoint_path": checkpoint_path.relative_to(
                     output_dir
                 ).as_posix(),
+                "retained_checkpoints": retained_checkpoints,
                 "selected_checkpoint_last_metrics": selected_checkpoint_training_state.get(
                     "last_metrics"
                 ),
@@ -2005,6 +3111,7 @@ def train(
                     else None,
                 },
                 "mcmc_telemetry": mcmc_telemetry,
+                "warm_start": warm_start,
             },
         }
     )

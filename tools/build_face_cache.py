@@ -64,6 +64,7 @@ from cloudstudio_3dgs.geometry.fisheye_faces import (
     FaceSpec,
     face_weight,
     plan_fisheye_faces,
+    plan_mipmap_face4,
 )
 from cloudstudio_3dgs.geometry.lidar_projection import SparseDepthMap
 from cloudstudio_3dgs.training.dataset import S1TrainingDataset, TrainingSample
@@ -407,7 +408,10 @@ def _camera_calibration(camera: Mapping[str, Any]) -> tuple[np.ndarray, np.ndarr
 
 
 def _check_existing_manifest(
-    output: Path, fov_deg: float, faces_serialized: dict[str, list[dict[str, Any]]]
+    output: Path,
+    fov_deg: float,
+    faces_serialized: dict[str, list[dict[str, Any]]],
+    face_plan: str = "adaptive_full_fov",
 ) -> None:
     manifest_path = output / FACE_MANIFEST_NAME
     if not manifest_path.is_file():
@@ -415,11 +419,17 @@ def _check_existing_manifest(
     existing = json.loads(manifest_path.read_text(encoding="utf-8"))
     verify_face_manifest(existing)
     same_fov = float(existing.get("fov_deg", -1.0)) == float(fov_deg)
+    same_plan = str(existing.get("face_plan", "adaptive_full_fov")) == str(
+        face_plan
+    )
     existing_faces = {
         camera_id: entry["faces"] for camera_id, entry in existing.get("cameras", {}).items()
     }
-    if not same_fov or json.dumps(existing_faces, sort_keys=True) != json.dumps(
-        faces_serialized, sort_keys=True
+    if (
+        not same_fov
+        or not same_plan
+        or json.dumps(existing_faces, sort_keys=True)
+        != json.dumps(faces_serialized, sort_keys=True)
     ):
         raise SystemExit(
             f"existing {manifest_path} was built with a different FoV/face plan; "
@@ -436,12 +446,14 @@ def build_manifest_payload(
     records: Sequence[dict[str, Any]],
     skipped: Sequence[dict[str, Any]],
     min_face_weight: float = MIN_FACE_WEIGHT,
+    face_plan: str = "adaptive_full_fov",
 ) -> dict[str, Any]:
     """Assemble the unsigned face-cache manifest payload (shared with tests)."""
     face_count = sum(len(record["faces"]) for record in records)
     return {
         "schema_version": FACE_CACHE_SCHEMA_VERSION,
         "kind": "fisheye_face_cache",
+        "face_plan": str(face_plan),
         "fov_deg": float(fov_deg),
         "split": str(split),
         "min_face_weight": float(min_face_weight),
@@ -489,6 +501,12 @@ def main() -> int:
     parser.add_argument("--depth-root", type=Path)
     parser.add_argument("--fov-deg", type=float, default=190.0)
     parser.add_argument(
+        "--face-plan",
+        choices=("adaptive_full_fov", "mipmap_face4"),
+        default="adaptive_full_fov",
+        help="virtual-camera geometry; mipmap_face4 uses the recovered product layout",
+    )
+    parser.add_argument(
         "--workers",
         type=int,
         default=max(1, (multiprocessing.cpu_count() or 2) - 2),
@@ -532,7 +550,10 @@ def main() -> int:
     faces_serialized: dict[str, list[dict[str, Any]]] = {}
     for camera_id in used_camera_ids:
         K, radial, image_size = _camera_calibration(cameras[camera_id])
-        faces = plan_fisheye_faces(args.fov_deg, K, radial, image_size)
+        if args.face_plan == "mipmap_face4":
+            faces = plan_mipmap_face4(image_size)
+        else:
+            faces = plan_fisheye_faces(args.fov_deg, K, radial, image_size)
         faces_serialized[camera_id] = [face.to_dict() for face in faces]
         print(
             f"camera {camera_id}: {len(faces)} faces, "
@@ -541,7 +562,9 @@ def main() -> int:
 
     output = Path(args.output)
     output.mkdir(parents=True, exist_ok=True)
-    _check_existing_manifest(output, args.fov_deg, faces_serialized)
+    _check_existing_manifest(
+        output, args.fov_deg, faces_serialized, face_plan=args.face_plan
+    )
 
     skip_existing = not args.no_skip_existing
     total = len(dataset)
@@ -586,6 +609,7 @@ def main() -> int:
         faces_serialized=faces_serialized,
         records=records,
         skipped=skipped,
+        face_plan=args.face_plan,
     )
     face_count = payload["summary"]["face_sample_count"]
     manifest = sign_face_manifest(payload)

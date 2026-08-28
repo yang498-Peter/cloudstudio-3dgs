@@ -142,8 +142,9 @@ class FaceSpec:
     ``R_face`` maps face-frame vectors into the parent camera frame
     (``d_cam = R_face @ d_face``); its columns are the face axes in camera
     coordinates and it serializes row-major. ``K_face`` is the pinhole intrinsic
-    matrix for a ``width`` x ``height`` (always square) image with principal
-    point at the image center.
+    matrix for a ``width`` x ``height`` image with principal point at the image
+    center. Adaptive faces are square; fixed product-derived plans may use
+    rectangular rasters.
     """
 
     face_id: str
@@ -533,6 +534,81 @@ def plan_fisheye_faces(
         "face planning failed to reach full FoV coverage within recipe bounds "
         f"(fov={fisheye_fov_deg} deg)"
     )
+
+
+def plan_mipmap_face4(image_size: tuple[int, int]) -> list[FaceSpec]:
+    """Return the four fixed pinhole views recovered from MipMap snow output.
+
+    The product first optimizes the physical raw-fisheye cameras, then derives
+    this cross-shaped set without introducing additional pose variables. The
+    reference geometry was measured from ``mvs_undistort.xml`` for a
+    2912-by-2912 source. Resolutions and focal lengths scale together for a
+    square source of another resolution, preserving the exact FOVs.
+    """
+    source_width, source_height = (int(image_size[0]), int(image_size[1]))
+    if source_width <= 0 or source_height <= 0:
+        raise ValueError("image_size must be positive")
+    if source_width != source_height:
+        raise ValueError("MipMap Face4 requires a square source image")
+
+    scale = source_width / 2912.0
+
+    def scaled_even(value: int) -> int:
+        result = max(2, int(round(value * scale)))
+        return result + result % 2
+
+    def rotation_x(angle_deg: float) -> np.ndarray:
+        angle = math.radians(angle_deg)
+        c, s = math.cos(angle), math.sin(angle)
+        return np.array(
+            [[1.0, 0.0, 0.0], [0.0, c, -s], [0.0, s, c]],
+            dtype=np.float64,
+        )
+
+    def rotation_y(angle_deg: float) -> np.ndarray:
+        angle = math.radians(angle_deg)
+        c, s = math.cos(angle), math.sin(angle)
+        return np.array(
+            [[c, 0.0, s], [0.0, 1.0, 0.0], [-s, 0.0, c]],
+            dtype=np.float64,
+        )
+
+    def fixed_face(
+        face_id: str,
+        rotation: np.ndarray,
+        reference_width: int,
+        reference_height: int,
+        reference_focal_px: float,
+    ) -> FaceSpec:
+        width = scaled_even(reference_width)
+        height = scaled_even(reference_height)
+        focal = float(reference_focal_px) * scale
+        K_face = np.array(
+            [
+                [focal, 0.0, width / 2.0],
+                [0.0, focal, height / 2.0],
+                [0.0, 0.0, 1.0],
+            ],
+            dtype=np.float64,
+        )
+        half_fov_deg = math.degrees(
+            math.atan(max(width, height) / (2.0 * focal))
+        )
+        return FaceSpec(
+            face_id=face_id,
+            R_face=rotation,
+            K_face=K_face,
+            width=width,
+            height=height,
+            half_fov_deg=half_fov_deg,
+        )
+
+    return [
+        fixed_face("yaw_minus_35", rotation_y(-35.0), 1456, 2912, 1039.691749),
+        fixed_face("yaw_plus_35", rotation_y(35.0), 1456, 2912, 1039.691749),
+        fixed_face("pitch_up_56", rotation_x(56.0), 2912, 1456, 2308.921016),
+        fixed_face("pitch_down_56", rotation_x(-56.0), 2912, 1456, 2308.921016),
+    ]
 
 
 # =============================== coverage check =================================

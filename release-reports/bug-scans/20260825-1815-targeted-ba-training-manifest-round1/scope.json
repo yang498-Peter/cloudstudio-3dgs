@@ -1,0 +1,133 @@
+{
+  "scan": "ba-training-manifest-round1",
+  "date": "2026-08-25",
+  "baselineHead": "edf52a7d278786d0b2235ac5b396a029a5533905",
+  "commitWindow": "edf52a7^..edf52a7d278786d0b2235ac5b396a029a5533905",
+  "result": "GO",
+  "findings": {
+    "P0": 0,
+    "P1": 1,
+    "P2": 0,
+    "P3": 0,
+    "total": 1
+  },
+  "newReproductions": [
+    "tests/codex-scan/bh-20260825-ba-training-manifest-round1.py"
+  ],
+  "positiveRegressions": [
+    "tests/test_ba_training_manifest.py",
+    "real snow 30000-step fixed-capacity GPU run",
+    "36-frame COMPLETE quality report",
+    "362470-gaussian PLY export"
+  ],
+  "exclusions": [
+    "full MCMC runtime",
+    "Browser/WebView2",
+    "installer and packaged payload",
+    "external PLY viewer",
+    "release CI"
+  ],
+  "concurrentWorktreeChangesObserved": [
+    "README.md",
+    "cloudstudio_3dgs/training/checkpoint.py",
+    "cloudstudio_3dgs/training/trainer.py",
+    "converter/s1_to_colmap.py",
+    "tests/test_training.py",
+    "train and upstream gsplat patch/config files"
+  ],
+  "productSourceModifiedByThisScan": true,
+  "scanProtocolVersion": 2,
+  "scanDepth": "targeted-delta",
+  "mode": "verify-and-fix",
+  "integrationHead": "edf52a7d278786d0b2235ac5b396a029a5533905",
+  "verdictScope": "accepted BA candidate to signed Trainer manifest and fixed-capacity real GPU path",
+  "findingOrigins": {
+    "preExisting": 1,
+    "introducedInWindow": 0,
+    "repairIntroduced": 0
+  },
+  "coverageModel": {
+    "producerConsumerEdges": [
+      "accepted BA report and candidate -> signed dataset manifest",
+      "signed dataset plus rebuilt derivatives -> Trainer",
+      "best checkpoint -> quality report and PLY"
+    ],
+    "dimensions": [
+      "identity and lineage",
+      "failure honesty",
+      "train-validation isolation",
+      "numeric Stage 2 prior",
+      "real GPU runtime",
+      "artifact export"
+    ],
+    "executedCells": [
+      "accepted report positive",
+      "rejected report negative",
+      "candidate hash tamper",
+      "candidate image set equality",
+      "validation pose isolation",
+      "global calibration propagation",
+      "30000-step training",
+      "36-frame GPU LPIPS evaluation",
+      "PLY export"
+    ],
+    "omittedCells": [
+      "interrupted resume equivalence",
+      "full MCMC operators",
+      "external PLY viewer",
+      "packaged release"
+    ]
+  },
+  "oracleAudit": {
+    "identityDistinct": true,
+    "protocolFaithful": true,
+    "workaroundFree": true,
+    "realBoundaryExecuted": true,
+    "notes": [
+      "base, split, report, candidate, run and PLY identities are distinct",
+      "real snow data was consumed by the actual Trainer"
+    ]
+  },
+  "gateAudit": {
+    "criticalTests": [
+      "tests/test_ba_training_manifest.py",
+      "tests/codex-scan/bh-20260825-ba-training-manifest-round1.py"
+    ],
+    "durableLanes": [
+      "pytest default discovery for tests/test_ba_training_manifest.py"
+    ],
+    "defaultSuite": "focused executed; full suite not executed after final documentation-only edit",
+    "browserLane": "not applicable",
+    "releasePreflight": "not executed",
+    "ci": "absent"
+  },
+  "independentReview": {
+    "performed": true,
+    "reviewKind": "same-agent orthogonal Pass B; separate subagent unavailable under current collaboration policy",
+    "dimensions": [
+      "rejected and tampered inputs",
+      "validation isolation and global calibration",
+      "real GPU consumer and artifact completeness"
+    ],
+    "newFindings": 0,
+    "repairIntroducedFindings": []
+  },
+  "externalGates": [
+    "full MCMC runtime remains FAIL/NOT_RUN and is outside this fixed-capacity run",
+    "external PLY viewer NOT_RUN",
+    "Browser/WebView2 NOT_RUN",
+    "installer and release CI NOT_RUN"
+  ],
+  "findingDetails": [
+    {
+      "id": "R1-P1-BA-TRAINING-BRIDGE",
+      "severity": "P1",
+      "status": "fixed",
+      "findingClass": "product",
+      "origin": "pre-existing",
+      "reproductionIds": [
+        "bh-20260825-ba-training-manifest-round1"
+      ]
+    }
+  ]
+}

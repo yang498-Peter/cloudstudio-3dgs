@@ -66,9 +66,49 @@ def verify_run_manifest(manifest: dict[str, Any]) -> str:
         )
     frames = manifest.get("frames", [])
     image_ids = [str(frame.get("image_id", "")) for frame in frames]
+    deferred_final = manifest.get("final_evaluation_artifacts") == {
+        "enabled": False,
+        "reason": "separate_3dgut_evaluation_required",
+        "status": "DEFERRED",
+    }
+    if not frames and deferred_final:
+        return actual
     if not frames or not all(image_ids) or len(image_ids) != len(set(image_ids)):
         raise ValueError("run manifest contains invalid or duplicate image IDs")
     return actual
+
+
+def finalize_deferred_run_manifest(
+    manifest: dict[str, Any],
+    *,
+    frames: list[dict[str, Any]],
+    evaluation_runtime: dict[str, Any],
+    checkpoint_sha256: str,
+) -> dict[str, Any]:
+    """Bind a separately rendered 3DGUT evaluation to a signed face-stage run."""
+    import copy
+
+    source_sha256 = verify_run_manifest(manifest)
+    if manifest.get("final_evaluation_artifacts") != {
+        "enabled": False,
+        "reason": "separate_3dgut_evaluation_required",
+        "status": "DEFERRED",
+    }:
+        raise ValueError("run manifest is not an explicit deferred face stage")
+    if not frames:
+        raise ValueError("final evaluation requires at least one frame")
+    output = copy.deepcopy(manifest)
+    output.pop("run_manifest_sha256", None)
+    output["frames"] = frames
+    output["final_evaluation_artifacts"] = {
+        "enabled": True,
+        "status": "COMPLETE",
+        "reason": None,
+        "source_face_stage_run_manifest_sha256": source_sha256,
+        "evaluation_runtime": dict(evaluation_runtime),
+        "checkpoint_sha256": str(checkpoint_sha256),
+    }
+    return sign_run_manifest(output)
 
 
 def verify_quality_report(report: dict[str, Any]) -> str:

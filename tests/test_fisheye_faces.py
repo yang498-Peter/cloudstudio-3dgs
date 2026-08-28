@@ -18,6 +18,7 @@ from cloudstudio_3dgs.geometry.fisheye_faces import (
     kb4_project,
     kb4_unproject,
     plan_fisheye_faces,
+    plan_mipmap_face4,
 )
 
 # Realistic S1 left-lens parameters (values mirror the ukgs manifest calibration).
@@ -154,6 +155,82 @@ class FaceResolutionTests(unittest.TestCase):
         faces = plan_fisheye_faces(S1_FOV_DEG, big_K, S1_COEFFS, S1_IMAGE_SIZE)
         self.assertTrue(all(face.width <= 4096 for face in faces))
         self.assertTrue(any(face.width == 4096 for face in faces))
+
+
+class MipMapFace4Tests(unittest.TestCase):
+    def test_reference_geometry_matches_recovered_xml(self) -> None:
+        faces = plan_mipmap_face4(S1_IMAGE_SIZE)
+        self.assertEqual(
+            [face.face_id for face in faces],
+            ["yaw_minus_35", "yaw_plus_35", "pitch_up_56", "pitch_down_56"],
+        )
+        self.assertEqual(
+            [(face.width, face.height) for face in faces],
+            [(1456, 2912), (1456, 2912), (2912, 1456), (2912, 1456)],
+        )
+        np.testing.assert_allclose(
+            [face.K_face[0, 0] for face in faces],
+            [1039.691749, 1039.691749, 2308.921016, 2308.921016],
+            atol=1e-9,
+        )
+        angle35 = math.radians(35.0)
+        angle56 = math.radians(56.0)
+        expected_axes = np.array(
+            [
+                [-math.sin(angle35), 0.0, math.cos(angle35)],
+                [math.sin(angle35), 0.0, math.cos(angle35)],
+                [0.0, -math.sin(angle56), math.cos(angle56)],
+                [0.0, math.sin(angle56), math.cos(angle56)],
+            ]
+        )
+        np.testing.assert_allclose(
+            np.array([face.center_direction_camera for face in faces]),
+            expected_axes,
+            atol=1e-12,
+        )
+
+    def test_intrinsics_have_centered_principal_points_and_expected_fovs(self) -> None:
+        faces = plan_mipmap_face4(S1_IMAGE_SIZE)
+        measured = []
+        for face in faces:
+            focal = float(face.K_face[0, 0])
+            self.assertEqual(float(face.K_face[1, 1]), focal)
+            self.assertEqual(float(face.K_face[0, 2]), face.width / 2.0)
+            self.assertEqual(float(face.K_face[1, 2]), face.height / 2.0)
+            measured.append(
+                (
+                    math.degrees(2.0 * math.atan(face.width / (2.0 * focal))),
+                    math.degrees(2.0 * math.atan(face.height / (2.0 * focal))),
+                )
+            )
+        np.testing.assert_allclose(
+            measured,
+            [(70.0, 108.941), (70.0, 108.941), (64.471, 35.0), (64.471, 35.0)],
+            atol=5e-4,
+        )
+
+    def test_resolution_scaling_preserves_geometry(self) -> None:
+        faces = plan_mipmap_face4((1456, 1456))
+        self.assertEqual(
+            [(face.width, face.height) for face in faces],
+            [(728, 1456), (728, 1456), (1456, 728), (1456, 728)],
+        )
+        np.testing.assert_allclose(
+            [face.K_face[0, 0] for face in faces],
+            [519.8458745, 519.8458745, 1154.460508, 1154.460508],
+            atol=1e-9,
+        )
+
+    def test_non_square_source_is_rejected(self) -> None:
+        with self.assertRaisesRegex(ValueError, "square source"):
+            plan_mipmap_face4((2912, 1456))
+
+    def test_cross_covers_product_140_degree_diameter_but_not_full_lens(self) -> None:
+        faces = plan_mipmap_face4(S1_IMAGE_SIZE)
+        product_coverage = face_coverage_check(faces, 140.0, samples=20000)
+        full_lens_coverage = face_coverage_check(faces, S1_FOV_DEG, samples=20000)
+        self.assertEqual(product_coverage["uncovered"], 0)
+        self.assertGreater(full_lens_coverage["uncovered_fraction"], 0.05)
 
 
 class FaceWeightTests(unittest.TestCase):

@@ -16,6 +16,7 @@ from s1_to_colmap import (
     load_calibration_intrinsics,
     load_imgpose_frames,
     quat_xyzw_to_rotmat,
+    write_pycolmap_binary_model,
 )
 
 
@@ -92,6 +93,28 @@ class ImgPoseConversionTests(unittest.TestCase):
         self.assertEqual(calibration["left"]["fl_x"], 700.0)
         self.assertEqual(calibration["right"]["fl_x"], 710.0)
         self.assertEqual(differences["left"]["fl_x"], 299.0)
+
+    def test_colmap4_binary_model_contains_trivial_rig_and_frame(self) -> None:
+        import pycolmap
+
+        camera_key = (
+            "OPENCV_FISHEYE", 2560, 2048,
+            800.0, 801.0, 1280.0, 1024.0,
+            0.1, -0.02, 0.003, -0.0004,
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            model_dir = Path(tmp)
+            write_pycolmap_binary_model(
+                model_dir,
+                {camera_key: 1},
+                [(1, "left_1.jpg", 1, np.eye(3), np.array([1.0, 2.0, 3.0]))],
+            )
+            reconstruction = pycolmap.Reconstruction(model_dir)
+
+        self.assertEqual(reconstruction.num_cameras(), 1)
+        self.assertEqual(reconstruction.num_images(), 1)
+        self.assertEqual(reconstruction.num_rigs(), 1)
+        self.assertEqual(reconstruction.num_frames(), 1)
 
 
 if __name__ == "__main__":

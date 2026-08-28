@@ -77,6 +77,11 @@ class TrainingSample:
     # the vignetting field lives on the sensor, not on the warped face.
     sensor_pixel_coords: np.ndarray | None = None
     sensor_resolution: tuple[int, int] | None = None
+    # Metric-aligned DA2 supervision.  This stays separate from sparse LiDAR
+    # range so schedules and evidence can distinguish the two sources.
+    mono_depth_range_m: np.ndarray | None = None
+    mono_depth_mask: np.ndarray | None = None
+    mono_depth_cache_path: Path | None = None
 
 
 class S1TrainingDataset:

@@ -1,0 +1,131 @@
+{
+  "scan": "snow-surface-init-round1",
+  "date": "2026-08-26",
+  "baselineHead": "926ce5ab8438198f2b0e21257f3469a135fa6d80",
+  "commitWindow": "edf52a7d278786d0b2235ac5b396a029a5533905..926ce5ab8438198f2b0e21257f3469a135fa6d80",
+  "result": "CONDITIONAL GO",
+  "findings": {"P0": 0, "P1": 2, "P2": 0, "P3": 0, "total": 2},
+  "newReproductions": [
+    "tests/test_surface_initialization.py",
+    "tests/test_training.py::TrainingContractTests::test_runtime_verification_rejects_untracked_checkout_files"
+  ],
+  "positiveRegressions": [
+    "tests/test_surface_initialization.py",
+    "tests/test_training.py::TrainingContractTests::test_locked_patch_runtime_is_verified_before_importing_runtime",
+    "real snow 4143881-gaussian SH2 10-step CUDA smoke",
+    "real snow 4143881-gaussian SH2 2000-step fixed-step probe",
+    "real snow warm-2000 plus 6000-step near-fixed formal run",
+    "36-frame COMPLETE LPIPS quality report",
+    "two full SH2 PLY exports and one optional opacity-pruned export",
+    "sharpness, Gaussian scale, health and exported-PLY audits"
+  ],
+  "exclusions": [
+    "training-time densification",
+    "Browser/WebView2",
+    "installer and packaged payload",
+    "external PLY viewer",
+    "release CI"
+  ],
+  "concurrentWorktreeChangesObserved": [
+    "README.md",
+    "cloudstudio_3dgs/training/checkpoint.py",
+    "cloudstudio_3dgs/training/trainer.py warm-start and retention work",
+    "converter/s1_to_colmap.py",
+    "tests/test_s1_to_colmap.py",
+    "train patch and launcher files"
+  ],
+  "productSourceModifiedByThisScan": true,
+  "scanProtocolVersion": 2,
+  "scanDepth": "module-deep",
+  "mode": "verify-and-fix",
+  "integrationHead": "926ce5ab8438198f2b0e21257f3469a135fa6d80",
+  "verdictScope": "surface-aligned dense LiDAR initialization, locked gsplat runtime, and real snow CUDA fixed-step path",
+  "findingOrigins": {"preExisting": 1, "introducedInWindow": 0, "repairIntroduced": 1},
+  "coverageModel": {
+    "producerConsumerEdges": [
+      "colorized LAS -> deterministic dense PLY and PCA geometry",
+      "PCA geometry -> Trainer metric scales and quaternions",
+      "locked gsplat runtime -> real CUDA checkpoint",
+      "latest checkpoint -> sharpness and scale audits"
+    ],
+    "dimensions": [
+      "geometry identity and lineage",
+      "numeric scale and quaternion convention",
+      "invalid input failure honesty",
+      "runtime source tamper resistance",
+      "8 GB CUDA capacity",
+      "fixed-step visual structure"
+    ],
+    "executedCells": [
+      "planar normal positive",
+      "nonplanar isotropic fallback",
+      "nonfinite geometry negative",
+      "locked patch positive",
+      "untracked runtime negative",
+      "4143881 Gaussian SH2 smoke and 2000-step run",
+      "four-view sharpness audit",
+      "visible Gaussian scale audit"
+    ],
+    "omittedCells": [
+      "interrupted resume equivalence",
+      "external PLY viewer",
+      "packaged release"
+    ]
+  },
+  "oracleAudit": {
+    "identityDistinct": true,
+    "protocolFaithful": true,
+    "workaroundFree": true,
+    "realBoundaryExecuted": true,
+    "notes": [
+      "A/B uses latest.pt at the same requested step count",
+      "competitor files are used only as measured structural evidence because frames differ"
+    ]
+  },
+  "gateAudit": {
+    "criticalTests": [
+      "tests/test_surface_initialization.py",
+      "test_runtime_verification_rejects_untracked_checkout_files",
+      "real snow 4143881 Gaussian CUDA probe"
+    ],
+    "durableLanes": ["Python unittest discovery"],
+    "defaultSuite": "47 training/reproducibility/surface tests executed; registered CUDA scale test passed",
+    "browserLane": "not applicable",
+    "releasePreflight": "not executed",
+    "ci": "absent"
+  },
+  "independentReview": {
+    "performed": true,
+    "reviewKind": "same-agent orthogonal Pass B; subagent creation not permitted by current collaboration policy",
+    "dimensions": [
+      "runtime untracked-file tamper",
+      "geometry row and finite-value boundary",
+      "competitor structural envelope and 8 GB CUDA capacity"
+    ],
+    "newFindings": 1,
+    "repairIntroducedFindings": ["R1-P1-RUNTIME-UNTRACKED-BLIND-SPOT"]
+  },
+  "externalGates": [
+    "external PLY viewer NOT_RUN",
+    "Browser/WebView2 NOT_RUN",
+    "installer and release CI NOT_RUN"
+  ],
+  "findingDetails": [
+    {
+      "id": "R1-P1-PCA-SURFACE-DISCARDED",
+      "severity": "P1",
+      "status": "fixed",
+      "findingClass": "product",
+      "origin": "pre-existing",
+      "reproductionIds": ["tests/test_surface_initialization.py"]
+    },
+    {
+      "id": "R1-P1-RUNTIME-UNTRACKED-BLIND-SPOT",
+      "severity": "P1",
+      "status": "fixed",
+      "findingClass": "gate-infrastructure",
+      "origin": "repair-introduced",
+      "reproductionIds": ["test_runtime_verification_rejects_untracked_checkout_files"]
+    }
+  ]
+}

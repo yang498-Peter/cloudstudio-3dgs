@@ -94,6 +94,10 @@ class ProposalConfig:
             floating ten metres in front of a perfectly planar wall would
             otherwise be teleported onto it, which is a *relocation*, not a
             proposal, and destroys whatever the parent was representing.
+        support_tangent_factor: maximum tangential distance from the nearest
+            measured LiDAR sample, expressed in local-spacing units.  This
+            prevents a point on the unbounded extension of a fitted plane from
+            being mistaken for support inside the actually scanned patch.
         sigma_perp_factor: forwarded to ``support_weight`` when evaluating
             ``support_gate``. Matches :class:`AdmissionConfig` so both gates are
             calibrated on the same number.
@@ -119,18 +123,38 @@ class ProposalConfig:
             the rasterizer cannot integrate stably. Where the surface has no
             measurable roughness the floor therefore wins outright and
             ``thickness_factor`` has nothing to scale.
+        additive_births: preserve every parent Gaussian when a proposed child
+            is moved to a different surface position.  The upstream MCMC
+            split conserves volume only while parent and child remain
+            co-located; applying that split before a tangent-plane move removes
+            opacity from the old position and creates visible holes.
+        birth_opacity: initial opacity of an additive child.  It must remain
+            above MCMC's dead-Gaussian threshold and low enough that the new
+            surface sample can be fitted without abruptly over-covering the
+            image.
+        reject_unsupported_births: fail-closed LiDAR mode for classic
+            split/clone densification.  Candidate parents must pass the same
+            planarity/support gates before they are allowed to grow, and every
+            newborn is placed from that measured parent on the local tangent
+            surface.  This is intentionally stronger than the visual-only MCMC
+            fallback and must be enabled only when LiDAR is the authority
+            geometry.
     """
 
     enabled: bool = False
     mode: str = "tangent"
     planarity_gate: float = 0.6
     support_gate: float = 0.1
+    support_tangent_factor: float = 3.0
     sigma_perp_factor: float = 1.0
     tangent_sigma_factor: float = 0.5
     normal_offset_factor: float = 0.1
     init_shortest_axis: bool = True
     thickness_factor: float = 0.5
     min_thickness_m: float = 1e-3
+    additive_births: bool = False
+    birth_opacity: float = 0.05
+    reject_unsupported_births: bool = False
 
     def validate(self) -> None:
         if self.mode not in PROPOSAL_MODES:
@@ -141,6 +165,8 @@ class ProposalConfig:
         # distant floater onto the nearest plane; see the attribute docstring.
         if not 0.0 < float(self.support_gate) <= 1.0:
             raise ValueError("support_gate must be within (0, 1]")
+        if not float(self.support_tangent_factor) > 0.0:
+            raise ValueError("support_tangent_factor must be positive")
         if not float(self.sigma_perp_factor) > 0.0:
             raise ValueError("sigma_perp_factor must be positive")
         if float(self.tangent_sigma_factor) < 0.0:
@@ -151,6 +177,8 @@ class ProposalConfig:
             raise ValueError("thickness_factor must be positive")
         if not float(self.min_thickness_m) > 0.0:
             raise ValueError("min_thickness_m must be positive")
+        if not 0.005 < float(self.birth_opacity) < 1.0:
+            raise ValueError("birth_opacity must be within (0.005, 1)")
 
     @property
     def active(self) -> bool:
@@ -164,12 +192,16 @@ class ProposalConfig:
             "mode": self.mode,
             "planarity_gate": self.planarity_gate,
             "support_gate": self.support_gate,
+            "support_tangent_factor": self.support_tangent_factor,
             "sigma_perp_factor": self.sigma_perp_factor,
             "tangent_sigma_factor": self.tangent_sigma_factor,
             "normal_offset_factor": self.normal_offset_factor,
             "init_shortest_axis": self.init_shortest_axis,
             "thickness_factor": self.thickness_factor,
             "min_thickness_m": self.min_thickness_m,
+            "additive_births": self.additive_births,
+            "birth_opacity": self.birth_opacity,
+            "reject_unsupported_births": self.reject_unsupported_births,
         }
 
 
@@ -295,6 +327,8 @@ class ProposalResult:
     anchor_index: np.ndarray
     anchor_confidence: np.ndarray
     support: np.ndarray
+    child_support: np.ndarray
+    fallback_to_parent: np.ndarray
 
 
 def propose_positions(
@@ -398,15 +432,15 @@ def propose_positions(
             anchor_index=np.zeros(0, dtype=np.int64),
             anchor_confidence=np.zeros(0, dtype=np.float64),
             support=np.zeros(0, dtype=np.float64),
+            child_support=np.zeros(0, dtype=np.float64),
+            fallback_to_parent=np.zeros(0, dtype=bool),
         )
 
     query = surface_field.query(means, k=1)
     support = support_weight(
         query, sigma_perp_factor=float(config.sigma_perp_factor)
     )
-    applied = (
-        np.asarray(query.planarity, dtype=np.float64) >= float(config.planarity_gate)
-    ) & (support >= float(config.support_gate))
+    applied = _trusted_surface_mask(query, support, config)
     if not config.active:
         applied = np.zeros(count, dtype=bool)
 
@@ -424,6 +458,22 @@ def propose_positions(
         + tangential
         + np.asarray(query.normal, dtype=np.float64) * offset[:, None]
     )
+    child_support = np.ones(count, dtype=np.float64)
+    fallback_to_parent = np.zeros(count, dtype=bool)
+    if config.reject_unsupported_births:
+        # A supported parent is necessary but not sufficient: Gaussian scatter
+        # is unbounded, so even a small sigma has a non-zero chance of landing
+        # beyond the measured patch.  Re-query the actual proposed position and
+        # fail closed to the already accepted parent when the child leaves the
+        # trusted surface.  This keeps classic split/clone additive capacity on
+        # LiDAR without inventing geometry in a scan hole.
+        child_query = surface_field.query(proposed, k=1)
+        child_support = support_weight(
+            child_query, sigma_perp_factor=float(config.sigma_perp_factor)
+        )
+        child_ok = _trusted_surface_mask(child_query, child_support, config)
+        fallback_to_parent = applied & ~child_ok
+        proposed = np.where(fallback_to_parent[:, None], means, proposed)
     new_means = np.where(applied[:, None], proposed, means)
 
     new_quats = None
@@ -454,6 +504,8 @@ def propose_positions(
         anchor_index=np.asarray(query.index, dtype=np.int64),
         anchor_confidence=np.asarray(query.confidence, dtype=np.float64),
         support=support,
+        child_support=np.asarray(child_support, dtype=np.float64),
+        fallback_to_parent=fallback_to_parent,
     )
 
 
@@ -479,6 +531,23 @@ def _surface_log_scales(
     thickness = np.minimum(np.maximum(thickness, floor), np.exp(tangential[:, 1]))
     return np.concatenate(
         [tangential, np.log(np.maximum(thickness, _EPS))[:, None]], axis=1
+    )
+
+
+def _trusted_surface_mask(
+    query: Any, support: np.ndarray, config: ProposalConfig
+) -> np.ndarray:
+    """Measured-patch support, not merely distance to an infinite local plane."""
+
+    spacing = np.maximum(
+        np.asarray(query.local_spacing, dtype=np.float64), DEFAULT_MIN_SIGMA_M
+    )
+    tangent_limit = float(config.support_tangent_factor) * spacing
+    return (
+        np.asarray(query.planarity, dtype=np.float64)
+        >= float(config.planarity_gate)
+    ) & (np.asarray(support, dtype=np.float64) >= float(config.support_gate)) & (
+        np.asarray(query.d_tangent, dtype=np.float64) <= tangent_limit
     )
 
 
@@ -570,6 +639,26 @@ class TangentProposal:
         self.last_stats = _summarize(result)
         return payload
 
+    def eligible_parent_mask(self, means: Any) -> Any:
+        """Return the hard LiDAR growth gate for classic split/clone parents.
+
+        The MCMC path deliberately keeps a visual-only fallback.  A LiDAR-first
+        classic lifecycle has a different invariant: unsupported Gaussians may
+        still render, but they may not become parents of additional geometry.
+        Querying the exact parent positions here also makes the later newborn
+        proposal fail-closed without depending on the random split offset.
+        """
+        torch = __import__("torch")
+        points = means.detach().cpu().to(torch.float64).numpy()
+        query = self.field.query(points, k=1)
+        support = support_weight(
+            query, sigma_perp_factor=float(self.config.sigma_perp_factor)
+        )
+        eligible = _trusted_surface_mask(query, support, self.config)
+        return torch.from_numpy(np.ascontiguousarray(eligible)).to(
+            device=means.device, dtype=torch.bool
+        )
+
 
 def _summarize(result: ProposalResult) -> dict[str, Any]:
     """Auditable summary of one proposal batch.
@@ -583,11 +672,15 @@ def _summarize(result: ProposalResult) -> dict[str, Any]:
     if total == 0:
         return {"count": 0, "applied": 0, "applied_fraction": 0.0}
     applied = int(np.count_nonzero(result.applied))
+    fallback = int(np.count_nonzero(result.fallback_to_parent))
     return {
         "count": total,
         "applied": applied,
         "applied_fraction": applied / total,
+        "fallback_to_parent": fallback,
+        "fallback_fraction": fallback / total,
         "support_mean": float(np.mean(result.support)),
+        "child_support_mean": float(np.mean(result.child_support)),
     }
 
 

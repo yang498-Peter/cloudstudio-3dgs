@@ -8,6 +8,7 @@ hand-planned faces, runs the cache tool's per-sample worker function directly
 from __future__ import annotations
 
 import importlib.util
+import hashlib
 import json
 import shutil
 import sys
@@ -34,6 +35,12 @@ from cloudstudio_3dgs.training.face_dataset import (
     FaceCacheDataset,
     sign_face_manifest,
 )
+from cloudstudio_3dgs.data.depth_cache import load_sparse_depth
+from cloudstudio_3dgs.data.mono_depth import sign_mono_depth_manifest
+from cloudstudio_3dgs.data.face_lidar_geometry import (
+    sign_face_lidar_geometry_manifest,
+)
+from cloudstudio_3dgs.data.renderer_masks import sign_renderer_mask_manifest
 
 _SPEC = importlib.util.spec_from_file_location(
     "_build_face_cache_under_test", REPO_ROOT / "tools" / "build_face_cache.py"
@@ -162,6 +169,45 @@ class FaceCacheRoundTripTest(unittest.TestCase):
     def make_dataset(self) -> FaceCacheDataset:
         return FaceCacheDataset(self.manifest_path, self.root)
 
+    def write_renderer_manifest(self, root: Path) -> Path:
+        face = json.loads(self.manifest_path.read_text(encoding="utf-8"))
+        records = []
+        for image in face["images"]:
+            for entry in image["faces"]:
+                records.append(
+                    {
+                        "image_id": image["image_id"],
+                        "camera_id": image["camera_id"],
+                        "face_id": entry["face_id"],
+                        "mask_path": entry["mask_path"],
+                        "mask_sha256": entry["mask_sha256"],
+                        "keep_pixels": int(entry["mask_true_pixels"]),
+                    }
+                )
+        renderer = sign_renderer_mask_manifest(
+            {
+                "schema_version": 1,
+                "kind": "face4_renderer_mask_cache",
+                "split": "train",
+                "source_face_manifest_sha256": face["face_manifest_sha256"],
+                "policy": {
+                    "profile": "mipmap_renderer_visibility_compat_v1",
+                    "keep_expression": "face_cache_combined_mask != 0",
+                    "competitor_reference_expression": "(seg != 255) & (seg != 33)",
+                    "label_33_semantics": "UNKNOWN_NOT_INFERRED",
+                },
+                "masks": records,
+                "summary": {
+                    "face_sample_count": len(records),
+                    "empty_mask_count": 0,
+                    "missing_mask_count": 0,
+                },
+            }
+        )
+        path = root / "renderer_mask_manifest.json"
+        path.write_text(json.dumps(renderer), encoding="utf-8")
+        return path
+
     def copy_cache(self, destination: Path) -> Path:
         shutil.copytree(self.root, destination, dirs_exist_ok=True)
         return destination / FACE_MANIFEST_NAME
@@ -182,6 +228,67 @@ class FaceCacheRoundTripTest(unittest.TestCase):
         self.assertIsNotNone(entries["front"]["depth_path"])
         # The tilted face does not contain the +z depth points.
         self.assertIsNone(entries["tilt"]["depth_path"])
+
+    def test_external_lidar_geometry_adds_depth_without_resigning_rgb_cache(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            manifest_path = self.copy_cache(root)
+            face = json.loads(manifest_path.read_text(encoding="utf-8"))
+            records = []
+            for image in face["images"]:
+                for entry in image["faces"]:
+                    records.append(
+                        {
+                            "sample_id": f"{image['image_id']}::{entry['face_id']}",
+                            "image_id": image["image_id"],
+                            "face_id": entry["face_id"],
+                            "path": entry["depth_path"],
+                            "sha256": entry["depth_sha256"],
+                            "valid_pixels": (
+                                0
+                                if entry["depth_path"] is None
+                                else int(
+                                    len(
+                                        load_sparse_depth(
+                                            root / entry["depth_path"]
+                                        ).pixel_index
+                                    )
+                                )
+                            ),
+                        }
+                    )
+                    entry["depth_path"] = None
+                    entry["depth_sha256"] = None
+            face["summary"]["with_depth_count"] = 0
+            face["source_identity"]["depth_manifest_sha256"] = None
+            face = sign_face_manifest(face)
+            manifest_path.write_text(json.dumps(face), encoding="utf-8")
+            lidar = sign_face_lidar_geometry_manifest(
+                {
+                    "schema_version": 1,
+                    "kind": "face4_sparse_lidar_geometry",
+                    "split": "train",
+                    "source_face_manifest_sha256": face["face_manifest_sha256"],
+                    "source_depth_manifest_sha256": "d" * 64,
+                    "complete_face_cache": True,
+                    "expected_face_count": len(records),
+                    "records": records,
+                }
+            )
+            lidar_path = root / "face_lidar_geometry_manifest.json"
+            lidar_path.write_text(json.dumps(lidar), encoding="utf-8")
+            dataset = FaceCacheDataset(
+                manifest_path,
+                root,
+                face_lidar_geometry_manifest_path=lidar_path,
+                face_lidar_geometry_root=root,
+            )
+            self.assertIsNotNone(dataset[0].depth_range_m)
+            self.assertIsNone(dataset[1].depth_range_m)
+            self.assertEqual(
+                dataset.identity["face_lidar_geometry_manifest_sha256"],
+                lidar["face_lidar_geometry_manifest_sha256"],
+            )
 
     def test_idempotent_rerun_preserves_artifacts(self) -> None:
         sample = make_sample()
@@ -237,6 +344,32 @@ class FaceCacheRoundTripTest(unittest.TestCase):
         self.assertIsNone(tilt_sample.depth_range_m)
         self.assertIsNone(tilt_sample.depth_mask)
         self.assertIsNone(tilt_sample.depth_cache_path)
+
+    def test_signed_renderer_mask_manifest_is_consumed_and_bound(self) -> None:
+        renderer_path = self.write_renderer_manifest(self.root)
+        dataset = FaceCacheDataset(
+            self.manifest_path,
+            self.root,
+            renderer_mask_manifest_path=renderer_path,
+        )
+        self.assertEqual(
+            dataset.identity["renderer_mask_manifest_sha256"],
+            json.loads(renderer_path.read_text(encoding="utf-8"))[
+                "renderer_mask_manifest_sha256"
+            ],
+        )
+        self.assertTrue(np.array_equal(dataset[0].rgb_mask, self.make_dataset()[0].rgb_mask))
+
+        renderer = json.loads(renderer_path.read_text(encoding="utf-8"))
+        renderer["source_face_manifest_sha256"] = "f" * 64
+        renderer = sign_renderer_mask_manifest(renderer)
+        renderer_path.write_text(json.dumps(renderer), encoding="utf-8")
+        with self.assertRaisesRegex(ValueError, "different Face4"):
+            FaceCacheDataset(
+                self.manifest_path,
+                self.root,
+                renderer_mask_manifest_path=renderer_path,
+            )
 
     def test_rgb_and_mask_round_trip_match_face_warp(self) -> None:
         dataset = self.make_dataset()
@@ -338,10 +471,126 @@ class FaceCacheRoundTripTest(unittest.TestCase):
         for sample_id in dataset.image_ids:
             self.assertEqual(dataset.exposure_id_for(sample_id), BASE_IMAGE_ID)
         self.assertIn("face_manifest_sha256", dataset.identity)
+        self.assertEqual(dataset.identity["face_plan"], "adaptive_full_fov")
         self.assertEqual(
             dataset.identity["source_identity"],
             {"dataset_manifest_sha256": "synthetic"},
         )
+
+    def test_tile_crop_uses_public_sample_id_and_shifts_intrinsics(self) -> None:
+        crop = {
+            "sample_id": f"{BASE_IMAGE_ID}::front",
+            "x": 2,
+            "y": 1,
+            "width": 4,
+            "height": 5,
+        }
+        full = self.make_dataset()[0]
+        dataset = FaceCacheDataset(
+            self.manifest_path,
+            self.root,
+            tile_views=[crop],
+        )
+        self.assertEqual(dataset.image_ids, [f"{BASE_IMAGE_ID}::front"])
+        self.assertTrue(dataset.identity["tile_cropped"])
+        sample = dataset[0]
+        np.testing.assert_array_equal(sample.image, full.image[1:6, 2:6])
+        np.testing.assert_array_equal(sample.rgb_mask, full.rgb_mask[1:6, 2:6])
+        np.testing.assert_allclose(sample.K[0, 2], full.K[0, 2] - 2.0)
+        np.testing.assert_allclose(sample.K[1, 2], full.K[1, 2] - 1.0)
+        np.testing.assert_array_equal(
+            sample.depth_to_range_scale,
+            full.depth_to_range_scale[1:6, 2:6],
+        )
+        if full.depth_range_m is not None:
+            np.testing.assert_array_equal(
+                sample.depth_range_m,
+                full.depth_range_m[1:6, 2:6],
+            )
+
+    def test_tile_crop_rejects_da2_filename_style_id(self) -> None:
+        with self.assertRaisesRegex(ValueError, "unknown Face4 samples"):
+            FaceCacheDataset(
+                self.manifest_path,
+                self.root,
+                tile_views=[
+                    {
+                        "sample_id": f"{BASE_IMAGE_ID}__front",
+                        "x": 0,
+                        "y": 0,
+                        "width": 4,
+                        "height": 4,
+                    }
+                ],
+            )
+
+    def test_tile_crop_shifts_intrinsics_and_consumes_aligned_da2(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            manifest_path = self.copy_cache(root)
+            face_manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            da2_path = root / "da2_front.npz"
+            with da2_path.open("wb") as stream:
+                np.savez(stream, relative_depth=np.full((4, 4), 10.0, np.float16))
+            da2_sha = hashlib.sha256(da2_path.read_bytes()).hexdigest()
+            mono = sign_mono_depth_manifest(
+                {
+                    "schema_version": 1,
+                    "kind": "face4_da2_relative_depth_cache",
+                    "split": "train",
+                    "source_face_manifest_sha256": face_manifest[
+                        "face_manifest_sha256"
+                    ],
+                    "dataset_manifest_sha256": "synthetic",
+                    "lidar_depth_manifest_sha256": "d" * 64,
+                    "complete_face_cache": True,
+                    "expected_face_count": 2,
+                    "records": [
+                        {
+                            "sample_id": f"{BASE_IMAGE_ID}__front",
+                            "path": da2_path.name,
+                            "sha256": da2_sha,
+                            "alignment": {
+                                "valid": True,
+                                "scale": 2.0,
+                                "shift": 1.0,
+                            },
+                        },
+                        {
+                            "sample_id": f"{BASE_IMAGE_ID}__tilt",
+                            "path": da2_path.name,
+                            "sha256": da2_sha,
+                            "alignment": {"valid": False},
+                        },
+                    ],
+                }
+            )
+            mono_path = root / "mono_depth_manifest.json"
+            mono_path.write_text(json.dumps(mono), encoding="utf-8")
+            dataset = FaceCacheDataset(
+                manifest_path,
+                root,
+                tile_views=[
+                    {
+                        "sample_id": f"{BASE_IMAGE_ID}::front",
+                        "x": 1,
+                        "y": 2,
+                        "width": 4,
+                        "height": 3,
+                    }
+                ],
+                mono_depth_manifest_path=mono_path,
+                mono_depth_root=root,
+            )
+            self.assertEqual(len(dataset), 1)
+            sample = dataset[0]
+            self.assertEqual(sample.image.shape, (3, 4, 3))
+            self.assertEqual((sample.width, sample.height), (4, 3))
+            self.assertAlmostEqual(float(sample.K[0, 2]), 3.0)
+            self.assertAlmostEqual(float(sample.K[1, 2]), 2.0)
+            np.testing.assert_allclose(sample.mono_depth_range_m, 21.0)
+            self.assertTrue(np.all(sample.mono_depth_mask <= sample.rgb_mask))
+            self.assertEqual(sample.depth_to_range_scale.shape, (3, 4))
 
     def test_rig_frame_surface_for_pose_refinement(self) -> None:
         """Pose refinement needs the same three members S1TrainingDataset has;

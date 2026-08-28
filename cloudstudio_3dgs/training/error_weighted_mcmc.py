@@ -606,20 +606,37 @@ def sample_add_weighted(
     if probs.shape[0] != opacities.flatten().shape[0]:
         raise ValueError("probs must be a full-length [N] weight vector")
     sampled_idxs = _multinomial_sample(probs, n, replacement=True)
-    new_opacities, new_scales = compute_relocation(
-        opacities=opacities[sampled_idxs],
-        scales=torch.exp(params["scales"])[sampled_idxs],
-        ratios=torch.bincount(sampled_idxs)[sampled_idxs] + 1,
-        binoms=binoms,
+    additive_births = bool(
+        proposal is not None
+        and proposal.active
+        and proposal.config.additive_births
     )
-    new_opacities = torch.clamp(new_opacities, max=1.0 - eps, min=min_opacity)
+    if additive_births:
+        # A tangent proposal moves children away from their sampled parents.
+        # Upstream compute_relocation assumes the split lobes stay co-located;
+        # shrinking the parent before moving the child removes coverage at the
+        # original position.  Additive births therefore leave every existing
+        # row bit-exact and initialize only the appended opacity.
+        new_opacities = torch.full_like(
+            opacities[sampled_idxs], float(proposal.config.birth_opacity)
+        )
+        new_scales = torch.exp(params["scales"])[sampled_idxs]
+    else:
+        new_opacities, new_scales = compute_relocation(
+            opacities=opacities[sampled_idxs],
+            scales=torch.exp(params["scales"])[sampled_idxs],
+            ratios=torch.bincount(sampled_idxs)[sampled_idxs] + 1,
+            binoms=binoms,
+        )
+        new_opacities = torch.clamp(new_opacities, max=1.0 - eps, min=min_opacity)
 
     override: Dict[str, Tensor] = {}
     if proposal is not None and proposal.active and int(sampled_idxs.numel()) > 0:
         # Reproduce the child's base log-scales exactly as param_fn will derive
         # them, without touching the live parameter.
         child_scales = params["scales"].detach().clone()
-        child_scales[sampled_idxs] = torch.log(new_scales)
+        if not additive_births:
+            child_scales[sampled_idxs] = torch.log(new_scales)
         payload = proposal.propose(
             params["means"].detach()[sampled_idxs],
             params["quats"].detach()[sampled_idxs],
@@ -643,11 +660,13 @@ def sample_add_weighted(
         applied = None
 
     def param_fn(name: str, p: Tensor) -> Tensor:
-        if name == "opacities":
+        if name == "opacities" and not additive_births:
             p[sampled_idxs] = torch.logit(new_opacities)
-        elif name == "scales":
+        elif name == "scales" and not additive_births:
             p[sampled_idxs] = torch.log(new_scales)
         children = p[sampled_idxs]
+        if name == "opacities" and additive_births:
+            children = torch.logit(new_opacities)
         replacement = override.get(name)
         if replacement is not None and applied is not None:
             # Broadcast the [M] mask over the trailing feature dims. Non-applied
@@ -673,6 +692,11 @@ def sample_add_weighted(
             state[k] = torch.cat((v, v_new))
     if scene is not None:
         scene.on_sample_add(sampled_idxs)
+    if proposal_out is not None:
+        proposal_out["additive_births"] = additive_births
+        proposal_out["birth_opacity"] = (
+            float(proposal.config.birth_opacity) if additive_births else None
+        )
     return sampled_idxs
 
 
