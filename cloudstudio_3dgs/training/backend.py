@@ -603,6 +603,10 @@ class GsplatBackend:
             noise_injection_stop_iter=self.strategy.noise_injection_stop_iter,
             noise_position_delta_max_m=noise_position_delta_max_m,
             strategy_prunes=self.strategy_prunes,
+            # The snapshots above were taken from this decision; re-deriving
+            # it inside the builder crashes on strategies whose boundary is
+            # inclusive (the exact MipMap lifecycle refines at step == start).
+            refine=refine,
         )
         lifecycle = getattr(self.strategy, "last_lifecycle_event", None)
         if lifecycle is not None:

@@ -579,14 +579,21 @@ def build_mcmc_step_event(
     noise_injection_stop_iter: int,
     noise_position_delta_max_m: float | None = None,
     strategy_prunes: bool = False,
+    refine: bool | None = None,
 ) -> dict[str, Any]:
     """Describe one completed strategy call without overstating visual quality."""
-    refine = _refine_triggered(
-        step=step,
-        refine_start_iter=refine_start_iter,
-        refine_stop_iter=refine_stop_iter,
-        refine_every=refine_every,
-    )
+    if refine is None:
+        # Callers that know their strategy's own boundary convention should
+        # pass it: the exact MipMap lifecycle refines at step == start_iter
+        # (inclusive) while this fallback formula is exclusive, and deriving
+        # the decision twice is what turned that off-by-one into a crash at
+        # the first boundary step.
+        refine = _refine_triggered(
+            step=step,
+            refine_start_iter=refine_start_iter,
+            refine_stop_iter=refine_stop_iter,
+            refine_every=refine_every,
+        )
     if refine and (before is None or after is None):
         raise ValueError("refine telemetry requires before and after snapshots")
     if not refine and (before is not None or after is not None):
