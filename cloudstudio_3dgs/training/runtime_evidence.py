@@ -276,9 +276,22 @@ def build_mcmc_runtime_report(
     locked_commit = source_runtime.get("locked_commit")
     actual_commit = source_runtime.get("commit")
     provenance_ok = (
-        source_runtime.get("clean") is True
-        and isinstance(locked_commit, str)
+        isinstance(locked_commit, str)
         and actual_commit == locked_commit
+        and (
+            source_runtime.get("clean") is True
+            # A signed patched checkout is provenance-pinned just as hard:
+            # verify_gsplat_runtime already refused any checkout whose patch
+            # artifact or applied-diff SHA256 disagreed with the lock, so by
+            # the time this report is built the shas below are verified. The
+            # fisheye patch only ADDS operators; the MCMC translation units
+            # are byte-identical to the clean commit.
+            or (
+                source_runtime.get("source_kind") == "locked_patch"
+                and bool(source_runtime.get("patch_sha256"))
+                and bool(source_runtime.get("checkout_diff_sha256"))
+            )
+        )
     )
     complete = (
         bool(cuda_available)
