@@ -1,5 +1,10 @@
 #!/usr/bin/env python3
-"""Build the signed Tile_1 V26a 502-step classic-growth boundary arm and gate."""
+"""Build a signed Tile_1 502-step classic-growth boundary arm and gate.
+
+The optional PPISP profile keeps the proven V26 LiDAR-guarded lifecycle while
+replacing its scalar exposure learner with the recovered per-view nuisance
+model used by the competitor-cross-checked V33 route.
+"""
 
 from __future__ import annotations
 
@@ -49,12 +54,55 @@ def main() -> int:
     parser.add_argument("--output-gate", required=True, type=Path)
     parser.add_argument("--run-output", required=True, type=Path)
     parser.add_argument("--resume-checkpoint", type=Path)
+    parser.add_argument(
+        "--run-id",
+        default="snow-tile1-v26a-classic-lidar-boundary502",
+    )
+    parser.add_argument(
+        "--ppisp-per-image",
+        action="store_true",
+        help="replace scalar exposure with scheduled no-CRF per-image PPISP",
+    )
+    parser.add_argument(
+        "--observation-aware-cull",
+        action="store_true",
+        help=(
+            "protect opacity culls with observation count, consecutive-event "
+            "and post-reset grace gates, capped at five percent per event"
+        ),
+    )
+    parser.add_argument(
+        "--detail-split-2cm",
+        action="store_true",
+        help=(
+            "split high-gradient LiDAR-supported gaussians above two centimetres "
+            "only when their observed raster radius exceeds 0.35 percent, and "
+            "prioritize low-opacity large-footprint culls"
+        ),
+    )
+    parser.add_argument(
+        "--gradient-profile",
+        choices=(
+            "legacy_absgrad_1p5e4",
+            "vendor_plain_1p5e4",
+            "absgrad_4e4",
+            "absgrad_8e4",
+            "absgrad_1p2e3",
+        ),
+        default="legacy_absgrad_1p5e4",
+        help="bind projected-gradient semantics and its calibrated threshold",
+    )
+    parser.add_argument(
+        "--thin-surfel-shape",
+        action="store_true",
+        help="disable the axis-ratio penalty that conflicts with competitor thin disks",
+    )
     args = parser.parse_args()
 
     config = _read(args.base_config)
     config.update(
         {
-            "run_id": "snow-tile1-v26a-classic-lidar-boundary502",
+            "run_id": args.run_id,
             "output_dir": args.run_output.resolve().as_posix(),
             "mipmap_pipeline_gate": args.output_gate.resolve().as_posix(),
             "implementation_smoke_only": False,
@@ -125,6 +173,68 @@ def main() -> int:
             "sh_degree_interval": 0,
         }
     )
+    if args.ppisp_per_image:
+        config["exposure_compensation"] = {
+            "enabled": False,
+            "learning_rate": 0.005,
+            "regularization_weight": 0.01,
+            "max_abs_log_gain": 0.6931471805599453,
+            "zero_mean_projection": False,
+            "mean_anchor_weight": 0.0,
+            "mean_anchor_beta": 0.1,
+        }
+        config["ppisp"] = {
+            "enabled": True,
+            "param_type": "no_crf",
+            "mode": "per_image",
+            "learning_rate": 0.002,
+            "lr_schedule": "linear_warmup_exponential_decay",
+            "warmup_fraction": 1.0 / 30.0,
+            "warmup_start_multiplier": 0.01,
+            "final_lr_multiplier": 0.01,
+            "exposure_mean_weight": 1.0,
+            "vig_center_weight": 0.02,
+            "vig_channel_weight": 0.1,
+            "vig_non_pos_weight": 0.01,
+            "color_mean_weight": 1.0,
+            "crf_channel_weight": 0.1,
+        }
+    if args.observation_aware_cull:
+        config["default_strategy"].update(
+            {
+                "opacity_cull_policy": "observation_aware",
+                "opacity_cull_min_observations": 4,
+                "opacity_cull_consecutive_events": 2,
+                "opacity_cull_grace_after_reset_steps": 200,
+                "opacity_cull_max_fraction": 0.05,
+            }
+        )
+    if args.detail_split_2cm:
+        if not args.observation_aware_cull:
+            parser.error("--detail-split-2cm requires --observation-aware-cull")
+        config["default_strategy"].update(
+            {
+                "detail_split_policy": "lidar_surface_screen_detail",
+                "detail_split_scale_m": 0.02,
+                "detail_split_screen_radius": 0.0035,
+                "opacity_cull_priority": "lowest_opacity_per_footprint",
+            }
+        )
+    gradient_profiles = {
+        "legacy_absgrad_1p5e4": (True, 0.00015),
+        "vendor_plain_1p5e4": (False, 0.00015),
+        "absgrad_4e4": (True, 0.0004),
+        "absgrad_8e4": (True, 0.0008),
+        "absgrad_1p2e3": (True, 0.0012),
+    }
+    absgrad, grow_grad2d = gradient_profiles[args.gradient_profile]
+    config["default_strategy"].update(
+        {"absgrad": absgrad, "grow_grad2d": grow_grad2d}
+    )
+    if args.thin_surfel_shape:
+        config["geometry_regularization"].update(
+            {"anisotropy_weight": 0.0, "max_anisotropy": 256.0}
+        )
     config.pop("config_manifest_sha256", None)
     if args.resume_checkpoint is not None:
         config["resume_checkpoint"] = args.resume_checkpoint.resolve().as_posix()

@@ -656,8 +656,47 @@ def initialize_mcmc_telemetry(initial: Mapping[str, Any]) -> dict[str, Any]:
         "noise_max_abs_delta_m": 0.0,
         "total_relocated": 0,
         "total_added": 0,
+        "total_pruned": 0,
         "events": [],
     }
+
+
+def normalize_classic_strategy_telemetry(telemetry: dict[str, Any]) -> None:
+    """Repair the shared telemetry vocabulary for classic 3DGS events.
+
+    The original generic event inferred ``relocated_count`` from the number of
+    low-opacity rows before a refine step. That inference is correct only for
+    MCMC. Classic Clone/Split/Cull never relocates, and its nested lifecycle is
+    authoritative for births and removals. Normalizing on resume also repairs
+    already-written bounded checkpoints without rewriting the checkpoint file.
+    """
+
+    total_relocated = 0
+    total_added = 0
+    total_pruned = 0
+    saw_classic = False
+    for event in telemetry.get("events", []):
+        lifecycle = event.get("classic_lifecycle")
+        if not isinstance(lifecycle, Mapping):
+            total_relocated += int(event.get("relocated_count", 0))
+            total_added += int(event.get("new_gaussian_count", 0))
+            total_pruned += int(event.get("pruned_gaussian_count", 0))
+            continue
+        saw_classic = True
+        births = int(lifecycle.get("clone_count", 0)) + int(
+            lifecycle.get("split_child_count", 0)
+        )
+        pruned = int(lifecycle.get("cull_count", 0))
+        event["strategy"] = "default_3dgs"
+        event["relocated_count"] = 0
+        event["new_gaussian_count"] = births
+        event["pruned_gaussian_count"] = pruned
+        total_added += births
+        total_pruned += pruned
+    if saw_classic:
+        telemetry["total_relocated"] = total_relocated
+        telemetry["total_added"] = total_added
+        telemetry["total_pruned"] = total_pruned
 
 
 def append_mcmc_telemetry(
@@ -677,8 +716,21 @@ def append_mcmc_telemetry(
     if not event.get("refine_triggered"):
         return
     telemetry["refine_event_count"] += 1
-    telemetry["total_relocated"] += int(event["relocated_count"])
-    telemetry["total_added"] += int(event["new_gaussian_count"])
+    lifecycle = event.get("classic_lifecycle")
+    if isinstance(lifecycle, Mapping):
+        relocated = 0
+        added = int(lifecycle.get("clone_count", 0)) + int(
+            lifecycle.get("split_child_count", 0)
+        )
+        pruned = int(lifecycle.get("cull_count", 0))
+    else:
+        relocated = int(event["relocated_count"])
+        added = int(event["new_gaussian_count"])
+        pruned = int(event.get("pruned_gaussian_count", 0))
+    telemetry["total_relocated"] += relocated
+    telemetry["total_added"] += added
+    telemetry.setdefault("total_pruned", 0)
+    telemetry["total_pruned"] += pruned
     telemetry["last_snapshot"] = dict(event["after"])
     telemetry["events"].append(dict(event))
 

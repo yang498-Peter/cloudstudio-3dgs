@@ -30,6 +30,7 @@ UPSTREAM_DATA_READY_STATUS = "UPSTREAM_DATA_READY"
 TRAINING_IMPLEMENTATION_READY_STATUS = "TRAINING_IMPLEMENTATION_READY"
 FIXED_TOPOLOGY_EVALUATION_READY_STATUS = "FIXED_TOPOLOGY_EVALUATION_READY"
 ADAPTIVE_GROWTH_BOUNDARY_READY_STATUS = "ADAPTIVE_GROWTH_BOUNDARY_READY"
+ADAPTIVE_GROWTH_REVIEW_READY_STATUS = "ADAPTIVE_GROWTH_REVIEW_READY"
 ADAPTIVE_GROWTH_EVALUATION_READY_STATUS = "ADAPTIVE_GROWTH_EVALUATION_READY"
 # Compatibility import for callers. Old signed gates whose literal status is
 # ``TRAINING_READY`` are intentionally not accepted by verify_training_gate.
@@ -134,9 +135,13 @@ MIPMAP_HIGH_TYPE2_REQUIRED_IMPLEMENTATION: dict[str, Any] = {
         "cull_screen_scale": 0.15,
         "opacity_reset_interval": 300,
         "opacity_reset_probability_cap": 0.2,
-        "lidar_parent_planarity_support_gate": True,
-        "newborn_tangent_surface_proposal": True,
-        "unsupported_births_rejected": True,
+        # The three surface-birth rules below are CloudStudio safety
+        # extensions.  They are deliberately kept outside the recovered
+        # vendor lifecycle semantics: the snow task proves classic
+        # split/clone/cull/reset, but not an equivalent LiDAR admission gate.
+        "cloudstudio_lidar_parent_planarity_support_gate": True,
+        "cloudstudio_newborn_tangent_surface_proposal": True,
+        "cloudstudio_unsupported_births_rejected": True,
     },
     "loss_schedule": {
         "rgb_l1_weight": 0.6,
@@ -163,11 +168,15 @@ MIPMAP_HIGH_TYPE2_REQUIRED_IMPLEMENTATION: dict[str, Any] = {
         "independent_training": True,
         "gaussian_count": 100000,
         "sh_degree": 1,
-        "merged_after_surface_tiles": True,
+        "separate_from_surface_ply": True,
+        "surface_ply_excludes_sky_vertices": True,
     },
     "tile_merge_and_delivery": {
-        "halo_ownership_resolved": True,
-        "cut_then_merge_consumed": True,
+        # MipMap's snow PLY is an append-only concatenation of all four
+        # level-0 Tile products and retains the observed halo.  Unique core
+        # ownership is a CloudStudio delivery enhancement, not vendor parity.
+        "vendor_halo_preserved_append_only": True,
+        "cloudstudio_unique_core_ownership_extension": True,
         "raw_fisheye_evaluation_passed": True,
         "ply_sog_lod_export_verified": True,
     },
@@ -861,8 +870,10 @@ def advance_adaptive_growth_gate(
         or tuple(upstream_gate.get("completed_stages", [])) != ORDERED_STAGES[:15]
     ):
         raise ValueError("adaptive growth requires an exact UPSTREAM_DATA_READY gate")
-    if stage not in {"boundary", "evaluation"}:
-        raise ValueError("adaptive growth stage must be boundary or evaluation")
+    if stage not in {"boundary", "review", "evaluation"}:
+        raise ValueError(
+            "adaptive growth stage must be boundary, review, or evaluation"
+        )
     config_sha = str(signed_config.get("config_manifest_sha256", ""))
     unsigned_config = copy.deepcopy(signed_config)
     unsigned_config.pop("config_manifest_sha256", None)
@@ -875,9 +886,14 @@ def advance_adaptive_growth_gate(
     proposal = signed_config.get("tangent_proposal", {})
     regularization = signed_config.get("geometry_regularization", {})
     strategy = signed_config.get("default_strategy", {})
+    detail_split_policy = strategy.get("detail_split_policy", "vendor_0_2m")
+    if detail_split_policy not in {
+        "vendor_0_2m",
+        "lidar_surface_screen_detail",
+    }:
+        raise ValueError("adaptive growth detail split policy is invalid")
     required_strategy = {
         "exact_mipmap_lifecycle": True,
-        "grow_grad2d": 0.00015,
         "growth_min_opacity": 0.15,
         "split_scale_m": 0.2,
         "prune_scale_m": 0.2,
@@ -887,7 +903,6 @@ def advance_adaptive_growth_gate(
         "prune_scale2d": 0.15,
         "reset_every": 300,
         "reset_opacity_cap": 0.2,
-        "absgrad": True,
         "revised_opacity": True,
     }
     mismatched_strategy = {
@@ -899,19 +914,61 @@ def advance_adaptive_growth_gate(
         raise ValueError(
             f"adaptive growth lifecycle parameters differ: {mismatched_strategy}"
         )
+    gradient_pair = (bool(strategy.get("absgrad")), strategy.get("grow_grad2d"))
+    gradient_profiles = {
+        (True, 0.00015): "legacy_absgrad_1p5e4",
+        (False, 0.00015): "vendor_plain_1p5e4",
+        (True, 0.0004): "absgrad_4e4",
+        (True, 0.0008): "absgrad_8e4",
+        (True, 0.0012): "absgrad_1p2e3",
+    }
+    gradient_profile = gradient_profiles.get(gradient_pair)
+    if gradient_profile is None:
+        raise ValueError("adaptive growth gradient semantics are not approved")
+    if detail_split_policy == "lidar_surface_screen_detail":
+        if strategy.get("detail_split_scale_m") != 0.02:
+            raise ValueError("adaptive detail split scale must be 0.02 m")
+        if strategy.get("detail_split_screen_radius") != 0.0035:
+            raise ValueError(
+                "adaptive detail split screen radius must be 0.0035"
+            )
+    cull_policy = strategy.get("opacity_cull_policy", "immediate")
+    if cull_policy not in {"immediate", "observation_aware"}:
+        raise ValueError("adaptive growth opacity cull policy is invalid")
+    if cull_policy == "observation_aware":
+        required_cull_protection = {
+            "opacity_cull_min_observations": 4,
+            "opacity_cull_consecutive_events": 2,
+            "opacity_cull_grace_after_reset_steps": 200,
+            "opacity_cull_max_fraction": 0.05,
+        }
+        if any(
+            strategy.get(key) != expected
+            for key, expected in required_cull_protection.items()
+        ):
+            raise ValueError("adaptive growth cull protection parameters differ")
     required_regularization = {
         "enabled": True,
         "opacity_sparsity_weight": 1e-4,
         "scale_upper_weight": 1e-4,
-        "anisotropy_weight": 1e-4,
         "max_scale_ratio_to_reference": 8.0,
-        "max_anisotropy": 10.0,
     }
     if any(
         regularization.get(key) != expected
         for key, expected in required_regularization.items()
     ):
         raise ValueError("adaptive growth geometry regularization differs")
+    shape_pair = (
+        regularization.get("anisotropy_weight"),
+        regularization.get("max_anisotropy"),
+    )
+    shape_profiles = {
+        (1e-4, 10.0): "legacy_axis_ratio_10",
+        (0.0, 256.0): "thin_surfel_unpenalized",
+    }
+    shape_profile = shape_profiles.get(shape_pair)
+    if shape_profile is None:
+        raise ValueError("adaptive growth shape regularization is not approved")
     if (
         topology.get("mode") != "adaptive_growth"
         or signed_config.get("densification_strategy") != "default_3dgs"
@@ -937,10 +994,22 @@ def advance_adaptive_growth_gate(
         status = ADAPTIVE_GROWTH_BOUNDARY_READY_STATUS
         boundary_sha = None
     else:
-        if signed_config.get("controlled_stop_after_steps") is not None:
-            raise ValueError("adaptive evaluation config must not retain a controlled stop")
+        controlled_stop = signed_config.get("controlled_stop_after_steps")
+        if stage == "review":
+            if (
+                not isinstance(controlled_stop, int)
+                or controlled_stop <= 502
+                or controlled_stop > 2618
+            ):
+                raise ValueError(
+                    "adaptive review requires a controlled stop within [503, 2618]"
+                )
+        elif controlled_stop is not None:
+            raise ValueError(
+                "adaptive evaluation config must not retain a controlled stop"
+            )
         if not isinstance(boundary_report, dict):
-            raise ValueError("adaptive evaluation requires a boundary report")
+            raise ValueError("adaptive continuation requires a boundary report")
         boundary_sha = str(boundary_report.get("boundary_report_sha256", ""))
         unsigned_report = copy.deepcopy(boundary_report)
         unsigned_report.pop("boundary_report_sha256", None)
@@ -956,7 +1025,11 @@ def advance_adaptive_growth_gate(
             value = str(boundary_report.get(field, ""))
             if len(value) != 64:
                 raise ValueError(f"adaptive boundary report has invalid {field}")
-        status = ADAPTIVE_GROWTH_EVALUATION_READY_STATUS
+        status = (
+            ADAPTIVE_GROWTH_REVIEW_READY_STATUS
+            if stage == "review"
+            else ADAPTIVE_GROWTH_EVALUATION_READY_STATUS
+        )
 
     payload = copy.deepcopy(upstream_gate)
     payload.pop("gate_manifest_sha256", None)
@@ -972,8 +1045,26 @@ def advance_adaptive_growth_gate(
             "next_required_stage": ORDERED_STAGES[15],
             "blocking_reasons": [],
             "bindings": bindings,
+            "cloudstudio_cull_enhancement": {
+                "policy": cull_policy,
+                "source": "cloudstudio_observation_coverage_safety",
+            },
+            "cloudstudio_detail_split_enhancement": {
+                "policy": detail_split_policy,
+                "vendor_split_scale_m": strategy.get("split_scale_m"),
+                "detail_split_scale_m": strategy.get("detail_split_scale_m"),
+                "detail_split_screen_radius": strategy.get(
+                    "detail_split_screen_radius"
+                ),
+            },
+            "projected_gradient_profile": gradient_profile,
+            "shape_regularization_profile": shape_profile,
             "adaptive_growth": {
-                "profile": "v26a_lidar_guarded_classic_growth",
+                "profile": (
+                    "v33a_lidar_guarded_classic_growth_ppisp"
+                    if signed_config.get("ppisp", {}).get("enabled") is True
+                    else "v26a_lidar_guarded_classic_growth"
+                ),
                 "stage": stage,
                 "tile_id": signed_config.get("mipmap_tile_id"),
                 "run_id": signed_config.get("run_id"),
@@ -982,6 +1073,11 @@ def advance_adaptive_growth_gate(
                 ),
                 "mcmc_allowed": False,
                 "capacity_cap": signed_config.get("cap_max"),
+                "photometric_nuisance_model": (
+                    "ppisp_no_crf_per_image"
+                    if signed_config.get("ppisp", {}).get("enabled") is True
+                    else "scalar_exposure_or_none"
+                ),
             },
         }
     )
@@ -1203,6 +1299,7 @@ def verify_training_gate(
         gate.get("status")
         in {
             ADAPTIVE_GROWTH_BOUNDARY_READY_STATUS,
+            ADAPTIVE_GROWTH_REVIEW_READY_STATUS,
             ADAPTIVE_GROWTH_EVALUATION_READY_STATUS,
         }
         and bool(gate.get("training_allowed", False))

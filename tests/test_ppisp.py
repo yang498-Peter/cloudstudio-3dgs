@@ -81,6 +81,60 @@ class PpispConfigTest(unittest.TestCase):
         rebuilt = PpispConfig(**config.to_dict())
         self.assertEqual(config, rebuilt)
 
+    def test_mipmap_lr_schedule_warms_then_decays_deterministically(self) -> None:
+        config = PpispConfig(
+            enabled=True,
+            learning_rate=2e-3,
+            lr_schedule="linear_warmup_exponential_decay",
+        )
+        total_steps = 7_480
+        warmup_steps = total_steps // 30
+        self.assertAlmostEqual(
+            config.learning_rate_for_step(step=0, total_steps=total_steps),
+            2e-5,
+            places=10,
+        )
+        self.assertAlmostEqual(
+            config.learning_rate_for_step(
+                step=warmup_steps - 1, total_steps=total_steps
+            ),
+            2e-3,
+            places=10,
+        )
+        self.assertAlmostEqual(
+            config.learning_rate_for_step(
+                step=total_steps - 1, total_steps=total_steps
+            ),
+            2e-5,
+            places=10,
+        )
+
+    def test_mipmap_lr_schedule_rejects_out_of_range_step(self) -> None:
+        config = PpispConfig(
+            enabled=True, lr_schedule="linear_warmup_exponential_decay"
+        )
+        with self.assertRaises(ValueError):
+            config.learning_rate_for_step(step=-1, total_steps=100)
+        with self.assertRaises(ValueError):
+            config.learning_rate_for_step(step=100, total_steps=100)
+
+    def test_mipmap_lr_schedule_reaches_final_lr_in_two_step_smoke(self) -> None:
+        config = PpispConfig(
+            enabled=True,
+            learning_rate=2e-3,
+            lr_schedule="linear_warmup_exponential_decay",
+        )
+        self.assertAlmostEqual(
+            config.learning_rate_for_step(step=0, total_steps=2),
+            2e-5,
+            places=10,
+        )
+        self.assertAlmostEqual(
+            config.learning_rate_for_step(step=1, total_steps=2),
+            2e-5,
+            places=10,
+        )
+
     def test_disabled_config_rejects_construction(self) -> None:
         with self.assertRaises(ValueError):
             PpispCorrector(

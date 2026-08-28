@@ -73,6 +73,15 @@ def main() -> int:
     parser.add_argument("--output-config", required=True, type=Path)
     parser.add_argument("--output-gate", required=True, type=Path)
     parser.add_argument("--run-output", required=True, type=Path)
+    parser.add_argument(
+        "--run-id",
+        default="snow-tile1-v26a-classic2d-lidar-eval7480",
+    )
+    parser.add_argument(
+        "--controlled-review-stop",
+        type=int,
+        help="build a signed bounded continuation instead of the full evaluation arm",
+    )
     args = parser.parse_args()
 
     boundary_config = _read(args.boundary_config)
@@ -106,6 +115,9 @@ def main() -> int:
         + int(lifecycle.get("split_parent_count", 0))
         - int(lifecycle.get("cull_count", 0)),
         "capacity_below_2_2m": 0 < final_count <= 2_200_000,
+        "retains_at_least_90pct_of_initial_surface": (
+            final_count >= int(0.9 * initial_count)
+        ),
         "real_births_observed": int(guard.get("newborns", 0)) > 0,
         "all_newborn_proposals_applied": float(
             proposal.get("applied_fraction", 0.0)
@@ -120,6 +132,14 @@ def main() -> int:
             proposal.get("fallback_fraction", 1.0)
         )
         <= 0.02,
+        "parent_support_mean_above_90pct": float(
+            proposal.get("support_mean", 0.0)
+        )
+        >= 0.9,
+        "child_support_mean_above_90pct": float(
+            proposal.get("child_support_mean", 0.0)
+        )
+        >= 0.9,
         "post_lifecycle_scale_p95_below_5cm": float(
             after.get("scale_m", {}).get("p95", 1e9)
         )
@@ -171,14 +191,21 @@ def main() -> int:
     evaluation_config = copy.deepcopy(boundary_config)
     evaluation_config.update(
         {
-            "run_id": "snow-tile1-v26a-classic2d-lidar-eval7480",
+            "run_id": args.run_id,
             "output_dir": args.run_output.resolve().as_posix(),
             "mipmap_pipeline_gate": args.output_gate.resolve().as_posix(),
             "resume_checkpoint": args.boundary_checkpoint.resolve().as_posix(),
             "checkpoint_keep_every": 2618,
         }
     )
-    evaluation_config.pop("controlled_stop_after_steps", None)
+    if args.controlled_review_stop is None:
+        evaluation_config.pop("controlled_stop_after_steps", None)
+        continuation_stage = "evaluation"
+    else:
+        evaluation_config["controlled_stop_after_steps"] = (
+            args.controlled_review_stop
+        )
+        continuation_stage = "review"
     evaluation_config.pop("config_manifest_sha256", None)
     evaluation_config["config_manifest_sha256"] = hashlib.sha256(
         canonical_json_bytes(evaluation_config)
@@ -186,14 +213,14 @@ def main() -> int:
     gate = advance_adaptive_growth_gate(
         _read(args.upstream_gate),
         evaluation_config,
-        stage="evaluation",
+        stage=continuation_stage,
         boundary_report=report,
     )
     _write(args.output_gate, gate)
     _write(args.output_config, evaluation_config)
     TrainerConfig.from_dict(evaluation_config).validate()
     print(
-        "V26a evaluation ready: "
+        f"V26a {continuation_stage} ready: "
         f"boundary_report_sha256={report['boundary_report_sha256']}, "
         f"config_sha256={evaluation_config['config_manifest_sha256']}, "
         f"gate_sha256={gate['gate_manifest_sha256']}"
