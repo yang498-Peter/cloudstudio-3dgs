@@ -222,6 +222,7 @@ class GsplatBackend:
         color_model: str = "rgb_sigmoid",
         sh_degree: int = 2,
         init_opacity: float = 0.1,
+        sky_shell_path: Any | None = None,
     ) -> tuple[Any, dict[str, Any], Any]:
         torch = self.torch
         if color_model not in ("rgb_sigmoid", "sh"):
@@ -294,11 +295,57 @@ class GsplatBackend:
             entries["colors"] = torch.nn.Parameter(
                 colors.clamp(1e-4, 1.0 - 1e-4).logit()
             )
+        if sky_shell_path is not None:
+            # Lightweight in-training sky: concatenate a pre-baked far-shell
+            # gaussian layer (same storage conventions as a checkpoint - log
+            # scales, logit opacities, sh0) into the trainable set BEFORE the
+            # optimizers and strategy state are built, so every downstream
+            # consumer sees one consistent population. Without a layer that
+            # owns the sky pixels, a white training background exerts a
+            # global downward opacity pressure on every gaussian bordering
+            # sky - the pressure the frozen-population arms banked as dead
+            # mass and every live-lifecycle arm harvested as a massacre.
+            if color_model != "sh":
+                raise ValueError("sky_shell_path requires the SH color model")
+            shell = self.torch.load(
+                str(sky_shell_path), map_location=self.device, weights_only=False
+            )["params"]
+            sky_count = len(shell["means"])
+            entries["means"] = torch.nn.Parameter(
+                torch.cat([entries["means"], shell["means"].to(self.device)])
+            )
+            entries["scales"] = torch.nn.Parameter(
+                torch.cat([entries["scales"], shell["scales"].to(self.device)])
+            )
+            entries["quats"] = torch.nn.Parameter(
+                torch.cat([entries["quats"], shell["quats"].to(self.device)])
+            )
+            entries["opacities"] = torch.nn.Parameter(
+                torch.cat(
+                    [entries["opacities"], shell["opacities"].to(self.device)]
+                )
+            )
+            shell_sh0 = shell["sh0"].to(self.device).reshape(sky_count, 1, 3)
+            entries["sh0"] = torch.nn.Parameter(
+                torch.cat([entries["sh0"], shell_sh0])
+            )
+            coefficient_count = (self.sh_degree + 1) ** 2
+            entries["shN"] = torch.nn.Parameter(
+                torch.cat(
+                    [
+                        entries["shN"],
+                        torch.zeros(
+                            (sky_count, coefficient_count - 1, 3),
+                            device=self.device,
+                        ),
+                    ]
+                )
+            )
         params = torch.nn.ParameterDict(entries)
         if self.error_score_state is not None:
             # A brand-new cloud: reset() rather than resize(), which now
             # preserves surviving per-Gaussian lifecycle rows by design.
-            self.error_score_state.reset(len(points))
+            self.error_score_state.reset(len(params["means"]))
         optimizers = {
             name: torch.optim.Adam(
                 [{"params": [parameter], "lr": float(learning_rates[name]), "name": name}],

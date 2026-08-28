@@ -227,6 +227,11 @@ class TrainerConfig:
     # MipMap lifecycle's prune gate; a coherent whole-machine transplant
     # starts at that machine's reset cap (0.2) instead.
     init_opacity: float = 0.1
+    # Optional pre-baked far-shell sky layer (checkpoint-convention params)
+    # concatenated into the trainable set at initialization, so sky pixels
+    # have an owner and the white background stops pressing scene gaussians
+    # toward transparency.
+    sky_shell_checkpoint: Path | None = None
     # What loss the densification criterion differentiates. "rgb_only" scores
     # births from L1+SSIM alone, the way Kerbl et al. trained; under "total_loss"
     # the LiDAR range and normal terms leak into means2d.grad through the shared
@@ -295,6 +300,7 @@ class TrainerConfig:
                 "face_lidar_geometry_manifest",
                 "face_lidar_geometry_root",
                 "mipmap_pipeline_gate",
+                "sky_shell_checkpoint",
             )
         }
         crop_value = value.get("crop")
@@ -649,6 +655,13 @@ class TrainerConfig:
             )
         if not 0.0 < float(self.init_opacity) < 1.0:
             raise ValueError("init_opacity must be within (0, 1)")
+        if self.sky_shell_checkpoint is not None:
+            if not self.sky_shell_checkpoint.is_file():
+                raise FileNotFoundError(
+                    f"sky shell checkpoint is missing: {self.sky_shell_checkpoint}"
+                )
+            if self.color_model != "sh":
+                raise ValueError("sky_shell_checkpoint requires color_model='sh'")
         if (
             self.lifecycle_order == "pre_optimizer"
             and self.densification_strategy != "default_3dgs"
@@ -2277,6 +2290,7 @@ def train(
         color_model=config.color_model,
         sh_degree=config.sh_degree,
         init_opacity=config.init_opacity,
+        sky_shell_path=config.sky_shell_checkpoint,
     )
     pose_refiner = None
     pose_optimizer = None
