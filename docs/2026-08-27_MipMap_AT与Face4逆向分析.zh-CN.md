@@ -306,3 +306,155 @@ v22i 同时优化了几何，虽学习率很低，仍使深度指标退化。`v2
 本轮对竞品方向的结论不是“Face4 越多越好”，而是：raw-fisheye 独立 pose AT 建立可收敛基线，Face4 只适合极轻量抛光，独立低透明度 sky 用于远景，最终冻结 LiDAR 几何做外观收口。精确 Face4 冷启动已经实测失败；既有 `v21c` 增长实验虽新增 307,904 个高斯，500 步完整 PSNR 只有 `13.4136 dB`，因此在没有新的出生位置机制证据前不重复盲目生长。
 
 当前新 AT 路线以 v22j combined PLY 为完整候选，以 surface PLY 为几何回退。它已完成训练、签名 Manifest、36 帧全分辨率评估、LPIPS、健康检查、纯表面空洞/锐度检查、分层 PLY 导出、PLY 复解析和哈希；外部独立 PLY Viewer 固定视角验收仍需单独执行，不能由训练渲染替代。
+
+## 14. 竞品可执行调用链与算法模块核对
+
+### 14.1 已确认的外部调用入口
+
+竞品桌面端最终调用：
+
+`D:\Program Files\MipMap\MipMapLite\resources\resources\catch3d\reconstruct_full_engine.exe`
+
+该程序的帮助信息公开了 `-task_json`、`-reconstruct_type`、`-desktop_magic` 和 `-license_key` 参数。现有任务的运行记录表明：
+
+- AT 阶段使用同一可执行文件并设置 `reconstruct_type=1`；
+- 三维重建阶段设置 `reconstruct_type=2`；
+- AT 配置为 `at_task.json`，三维配置为 `r3d_task.json`；
+- 去畸变子任务固化在 `task/image_undistortion_task_0.json`，其中 `head_task=true`、`remove_moving_object=true`、`keep_undistort_images=false`、`resolution_level=1`；
+- 插件路径由任务 JSON 指向用户目录中的 `extentions/gs_dlls` 和 `extentions/ml_dlls`。
+
+`keep_undistort_images=false` 解释了为什么任务完成后只剩 `AT/mvs_undistort.xml`，而运行中生成的 `.temp/undistort/*.jpg` 和 `.temp/undistort_classify/*.tif` 被删除。
+
+### 14.2 DLL 导入导出提供的直接证据
+
+PE 导入表显示 `reconstruct_full_engine.exe` 直接依赖 `mipmap_engine.dll`、`mipmap_log.dll`、`mipmap_hardware.dll` 和 `mipmap_engine_util.dll`。关键导出如下：
+
+- `mipmap_engine.dll`：`ReconstructAT`、`OptimizeAT`、`UndistortionTask`、`UndistortionPartionTask`、`ReconstructBlockTask`、`Reconstruct3D`；
+- `mipmap_classify.dll`：`SegFormerSeg`、`TensorRTSeg`、`TensorRTMonoDepth`、`Infer`、`InferRaw`、`InferColor`、`SetConfidenceThreshold`、`MakeEngine`、`WarmUp`；
+- `mipmap_gaussian_splat.dll`：`GSTraining::BatchTraning`、`InitialParameters(PointCloud)`、`GetMonoDepth`、`GetDepthRegularizerLoss`、`GetNormalLoss`、`GetNormalGradientLoss`、`GetScaleLoss`、`GetOpacityLoss`、`GetSingleViewLoss`、`AddNewGS`、`CloneGS`、`SplitGS`、`CullGS`、`CullGSRedundancy`、`RelocateGS`、`AfterTrainMCMC` 和 `TrainBackground`。
+
+这些名称直接证明竞品二进制包含对应能力，但仅凭导出名称不能证明每项能力在 snow 任务中都被启用。能够由运行产物继续确认的是：
+
+- `mipmap_classify.dll` 加载 TensorRT 10；
+- `seg_v1.onx` 对应的 GPU TensorRT engine 在 Face4/去畸变阶段生成，证明该阶段实际运行了分割模型；
+- `da2_v1.onx` 对应的 GPU TensorRT engine 在 Tile/高斯阶段开始时生成，证明该阶段实际运行了单目深度模型；
+- 最终四个 Tile 的高斯数相对各自 LAS 初始化数既有减少也有增加，证明 snow 任务不是固定拓扑的全局 615.8 万点优化，而是发生了内容自适应的净增长/裁剪。仅凭最终点数还不能还原每次 `Add/Clone/Split/Cull/Relocate` 的具体调度。
+
+模型容器位于 `C:\ProgramData\MipMap\MipMapLite\gdal_data`：`seg_v1.onx`、`seg_model_v1.onx`、`da2_v1.onx` 和 `voc.bin`。这些 `.onx` 不是普通 ONNX；ONNX Runtime 解析为 `InvalidProtobuf`，而 DLL 字符串包含 encrypted onnx 构建失败信息。因此当前只能通过竞品自身运行时做黑盒输入输出捕获，不应把它们当普通 ONNX 直接加载。
+
+### 14.3 人物掩膜纠正
+
+`milestones/classify/*.tif` 共 342 张、每张 `728×728`、只有 0/255 两个值。对 `1.tif` 与原始鱼眼图叠加后可见，它主要描述鱼眼有效圆和边界，并没有遮住画面左侧人物。因此不能再把这 342 张文件写成竞品人物/移动物体语义掩膜。
+
+竞品真正的语义输出更可能是 Face4 后的 `.temp/undistort_classify/*.tif`：运行时数量为 1368，和 342×4 完全一致，但因 `keep_undistort_images=false` 已在成功收尾时删除。要确认其类别编码、人物覆盖率和形态学后处理，必须进行一次受控竞品重跑并在去畸变完成后保留该目录。
+
+我们自己的 v22f/v22g 并非没有人物识别：
+
+- `independent_at_training_person_masks_v22c/person_mask_manifest.json` 记录 342 张图、271 张有人、480 个实例；
+- v22g 配置包含 `require_person_masks=true`；
+- Dataset 以 `rgb_mask = valid_mask & static_mask` 排除动态区域；
+- `tools/build_face_cache.py` 将这个组合掩膜与 RGB 一起投影到四个虚拟相机面；
+- Face4 可视化复核确认人物轮廓已进入派生面无效区。
+
+当前缺口不是“完全没做人影识别”，而是我们使用的是自己的检测器，且人工复核状态仍为 `PENDING`；尚未获得竞品 Face4 后分割模型的真实输出用于逐像素对位。
+
+### 14.4 对当前失败原因的修正
+
+v22g 只复刻了 Face4 几何、人物掩膜投影和 SH0 训练输入，没有复刻竞品完整的后半段。现有证据表明至少还缺：
+
+1. 竞品共享单焦距 KB4 内参联合优化；当前 v22c 是 pose-only AT；
+2. Face4 后的竞品语义分割输出与其阈值/类别合并规则；
+3. `da2_v1` 单目深度及深度、法线、尺度、不透明度正则；
+4. 按空间 Tile 选择相机和 LAS 子集，而不是一次全局训练；
+5. 实际启用的高斯增长、克隆、分裂、裁剪、冗余裁剪和重定位调度；
+6. 独立背景/天空训练与最后的 Tile/LOD 合并。
+
+所以“Face4 冷启动低 2.3 dB”只能否定我们当时那套固定 LiDAR 拓扑的全局训练配置，不能据此否定竞品 Face4 路线本身。
+
+### 14.5 下一次黑盒对位测试
+
+下一次竞品测试应只改变中间产物保留项：从桌面端正常启动已授权任务，将 `keep_undistort_images` 设为 `true`，在 `undistort.done` 后复制 1368 张 Face4 JPG、1368 张 classify TIF、`mvs_undistort.xml` 和任务日志，然后停止后续 Tile 训练。验收项为：
+
+- 派生图尺寸、焦距、yaw/pitch 与 XML 逐张一致；
+- 语义 TIF 的尺寸、像素值集合、人物召回、非人物误杀和是否包含鱼眼有效区；
+- 文件时间线与 `seg_v1` TensorRT engine 调用一致；
+- 同一原图的四面 RGB 和掩膜可以由我们的 Face4 几何重投影到像素级对比。
+
+该测试不需要解密模型，也不应绕过授权信息；它只捕获竞品正常执行时产生的输入输出。完成这一步后，才能决定是复刻其语义后处理，还是保留我们的检测器并补齐漏检区域。
+
+## 15. 圆形有效区、人物掩膜前置与共享单焦距 KB4 AT 实测
+
+### 15.1 问题现象与流程纠正
+
+此前 HLoc 的 ALIKED 特征提取与 LightGlue 匹配没有加载掩膜，人物和鱼眼低质量外圈仍可能进入 tie point 图。仅在 3DGS 训练阶段排除人物不能修复已经被动态目标污染的 AT 位姿。因此本轮把掩膜前置到特征匹配之前，统一采用：
+
+`AT 有效特征 = 半径 1200 px 的主点圆形有效区 & ~人物动态区`
+
+1200 px 是 2912×2912 原图尺度；缩到 728×728 后与竞品 `milestones/classify/*.tif` 的圆形区域 IoU 分别为左 `0.9771`、右 `0.9789`。该掩膜只删除低质量外圈，不尝试拟合复杂边界。人物掩膜使用我们已有的 342 张逐图检测结果，并在图像 ID、源路径、源图 SHA256 和相机 ID 全部一致时才允许重绑定到 AT 后的新数据签名。
+
+### 15.2 修改文件
+
+- `cloudstudio_3dgs/data/mask_manifest.py`：增加按主点生成固定像素半径圆形有效区；
+- `cloudstudio_3dgs/ba/hloc_mask_filter.py`、`tools/run_hloc_aliked_lightglue.py`：在 ALIKED 后、LightGlue 前过滤圆外和人物区域特征，并签名记录过滤身份；
+- `cloudstudio_3dgs/ba/single_focal_kb4.py`、`tools/run_independent_at.py`：交替执行独立相机位姿/点 BA 与两组共享单焦距 KB4 内参优化；
+- `tools/rebind_person_mask_base.py`：增加跨位姿数据清单的不可变图像身份验证后重绑定；
+- `tests/test_image_sample.py`、`tests/test_pycolmap_ba.py`：覆盖圆形掩膜和单焦距 KB4 约束。
+
+### 15.3 AT 结果
+
+新的遮罩特征图从 918,786 个 ALIKED 特征中保留 713,607 个，删除 205,179 个（`22.3315%`）；LightGlue 重新匹配 1,733 对图像。三角化仍注册 342/342 张图，得到 75,112 个点和 285,555 个观测，平均轨迹长度 `3.8017`，说明过滤没有破坏全量覆盖。
+
+`independent_at_circle_person_single_focal_kb4_v23e` 明确收敛：重投影误差 P50 从 `1.46036 px` 降到 `0.86844 px`，P95 为 `2.52094 px`；位置修正 P50 `1.008 cm`、P95 `2.316 cm`、最大 `3.240 cm`；旋转修正 P50 `0.2765°`、P95 `0.5214°`。最终左右相机分别为：
+
+- left：`f=787.0446, cx=1454.3521, cy=1452.2099`；
+- right：`f=786.5898, cx=1454.6595, cy=1449.1718`。
+
+这与竞品相同的是“342 张原始鱼眼、逐图独立 pose、两组共享单焦距 KB4”的变量结构；数值没有伪装成完全一致。竞品的左右焦距为 `786.6060/784.5731`，其位姿修正 P50 为 `2.099 cm`，而本轮为 `1.008 cm`。差异仍可能来自特征/匹配器、圆形掩膜边界和竞品内部稳健核或先验权重，需用保留下来的竞品 tie point/Face4 中间产物继续对位。
+
+### 15.4 1368 张 Face4 固化结果
+
+通过验收的 AT candidate 已发布成签名训练数据集，SHA256 为 `735beec49ae0a48b08f0b70d5ae05645123e8e5fdfc8f8ce56236a28e3ef3e99`。重新绑定后的 train/val 图像 ID 与原始划分完全一致。按 `mipmap_face4` 固定几何生成：
+
+- train：306×4=`1224` 张，0 跳过，Face Manifest SHA256 `307caccb62ec06da8041f2833f928654865b628bde2e51dd22f5d0cd70105b91`；
+- val：36×4=`144` 张，0 跳过，Face Manifest SHA256 `5579bae10c9b2a3b80820221f0458d3a394fcf8b812a866bd030dc2efe4cd793`；
+- 合计：342×4=`1368` 张，四个方向各 342 张。
+
+人物最多的抽查帧 `img_51cfc781b27f6ab6d6f8b7dd` 在派生面 mask 中已形成对应黑色无监督区，证明人物掩膜不是只写清单，而是实际进入 Face4 训练输入。新 AT 对应的完整 LAS 深度现已覆盖 342/342 原图并独立验签；Face4 DA2 阶段流式把该深度重投影用于标定，不把旧深度清单混入本轮结果。
+
+## 16. 2026-08-28 对比结论与流程门禁
+
+完整对比后不能宣称当前 CloudStudio 雪堆结果整体优于竞品。v23e 的 AT、遮罩前置和签名链路已经达到同量级且更可审计，但竞品在 Face4 多类别语义、DA2、四 Tile 自适应高斯、独立天空及 SOG/LOD 交付上仍领先。双方 AT 的重投影 RMSE 分别为我方 `1.315863 px`、竞品 `1.251524 px`；我方与竞品最终相机中心差异 P50/P95 为 `1.340/3.038 cm`，旋转差异 P50/P95 为 `0.362/0.678°`。这些结果支持“路线接近”，不支持“结果相同”或“我方更好”。
+
+已新增 `MIPMAP_ALIGNED_FACE4_PIPELINE_SOP.zh-CN.md`，把从输入、时间同步、原图遮罩、AT、Face4、renderer mask、深度、天空、Tile 到训练/评估/导出的 18 个阶段固定为不可跳过的连续序列。`cloudstudio_3dgs/pipeline/mipmap_gate.py` 和 Trainer 门禁会对 shared-single-focal KB4 数据 fail-closed：缺少签名门禁、缺少 Face4、阶段未完成、顺序改变或输入 SHA256 不匹配时均拒绝训练。
+
+静态审计进一步确认 snow High/type-2 使用 `0.6 mean-L1 + 0.4 DSSIM`、`20×Tile视图数` 步和 gradient split/clone/cull/reset，本任务 MCMC 与 redundancy cull 均关闭。保留的 342 张 classify TIF 只有左右相机各一份固定二值图，不能冒充逐图多类别语义；训练 renderer 的可确认规则为 `(seg!=255)&(seg!=33)`，label 33 的类别名仍未知。
+
+雪堆前半段的 DA2 结果保持不变：完整新 AT 深度覆盖 342/342 原图、绑定 `7,036,347` 点 LAS，342 个 NPZ 哈希全部通过。DA2 使用官方 Apache-2.0 Small 模型，按竞品 reciprocal 输出和 `a×mono+b` 的 `2000` 次 RANSAC/`1%`/`>5%`/OLS 规则逐 Face4 标定；train `1123/1224`、val `80/144` 通过，1368 个缓存 SHA 全通过且无非有限值。后续独立天空和 LiDAR Tile 计划已经在第 17 节补齐，当前门状态以该节为准。
+
+## 17. 独立天空与 LiDAR 可见性分块落地（2026-08-28）
+
+### 17.1 天空证据边界
+
+旧 v22j 的 100k 固定球壳只是把确定颜色的远场高斯追加到表面检查点，不等于竞品 `TrainBackground` 的独立训练。本轮改为独立数据和模型：对每个 Face4，只接受 `Face4有效掩膜 & DA2尺度对齐有效 & 对齐深度>=30 m & 世界方向Z>=0` 的像素；单视图候选不足 1% 时整视图禁用，无效 DA2 对齐也直接禁用。该策略与竞品 `mono_depth<=0` 代理不完全相同，因为官方 DA2 在天空仍输出正值；差异已写入签名 Manifest，未伪装成完全复刻。
+
+实测 train `438/1224`、val `17/144` 个视图提供天空/远景监督，总候选比例分别为 `1.4943%`、`0.3278%`。训练证据生成独立 `100,000` 个高斯的 SH degree 1 初始化；没有读取、追加或改写任何表面检查点。天空证据门签名为 `59a76d850d7eda323a15ced38149f7a243c43c247356c1e083c36f7b9a103803`。
+
+### 17.2 为什么最终不用照片 AT 稀疏点切块
+
+照片 AT 的 `75,112` 个稀疏点适合纯视觉流程，也是 MipMap 兼容无 LiDAR 输入的合理最低公分母；但雪堆已有完整 LiDAR。第一次用 AT 稀疏点自动取根包围盒时，离群点把范围扩展到 X `[-131.14,166.26]`、Y `[-127.35,182.79]` m，并得到 `Y→Y→X`，该结果被保留为诊断但不晋级。
+
+正确实现是混合路线：
+
+1. 完整 703 万点 LAS 头确定场景范围，20% padding 后为 X `[-57.233,65.306]`、Y `[-62.489,49.179]`、Z `[-5.537,18.319]` m；
+2. 从每张原鱼眼的新 AT LiDAR z-buffer 均匀抽取 5000 个有效深度像素；
+3. 用共享 KB4 内参把像素反投影成相机射线，用量测 range 恢复世界点；
+4. 再用固定 Face4 虚拟相机投影，并与 Face4 人物/有效区 mask 相交；
+5. 由这些真实 LiDAR 可见点同时决定空间负载、每块相机集合和每张图的 256 px 最小裁剪/128 px halo。
+
+该过程产生 `1,710,000` 个 LiDAR 规划锚点、all/train `1,607,923/1,435,928` 个 Face4 观测。按实测可用显存约 `6.85 GiB` 并施加 `6.5 GiB` 保守上限，得到 5 个串行 Tile；主拓扑从 X 开始并在左右继续按 Y 分裂。5 Tile 不等于复刻失败：竞品 4 Tile 来自其 MVS 观测、ROI 和运行时预算；LiDAR 可见性更密，不能为了凑成 4 块丢弃负载证据。
+
+### 17.3 修改与验证
+
+新增正式模块 `adaptive_tiling.py`、`lidar_face4_observations.py`、`tile_scheduler.py` 和 `sky_background.py`，并新增天空/Tile 门禁推进工具。Tile 必须严格串行；训练配置可将 `cuda_empty_cache_interval_steps=2`，每块结束还必须 synchronize、清缓存并释放 Python 引用。`tiles.json.max_memory` 继续表示照片工作集估值，不冒充 CUDA 显存硬上限。
+
+最终上游门文件为 `mipmap_aligned_training_ready_lidar_tiles_gate_v23q.json`，状态 `TRAINING_READY`、`training_allowed=true`，签名 `4cf63fa6e28c93e56c2aa74d744013cbfdf16c5af0a3375c3d4048a7041ce6ac`。这只允许进入 `tile_gaussian_training`；尚未代表训练质量、原鱼眼评估或最终 PLY/SOG/LOD 通过。

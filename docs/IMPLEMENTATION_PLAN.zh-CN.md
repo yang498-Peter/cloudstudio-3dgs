@@ -1199,3 +1199,74 @@ GitHub 重新联网后，澳洲 `machine-b/uk-quality` 从 `2113134` 推进到 `
 ### 结论与下一步
 
 相对 legacy reference，KNN-only 提升 PSNR `0.259168 dB`、SSIM `0.011996`，LPIPS 降低 `0.005358`，最低深度覆盖提高 `0.004058`；但 depth MAE 恶化 `0.088968 m`。按 A/B 聚合器的严格零回归语义，该臂结论为 **MIXED**，不能写成全指标晋级；它证明 KNN 初始化是澳洲 P5 外观增益的有效组成部分，但不能单独关闭 Gate 2 深度门。相对澳洲 P5，KNN-only 的 depth 改善 `2.461218 m`，但 PSNR 低 `2.426477 dB`、SSIM 低 `0.116415`、LPIPS 恶化 `0.107822`，因此澳洲 `gate2_quality_australian_p5_v1` 仍是优先外观版本，不能被本臂替换。下一步按同一原矩阵继续 `sh_only`，再执行 `local_ssim_only`，完成三项独立归因后才能生成五臂正式聚合报告。
+
+## 38. 澳洲路线同步：周期 checkpoint 保留与旧 SH 臂停止
+
+### 问题现象与路线纠偏
+
+GitHub 重新联网后，澳洲 `machine-b/uk-quality@cd85eeb` 的两个最新提交已合并为当前分支祖先：seed-43 的 30k 运行以 `best_golden@7000` 达到 PSNR `17.07`、p10 `16.73`、SSIM `0.5622`，并证明 seed42 在 20k 的离散断崖是随机事件，但约 20k 后缓慢回落具有跨种子趋势。澳洲夜间总结同时指出 only `latest.pt + best_golden.pt` 会丢失 16k 等平台期状态，优先建议 keep-every-N。用户要求以澳洲新路线为准后，本机停止了正在补旧矩阵的 SH-only：外部中间 evidence 到 golden step 5000、仅一次 full validation，未生成 `run_manifest.json`，因此不登记为正式完成，也不继续消耗 GPU 冒充澳洲下一步。
+
+### 修改文件
+
+- `cloudstudio_3dgs/training/checkpoint.py`
+- `cloudstudio_3dgs/training/trainer.py`
+- `tools/run_synthetic_training_acceptance.py`
+- `train/run_gate2_synthetic_acceptance_local.ps1`
+- `tests/test_training.py`
+- `README.md`
+- `docs/IMPLEMENTATION_PLAN.zh-CN.md`
+
+### 修改内容
+
+- Trainer 新增 opt-in `checkpoint_keep_every`，默认 `0` 时从 contract 省略，澳洲既有 P5、reference 和五臂矩阵身份保持不变；启用时 contract 签名记录步数与固定路径模式 `checkpoints/step_{step:08d}.pt`。
+- 每到保留步先按原逻辑原子写 `latest.pt`，再把其完全相同的字节原子复制为不可覆盖的 step checkpoint；目标已存在时 fail-closed，避免重跑或错误恢复覆盖历史平台点。`latest` 与 `best_golden` 的更新、选择和恢复语义不变。
+- 完整 run Manifest 的 `training.retained_checkpoints` 逐项记录 step、相对路径、SHA256 和字节数；完成签名前强制检查所有应有步数的文件，任何缺失都会拒绝发布 Manifest。
+- 合成验收 CLI 与 Windows 锁定启动器新增显式保留间隔，可与 full-MCMC、受控中断恢复等价性组合复验。
+
+### 验证方式与当前状态
+
+- 红灯先行：实现前新测试因不存在 `retain_checkpoint` 明确失败；实现后默认契约省略、启用契约签名、非法负间隔、精确字节复制、目标不可覆盖、Manifest 记录构造均通过。
+- 澳洲原五臂矩阵在默认关闭保留功能时仍验证为原 SHA256 `7e6daf8ca6baecc915dda020610419b7f6313867b55b95e3d9c67f4adfd86593`；28 项 Trainer contract/MCMC 定向测试全部通过。
+- 本机 RTX 5070 Laptop 使用锁定 gsplat 执行 80 步 full-MCMC 连续训练与 step40 受控中断恢复，保留间隔为 20：连续与恢复目录都产生 20/40/60/80 四个 checkpoint。恢复全状态比较为 `PASS`、`0 mismatch`、max abs `1.9073486328125e-6 < atol 5e-6`；恢复 run Manifest SHA256 为 `c6df63d97e4331b630d9c15f7e8403537935845259f482a679a9686300d79101`。
+- 对恢复 run 的四个保留文件逐一重算 SHA、字节数、payload step 与 checkpoint identity，全部匹配 Manifest；step40 在中断前创建，恢复后未被覆盖，证明跨中断保留语义成立。
+- 全仓 CPU 套件显式隐藏 CUDA 后运行 `212` 项，为 `190 PASS + 22 SKIPPED`；跳过项仍是需要锁定 CUDA runtime 的既有测试，本轮真实 CUDA 验收单独覆盖新增路径。
+
+当前为 **PASS（澳洲 30k checkpoint 生命周期增量）**。下一步不回到已拒绝的曝光锚、误差加权 v1 或旧尺度参数搜索；按澳洲排序拆解 error-weighted v2 的最小可验收切片：先定义 α·T 误差聚合的张量契约与 CPU 负控，再接入 gsplat backward/投影贡献证据。
+
+## 39. Snow MipMap High/type-2 训练实现对位硬门
+
+### 问题现象
+
+Snow 的前 15 个数据阶段已经验签，但历史 `TRAINING_READY` 把“上游数据存在”和“Trainer 已按竞品算法消费”混成一个状态。缺少 renderer Manifest 实际消费、LiDAR mesh depth/normal、阶段 loss、BilateralGrid、SIFT、容量公式、独立天空训练及 Cut/Merge 时，存在误启动长训练风险。
+
+### 修改文件
+
+- `cloudstudio_3dgs/pipeline/mipmap_gate.py`
+- `cloudstudio_3dgs/training/face_dataset.py`
+- `cloudstudio_3dgs/training/trainer.py`
+- `cloudstudio_3dgs/training/default_strategy_adapter.py`
+- `cloudstudio_3dgs/training/mipmap_loss_schedule.py`
+- `cloudstudio_3dgs/training/tile_face4_consumption.py`
+- `tools/audit_mipmap_tile_face4_consumption.py`
+- `tools/build_mipmap_loss_schedule_audit.py`
+- `tests/test_mipmap_gate.py`
+- `tests/test_face_dataset.py`
+- `tests/test_default_strategy_adapter.py`
+- `tests/test_mipmap_loss_schedule.py`
+- `docs/MIPMAP_ALIGNED_FACE4_PIPELINE_SOP.zh-CN.md`
+
+### 修改内容
+
+- 门禁拆为 `UPSTREAM_DATA_READY` 和 `TRAINING_IMPLEMENTATION_READY`；旧字面 `TRAINING_READY` 不再授权训练。
+- 实现合同必须完整覆盖 renderer 语义、K7/K30 初始化、Tile crop、DA2、Fisher–Yates 采样、经典 split/clone/cull/reset、mesh depth/normal、阶段 loss、BilateralGrid/SIFT、容量公式、独立天空和 Cut/Merge/交付，且 CPU tests、短 GPU smoke 必须通过、阻塞项必须为空。
+- Dataset 真实消费 renderer-mask Manifest，并验证其签名、Face4 绑定、每个 sample 的路径/SHA/keep-pixel 一致性。
+- High/type-2 调度固化为按每块视图数换算的 `0–5V / 5–10V / 10–15V / 15–20V`，但缺失的 mesh/normal/sky consumer 明确保持阻塞。
+
+### 验证方式与当前状态
+
+- CPU 定向套件 `126 passed`，未启动 CUDA/GPU 训练。
+- 新上游门：`outputs/snow-20260224-full-20260825/mipmap_upstream_data_ready_lidar_tiles_gate_v23y.json`，SHA256 `b5a660cc7e67225d11b2e8e254eb6900d0f519494c940569db4792cf30dd6731`，`training_allowed=false`。
+- renderer/crop/DA2 真实消费审计：`mipmap_tile_face4_renderer_da2_consumption_audit_v23w.json`，SHA256 `e7bccc65112c700df109d8733fa6b00d6f08f955791fc0294f74bc32da95c9f0`。
+- loss schedule 审计：`mipmap_high_type2_loss_schedule_audit_v23x.json`，SHA256 `8a927d8070d8b51ad0c8f83c5b834c3a04db87ceec3e21ee66299a186c25aeb9`。
+
+当前为 **NO-GO（上游数据就绪；训练实现未对位）**。下一轮优先实现 LiDAR-derived mesh depth/normal cache、遮挡过滤和 Trainer 逐像素消费；不得以现有 sparse LiDAR range/nearest-normal anchor 冒充竞品 mesh 路线。
