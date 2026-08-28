@@ -592,6 +592,22 @@ class FaceCacheRoundTripTest(unittest.TestCase):
             self.assertTrue(np.all(sample.mono_depth_mask <= sample.rgb_mask))
             self.assertEqual(sample.depth_to_range_scale.shape, (3, 4))
 
+    def test_rig_frame_surface_for_pose_refinement(self) -> None:
+        """Pose refinement needs the same three members S1TrainingDataset has;
+        their absence killed the first pose-refined face-cache run at step 0."""
+        dataset = self.make_dataset()
+        self.assertEqual(dataset.rig_frame_ids, (RIG_FRAME_ID,))
+        centers = dataset.rig_frame_centers()
+        self.assertEqual(set(centers), {RIG_FRAME_ID})
+        np.testing.assert_allclose(centers[RIG_FRAME_ID], BASE_C2W[:3, 3])
+        # One rig frame: every budget selects every face sample.
+        self.assertEqual(dataset.indices_for_rig_frames(1),
+                         tuple(range(len(dataset))))
+        self.assertEqual(dataset.indices_for_rig_frames(5),
+                         tuple(range(len(dataset))))
+        with self.assertRaises(ValueError):
+            dataset.indices_for_rig_frames(0)
+
     def test_missing_cache_file_raises(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             manifest_path = self.copy_cache(Path(tmp))
