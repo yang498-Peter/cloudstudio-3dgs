@@ -115,6 +115,7 @@ from cloudstudio_3dgs.training.runtime_evidence import (
     append_mcmc_telemetry,
     build_mcmc_step_event,
     initialize_mcmc_telemetry,
+    normalize_classic_strategy_telemetry,
     require_finite_training_tensors,
     snapshot_gaussians,
 )
@@ -779,8 +780,15 @@ class TrainerConfig:
                 raise ValueError(
                     "exact MipMap lifecycle requires a signed renderer mask manifest"
                 )
+            detail_split_policy = self.default_strategy.get(
+                "detail_split_policy", "vendor_0_2m"
+            )
+            if detail_split_policy not in {
+                "vendor_0_2m",
+                "lidar_surface_screen_detail",
+            }:
+                raise ValueError("exact MipMap detail split policy is invalid")
             expected_lifecycle = {
-                "grow_grad2d": 0.00015,
                 "growth_min_opacity": 0.15,
                 "split_scale_m": 0.2,
                 "prune_scale_m": 0.2,
@@ -801,6 +809,33 @@ class TrainerConfig:
                 raise ValueError(
                     f"exact MipMap lifecycle parameters differ: {mismatched}"
                 )
+            gradient_pair = (
+                bool(self.default_strategy.get("absgrad")),
+                self.default_strategy.get("grow_grad2d"),
+            )
+            allowed_gradient_pairs = {
+                # Historical V26/V33/V34 compatibility only. This pair is no
+                # longer emitted by the builder because gsplat documents that
+                # AbsGrad requires a materially higher threshold.
+                (True, 0.00015),
+                # Recovered competitor/plain projected-gradient semantics.
+                (False, 0.00015),
+                # Bounded AbsGrad calibration arms.
+                (True, 0.0004),
+                (True, 0.0008),
+                (True, 0.0012),
+            }
+            if gradient_pair not in allowed_gradient_pairs:
+                raise ValueError(
+                    "exact MipMap gradient semantics are not an approved profile"
+                )
+            if detail_split_policy == "lidar_surface_screen_detail":
+                if self.default_strategy.get("detail_split_scale_m") != 0.02:
+                    raise ValueError("detail split scale must be 0.02 m")
+                if self.default_strategy.get("detail_split_screen_radius") != 0.0035:
+                    raise ValueError(
+                        "detail split screen radius must be 0.0035"
+                    )
             if (
                 self.mcmc_refine_start_iter != 500
                 or self.mcmc_refine_every != 100
@@ -2738,6 +2773,7 @@ def train(
             adaptive_resume = resume_gate.get("adaptive_growth", {})
             if adaptive_resume.get("stage") in {
                 "evaluation",
+                "review",
                 "continuation",
                 "stabilization",
             }:
@@ -2787,6 +2823,8 @@ def train(
             raise ValueError("full-MCMC checkpoint has no MCMC telemetry state")
         if restored_telemetry is not None:
             mcmc_telemetry = dict(restored_telemetry)
+            if config.densification_strategy == "default_3dgs":
+                normalize_classic_strategy_telemetry(mcmc_telemetry)
         topology_events = [
             dict(event) for event in training_state.get("topology_events", [])
         ]
@@ -2948,6 +2986,13 @@ def train(
                 continue
             for group in optimizer.param_groups:
                 group["lr"] = base_lr * scale
+        ppisp_effective_lr = None
+        if ppisp_optimizer is not None:
+            ppisp_effective_lr = config.ppisp.learning_rate_for_step(
+                step=step, total_steps=config.max_steps
+            )
+            for group in ppisp_optimizer.param_groups:
+                group["lr"] = ppisp_effective_lr
         active_sh_degree = active_sh_degree_for_step(config, step)
         loss, l1, ssim, range_loss, info = _render_supervision_loss(
             backend=backend,
@@ -3283,6 +3328,18 @@ def train(
             "effective_lidar_normal_weight_scale": float(
                 phase["normal_weight_scale"]
             ),
+            "ppisp_effective_lr": ppisp_effective_lr,
+            "rgb_mask_true_pixels": int(tensors["rgb_mask"].sum().detach().cpu()),
+            "rgb_mask_total_pixels": int(tensors["rgb_mask"].numel()),
+            "rgb_mask_valid_fraction": float(
+                tensors["rgb_mask"].float().mean().detach().cpu()
+            ),
+            "depth_mask_true_pixels": None
+            if "depth_mask" not in tensors
+            else int(tensors["depth_mask"].sum().detach().cpu()),
+            "depth_mask_valid_fraction": None
+            if "depth_mask" not in tensors
+            else float(tensors["depth_mask"].float().mean().detach().cpu()),
             "rgb_l1": float(l1.detach().cpu()),
             "rgb_gradient_l1": None
             if info["cloudstudio_rgb_gradient_l1"] is None

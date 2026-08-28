@@ -619,6 +619,12 @@ class GsplatBackend:
         lifecycle = getattr(self.strategy, "last_lifecycle_event", None)
         if lifecycle is not None:
             event["classic_lifecycle"] = dict(lifecycle)
+            event["strategy"] = "default_3dgs"
+            event["relocated_count"] = 0
+            event["new_gaussian_count"] = int(lifecycle.get("clone_count", 0)) + int(
+                lifecycle.get("split_child_count", 0)
+            )
+            event["pruned_gaussian_count"] = int(lifecycle.get("cull_count", 0))
         relocation = getattr(self.strategy, "last_relocation_event", None)
         if refine and relocation is not None:
             event["adaptive_relocation"] = dict(relocation)

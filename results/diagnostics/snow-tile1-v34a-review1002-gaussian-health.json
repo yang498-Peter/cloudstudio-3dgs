@@ -1,0 +1,254 @@
+{
+  "schema_version": "gaussian-health-1.0",
+  "thresholds": {
+    "giant_max_axis_thresholds_m": [
+      0.5,
+      1.0,
+      5.0,
+      20.0
+    ],
+    "needle_ratio_thresholds": [
+      10.0,
+      30.0,
+      100.0
+    ],
+    "degenerate_min_axis_m": 0.0001,
+    "opacity_dead_max": 0.005,
+    "opacity_fog_max": 0.1,
+    "opacity_hard_min": 0.95,
+    "floater_min_opacity": 0.1,
+    "floater_dist_thresholds_m": [
+      0.3,
+      1.0,
+      5.0
+    ],
+    "plane_ransac_iters": 400,
+    "plane_inlier_threshold_m": 0.03,
+    "plane_min_inlier_fraction": 0.05,
+    "plane_lidar_band_m": 0.05,
+    "wall_gaussian_band_m": 0.15,
+    "wall_min_opacity": 0.1
+  },
+  "gaussian_count": 1573987,
+  "lidar_point_count": 971903,
+  "ransac_seed": 0,
+  "scale": {
+    "count": 1573987,
+    "max_axis_m": {
+      "p50": 0.007897967690464556,
+      "p95": 0.02640069764141274,
+      "p99": 0.04982899979684498,
+      "p99_9": 0.09860462350209688,
+      "max": 0.200538924884638
+    },
+    "giant": {
+      "gt_0.5m": {
+        "count": 0,
+        "opacity_median": null
+      },
+      "gt_1.0m": {
+        "count": 0,
+        "opacity_median": null
+      },
+      "gt_5.0m": {
+        "count": 0,
+        "opacity_median": null
+      },
+      "gt_20.0m": {
+        "count": 0,
+        "opacity_median": null
+      }
+    },
+    "needle": {
+      "ratio_gt_10": 270677,
+      "ratio_gt_30": 22416,
+      "ratio_gt_100": 429
+    },
+    "degenerate_min_axis_lt_1e4_count": 0
+  },
+  "opacity": {
+    "count": 1573987,
+    "p5": 0.0014572523639947827,
+    "p50": 0.05155007570430953,
+    "p95": 0.51251535976434,
+    "mean": 0.12492741761164035,
+    "histogram": {
+      "bin_edges": [
+        0.0,
+        0.1,
+        0.2,
+        0.30000000000000004,
+        0.4,
+        0.5,
+        0.6000000000000001,
+        0.7000000000000001,
+        0.8,
+        0.9,
+        1.0
+      ],
+      "counts": [
+        1011362,
+        228482,
+        125602,
+        74531,
+        50290,
+        34418,
+        23048,
+        15646,
+        8728,
+        1880
+      ]
+    },
+    "dead_lt_0_005": {
+      "count": 235980,
+      "fraction": 0.14992499938055398
+    },
+    "fog_0_005_to_0_1": {
+      "count": 775382,
+      "fraction": 0.4926228742677036
+    },
+    "hard_gt_0_95": {
+      "count": 243,
+      "fraction": 0.0001543850108037741
+    }
+  },
+  "floater": {
+    "definition": "visible gaussians (opacity > 0.10) by nearest-neighbor distance to the LiDAR cloud; outliers far from measured geometry are floaters",
+    "visible_count": 562625,
+    "distance_m": {
+      "p50": 0.0017105421470869594,
+      "p95": 0.009023046499761583,
+      "p99": 0.01868040509978434
+    },
+    "outliers": {
+      "gt_0.3m": {
+        "count": 0,
+        "mean_opacity": null,
+        "mean_max_axis_m": null
+      },
+      "gt_1.0m": {
+        "count": 0,
+        "mean_opacity": null,
+        "mean_max_axis_m": null
+      },
+      "gt_5.0m": {
+        "count": 0,
+        "mean_opacity": null,
+        "mean_max_axis_m": null
+      }
+    }
+  },
+  "wall": {
+    "plane_count": 6,
+    "planes": [
+      {
+        "plane_index": 0,
+        "normal": [
+          -0.018165672762921966,
+          0.0011170213445865912,
+          0.9998343665809784
+        ],
+        "offset": 0.200403467224123,
+        "lidar_inlier_count": 385166,
+        "gaussian_count": 424935,
+        "center_normal_rms_m": 0.024112445707714227,
+        "effective_thickness_m": {
+          "p50": 0.006969096618567518,
+          "p95": 0.05056568034527581
+        },
+        "shortest_axis_angle_deg_p50": 5.200689643388895
+      },
+      {
+        "plane_index": 1,
+        "normal": [
+          -0.5379003581233257,
+          0.2539465329757402,
+          0.8038497142628088
+        ],
+        "offset": 1.1943776566642315,
+        "lidar_inlier_count": 121788,
+        "gaussian_count": 138898,
+        "center_normal_rms_m": 0.07704983410080238,
+        "effective_thickness_m": {
+          "p50": 0.05823350178974765,
+          "p95": 0.1389200867203039
+        },
+        "shortest_axis_angle_deg_p50": 32.66385507038092
+      },
+      {
+        "plane_index": 2,
+        "normal": [
+          0.25334105864981593,
+          -0.21071201892659086,
+          -0.9441497514070902
+        ],
+        "offset": -0.6055519216538892,
+        "lidar_inlier_count": 102938,
+        "gaussian_count": 239819,
+        "center_normal_rms_m": 0.08261355653898293,
+        "effective_thickness_m": {
+          "p50": 0.06740188261722913,
+          "p95": 0.14187073307705084
+        },
+        "shortest_axis_angle_deg_p50": 19.685799567510756
+      },
+      {
+        "plane_index": 3,
+        "normal": [
+          0.5367572323784104,
+          -0.254248889214547,
+          -0.8045179773147637
+        ],
+        "offset": -1.2500998823055878,
+        "lidar_inlier_count": 68781,
+        "gaussian_count": 131779,
+        "center_normal_rms_m": 0.07781119436042808,
+        "effective_thickness_m": {
+          "p50": 0.06393554018798452,
+          "p95": 0.1372330128473231
+        },
+        "shortest_axis_angle_deg_p50": 32.36605152518537
+      },
+      {
+        "plane_index": 4,
+        "normal": [
+          -0.5219164377683836,
+          0.2527290107125821,
+          0.814697047454697
+        ],
+        "offset": 1.1126996032609175,
+        "lidar_inlier_count": 58038,
+        "gaussian_count": 137569,
+        "center_normal_rms_m": 0.08024206118840176,
+        "effective_thickness_m": {
+          "p50": 0.06534315936074767,
+          "p95": 0.1400828182108268
+        },
+        "shortest_axis_angle_deg_p50": 32.26414257823389
+      },
+      {
+        "plane_index": 5,
+        "normal": [
+          0.5084578902528555,
+          -0.2483876286374962,
+          -0.8244841780043183
+        ],
+        "offset": -1.2585674156789288,
+        "lidar_inlier_count": 53164,
+        "gaussian_count": 117796,
+        "center_normal_rms_m": 0.08666730152574799,
+        "effective_thickness_m": {
+          "p50": 0.07523636609207549,
+          "p95": 0.14278068843455122
+        },
+        "shortest_axis_angle_deg_p50": 32.34633470445972
+      }
+    ],
+    "weighted_by_lidar_inliers": {
+      "center_normal_rms_m": 0.05290927636247221,
+      "effective_thickness_p50_m": 0.03659366180291468,
+      "effective_thickness_p95_m": 0.09641881672258586,
+      "shortest_axis_angle_deg_p50": 17.504019597423273
+    }
+  }
+}

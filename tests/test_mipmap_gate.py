@@ -19,6 +19,7 @@ from cloudstudio_3dgs.pipeline.mipmap_gate import (
     TRAINING_IMPLEMENTATION_READY_STATUS,
     FIXED_TOPOLOGY_EVALUATION_READY_STATUS,
     ADAPTIVE_GROWTH_BOUNDARY_READY_STATUS,
+    ADAPTIVE_GROWTH_REVIEW_READY_STATUS,
     TRAINING_READY_STATUS,
     UPSTREAM_DATA_READY_STATUS,
     advance_training_implementation_gate,
@@ -191,6 +192,115 @@ class MipMapPipelineGateTests(unittest.TestCase):
                     "config_manifest_sha256"
                 ],
             )
+
+        review_config = copy.deepcopy(config)
+        review_config["controlled_stop_after_steps"] = 1002
+        review_config.pop("config_manifest_sha256")
+        review_config["config_manifest_sha256"] = hashlib.sha256(
+            canonical_json_bytes(review_config)
+        ).hexdigest()
+        boundary_report = {
+            "status": "ADAPTIVE_GROWTH_BOUNDARY_PASS",
+            "checkpoint_sha256": "a" * 64,
+            "source_trainer_config_sha256": "b" * 64,
+        }
+        boundary_report["boundary_report_sha256"] = hashlib.sha256(
+            canonical_json_bytes(boundary_report)
+        ).hexdigest()
+        review_gate = advance_adaptive_growth_gate(
+            _upstream_data_gate(),
+            review_config,
+            stage="review",
+            boundary_report=boundary_report,
+        )
+        self.assertEqual(
+            review_gate["status"], ADAPTIVE_GROWTH_REVIEW_READY_STATUS
+        )
+
+        protected_config = copy.deepcopy(config)
+        protected_config["run_id"] = "v34-cull-protected-boundary"
+        protected_config["default_strategy"].update(
+            {
+                "opacity_cull_policy": "observation_aware",
+                "opacity_cull_min_observations": 4,
+                "opacity_cull_consecutive_events": 2,
+                "opacity_cull_grace_after_reset_steps": 200,
+                "opacity_cull_max_fraction": 0.05,
+            }
+        )
+        protected_config.pop("config_manifest_sha256")
+        protected_config["config_manifest_sha256"] = hashlib.sha256(
+            canonical_json_bytes(protected_config)
+        ).hexdigest()
+        protected_gate = advance_adaptive_growth_gate(
+            _upstream_data_gate(), protected_config, stage="boundary"
+        )
+        self.assertEqual(
+            protected_gate["cloudstudio_cull_enhancement"]["policy"],
+            "observation_aware",
+        )
+
+        detail_config = copy.deepcopy(protected_config)
+        detail_config["run_id"] = "v35-detail-split-boundary"
+        detail_config["default_strategy"].update(
+            {
+                "detail_split_policy": "lidar_surface_screen_detail",
+                "detail_split_scale_m": 0.02,
+                "detail_split_screen_radius": 0.0035,
+                "opacity_cull_priority": "lowest_opacity_per_footprint",
+            }
+        )
+        detail_config.pop("config_manifest_sha256")
+        detail_config["config_manifest_sha256"] = hashlib.sha256(
+            canonical_json_bytes(detail_config)
+        ).hexdigest()
+        detail_gate = advance_adaptive_growth_gate(
+            _upstream_data_gate(), detail_config, stage="boundary"
+        )
+        self.assertEqual(
+            detail_gate["cloudstudio_detail_split_enhancement"]["policy"],
+            "lidar_surface_screen_detail",
+        )
+
+        vendor_gradient_config = copy.deepcopy(detail_config)
+        vendor_gradient_config["run_id"] = "v35-vendor-gradient-boundary"
+        vendor_gradient_config["default_strategy"].update(
+            {"absgrad": False, "grow_grad2d": 0.00015}
+        )
+        vendor_gradient_config["geometry_regularization"].update(
+            {"anisotropy_weight": 0.0, "max_anisotropy": 256.0}
+        )
+        vendor_gradient_config.pop("config_manifest_sha256")
+        vendor_gradient_config["config_manifest_sha256"] = hashlib.sha256(
+            canonical_json_bytes(vendor_gradient_config)
+        ).hexdigest()
+        vendor_gradient_gate = advance_adaptive_growth_gate(
+            _upstream_data_gate(), vendor_gradient_config, stage="boundary"
+        )
+        self.assertEqual(
+            vendor_gradient_gate["projected_gradient_profile"],
+            "vendor_plain_1p5e4",
+        )
+        self.assertEqual(
+            vendor_gradient_gate["shape_regularization_profile"],
+            "thin_surfel_unpenalized",
+        )
+
+        absgrad_config = copy.deepcopy(vendor_gradient_config)
+        absgrad_config["run_id"] = "v35-absgrad-calibration-boundary"
+        absgrad_config["default_strategy"].update(
+            {"absgrad": True, "grow_grad2d": 0.0008}
+        )
+        absgrad_config.pop("config_manifest_sha256")
+        absgrad_config["config_manifest_sha256"] = hashlib.sha256(
+            canonical_json_bytes(absgrad_config)
+        ).hexdigest()
+        absgrad_gate = advance_adaptive_growth_gate(
+            _upstream_data_gate(), absgrad_config, stage="boundary"
+        )
+        self.assertEqual(
+            absgrad_gate["projected_gradient_profile"], "absgrad_8e4"
+        )
 
     def test_fixed_topology_evaluation_gate_authorizes_only_signed_arm(self) -> None:
         arm_config = {

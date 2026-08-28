@@ -85,6 +85,15 @@ class DefaultStrategyAdapter:
         reset_opacity_cap: float | None = None,
         capacity_cap: int | None = None,
         surface_birth_proposal: Any | None = None,
+        opacity_cull_policy: str = "immediate",
+        opacity_cull_min_observations: int = 0,
+        opacity_cull_consecutive_events: int = 1,
+        opacity_cull_grace_after_reset_steps: int = 0,
+        opacity_cull_max_fraction: float = 1.0,
+        opacity_cull_priority: str = "lowest_opacity",
+        detail_split_policy: str = "vendor_0_2m",
+        detail_split_scale_m: float = 0.02,
+        detail_split_screen_radius: float = 0.0035,
     ) -> None:
         from gsplat.strategy import DefaultStrategy
 
@@ -104,8 +113,50 @@ class DefaultStrategyAdapter:
         if self.capacity_cap is not None and self.capacity_cap <= 4:
             raise ValueError("capacity_cap must be greater than four")
         self.surface_birth_proposal = surface_birth_proposal
+        self.opacity_cull_policy = str(opacity_cull_policy)
+        self.opacity_cull_min_observations = int(opacity_cull_min_observations)
+        self.opacity_cull_consecutive_events = int(
+            opacity_cull_consecutive_events
+        )
+        self.opacity_cull_grace_after_reset_steps = int(
+            opacity_cull_grace_after_reset_steps
+        )
+        self.opacity_cull_max_fraction = float(opacity_cull_max_fraction)
+        self.opacity_cull_priority = str(opacity_cull_priority)
+        self.detail_split_policy = str(detail_split_policy)
+        self.detail_split_scale_m = float(detail_split_scale_m)
+        self.detail_split_screen_radius = float(detail_split_screen_radius)
         self.last_lifecycle_event: dict[str, Any] | None = None
         self._last_surface_birth_event: dict[str, Any] | None = None
+        self._last_cull_event: dict[str, Any] | None = None
+        if self.opacity_cull_policy not in {"immediate", "observation_aware"}:
+            raise ValueError(
+                "opacity_cull_policy must be immediate or observation_aware"
+            )
+        if self.opacity_cull_min_observations < 0:
+            raise ValueError("opacity_cull_min_observations must be non-negative")
+        if self.opacity_cull_consecutive_events <= 0:
+            raise ValueError("opacity_cull_consecutive_events must be positive")
+        if self.opacity_cull_grace_after_reset_steps < 0:
+            raise ValueError(
+                "opacity_cull_grace_after_reset_steps must be non-negative"
+            )
+        if not 0.0 < self.opacity_cull_max_fraction <= 1.0:
+            raise ValueError("opacity_cull_max_fraction must be within (0, 1]")
+        if self.opacity_cull_priority not in {
+            "lowest_opacity",
+            "lowest_opacity_per_footprint",
+        }:
+            raise ValueError("opacity_cull_priority is invalid")
+        if self.detail_split_policy not in {
+            "vendor_0_2m",
+            "lidar_surface_screen_detail",
+        }:
+            raise ValueError("detail_split_policy is invalid")
+        if self.detail_split_scale_m <= 0.0:
+            raise ValueError("detail_split_scale_m must be positive")
+        if not 0.0 < self.detail_split_screen_radius < 1.0:
+            raise ValueError("detail_split_screen_radius must be within (0, 1)")
         if self.exact_mipmap_lifecycle:
             if growth_min_opacity is None or not 0.0 < growth_min_opacity < 1.0:
                 raise ValueError("exact MipMap lifecycle requires growth_min_opacity")
@@ -174,7 +225,33 @@ class DefaultStrategyAdapter:
     # -- lifecycle -----------------------------------------------------------
 
     def initialize_state(self) -> dict[str, Any]:
-        return self.inner.initialize_state(scene_scale=self.scene_scale)
+        state = self.inner.initialize_state(scene_scale=self.scene_scale)
+        if self.opacity_cull_policy == "observation_aware":
+            # These are per-Gaussian tensors on purpose. gsplat's duplicate,
+            # split and remove operations apply the same topology transform to
+            # every tensor in strategy state, so the protection survives
+            # growth, pruning and checkpoint resume without a parallel index.
+            state["_cloudstudio_cull_low_streak"] = None
+            state["_cloudstudio_cull_observations"] = None
+            state["_cloudstudio_last_opacity_reset_step"] = None
+        return state
+
+    def _ensure_cull_tracking(
+        self, params: Any, state: dict[str, Any]
+    ) -> None:
+        if self.opacity_cull_policy != "observation_aware":
+            return
+        import torch
+
+        count = len(params["means"])
+        device = params["means"].device
+        for key, dtype in (
+            ("_cloudstudio_cull_low_streak", torch.int16),
+            ("_cloudstudio_cull_observations", torch.float32),
+        ):
+            value = state.get(key)
+            if not isinstance(value, torch.Tensor) or len(value) != count:
+                state[key] = torch.zeros(count, dtype=dtype, device=device)
 
     def check_sanity(self, params: Any, optimizers: dict[str, Any]) -> None:
         self.inner.check_sanity(params, optimizers)
@@ -275,8 +352,23 @@ class DefaultStrategyAdapter:
                 eligible = limited
         maximum_scale = torch.exp(params["scales"]).max(dim=-1).values
         small = maximum_scale <= float(self.split_scale_m)
-        duplicate_mask = eligible & small
-        split_mask = eligible & ~small
+        detail_split_mask = torch.zeros_like(eligible)
+        radii = state.get("radii")
+        if (
+            self.detail_split_policy == "lidar_surface_screen_detail"
+            and radii is not None
+        ):
+            # Preserve the recovered 0.2 m world-space split rule. The
+            # CloudStudio detail extension only redirects an otherwise cloned
+            # high-gradient parent into split when it is both physically large
+            # enough and visibly broad in the actual training renders. This
+            # avoids globally shrinking the larger thin disks that efficiently
+            # cover low-texture walls and snow planes.
+            detail_split_mask = eligible & small
+            detail_split_mask &= maximum_scale > self.detail_split_scale_m
+            detail_split_mask &= radii > self.detail_split_screen_radius
+        duplicate_mask = eligible & small & ~detail_split_mask
+        split_mask = eligible & (~small | detail_split_mask)
         duplicate_count = int(duplicate_mask.sum().item())
         split_count = int(split_mask.sum().item())
         parent_means = None
@@ -374,13 +466,90 @@ class DefaultStrategyAdapter:
             if step >= int(self.prune_switch_step)
             else float(self.inner.prune_opa)
         )
-        remove_mask = torch.sigmoid(params["opacities"].flatten()) < opacity_threshold
+        opacity = torch.sigmoid(params["opacities"].flatten())
+        raw_opacity_mask = opacity < opacity_threshold
         maximum_scale = torch.exp(params["scales"]).max(dim=-1).values
-        remove_mask |= maximum_scale > float(self.prune_scale_m)
+        world_scale_mask = maximum_scale > float(self.prune_scale_m)
         radii = state.get("radii")
+        screen_scale_mask = torch.zeros_like(raw_opacity_mask)
         if radii is not None:
-            remove_mask |= radii > float(self.inner.prune_scale2d)
+            screen_scale_mask = radii > float(self.inner.prune_scale2d)
+
+        opacity_mask = raw_opacity_mask.clone()
+        grace_active = False
+        if self.opacity_cull_policy == "observation_aware":
+            self._ensure_cull_tracking(params, state)
+            streak = state["_cloudstudio_cull_low_streak"]
+            observations = state["_cloudstudio_cull_observations"]
+            observations.add_(state["count"].to(observations.dtype))
+            streak.copy_(
+                torch.where(
+                    raw_opacity_mask,
+                    torch.clamp(streak + 1, max=32767),
+                    torch.zeros_like(streak),
+                )
+            )
+            last_reset = state.get("_cloudstudio_last_opacity_reset_step")
+            grace_active = bool(
+                last_reset is not None
+                and step - int(last_reset)
+                <= self.opacity_cull_grace_after_reset_steps
+            )
+            opacity_mask = raw_opacity_mask.clone()
+            opacity_mask &= (
+                observations >= float(self.opacity_cull_min_observations)
+            )
+            opacity_mask &= streak >= self.opacity_cull_consecutive_events
+            if grace_active:
+                opacity_mask &= False
+
+            maximum_opacity_culls = int(
+                len(opacity_mask) * self.opacity_cull_max_fraction
+            )
+            selected_count = int(opacity_mask.sum().item())
+            if selected_count > maximum_opacity_culls:
+                candidates = torch.where(opacity_mask)[0]
+                priority = opacity[candidates]
+                if self.opacity_cull_priority == "lowest_opacity_per_footprint":
+                    footprint = maximum_scale
+                    if radii is not None and len(radii) == len(maximum_scale):
+                        # ``radii`` is the maximum observed raster radius,
+                        # normalized by max(image width, image height). It is a
+                        # closer measure of visible blur than world scale.
+                        footprint = radii
+                    priority = priority / footprint[candidates].clamp_min(1e-6)
+                keep = torch.topk(
+                    priority,
+                    k=maximum_opacity_culls,
+                    largest=False,
+                    sorted=False,
+                ).indices
+                limited = torch.zeros_like(opacity_mask)
+                limited[candidates[keep]] = True
+                opacity_mask = limited
+
+        forced_geometry_mask = world_scale_mask | screen_scale_mask
+        remove_mask = opacity_mask | forced_geometry_mask
         prune_count = int(remove_mask.sum().item())
+        self._last_cull_event = {
+            "policy": self.opacity_cull_policy,
+            "opacity_threshold": float(opacity_threshold),
+            "raw_opacity_candidate_count": int(raw_opacity_mask.sum().item()),
+            "selected_opacity_count": int(opacity_mask.sum().item()),
+            "world_scale_count": int(world_scale_mask.sum().item()),
+            "screen_scale_count": int(screen_scale_mask.sum().item()),
+            "forced_geometry_union_count": int(forced_geometry_mask.sum().item()),
+            "opacity_geometry_overlap_count": int(
+                (opacity_mask & forced_geometry_mask).sum().item()
+            ),
+            "grace_active": grace_active,
+            "min_observations": self.opacity_cull_min_observations,
+            "consecutive_events": self.opacity_cull_consecutive_events,
+            "grace_after_reset_steps": self.opacity_cull_grace_after_reset_steps,
+            "max_opacity_cull_fraction": self.opacity_cull_max_fraction,
+            "opacity_cull_priority": self.opacity_cull_priority,
+            "total_cull_count": prune_count,
+        }
         if prune_count:
             remove(
                 params=params,
@@ -405,11 +574,13 @@ class DefaultStrategyAdapter:
 
         self.last_lifecycle_event = None
         self._last_surface_birth_event = None
+        self._last_cull_event = None
         if step >= self.refine_stop_iter:
             return
         self.inner._update_state(params, state, info, packed=False)
         if not self.is_refine_step(step):
             return
+        self._ensure_cull_tracking(params, state)
         before = len(params["means"])
         clone_count, split_count = self._grow_mipmap(
             params, optimizers, state
@@ -425,6 +596,10 @@ class DefaultStrategyAdapter:
                 state=state,
                 value=float(self.reset_opacity_cap),
             )
+            if self.opacity_cull_policy == "observation_aware":
+                state["_cloudstudio_cull_low_streak"].zero_()
+                state["_cloudstudio_cull_observations"].zero_()
+                state["_cloudstudio_last_opacity_reset_step"] = int(step)
         state["grad2d"].zero_()
         state["count"].zero_()
         if state.get("radii") is not None:
@@ -446,6 +621,10 @@ class DefaultStrategyAdapter:
         if self._last_surface_birth_event is not None:
             self.last_lifecycle_event["surface_birth_guard"] = dict(
                 self._last_surface_birth_event
+            )
+        if self._last_cull_event is not None:
+            self.last_lifecycle_event["cull_reasons"] = dict(
+                self._last_cull_event
             )
         if params["means"].is_cuda:
             torch.cuda.empty_cache()
@@ -486,6 +665,17 @@ class DefaultStrategyAdapter:
                 if self.surface_birth_proposal is None
                 else self.surface_birth_proposal.config.to_dict()
             ),
+            "opacity_cull_policy": self.opacity_cull_policy,
+            "opacity_cull_min_observations": self.opacity_cull_min_observations,
+            "opacity_cull_consecutive_events": self.opacity_cull_consecutive_events,
+            "opacity_cull_grace_after_reset_steps": (
+                self.opacity_cull_grace_after_reset_steps
+            ),
+            "opacity_cull_max_fraction": self.opacity_cull_max_fraction,
+            "opacity_cull_priority": self.opacity_cull_priority,
+            "detail_split_policy": self.detail_split_policy,
+            "detail_split_scale_m": self.detail_split_scale_m,
+            "detail_split_screen_radius": self.detail_split_screen_radius,
             # The resolved metric meaning of the two normalised scale gates.
             "effective_split_scale_m": float(
                 self.inner.grow_scale3d * self.scene_scale
