@@ -29,16 +29,16 @@ val 同理，改 `face4_val` / `da2_val`。
 
 ### 第 14 步 独立天空
 
-竞品交付件实测参数（本次审计所得，直接对齐）：
-100,000 点、SH0、包围盒 403.5×404.0×283.6 m（半径约 202 m）、
-最长轴 P50 2.056 m、轴比 P50 1.521（近各向同性）、opacity P50 0.100。
+目标规格见 `SURFACE_TRAINING_TARGETS_AND_PARAMETERS.zh-CN.md` §7：
+100,000 点、SH0、包围盒约 404×404×284 m（半径约 202 m）、
+最长轴 P50 约 2.06 m、轴比 P50 约 1.52（近各向同性）、opacity P50 约 0.10。
 
 ```
 python tools/build_independent_sky_background.py --face-manifest %OUT%\face4\face_manifest.json ^
   --face-root %OUT%\face4 --mono-manifest %OUT%\da2_train\<manifest> --mono-root %OUT%\da2_train ^
   --output %OUT%\sky_train --sky-count 100000 --sky-radius-m 202 --sky-scale-m 2.056 --sky-opacity 0.100
 ```
-先看工具默认值再决定是否覆盖；`--sky-count 100000` 与竞品完全一致，可直接用。
+先看工具默认值再决定是否覆盖。
 
 ### 门禁推进链（严格前缀，不可跳）
 
@@ -59,27 +59,29 @@ tools/build_mipmap_tile_geometry.py          （K=7 邻距尺度 / K=30 PCA 法�
 tools/build_tile_face4_lidar_geometry.py     （逐 Tile 侧车）
 ```
 
-### 第 16 步训练配置（DLL 审计得出的修正）
+### 第 16 步训练配置
 
-免代码的配置项：
+完整参数基线与理由见 `SURFACE_TRAINING_TARGETS_AND_PARAMETERS.zh-CN.md`。要点：
 
 - `factor = 1`（**底线，不得退回 2**；我方 41 次历史训练全是半分辨率）
-- `split_scale_m = 0.15`（DLL 硬编码值，我方原为 0.2）
-- `capacity_cap` 用**绝对整数**（DLL 证实竞品是绝对上限，不存在倍率 C）
-- `grow_grad2d` 必须先扫本场景梯度分位再定（竞品该值是宿主传入、不在二进制里；雪堆定标为 7.5e-5）
-- RGB `0.6·L1 + 0.4·(1−SSIM)`；LiDAR range 0.05；LiDAR 法向 0.01；DA2/mesh 权重 0
+- `split_scale_m = 0.01`（percent-dense 约定，× 场景尺度；我方原为 0.2）
+- `capacity_cap` 用**绝对整数**上限，不是相对初始点数的倍率
+- `grow_grad2d` 必须先扫本场景梯度分位再定（雪堆定标为 7.5e-5，不可照抄）
+- RGB 权重：训练器默认 `0.8·L1 + 0.2·(1−SSIM)`；SOP 现行写的是 `0.6/0.4`，两者需 A/B 定夺
+- LiDAR range 0.05；LiDAR 法向 0.01；DA2/mesh 权重 0
+- `world_shrink_factor = 0.8`（配 `max_world_size_m = 0.2`）——保形收缩，替代逐轴硬 clamp
+- `weight_tangent_isotropy > 0` —— 与 `weight_flatten` 同开才能得到薄圆盘而非针状
 
-需改代码（**尚未实施**）：
+已实施（2026-08-30）：保形超尺寸收缩、切向各向同性项，均带定向测试。
 
-- 裁剪阈值缩放与前半段加倍。已用 capstone 独立复核，并更正了首轮报告的三处错误（加倍的是
-  `0x128` 不是"阈值 A"；系数对应为 `0x128→×0.25`、`0x124→×5.0`、`0x130→×5.0`；两种调整
-  **互斥不叠加**）。精确指令序列见 `COMPETITOR_BINARY_AND_ARTIFACT_AUDIT.zh-CN.md` §5.1。
-  **仍不可实施**：三个偏移各自对应哪个物理量（透明度／屏幕半径／世界尺度）尚未确定，
-  乘数已知而被乘数未知。
+尚未实施：
+
+- cull 安全阀（某轮无 clone/split 时放宽三个阈值，即"没补新点就少删点"）。语义清楚，
+  但需在形状改动的效果可归因之后单独 A/B，不与之同轮开启。
 - 生命周期顺序 Split 先于 Clone（我方 `duplicate()` 在 501 行、`split()` 在 649 行）。两个掩膜
   互斥（`small` vs `~small`），实际只影响索引布局，优先级低。
 
-形态目标（竞品实测）：高斯数 22,452,075、最短轴 P50 0.428 mm、轴比 P50 10.235。
+形态目标：高斯数约 2245 万、最短轴 P50 0.43 mm、轴比 P50 10.2。
 我方 D1 对应为 7,453,193 / 5.006 mm / 2.297。
 
 ## 已就绪的产物（全部签名验证通过）
