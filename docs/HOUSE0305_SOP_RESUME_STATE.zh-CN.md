@@ -69,10 +69,15 @@ tools/build_tile_face4_lidar_geometry.py     （逐 Tile 侧车）
 - `grow_grad2d` 必须先扫本场景梯度分位再定（竞品该值是宿主传入、不在二进制里；雪堆定标为 7.5e-5）
 - RGB `0.6·L1 + 0.4·(1−SSIM)`；LiDAR range 0.05；LiDAR 法向 0.01；DA2/mesh 权重 0
 
-需改代码（**尚未实施，且结论来自单次反汇编、我未亲自复核**）：
+需改代码（**尚未实施**）：
 
-- 透明度裁剪在纯裁剪步上阈值分别 ×0.25 / ×5.0 / ×5.0，阈值 A 在训练前半段 ×2
-- 生命周期顺序 Split 先于 Clone（我方 `duplicate()` 在 501 行、`split()` 在 649 行）
+- 裁剪阈值缩放与前半段加倍。已用 capstone 独立复核，并更正了首轮报告的三处错误（加倍的是
+  `0x128` 不是"阈值 A"；系数对应为 `0x128→×0.25`、`0x124→×5.0`、`0x130→×5.0`；两种调整
+  **互斥不叠加**）。精确指令序列见 `COMPETITOR_BINARY_AND_ARTIFACT_AUDIT.zh-CN.md` §5.1。
+  **仍不可实施**：三个偏移各自对应哪个物理量（透明度／屏幕半径／世界尺度）尚未确定，
+  乘数已知而被乘数未知。
+- 生命周期顺序 Split 先于 Clone（我方 `duplicate()` 在 501 行、`split()` 在 649 行）。两个掩膜
+  互斥（`small` vs `~small`），实际只影响索引布局，优先级低。
 
 形态目标（竞品实测）：高斯数 22,452,075、最短轴 P50 0.428 mm、轴比 P50 10.235。
 我方 D1 对应为 7,453,193 / 5.006 mm / 2.297。
@@ -90,7 +95,13 @@ tools/build_tile_face4_lidar_geometry.py     （逐 Tile 侧车）
 | renderer 掩膜 train | `%OUT%\renderer_mask_train.json` | `20e632a7` |
 | renderer 掩膜 val | `%OUT%\renderer_mask_val.json` | `bdbb3d6a` |
 | LiDAR 深度（886 图） | `%OUT%\depth\depth_manifest.json` | `af8fb540` |
-| Face4 LiDAR 侧车 | `%OUT%\face4_lidar_train` / `_val` | 构建中 |
+| Face4 LiDAR 侧车 train | `%OUT%\face4_lidar_train` | `bacd67bf` |
+| Face4 LiDAR 侧车 val | `%OUT%\face4_lidar_val` | `e5ae6532` |
+
+Face4 LiDAR 侧车已完成：train `3184/3184` 面全部有真实命中、有效像素 `1,263,932,760`；
+val `360/360` 面全部有命中、`114,333,560` 像素。两个划分都是 **100% 覆盖**（雪堆同阶段为
+95.5% / 87.5%）。共 7.4 GB，按 §9.4 的正式算法用完整 LAS 经 `c2w` + `R_face/K_face`
+直接投影生成，未走鱼眼整数像素中转。每个逐 Tile 侧车都要绑定它作为上游。
 
 可复用、无需重建：`house0305_mesh_full\tile_lidar_surface_bpa_full.ply`（位姿无关）。
 已作废：`house0305_face4_geom_ba`（584 图 × 11 面的旧方案，且绑定旧 AT）。
