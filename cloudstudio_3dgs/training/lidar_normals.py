@@ -201,6 +201,7 @@ class NormalAlignmentConfig:
     enabled: bool = False
     weight_align: float = 0.01
     weight_flatten: float = 0.01
+    weight_tangent_isotropy: float = 0.0
     weight_point_to_plane: float = 0.0
     planarity_gate: float = 0.6
     max_anchor_distance_m: float = 0.10
@@ -214,6 +215,7 @@ class NormalAlignmentConfig:
         if (
             self.weight_align < 0.0
             or self.weight_flatten < 0.0
+            or self.weight_tangent_isotropy < 0.0
             or self.weight_point_to_plane < 0.0
         ):
             raise ValueError("normal alignment weights must be non-negative")
@@ -238,6 +240,7 @@ class NormalAlignmentConfig:
             "enabled": self.enabled,
             "weight_align": self.weight_align,
             "weight_flatten": self.weight_flatten,
+            "weight_tangent_isotropy": self.weight_tangent_isotropy,
             "weight_point_to_plane": self.weight_point_to_plane,
             "planarity_gate": self.planarity_gate,
             "max_anchor_distance_m": self.max_anchor_distance_m,
@@ -372,9 +375,11 @@ class LidarNormalAnchors:
         result = {
             "align": zero,
             "flatten": zero,
+            "tangent_isotropy": zero,
             "point_to_plane": zero,
             "align_raw": zero,
             "flatten_raw": zero,
+            "tangent_isotropy_raw": zero,
             "point_to_plane_raw": zero,
             "total": zero,
             "anchored_count": 0,
@@ -440,6 +445,17 @@ class LidarNormalAnchors:
         excess = torch.relu(thickness - target)
         flatten_raw = (weight * excess.square()).sum() / weight_sum
 
+        # Thinning alone does not decide what the remaining two axes do. A
+        # needle and a disk are both thin, and only the disk actually covers a
+        # surface, so the ratio of the two tangential axes is penalized away
+        # from one. Sorting makes this the larger over the middle axis, which
+        # is >= 1 by construction.
+        sorted_tangent = torch.sort(scales_m, dim=1).values
+        tangent_ratio = sorted_tangent[:, 2] / sorted_tangent[:, 1].clamp_min(_EPS)
+        tangent_isotropy_raw = (
+            weight * (tangent_ratio - 1.0).square()
+        ).sum() / weight_sum
+
         # A soft surface tether: only displacement along the LiDAR normal is
         # penalized.  Tangential motion remains free, which is the essential
         # difference from nearest-point locking and lets projected RGB
@@ -462,6 +478,9 @@ class LidarNormalAnchors:
 
         align = float(self.config.weight_align) * align_raw
         flatten = float(self.config.weight_flatten) * flatten_raw
+        tangent_isotropy = (
+            float(self.config.weight_tangent_isotropy) * tangent_isotropy_raw
+        )
         point_to_plane = (
             float(self.config.weight_point_to_plane) * point_to_plane_raw
         )
@@ -469,11 +488,13 @@ class LidarNormalAnchors:
             {
                 "align": align,
                 "flatten": flatten,
+                "tangent_isotropy": tangent_isotropy,
                 "point_to_plane": point_to_plane,
                 "align_raw": align_raw,
                 "flatten_raw": flatten_raw,
+                "tangent_isotropy_raw": tangent_isotropy_raw,
                 "point_to_plane_raw": point_to_plane_raw,
-                "total": align + flatten + point_to_plane,
+                "total": align + flatten + tangent_isotropy + point_to_plane,
             }
         )
         return result
