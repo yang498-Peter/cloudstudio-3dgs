@@ -23,6 +23,7 @@ class SurfaceInitializationConfig:
     planarity_gate: float = 0.6
     normal_scale_ratio: float = 0.08
     minimum_normal_scale_m: float = 0.0005
+    maximum_scale_m: float | None = None
 
     def validate(self) -> None:
         if self.mode not in {"planar_surfel", "mipmap_k7_k30"}:
@@ -35,6 +36,8 @@ class SurfaceInitializationConfig:
             raise ValueError("surface initialization normal_scale_ratio must be within (0, 1]")
         if self.minimum_normal_scale_m <= 0.0:
             raise ValueError("surface initialization minimum_normal_scale_m must be positive")
+        if self.maximum_scale_m is not None and self.maximum_scale_m <= 0.0:
+            raise ValueError("surface initialization maximum_scale_m must be positive")
 
     def to_dict(self) -> dict[str, Any]:
         self.validate()
@@ -44,7 +47,43 @@ class SurfaceInitializationConfig:
             "planarity_gate": self.planarity_gate,
             "normal_scale_ratio": self.normal_scale_ratio,
             "minimum_normal_scale_m": self.minimum_normal_scale_m,
+            "maximum_scale_m": self.maximum_scale_m,
         }
+
+
+def cap_surface_initialization_scales(
+    scales: np.ndarray,
+    *,
+    maximum_scale_m: float | None,
+) -> tuple[np.ndarray, dict[str, Any]]:
+    """Clamp only the sparse KNN scale tail and report the exact intervention."""
+
+    values = np.asarray(scales, dtype=np.float32)
+    if values.ndim != 2 or values.shape[1] != 3 or not np.isfinite(values).all():
+        raise ValueError("surface initialization scales must be finite Nx3")
+    if np.any(values <= 0.0):
+        raise ValueError("surface initialization scales must be positive")
+    before_max = float(values.max()) if len(values) else 0.0
+    if maximum_scale_m is None:
+        return values, {
+            "enabled": False,
+            "maximum_scale_m": None,
+            "clamped_gaussian_count": 0,
+            "clamped_axis_count": 0,
+            "before_max_m": before_max,
+            "after_max_m": before_max,
+        }
+    limit = float(maximum_scale_m)
+    mask = values > limit
+    clamped = np.minimum(values, limit).astype(np.float32, copy=False)
+    return clamped, {
+        "enabled": True,
+        "maximum_scale_m": limit,
+        "clamped_gaussian_count": int(np.count_nonzero(mask.any(axis=1))),
+        "clamped_axis_count": int(np.count_nonzero(mask)),
+        "before_max_m": before_max,
+        "after_max_m": float(clamped.max()) if len(clamped) else 0.0,
+    }
 
 
 def load_initialization_geometry(

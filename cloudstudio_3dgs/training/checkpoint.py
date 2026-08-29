@@ -278,14 +278,40 @@ def load_checkpoint(
     map_location: str,
     auxiliary_params: dict[str, Any] | None = None,
     auxiliary_optimizers: dict[str, Any] | None = None,
+    allowed_source_trainer_config_sha256: str | None = None,
+    allowed_lineage_difference_keys: tuple[str, ...] = (),
 ) -> tuple[int, Any, Any, dict[str, Any]]:
     import torch
 
     payload = torch.load(Path(path), map_location=map_location, weights_only=False)
     if payload.get("schema_version") != 1:
         raise ValueError("unsupported checkpoint schema")
-    if payload.get("identity") != expected_identity:
-        raise ValueError("checkpoint identity does not match this training run")
+    checkpoint_identity = payload.get("identity")
+    if checkpoint_identity != expected_identity:
+        if allowed_source_trainer_config_sha256 is None:
+            raise ValueError("checkpoint identity does not match this training run")
+        if not isinstance(checkpoint_identity, dict):
+            raise ValueError("checkpoint identity is invalid")
+        source_sha = checkpoint_identity.get("trainer_config_sha256")
+        if source_sha != allowed_source_trainer_config_sha256:
+            raise ValueError("checkpoint trainer config is not the authorized source")
+        source_lineage = dict(checkpoint_identity)
+        expected_lineage = dict(expected_identity)
+        source_lineage.pop("trainer_config_sha256", None)
+        expected_lineage.pop("trainer_config_sha256", None)
+        for key in allowed_lineage_difference_keys:
+            source_lineage.pop(key, None)
+            expected_lineage.pop(key, None)
+        if source_lineage != expected_lineage:
+            differing = sorted(
+                key
+                for key in set(source_lineage) | set(expected_lineage)
+                if source_lineage.get(key) != expected_lineage.get(key)
+            )
+            raise ValueError(
+                "checkpoint lineage differs beyond the authorized config transition: "
+                f"{differing}"
+            )
     checkpoint_params = payload["params"]
     if set(checkpoint_params) != set(params):
         raise ValueError("checkpoint parameter names do not match the trainer")

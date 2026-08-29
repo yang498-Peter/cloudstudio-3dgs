@@ -136,16 +136,25 @@ class NormalAlignmentConfigTest(unittest.TestCase):
         self.assertEqual(payload["weight_align"], 0.01)
         self.assertEqual(payload["planarity_gate"], 0.6)
         self.assertEqual(payload["refresh_every"], 500)
+        self.assertEqual(payload["flatten_mode"], "absolute_m")
         self.assertEqual(payload["flatten_target_m"], 0.02)
+        self.assertEqual(payload["flatten_ratio_target"], 0.15)
+        self.assertEqual(payload["weight_point_to_plane"], 0.0)
+        self.assertEqual(payload["point_to_plane_huber_delta_m"], 0.02)
 
     def test_rejects_invalid_values(self) -> None:
         bad = [
             NormalAlignmentConfig(weight_align=-1.0),
             NormalAlignmentConfig(weight_flatten=-0.1),
+            NormalAlignmentConfig(weight_point_to_plane=-0.1),
             NormalAlignmentConfig(planarity_gate=1.5),
             NormalAlignmentConfig(max_anchor_distance_m=0.0),
             NormalAlignmentConfig(refresh_every=0),
+            NormalAlignmentConfig(flatten_mode="unknown"),
             NormalAlignmentConfig(flatten_target_m=-0.01),
+            NormalAlignmentConfig(flatten_ratio_target=0.0),
+            NormalAlignmentConfig(flatten_ratio_target=1.0),
+            NormalAlignmentConfig(point_to_plane_huber_delta_m=0.0),
         ]
         for config in bad:
             with self.assertRaises(ValueError):
@@ -237,6 +246,68 @@ class LidarNormalAnchorsTest(unittest.TestCase):
         # gradient on the log scale under minimization).
         self.assertGreater(float(scales.grad[0, 2]), 0.0)
         self.assertEqual(float(scales.grad[0, 0]), 0.0)
+
+    def test_ratio_flatten_penalizes_round_shapes_at_any_metric_scale(self) -> None:
+        config = NormalAlignmentConfig(
+            enabled=True,
+            weight_align=0.0,
+            weight_flatten=1.0,
+            flatten_mode="tangent_ratio",
+            flatten_ratio_target=0.15,
+        )
+        anchors = self._anchors(config)
+        params = _params(
+            [[0.0, 0.0, 0.01], [1.0, 1.0, 0.01]],
+            [
+                [math.log(0.01), math.log(0.01), math.log(0.005)],
+                [math.log(0.10), math.log(0.10), math.log(0.01)],
+            ],
+            [[1.0, 0.0, 0.0, 0.0], [1.0, 0.0, 0.0, 0.0]],
+        )
+        anchors.refresh(params["means"])
+        result = anchors.loss(params)
+        # The 0.5-thickness round row is penalized; the geometrically ten
+        # times larger but ratio-0.1 disk is accepted.
+        self.assertGreater(float(result["flatten_raw"]), 0.0)
+        disk = _params(
+            [[0.0, 0.0, 0.01]],
+            [[math.log(0.10), math.log(0.10), math.log(0.01)]],
+            [[1.0, 0.0, 0.0, 0.0]],
+        )
+        anchors.refresh(disk["means"])
+        self.assertEqual(float(anchors.loss(disk)["flatten_raw"]), 0.0)
+
+    def test_point_to_plane_tether_allows_tangent_motion_but_pushes_normal_motion(self) -> None:
+        config = NormalAlignmentConfig(
+            enabled=True,
+            weight_align=0.0,
+            weight_flatten=0.0,
+            weight_point_to_plane=1.0,
+            point_to_plane_huber_delta_m=0.02,
+        )
+        anchors = self._anchors(config)
+        anchors.refresh(torch.tensor([[0.0, 0.0, 0.0]]))
+
+        tangent_means = torch.tensor([[0.05, 0.0, 0.0]], requires_grad=True)
+        tangent = {
+            "means": tangent_means,
+            "scales": torch.tensor([[-3.0, -3.0, -5.0]]),
+            "quats": torch.tensor([[1.0, 0.0, 0.0, 0.0]]),
+        }
+        tangent_loss = anchors.loss(tangent)
+        self.assertLess(
+            float(tangent_loss["point_to_plane_raw"].detach()), 1e-7
+        )
+
+        normal_means = torch.tensor([[0.05, 0.0, 0.01]], requires_grad=True)
+        normal = {**tangent, "means": normal_means}
+        normal_loss = anchors.loss(normal)
+        self.assertGreater(
+            float(normal_loss["point_to_plane_raw"].detach()), 0.0
+        )
+        normal_loss["total"].backward()
+        self.assertAlmostEqual(float(normal_means.grad[0, 0]), 0.0, places=6)
+        self.assertGreater(abs(float(normal_means.grad[0, 2])), 0.0)
 
     def test_max_anchor_distance_filters_far_gaussians(self) -> None:
         params = _params(

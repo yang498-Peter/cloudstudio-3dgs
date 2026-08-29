@@ -491,6 +491,8 @@ def relocate_weighted(
     probs: Tensor,
     min_opacity: float = 0.005,
     scene: Any | None = None,
+    proposal: Optional["TangentProposal"] = None,
+    proposal_out: Optional[Dict[str, Any]] = None,
 ) -> tuple[Tensor, Tensor]:
     """Inplace relocate dead Gaussians onto live ones sampled by ``probs``.
 
@@ -528,12 +530,51 @@ def relocate_weighted(
     )
     new_opacities = torch.clamp(new_opacities, max=1.0 - eps, min=min_opacity)
 
+    override: Dict[str, Tensor] = {}
+    applied: Optional[Tensor] = None
+    if proposal is not None and proposal.active and int(sampled_idxs.numel()) > 0:
+        # Relocation updates duplicated source scales before copying them into
+        # the dead slots. Reconstruct that exact scatter-then-gather state for
+        # the proposal, matching sample_add_weighted's index semantics.
+        source_log_scales = params["scales"].detach().clone()
+        source_log_scales[sampled_idxs] = torch.log(new_scales)
+        payload = proposal.propose(
+            params["means"].detach()[sampled_idxs],
+            params["quats"].detach()[sampled_idxs],
+            source_log_scales[sampled_idxs],
+        )
+        applied = payload["applied"]
+        for name in ("means", "quats", "scales"):
+            if name in payload:
+                override[name] = payload[name]
+        if proposal_out is not None:
+            proposal_out.update(
+                {
+                    "applied": applied,
+                    "anchor_index": payload["anchor_index"],
+                    "anchor_confidence": payload["anchor_confidence"],
+                    "applied_count": int(applied.sum().item()),
+                    "stats": dict(proposal.last_stats),
+                }
+            )
+
     def param_fn(name: str, p: Tensor) -> Tensor:
         if name == "opacities":
             p[sampled_idxs] = torch.logit(new_opacities)
         elif name == "scales":
             p[sampled_idxs] = torch.log(new_scales)
-        p[dead_indices] = p[sampled_idxs]
+        relocated = p[sampled_idxs]
+        replacement = override.get(name)
+        if replacement is not None and applied is not None:
+            proposal_mask = applied.reshape(
+                -1, *([1] * (relocated.dim() - 1))
+            )
+            relocated = torch.where(
+                proposal_mask,
+                replacement.to(dtype=relocated.dtype, device=relocated.device),
+                relocated,
+            )
+        p[dead_indices] = relocated
         return torch.nn.Parameter(p, requires_grad=p.requires_grad)
 
     def optimizer_fn(key: str, v: Tensor) -> Tensor:
@@ -722,9 +763,34 @@ class ErrorWeightedMCMCStrategy(MCMCStrategy):
     # Optional tangent-plane birth-site proposal (WP-5). Decides *where the
     # newborn lands*, where admission decides *which parent it comes from*.
     proposal_state: Optional["TangentProposal"] = None
+    # Fixed-capacity reallocation can set this to zero. The upstream default
+    # remains 5%, preserving existing runs unless explicitly overridden.
+    growth_rate: float = 0.05
+    # Bound how much of a dense LiDAR initialization can be recycled at one
+    # refine event. This prevents a single opacity threshold from replacing a
+    # large fraction of otherwise excellent fixed-topology geometry.
+    relocation_max_fraction: float = 1.0
+    # Optional metric/shape failure modes. They are semantic-agnostic: giant
+    # fog splats and needle splats become recyclable slots regardless of why
+    # they arose (dynamic objects, exposure conflict, pose error, etc.).
+    relocation_max_scale_m: Optional[float] = None
+    relocation_max_anisotropy: Optional[float] = None
+    last_relocation_event: Optional[Dict[str, Any]] = None
 
     def __post_init__(self) -> None:
         self.error_config.validate()
+        if not 0.0 <= float(self.growth_rate) <= 1.0:
+            raise ValueError("growth_rate must be within [0, 1]")
+        if not 0.0 < float(self.relocation_max_fraction) <= 1.0:
+            raise ValueError("relocation_max_fraction must be within (0, 1]")
+        if self.relocation_max_scale_m is not None and float(
+            self.relocation_max_scale_m
+        ) <= 0.0:
+            raise ValueError("relocation_max_scale_m must be positive")
+        if self.relocation_max_anisotropy is not None and float(
+            self.relocation_max_anisotropy
+        ) <= 1.0:
+            raise ValueError("relocation_max_anisotropy must exceed one")
 
     def _weighting_active(self, num_gaussians: int) -> bool:
         return (
@@ -776,12 +842,110 @@ class ErrorWeightedMCMCStrategy(MCMCStrategy):
         if not self._weighting_active(opacities.shape[0]):
             return super()._relocate_gs(params, optimizers, binoms, scene=scene)
         dead_mask = opacities <= self.min_opacity
+        scales = torch.exp(params["scales"].detach())
+        max_scale = scales.max(dim=1).values
+        min_scale = scales.min(dim=1).values.clamp_min(1e-12)
+        scale_failed = torch.zeros_like(dead_mask)
+        anisotropy_failed = torch.zeros_like(dead_mask)
+        if self.relocation_max_scale_m is not None:
+            scale_failed = max_scale > float(self.relocation_max_scale_m)
+            dead_mask |= scale_failed
+        if self.relocation_max_anisotropy is not None:
+            anisotropy_failed = (
+                max_scale / min_scale
+            ) > float(self.relocation_max_anisotropy)
+            dead_mask |= anisotropy_failed
+
+        candidate_mask = dead_mask.clone()
+        candidate_count = int(candidate_mask.sum().item())
+        max_relocated = max(
+            1,
+            int(opacities.numel() * float(self.relocation_max_fraction)),
+        )
+        if candidate_count > max_relocated:
+            # Shape failures are visible corruption and must be recovered
+            # before merely transparent rows. Fill the remaining budget with
+            # the lowest-opacity candidates. This also makes the policy easy
+            # to audit: no giant survives because an unrelated almost-zero
+            # opacity happened to have a larger numeric severity.
+            severity = (
+                (self.min_opacity / opacities.clamp_min(1e-12))
+                + (
+                    max_scale / float(self.relocation_max_scale_m)
+                    if self.relocation_max_scale_m is not None
+                    else torch.zeros_like(max_scale)
+                )
+                + (
+                    (max_scale / min_scale)
+                    / float(self.relocation_max_anisotropy)
+                    if self.relocation_max_anisotropy is not None
+                    else torch.zeros_like(max_scale)
+                )
+            )
+            shape_failed = scale_failed | anisotropy_failed
+            mandatory = shape_failed.nonzero(as_tuple=True)[0]
+            if int(mandatory.numel()) > max_relocated:
+                chosen = mandatory[
+                    torch.topk(
+                        severity[mandatory],
+                        k=max_relocated,
+                        largest=True,
+                        sorted=False,
+                    ).indices
+                ]
+            else:
+                remaining = max_relocated - int(mandatory.numel())
+                optional_mask = candidate_mask & ~shape_failed
+                optional = optional_mask.nonzero(as_tuple=True)[0]
+                if remaining > 0:
+                    optional = optional[
+                        torch.topk(
+                            severity[optional],
+                            k=min(remaining, int(optional.numel())),
+                            largest=True,
+                            sorted=False,
+                        ).indices
+                    ]
+                    chosen = torch.cat([mandatory, optional])
+                else:
+                    chosen = mandatory
+            dead_mask = torch.zeros_like(dead_mask)
+            dead_mask[chosen] = True
         n_gs = int(dead_mask.sum().item())
+        strict_surface = bool(
+            self.proposal_state is not None
+            and self.proposal_state.active
+            and self.proposal_state.config.reject_unsupported_births
+        )
+        self.last_relocation_event = {
+            "candidate_count": candidate_count,
+            "selected_count": n_gs,
+            "low_opacity_count": int((opacities <= self.min_opacity).sum().item()),
+            "oversized_count": int(scale_failed.sum().item()),
+            "anisotropy_failed_count": int(anisotropy_failed.sum().item()),
+            "max_fraction": float(self.relocation_max_fraction),
+            "strict_surface_gate": strict_surface,
+        }
         if n_gs > 0:
             assert self.score_state is not None
             probs = self.score_state.sampling_weights(
                 opacities, admission=self._admission_weights(opacities)
             )
+            probs = probs.clone()
+            # No known-bad candidate may become a source, even when the 2%
+            # event budget postpones its own relocation to a later refine.
+            probs[candidate_mask] = 0.0
+            if strict_surface:
+                eligible = self.proposal_state.eligible_parent_mask(params["means"])
+                probs *= eligible.to(device=probs.device, dtype=probs.dtype)
+                self.last_relocation_event["eligible_source_count"] = int(
+                    ((~candidate_mask) & eligible).sum().item()
+                )
+            if not bool(torch.isfinite(probs).all()) or float(probs.sum()) <= 0.0:
+                self.last_relocation_event["skipped"] = "no_eligible_source"
+                self.last_relocation_event["selected_count"] = 0
+                return 0
+            proposal_out: Dict[str, Any] = {}
             outcome = relocate_weighted(
                 params=params,
                 optimizers=optimizers,
@@ -791,6 +955,8 @@ class ErrorWeightedMCMCStrategy(MCMCStrategy):
                 probs=probs,
                 min_opacity=self.min_opacity,
                 scene=scene,
+                proposal=self.proposal_state,
+                proposal_out=proposal_out,
             )
             # Relocation keeps N constant, but each dead slot now holds a copy
             # of its source Gaussian: its lifecycle row must follow the source
@@ -808,8 +974,12 @@ class ErrorWeightedMCMCStrategy(MCMCStrategy):
                     self.admission_state.on_relocate(
                         dead_indices,
                         sampled_idxs,
+                        means=params["means"][dead_indices],
                         lifecycle=self.score_state.lifecycle,
                     )
+                stats = proposal_out.get("stats")
+                if stats is not None:
+                    self.last_relocation_event["proposal"] = dict(stats)
         return n_gs
 
     @torch.no_grad()
@@ -827,7 +997,10 @@ class ErrorWeightedMCMCStrategy(MCMCStrategy):
             # length alignment is possible here; surviving rows are preserved.
             self._sync_lifecycle_length(len(params["means"]))
             return n_gs
-        n_target = min(self.cap_max, int(1.05 * current_n_points))
+        n_target = min(
+            self.cap_max,
+            int((1.0 + float(self.growth_rate)) * current_n_points),
+        )
         n_gs = max(0, n_target - current_n_points)
         if n_gs > 0:
             assert self.score_state is not None
@@ -835,6 +1008,15 @@ class ErrorWeightedMCMCStrategy(MCMCStrategy):
             probs = self.score_state.sampling_weights(
                 opacities, admission=self._admission_weights(opacities)
             )
+            if (
+                self.proposal_state is not None
+                and self.proposal_state.active
+                and self.proposal_state.config.reject_unsupported_births
+            ):
+                eligible = self.proposal_state.eligible_parent_mask(params["means"])
+                probs = probs * eligible.to(device=probs.device, dtype=probs.dtype)
+                if not bool(torch.isfinite(probs).all()) or float(probs.sum()) <= 0.0:
+                    return 0
             proposal_out: Dict[str, Any] = {}
             sampled_idxs = sample_add_weighted(
                 params=params,

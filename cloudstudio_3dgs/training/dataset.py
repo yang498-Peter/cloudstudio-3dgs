@@ -82,6 +82,13 @@ class TrainingSample:
     mono_depth_range_m: np.ndarray | None = None
     mono_depth_mask: np.ndarray | None = None
     mono_depth_cache_path: Path | None = None
+    # Continuous LiDAR-surface supervision.  These arrays remain distinct
+    # from sparse LiDAR and metric-aligned monocular depth.
+    mesh_depth_range_m: np.ndarray | None = None
+    mesh_normal_camera: np.ndarray | None = None
+    mesh_confidence: np.ndarray | None = None
+    mesh_depth_mask: np.ndarray | None = None
+    mesh_geometry_cache_path: Path | None = None
 
 
 class S1TrainingDataset:

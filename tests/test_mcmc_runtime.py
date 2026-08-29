@@ -19,6 +19,7 @@ from cloudstudio_3dgs.training.runtime_evidence import (
     build_mcmc_runtime_report,
     build_mcmc_step_event,
     initialize_mcmc_telemetry,
+    normalize_classic_strategy_telemetry,
     require_finite_training_tensors,
     require_full_mcmc_runtime,
     sign_full_mcmc_gate_evidence,
@@ -320,6 +321,37 @@ class MCMCTelemetryTests(unittest.TestCase):
         append_mcmc_telemetry(telemetry, noise_only)
         self.assertEqual(telemetry["noise_nonzero_step_count"], 1)
         self.assertAlmostEqual(telemetry["noise_max_abs_delta_m"], 0.002)
+
+    def test_classic_lifecycle_does_not_report_mcmc_relocation(self) -> None:
+        telemetry = initialize_mcmc_telemetry(
+            {"gaussian_count": 100, "dead_gaussian_count": 40}
+        )
+        event = {
+            "step": 500,
+            "refine_triggered": True,
+            "noise_injection_invoked": False,
+            "relocated_count": 40,
+            "new_gaussian_count": 5,
+            "pruned_gaussian_count": 0,
+            "noise_position_delta_max_m": None,
+            "before": {"gaussian_count": 100},
+            "after": {"gaussian_count": 105},
+            "classic_lifecycle": {
+                "clone_count": 20,
+                "split_child_count": 4,
+                "cull_count": 19,
+            },
+        }
+        append_mcmc_telemetry(telemetry, event)
+        self.assertEqual(telemetry["total_relocated"], 0)
+        self.assertEqual(telemetry["total_added"], 24)
+        self.assertEqual(telemetry["total_pruned"], 19)
+
+        telemetry["events"][0]["relocated_count"] = 999
+        telemetry["total_relocated"] = 999
+        normalize_classic_strategy_telemetry(telemetry)
+        self.assertEqual(telemetry["total_relocated"], 0)
+        self.assertEqual(telemetry["events"][0]["strategy"], "default_3dgs")
 
     def test_non_finite_parameter_or_gradient_fails_closed(self) -> None:
         params = self._params()

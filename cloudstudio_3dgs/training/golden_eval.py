@@ -12,6 +12,7 @@ import numpy as np
 from PIL import Image
 
 from cloudstudio_3dgs.data.manifest import canonical_json_bytes
+from cloudstudio_3dgs.training.backend import rendered_range_to_euclidean
 from cloudstudio_3dgs.evaluation.image_metrics import (
     masked_depth_metrics,
     masked_psnr,
@@ -133,7 +134,12 @@ def _evaluate_views(
             }
             if background_rgb is not None:
                 render_options["background_rgb"] = background_rgb
-            rendered, rendered_range, _, _ = backend.render(params, sample, **render_options)
+            rendered, rendered_range, _, render_info = backend.render(
+                params, sample, **render_options
+            )
+            rendered_range = rendered_range_to_euclidean(
+                backend.torch, rendered_range, sample, render_info
+            )
             prediction = rendered.detach().clamp(0.0, 1.0).cpu().numpy()
             reference = np.asarray(sample.image, dtype=np.float32) / 255.0
             psnr = masked_psnr(prediction, reference, sample.rgb_mask)

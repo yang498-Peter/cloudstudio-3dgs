@@ -49,7 +49,7 @@
 13. `da2_monocular_depth`：生成 DA2 相对深度，并签名记录尺度对齐和有效区。
 14. `independent_sky_background`：天空/远景独立建模，不得让表面高斯用超大尺度代替天空。
 15. `spatial_tile_plan`：按空间拆分 Tile，并为每个 Tile 固化 LAS 子集、相机子集及重叠区。
-16. `tile_gaussian_training`：各 Tile 按 High/type-2 执行 `20×Tile视图数` 步、训练内部 SH degree 1/表面产品 DC-only、RGB `0.6 mean-L1 + 0.4(1-SSIM)`、DA2 `0.5`、LiDAR/mesh depth `0.5→0.25`、mesh normal `0.05`、后期自洽 normal `0.01` 和 opacity-mean `0.01`。snow 分支固定使用 gradient split/clone/cull/reset，禁止启用 MCMC relocation 或 redundancy cull 冒充竞品。
+16. `tile_gaussian_training`：各 Tile 按 High/type-2 执行 `20×Tile视图数` 步；参数结构为 SH degree 1，但表面终态为 DC-only，现有证据不能区分 surface SH-rest 从未激活还是导出时丢弃；RGB 为 `0.6 mean-L1 + 0.4(1-SSIM)`，DA2 `0.5`、LiDAR/mesh depth `0.5→0.25`、mesh normal `0.05`、后期自洽 normal `0.01` 和 opacity-mean `0.01`。snow 分支固定使用 gradient split/clone/cull/reset，禁止启用 MCMC relocation 或 redundancy cull 冒充竞品。
 17. `raw_fisheye_evaluation`：回到原始鱼眼验证集评估 PSNR、SSIM、LPIPS、深度、覆盖率、空洞、漂浮点和尺度异常。
 18. `ply_sog_lod_export`：只有评估门通过后才导出表面 PLY、天空、Tile、SOG/LOD 和最终质量报告。
 
@@ -84,7 +84,7 @@
 - Huber 尺度 `2.0 px`；最多 15 轮内参/pose 交替并已收敛；
 - POS 先验 sigma 为 `[0.03, 0.03, 0.06] m`，不是已经验证通过的“统一 2 cm”；
 - 2 cm 先验只能作为独立 Stage 2 对照实验，不能无对照替换产品基线；
-- 竞品 High/type-2 已直接确认训练参数 degree 1，而表面终态为 DC-only、天空为 degree 1；不能把“最终表面 PLY 无 SH rest”解释成训练全程只用了 SH0。
+- 竞品 High/type-2 已直接确认参数结构 degree 1，而表面终态为 DC-only、天空为 degree 1；不能把“最终表面 PLY 无 SH rest”解释成训练全程必然只用了 SH0，也不能反向宣称 surface SH1 在训练中一定活跃。
 - High/type-2 的 densification 从 step 500 开始、每 100 步运行；gradient threshold `1.5e-4`，候选 opacity `>0.15`，尺度分界 `0.2`，split 两子点并 `/1.6`，cull opacity/scale/screen 阈值为 `0.05/0.2/0.15`，每 300 步把 opacity 上限 reset 到 `0.2`。
 
 竞品已经确认运行的部分是 SegFormer renderer mask、DA2、四 Tile、gradient split/clone/cull/reset、独立天空和最终多格式交付。保留下来的 342 张 `milestones/classify/*.tif` 只有两种 SHA256、各 171 张，且只有 `0/255`，所以不能把它们写成逐图多类别结果；未知 label 33 语义继续标为未知。
@@ -310,3 +310,282 @@
 Tile_1 低显存 GPU 组件 smoke 已通过：真实 crop 中 `268,854` 个 LiDAR 像素产生非零梯度；5,000 点表面场触发 `4,817` 个受约束 clone，全部经过 proposal；峰值显存 `76 MiB`，签名 `e01bdac6ac720e0ac9e7cf81be392512b875b87bf297f592be9bf1232c9c0e61`。该结果只证明深度和贴面增长组件连通，不证明 rasterizer、step 500 生命周期或最终图像质量。
 
 当前状态为 `TILE_1_RANGE_CONSUMPTION_READY`，仍固定 `training_allowed=false`。下一步应以同一签名算法串行生成 Tile_0/2/3/4，随后做短 Trainer raster smoke；只有 batch 中 `depth_mask` 非空、`lidar_range_loss` 非零、第一次 densification 实际触发 LiDAR 父点门与切平面 proposal、Gaussian 数量/显存/loss 均正常，才允许进入逐 Tile 长训练。
+
+### 9.8 Tile_1 两步 Trainer raster smoke（2026-08-28）
+
+问题现象：本机锁定 gsplat wheel 提供 `projection_ut_3dgs_fused` 和 `rasterize_to_pixels_from_world_3dgs`，但不提供经典 `projection_ewa_3dgs_fused_fwd` 与 `rasterize_to_pixels_3dgs_fwd`。Face4 pinhole 默认经典路径因此无法进入真实 raster；仅打开 UT 后仍会落回缺失的经典二维 raster。eval3d 能完成前向和反向，但它不提供 DefaultStrategy 所依赖的经典 `means2d.grad`，因此禁止把两步实现 smoke 误写成 densification 已验证。
+
+修改文件：
+
+- `cloudstudio_3dgs/training/backend.py`
+- `cloudstudio_3dgs/training/trainer.py`
+- `tests/test_training.py`
+- `outputs/snow-20260224-full-20260825/snow_tile1_lidar_first_raster_smoke2_v24f.config.json`
+
+修改内容：新增显式 `pinhole_with_ut` 兼容开关；仅在该开关开启时让 pinhole 使用 `UT + eval3d + RGB-Ed`。Backend 标记输出为 `euclidean_ray_range_m`，Trainer 不再重复乘 Face4 `depth_to_range_scale`。`implementation_smoke_only` 固定最多 2 步、禁止致密化和正式评估，并跳过依赖 `means2d.grad` 的策略梯度隔离及 post-step；默认 pinhole 正式训练路径不变。
+
+验证方式：`tests.test_mcmc_runtime + tests.test_mipmap_gate` 共 `31 passed`；此前 Face4/门禁定向测试共 `34 passed`，eval3d range 语义回归 `1 passed`。最终按 B 方案锁定 `SH0` 的真实 Tile_1 smoke 使用 `971,903` 个 LiDAR 初始化高斯、签名 Face4 RGB/mask、Tile range sidecar 和 K7/K30 几何完成 2/2 CUDA steps，训练状态为 `IMPLEMENTATION_SMOKE_COMPLETE`，峰值显存 `957,911,552 bytes`，最终高斯数保持 `971,903`，LiDAR robust-log-Huber loss 为 `0.0003253764`。checkpoint SHA256 为 `e2b8ef731a20e59051f1e778bf199d24dba3641b0f8b3e685275d98052a8efe7`，Manifest 合同 SHA256 为 `6abe7e0590f4d132c5dc1ee3f492e9e6751d8944ebc5c55f65fe236e4c9b5d57`。
+
+当前状态：真实 raster、LiDAR range loss、反向、优化器和 checkpoint 链路已经连通，但证据范围严格为 `IMPLEMENTATION_SMOKE_ONLY_NOT_TRAINING_READY`。两步使用随机视图，loss 从首步 `0.43987` 到末步 `0.55465`，不能用于判断收敛或画质。正式训练前仍必须单独解决 eval3d 下的增长统计来源，并在第一次真实 clone/split/cull/reset 边界验证 LiDAR 父点门、切平面出生、Gaussian 数量和显存；在此之前不得启动长训练。
+
+### 9.9 固定拓扑优先的优化评估重排（2026-08-28）
+
+问题现象：此前 Snow 配置仍以 `default_3dgs` 和推迟 refine window 间接表达“暂不增长”，无法从签名合同区分严格固定拓扑、只裁 opacity 和自适应增长；训练也没有明确记录 Phase A 几何冻结、Phase B 小 LR 几何优化、逐损失梯度冲突、参数实际更新和 point-to-plane drift。Tile 清单还把 `training_and_export_box` 同时用于训练和导出，存在 halo 直接拼接、重叠高斯重复交付的风险。仅报告保留像素的深度误差也可能通过丢弃难点像素得到虚假低尾差。
+
+修改文件：
+
+- `cloudstudio_3dgs/training/topology_policy.py`
+- `cloudstudio_3dgs/training/optimization_audit.py`
+- `cloudstudio_3dgs/training/tile_ownership.py`
+- `cloudstudio_3dgs/evaluation/lidar_accuracy_coverage.py`
+- `cloudstudio_3dgs/training/trainer.py`
+- `tools/audit_tile_lidar_accuracy_coverage.py`
+- `tools/build_tile_core_ownership_contract.py`
+- `tools/build_fixed_topology_evaluation_plan.py`
+- `tools/build_fixed_topology_evaluation_readiness.py`
+- `configs/snow_tile1_fixed_topology_a0_smoke_v25a.json`
+- `tests/test_topology_policy.py`
+- `tests/test_optimization_audit.py`
+- `tests/test_tile_ownership.py`
+- `tests/test_lidar_accuracy_coverage.py`
+- `tests/test_training.py`
+
+修改内容：
+
+1. Trainer 新增显式 `strict_fixed / opacity_prune_only / adaptive_growth` 拓扑合同。A0 每步强制 Gaussian 数量不变；A1 只允许在指定 completed-step 执行一次 opacity prune，任何出生、重定位或非授权数量变化立即失败；增长策略在 A0/A1 中不执行。
+2. 固化 Phase A/B/C：A 只优化颜色、曝光和 opacity，means/scale/quat 的 LR 为 `0`，range/normal 继续计算但优化权重为 `0`；B 以配置比例开放几何 LR 并启用 robust range 与 surface normal；C 维持受约束几何优化并标记 gap diagnostic，不自动出生。
+3. audit step 记录 means/scale/quat/opacity 的总梯度、实际更新量、RGB/range/normal 分项梯度范数与夹角、range 朝向性检查以及相对初始化表面的 point-to-plane P50/P95/P99/最大值。
+4. Tile merge 固定为 `core = 唯一最终所有权，halo = 仅训练上下文`。共享边界采用最小 Tile ID 唯一归属；正式合并必须先逐 Tile core cut 再 concatenate，禁止直接拼接 halo。
+5. Gate 0 报告同时保留 accuracy 与 coverage 分母，输出 per-view P5/P10/P50/P95/P99、低/中/高 confidence、深度不连续边缘、5/10 cm 尾差。range-only sidecar 无法可靠给出低入射角和语义墙角分层时明确写 `NOT_AVAILABLE`，不伪造通过。
+
+验证方式与结果：
+
+- 新增定向测试与既有门禁组合回归均通过；Python 语法、diff whitespace 和 UTF-8 检查通过。
+- Tile_1 Gate 0：候选 `89,938,146`，core+halo 保留 `44,487,571`，coverage `49.4646%`；per-view coverage P5/P10/P50 为 `10.6945% / 17.0641% / 50.8994%`。低/中/高 confidence coverage 为 `62.9318% / 41.6849% / 34.7981%`；深度不连续边缘为 `33.7877%`，非边缘为 `52.1447%`。保留像素的 range P50/P95/P99/最大误差均为 `0`，`>5 cm` 和 `>10 cm` 均为 `0`。审计 SHA256 为 `0e7b7f5af1ade4444c154add9d41a0b6723e990f2860e88bacaeca8170af5ba4`。
+- A0 SH0 方向 smoke：`971,903` 个 Gaussian 完成 Phase A 冻结和 Phase B `0.1×` 几何 LR 两步；Phase A means/scale/quat 更新严格为 `0`，Phase B point-to-plane P95 `1.741 μm`、最大 `1.858 μm`，数量保持不变。Phase B range baseline `0.0003260`，朝 LiDAR 拉回 1 cm 后 `0.0002365`，反向推远后 `0.0004514`，方向门通过。Manifest SHA256 为 `fe3bad68bd8a474e287aa285ae1073febe1ba338a81a9a5970dae6970de19eda`。
+- 单视图梯度只作为调权起点：Phase B 配置加权 RGB/range 对 means 的 L2 分别为 `0.037338 / 0.00004347`，约差 `859×`；opacity 的 RGB-range cosine 为 `-0.6767`，scale 为 `-0.3966`，说明 `0.05/0.01` 尚不能冻结为产品权重，必须在 A0 多视图 audit 中看分布。
+- full-resolution `factor=1`、SH0、strict-fixed 单步 smoke 通过，峰值显存 `1,137,484,800 bytes`，Manifest SHA256 为 `88fafa6023ce7a3687a5f3869e0c1bbd101d570500b527e41578c7201e3b9725`。
+- 5 Tile core ownership 合同 SHA256 为 `895490a3ab5be96d0f317f852f2a2e05413c41838176a091502802c7054bf0ee`；固定拓扑评估计划 SHA256 为 `7d00e622bdf542f71d18bfd42eddb322d804bfb5860837a533b09ea25844309d`。
+
+准备的两个清洁基线严格共用权威输入、374 个训练 Face、SH0、seed 42、factor 1、loss、Phase 和评价 cadence：A0 为完全固定拓扑；A1 仅在 Phase A 的 `1870` 步 warm-up 后执行一次 opacity `<0.01` prune。两者均为 `5V + 10V + 5V = 7480` 步，Phase 长度 `1870 / 3740 / 1870`。
+
+当前状态为 `FIXED_TOPOLOGY_EVALUATION_PREPARED`，readiness SHA256 为 `c1815151d71b913cccd2d2394b6377b845399e1c3dd8d420ac8bbf91d1bea5d7`。本状态仍固定 `training_allowed=false`，需要明确晋级后才运行 7480-step A0/A1；adaptive growth 继续禁止。A0/A1 运行期间必须输出多视图梯度分布和 Phase C 结构缺口图，最终 5 Tile 合并前必须完成逐 Tile core cut 数量和唯一性审计。
+
+### 9.10 固定拓扑评估晋级与实时监控（2026-08-28）
+
+问题现象：用户明确要求继续 A0 后，Trainer 正确拒绝了 `UPSTREAM_DATA_READY`，因为旧的 `TRAINING_IMPLEMENTATION_READY` 合同强制要求经典 split/clone/cull，与本轮 `strict_fixed / opacity_prune_only` 实验相冲突。直接复用旧门会把新路线伪装成已启用增长，手工改 `training_allowed` 又会破坏签名和 fail-closed 语义。训练产物此前也只在 checkpoint 保存最后一个 batch 指标，无法提供多轮自动刷新曲线。
+
+修改文件：
+
+- `cloudstudio_3dgs/pipeline/mipmap_gate.py`
+- `cloudstudio_3dgs/training/trainer.py`
+- `tools/promote_fixed_topology_evaluation_gate.py`
+- `tools/training_monitor_server.py`
+- `tools/training_monitor.html`
+- `tests/test_mipmap_gate.py`
+
+修改内容：新增独立签名状态 `FIXED_TOPOLOGY_EVALUATION_READY`。Promotion 必须复验上游门、readiness、评估计划和 A0/A1 配置，绑定不依赖 gate 路径的 arm fingerprint，只允许 `strict_fixed` 与 `opacity_prune_only`，并显式保持 `adaptive_growth_allowed=false`。Trainer 按自己的 run、Tile、Phase、factor、SH、DA2、出生控制和拓扑配置重算 fingerprint；不匹配的配置无法借用该门。新增非权威 `monitor/progress.jsonl`，后续训练每 10 步记录 loss、RGB/SSIM、LiDAR range/normal、Gaussian 数量、阶段、显存与最新几何审计；监控服务只读 checkpoint/Manifest/JSONL，将多轮数据缓存并通过本机网页每 5 秒刷新，支持任意数值指标和多轮叠加。
+
+验证方式：门禁、拓扑和 Trainer 回归共 `74 passed`，相关 Python 文件语法检查通过；晋级门 SHA256 为 `2779d90eeddb2f833ffbf5ca76e2164ae2cbfbd249126e9f05aa93dddb6e32c9`。A0 已使用该门进入真实全分辨率训练：Phase A step 1870 时 Gaussian 数量保持 `971,903`，means/scale/quat 更新与 point-to-plane drift 均为 `0`，LiDAR 方向性通过；Phase B 首个持久化检查点 step 2244 的 point-to-plane P95 为 `0.0000004109 m`，仍无拓扑变化。监控 API 已返回 A0/A1 两轮状态、GPU、指标和持久化曲线点；页面地址为 `http://127.0.0.1:8792/`。
+
+当前状态：A0 正在运行，A1 未启动，自适应增长继续禁止。当前 A0 进程在本次遥测代码加载前启动，因此本轮曲线以 374 步 checkpoint 为粒度；A1 和后续轮次将使用每 10 步 JSONL。监控数据不是质量签名，最终判断仍以 checkpoint、run manifest、原鱼眼评估和 Phase C 缺口审计为准。
+
+### 9.11 V26a LiDAR 约束经典生长边界与续跑（2026-08-28）
+
+问题现象：A0 在 step 2618 的固定拓扑 PLY 中，雪面主体细致、加载快，但人物和移动物体干扰对应的离面大高斯在 SuperSplat 中非常明显。固定 97.19 万点无法通过拓扑生命周期删除这些错误结构，也不能只在真实覆盖缺口补点。第一版 V26a 使用 `pinhole_with_ut=true` 的 eval3d 兼容路径；该路径不提供 DefaultStrategy/AbsGS 所需的 `means2d.absgrad`，因此第 1 步按合同失败，未生成伪造的经典生长结果。切换真正的经典二维路径后，首次 step 500 生命周期已触发，但旧 MCMC 遥测用 `step > start` 判断事件，而竞品式精确生命周期用 `step >= start`，导致证据封装拒绝 step 500 的合法快照并停止。
+
+修改文件：
+
+- `cloudstudio_3dgs/pipeline/mipmap_gate.py`
+- `cloudstudio_3dgs/training/backend.py`
+- `cloudstudio_3dgs/training/checkpoint.py`
+- `cloudstudio_3dgs/training/default_strategy_adapter.py`
+- `cloudstudio_3dgs/training/runtime_evidence.py`
+- `cloudstudio_3dgs/training/trainer.py`
+- `tools/build_v26a_boundary_gate.py`
+- `tools/promote_v26a_evaluation.py`
+- `tools/run_with_prebuilt_gsplat.py`
+- `tests/test_default_strategy_adapter.py`
+- `tests/test_mipmap_gate.py`
+- `tests/test_training.py`
+
+修改内容：Face4 V26a 固定使用包含经典 EWA 投影和二维 raster 的 gsplat 3DGS 扩展，`pinhole_with_ut=false`，保留真实 `means2d.absgrad`；不允许以 eval3d 世界坐标梯度代理 AbsGS。新增 `ADAPTIVE_GROWTH_BOUNDARY_READY / ADAPTIVE_GROWTH_EVALUATION_READY` 两级签名门：先在 step 502 受控停点核验首次 clone/split/cull、LiDAR 出生守卫、scale、数量和显存，只有签名报告 PASS 才允许从原 checkpoint 连续恢复到 7480 步。跨门恢复只允许 `trainer_config_sha256` 从边界配置切换到评估配置；Dataset、Face4、LiDAR、坐标变换、初始化、尺度标定和 gsplat runtime 任一身份变化仍 fail-closed。step 2618 设置独立保留 checkpoint，导出后训练继续。
+
+验证方式与边界结果：相关门禁、训练和遥测回归共 `127 passed`，Python 语法检查通过。真实全分辨率边界在 step 500 执行 clone `251,672`、split 父点 `6`（子点 `12`）、cull `238,447`，数量从 `971,903` 变为 `985,134`，净增 `13,231`。LiDAR 门检查 `257,723` 个候选，支持 `251,678` 个并拒绝 `6,045` 个；`251,684` 个新生点全部经过切平面 proposal，应用率 `100%`，回退父点比例 `0.6313%`。生命周期后 scale P95 为 `0.01520 m`、最大 `0.19761 m`；峰值训练显存 `2,054,993,408 bytes`，低于 7.5 GiB 门；MCMC 噪声步数为 `0`。边界报告 SHA256 为 `3deea1f1b3172a2814bcbec9307c87c520d3a5d5dc5503a97dfb022e2fc24332`，评估门 SHA256 为 `e68771d7c03ea4cc783ba736bd67d856cd36cb72b8af96d2c2f6d32e8b6a0712`。
+
+当前状态：V26a 已从 step 502 原优化器、采样器和生命周期状态恢复并越过 step 2618，训练继续运行；A1 与纯 MCMC 均未启动。step 2618 独立 checkpoint 保留 `360,078` 个 Gaussian，完整 SH0 PLY 为 `24.5 MB`，SHA256 为 `6c9fc158f6261c992c27e032e20e4e1f4a7454dcd7afb9afcf871f9733fe0bed`。其最长轴 P50/P95/最大值为 `1.73/6.59/24.92 cm`，最短轴 P50/P95 为 `0.15/0.47 cm`；轴比 P50/P95 为 `11.91/37.46`，说明浮空大球预期会比 A0 少，但当前模型更稀疏且存在偏扁高斯，必须以同一 SuperSplat 视角实际比较，不能只凭 loss 或文件大小宣称更好。实时监控页面继续使用 `http://127.0.0.1:8792/`，已叠加 A0、V26a 边界和 V26a 续跑曲线。
+
+### 9.12 五 Tile 全域合并、独立天空与原鱼眼外观精修（2026-08-28）
+
+问题现象：全局 MCMC 重分配虽然改善部分低透明度点，但同一原鱼眼验证上比固定拓扑 A0 低 `0.71 dB`，不能替换用户已经确认细致的 LiDAR 表面。五 Tile checkpoint 直接串接还会保留 halo 双层；A0 合并后仍有 `12,002` 个主体 Gaussian 的最长轴超过 `8 cm`，其中 `23` 个超过 `20 cm`。原鱼眼验证缺少天空时白色背景又会显著拉低全帧指标。竞品 PLY 的刚性配准 ICP 中位残差为 `52.9 cm`，超过 `15 cm` 门，不能伪造逐帧竞品指标。
+
+修改文件：
+
+- `cloudstudio_3dgs/training/trainer.py`
+- `tools/merge_v28_tile_checkpoints.py`
+- `tools/compose_gaussian_checkpoint_layers.py`
+- `tools/build_raw_fisheye_post_refine_gate.py`
+- `tools/evaluate_checkpoint_validation.py`
+- `tools/export_gaussian_ply.py`
+- `tools/import_gaussian_ply.py`
+- `tools/align_gaussian_ply.py`
+- `tests/test_export_gaussian_ply.py`
+
+修改内容：五 Tile 合并按唯一 core owner 丢弃 halo/场外重复点；合并 checkpoint 补齐可 warm-start 的 schema。新增签名的 raw-fisheye post-refine lineage：只允许已有 Face4/LiDAR 全流程产物 warm start、`strict_fixed`、means/scale/quat LR 全为 `0`，并允许重新初始化原鱼眼曝光辅助参数。独立照片天空以 100,000 个 SH0 Gaussian 烘焙，和主体分层组合。导出与验证支持只对前 N 个主体 Gaussian 应用尺度上限，不缩小天空壳。导入/配准工具会自动建立输出目录，避免不存在父目录时写盘失败。
+
+验证方式与结果：2-step smoke 峰值显存 `2.89 GiB`，means/scale/quat 最大逐元素变化均为 `0`。250 步和 500 步原鱼眼精修持续提升；500 步 surface-only 为 PSNR `13.595 dB`、SSIM `0.5727`、LiDAR depth MAE `0.644 m`，相比未精修 A0 的 `13.324 / 0.5615 / 0.650 m` 全部改善。加入独立天空后为 `18.174 dB / 0.5539`；旧 v17d 为 `18.437 dB / 0.5704`，但其 depth MAE 为 `4.585 m`，因此 V30 保留了接近旧外观分数并显著改善真实几何。主体 `8 cm` 尺度 cap 前后图像指标不变。相关 Trainer、门禁、Surface、Tile 与导出回归分别通过 `76 passed` 和 `58 passed`，Python 语法及 UTF-8 乱码检查通过。
+
+最终交付 PLY 为 `full_area_final_v30/exports/snow_full_area_v30_final_refine500_photo_sky_sh0_pruned005.ply`：`6,334,817` 个 SH0 Gaussian，`430.8 MB`，opacity `<0.005` 的死点已移除，SHA256 为 `eb455a21b86a0021b67b25642568a311cc4df80fcd5c30406cb8b72f96d412dc`。主体所有轴不超过 `8 cm`；全文件最大轴 `1.2851 m` 只来自独立 `210 m` 天空壳。1000 步候选在 G: 仅剩 `40 MB` 时因 checkpoint 写盘失败，已只删除其 `478,482,432` 字节失败临时文件并回退到已通过的 V30，未删除正式结果。
+
+续训修正：原 1000 步候选会从 A0 重复执行已经完成的前 500 步，而且每 50 步原子写入约 1.18 GB checkpoint，在低磁盘空间下没有必要。`build_raw_fisheye_post_refine_gate.py` 新增显式 warm-start、继承曝光辅助参数、自定义 run ID 与 checkpoint 间隔参数；下一轮从 refine500 的 `latest.pt` 继承主体颜色、透明度和曝光，几何仍严格冻结，只再执行 500 步并把 checkpoint 间隔放宽到 250 步。验证要求包括配置/门禁签名通过、warm-start 文件存在、means/scale/quat LR 均为零、点数保持不变，以及中间/最终原鱼眼指标不低于 V30；未通过则不晋级。
+
+续训结果：用户确认永久删除 23 个已核对的旧 smoke/V28/V29 checkpoint、evaluation 与 export 目录，实际删除 `32.85 GiB`，G 盘可用空间由 `0.29 GiB` 增至 `34.69 GiB`；V30、refine500、A0 合并 checkpoint、原始数据、源码和 JSON 证据均保留。第二段 500 步从 refine500 warm start 正常完成，`7,036,339` 个主体 Gaussian 全程保持不变，峰值显存 `3,117,250,048 bytes`。step 250 surface 为 `13.6977 dB / 0.57627 / 0.61672 m`，step 500 surface 为 `13.80315 dB / 0.57952 / 0.61391 m`。与同一 100k 照片天空组合后的 V31 整图均值达到 `18.77258 dB / 0.55984`，但用户视觉复核及我方原始鱼眼渲染均明确发现墙体透明、背景颜色穿透墙面以及远树缺失。复盘确认旧门禁仅使用整图平均 PSNR/SSIM，未检查前景 alpha、背景泄漏、墙体 ROI 和远树保留率；同时 V31 使用的是 SH0 照片球壳，而不是竞品式独立 SH1 天空。因此上述数值只作为失败实验记录，V31 交付晋级结论撤销。
+
+当前状态：`V31_VISUAL_REVIEW_FAILED_RETRAIN_REQUIRED`。新路线回退到 A0 全域主体检查点：位置、尺度、旋转和 opacity 全部冻结，仅允许短程颜色/曝光适配；天空独立为 SH1，且天空掩膜必须排除远树与建筑。新门禁除 PSNR/SSIM 和 LiDAR range 外，必须同时检查墙体/地面前景 alpha、开关天空前后的背景泄漏、远树 ROI 保留率及最差视图，未通过前不得重新标记为交付。
+
+### 9.13 竞品路线交叉核对与重训阻塞（2026-08-28）
+
+问题现象：V26a 把“竞品经典生命周期阈值”和我方简化 loss/光度模型直接组合，step 2618 只剩 `360,078` 个高斯；V30/V31 又把 100k SH0 照片球壳合入 surface PLY。两者都混淆了竞品已证实路径、DLL 未启用能力和 CloudStudio 自有增强，导致同名参数不等于同样行为。
+
+交叉核对：重新读取竞品实际任务、四个 level-0、surface/sky PLY，并与二进制静态审计逐项比对。确认 snow 使用四 Tile 串行、K7/K30 LiDAR 初始化、`20V` 无放回视图、gradient split/clone/cull/reset、MCMC 关闭、BilateralGrid 与条件 SIFT；surface 终态 DC-only，独立 sky 为 100k SH1。surface `gs.ply` SHA256 为 `C10026FEFF1DD645273E1620C7BA7E1A08C8727282734D847CC1CBA3D81DF8C4`，sky `sky.ply` 为 `C55F326E99AF6F58C3A8E00B63687CAFCEAFBFE20984C710B6EE05D8D2CDA3E5`。仍未知 label 33 类名、surface SH-rest 活跃方式、cap 倍率 C、每次 lifecycle 事件数和 `TrainBackground` 完整 loss。
+
+修改内容：训练合同把 LiDAR 出生守卫和唯一 core ownership 明确标记为 CloudStudio 增强；sky 改为独立于 surface PLY 的产品，不再要求合并进主体流；表面 degree 1 的描述收紧为“参数结构已证实、实际 SH-rest 是否参与训练未知”。完整决策见 `results/diagnostics/snow-20260828-mipmap-route-crosscheck-and-retraining-decision.zh-CN.md`。
+
+当前状态：`COMPETITOR_CROSSCHECK_COMPLETE_RETRAIN_BLOCKED`。新长训继续禁止。下一步先补真实 renderer semantic/dynamic mask 消费和 per-camera BilateralGrid 或等价受控光度模型，再生成单 Tile 502-step 签名边界；该边界必须同时通过数量、opacity、scale、LiDAR 距离、墙体 alpha、远树 ROI 和天空泄漏门，才允许继续下一完整 epoch。
+
+### 9.14 V33a 竞品式生命周期与 LiDAR 出生守卫复核（2026-08-29）
+
+问题现象：V33a 已使用竞品 snow 的主机制而非 MCMC，即 projected-gradient clone/split/cull/reset，并额外加入 LiDAR 父点支持与切平面出生守卫、逐相机 PPISP、SH0 surface、DA2/POS 关闭。step 502 首次生命周期健康，但继续执行同一组 cull/reset 阈值后点数快速崩塌，说明“机制方向正确”不等于“现有阈值已经与我方 loss、mask、可见性和 LiDAR 初始化完成定标”。
+
+修改文件：
+
+- `cloudstudio_3dgs/pipeline/mipmap_gate.py`
+- `cloudstudio_3dgs/training/ppisp.py`
+- `cloudstudio_3dgs/training/trainer.py`
+- `tools/build_v26a_boundary_gate.py`
+- `tools/promote_v26a_evaluation.py`
+- `tests/test_mipmap_gate.py`
+- `tests/test_ppisp.py`
+
+修改内容：PPISP 增加确定性的 warmup + exponential decay 学习率并由 Trainer 每步消费；Trainer 记录 PPISP 实际学习率和 RGB/depth mask 有效像素比例。门禁增加 step `503–2618` 的受控 review 状态，并将首次边界最低保留率提高到 `90%`，同时要求父点和子点 LiDAR 支持均值不低于 `90%`。跨门 resume 仍绑定 Dataset、Face4、LiDAR、初始化和 runtime 身份。
+
+验证方式与结果：定向回归 `101 passed`，Python 语法和 diff 检查通过。两步真实 raster smoke 完成，`971,903` 个高斯不变，RGB mask 有效比例为 `97.71% / 95.54%`，depth mask 实际非空，峰值显存约 `1.14 GiB`。真实 step 502 生命周期从 `971,903` 变为 `933,870`：clone `244,484`、split 父点 `5`、cull `282,522`；父/子 LiDAR 支持均值为 `95.726% / 95.280%`，点到 LiDAR 最近距离 P95 `4.837 mm`，最大轴 `0.19993 m`，峰值显存约 `2.47 GiB`。该边界报告为 PASS。
+
+连续 review 到 step 1002 后只剩 `468,203` 个高斯，为初始点数的 `48.17%`。六次生命周期累计 clone `857,210`、split 子点净增 `484`、cull `1,361,394`。step 600 opacity reset 把上限压到 `0.2`，step 700 随后一次删除 `361,844`；其中低 opacity 候选 `359,585`，证明 collapse 主要来自 opacity cull/reset 相互作用，不是 LiDAR 出生守卫拒绝过强。step 502 原鱼眼指标为 PSNR `6.9918 dB`、SSIM `0.45841`、alpha `0.17971`，与 A0 step 2618 接近，仅证明首次边界未立即恶化，不代表最终晋级。
+
+当前状态：`V33A_BOUNDARY_PASS_CONTINUED_CULL_FAILED`。MCMC 降级为未来固定预算重分配实验，不再作为当前 backbone；A0 只作覆盖基线；主线固定为 `LiDAR planar surfel + projected-gradient adaptive topology + LiDAR-safe birth + observation/coverage-aware cull`。下一步先增加按 opacity/world-scale/screen-radius 分项的 cull 遥测，再做 Tile_1 的受控短 A/B；在 step 1002 总保留率、单次净删除、前景 alpha、墙体/远树 ROI、LiDAR 距离和尺度全部通过前，禁止五 Tile 或全域长训。
+
+### 9.15 V34a 观察量感知 Cull 修复（2026-08-29）
+
+问题现象：V33a 的 projected-gradient 出生和 LiDAR 切平面守卫已经通过，但 opacity reset 后的下一次生命周期会直接按单帧累计状态删除所有低于阈值的点。step 700 一次删除 `361,844`，造成墙面、地面和远景覆盖崩塌。共享 MCMC 遥测还会把经典路线 refine 前的低 opacity 数量误记为 relocation，虽然嵌套 `classic_lifecycle` 正确，但监控汇总具有误导性。
+
+修改文件：
+
+- `cloudstudio_3dgs/training/default_strategy_adapter.py`
+- `cloudstudio_3dgs/training/backend.py`
+- `cloudstudio_3dgs/training/runtime_evidence.py`
+- `cloudstudio_3dgs/training/trainer.py`
+- `cloudstudio_3dgs/pipeline/mipmap_gate.py`
+- `tools/build_v26a_boundary_gate.py`
+- `tests/test_default_strategy_adapter.py`
+- `tests/test_mcmc_runtime.py`
+- `tests/test_mipmap_gate.py`
+
+修改内容：新增签名的 `observation_aware` opacity cull policy。低 opacity 点必须累计至少 4 次有效观测、连续两个生命周期保持低值，并离上次 reset 超过 200 步；每次 opacity 删除最多为当前人口的 5%。world-scale 与 screen-radius 删除继续即时生效。策略状态中的观察数和连续低值是逐 Gaussian tensor，会随 gsplat duplicate/split/remove 同步变换并写入 checkpoint。生命周期证据拆分 opacity/world/screen 原因。经典路线的通用 telemetry 现固定 relocation 为 0，并以真实 clone/split/cull 重算 added/pruned；resume 会修复内存中的旧统计，不修改旧 checkpoint 文件。
+
+验证方式与结果：定向生命周期、门禁、Trainer、PPISP 和 MCMC 回归共 `163 passed`，Python 语法与 diff 检查通过。真实 step 502 从 `971,903` 变为 `1,214,533`，clone `244,483`、split 父点 `5`、cull `1,858`；其中 opacity cull 为 0，全部删除来自 world/screen 异常。继续到 step 1002 后为 `1,573,987`，失败 V33a 同阶段仅 `468,203`。六轮累计生成 clone/split children `761,663`、cull `159,060`，另有 `519` 个 split parent 被替换，净增 `602,084`；没有单轮大规模 collapse。峰值显存低于 `2.7 GiB`。
+
+几何与图像门：可见点到 LiDAR 距离 P95 `9.023 mm`、超过 `0.3 m` 为 0；最长轴 P95 `26.40 mm`，无 `>0.5 m` 巨型高斯；轴比 P50 `5.68`。原鱼眼 PSNR `6.9944 dB`、SSIM `0.45452`、alpha `0.18801`、LiDAR alpha `0.27570`。覆盖相对 V33a step 502 改善，但 SSIM 略降；且 `64.25%` 的高斯 opacity 低于 `0.1`，说明人口平衡仍未完成。
+
+当前状态：`V34A_CULL_COLLAPSE_FIXED_QUALITY_GATE_PENDING`。完整 step 1002 PLY 已导出用于与 A0/V33a 同视角视觉比较；在墙体、远树、雪面和动态区域 ROI 通过前，不继续 2618 或五 Tile。下一轮只允许受控 population-equilibrium A/B，不得重新启用 MCMC，也不得把低 opacity 直接等价为几何无效。
+
+### 9.16 V35 屏幕足迹条件 Split 门禁（2026-08-29）
+
+问题现象：V34a 已阻止人口崩塌并保持 LiDAR 几何，但 step 1002 PLY 仍有明显模糊大高斯。可见高斯投影足迹 `>5 px` 的比例为 `39.4%`；最长轴 `>2 cm` 的可见点为 `79,483`，其中只有 `9,524` 个同时满足轴比 `<3`。这说明问题不只是“圆球过多”，还包括高轴比薄盘在当前视角占据过大屏幕足迹。全局按 2 cm Split 会破坏竞品依赖大薄盘覆盖平滑面的容量分配。
+
+修改文件：
+
+- `cloudstudio_3dgs/training/default_strategy_adapter.py`
+- `cloudstudio_3dgs/training/trainer.py`
+- `cloudstudio_3dgs/pipeline/mipmap_gate.py`
+- `tools/build_v26a_boundary_gate.py`
+- `tests/test_default_strategy_adapter.py`
+- `tests/test_mipmap_gate.py`
+
+修改内容：保留竞品确认的 `split_scale_m=0.2`，新增签名策略 `lidar_surface_screen_detail`。只有高 projected-gradient、LiDAR 支持、最长轴 `>0.02 m` 且过去一个 lifecycle 窗口真实最大 raster radius `>0.0035` 的父点才从 clone 改为 split。低 opacity 删除受 5% 上限约束时，`lowest_opacity_per_footprint` 使用 gsplat 实际累计 raster radius 排序；仅在缺失 radii 时回退到世界尺度。构建工具仍使用显式 `--detail-split-2cm` 开关，但门禁同时绑定物理尺度和屏幕阈值，不能退化成全局 2 cm Split。
+
+验证方式：相关 lifecycle、门禁、MCMC 遥测与 PPISP 回归 `113 passed`；修改模块 Python 语法检查通过。新增单元测试证明只有同时超过物理与屏幕阈值的高梯度点 Split，屏幕足迹不足的大薄盘和物理尺寸较小的清晰点继续 clone。尚未启动 V35 训练，故当前没有画质 PASS 结论。
+
+当前状态：`V35_SCREEN_DETAIL_ARM_IMPLEMENTED_NOT_RUN`。下一步只允许独立 Tile_1 step 1002 短臂；A0/V34a 复用既有产物。先比较固定 ROI 清晰度、alpha、SSIM、投影足迹分布、纹理—密度相关、LiDAR P95/P99、点数和显存，再决定是否继续 2618。opacity-mean `0.01`、无 LiDAR 视觉补洞、独立天空和五 Tile 长训均不得与本短臂同时开启。
+
+### 9.17 V35–V38 症状补丁路线终止与 lifecycle 时序复盘（2026-08-29）
+
+问题现象：V36b 已能让低纹理区高斯数量下降，但大量保留点 opacity 很低，真实 alpha 不足，墙面和地面出现背景穿透；V37a 只把高斯压得更薄，没有恢复表面不透明度。准备中的 V38a 使用 LiDAR alpha `0.95` 和 2 cm 体素累计 alpha `0.5` 试图补洞，但世界体素 opacity 乘积不包含相机视角、遮挡顺序、投影重叠和椭球方向，不能冒充真实渲染覆盖，也不是竞品生命周期。
+
+修改文件：`cloudstudio_3dgs/training/default_strategy_adapter.py`、`cloudstudio_3dgs/training/lidar_normals.py`、`cloudstudio_3dgs/training/trainer.py`、`cloudstudio_3dgs/pipeline/mipmap_gate.py`、`tools/build_v26a_boundary_gate.py`、`tools/promote_v26a_evaluation.py` 及对应测试。
+
+修改内容与复盘：相关 alpha、局部保护、比例压平和 screen-detail 能力均保持显式可关闭，不作为下一主臂默认值。源码确认当前训练循环是 `backward -> Adam -> topology`，而竞品恢复顺序为 `backward -> Split/Clone/Cull -> Adam`；当前还使用了 `revised_opacity=true`，与竞品 Split 子点重复父 opacity 的证据不符。PPISP 只能视为受控光度模型，不能标成 `[N_camera,12,8,16,16]` BilateralGrid 等价实现。
+
+验证方式：alpha/局部保护/比例压平相关定向回归 `143 passed, 1 deselected`；排除项是当前经典 3DGS 动态库不支持的 3DGUT 尺度测试。V38a 在约 step 240 强制停止，未到首次 topology 边界，不产生晋级结论。
+
+当前状态：`V38A_ABORTED_VENDOR_SEMANTICS_REWORK_REQUIRED`。下一步必须先增加签名的 pre-optimizer lifecycle，并证明 Split/Clone/Cull 后当前步梯度和 Adam state 按行正确继承；竞品语义臂关闭 LiDAR 硬出生守卫、局部保护、删除上限、detail split、薄盘和 alpha 自定义损失，使用普通梯度、厂商阈值、原始 opacity 复制和 immediate Cull。CPU 合成测试、2-step GPU smoke、step 502、reset 后短 review 依次通过前，禁止长训和全域扩展。
+
+### 9.18 V40–V46 透明度生命周期定标与 602 步早停（2026-08-29）
+
+问题现象：V40a step 502 PLY 的主体结构可用，但雪堆略透明且细节提升有限。继续使用每 300 步 opacity reset 和每 100 步 immediate Cull 会在 step 602 后快速降低覆盖；只降低 Cull 阈值或延长到 step 1002 仍会让 PSNR、alpha 和最差视图同时下降。
+
+修改文件：`cloudstudio_3dgs/training/default_strategy_adapter.py`、`cloudstudio_3dgs/training/trainer.py`、`cloudstudio_3dgs/pipeline/mipmap_gate.py`、`tools/build_v26a_boundary_gate.py`、`tools/promote_v26a_evaluation.py`、`tools/evaluate_checkpoint_validation.py`、`tests/test_default_strategy_adapter.py`、`tests/test_mipmap_gate.py`。
+
+修改内容：增加签名的 deferred reset、普通梯度 `7.5e-5`、uniform Cull `0.04`、当前可见高斯 opacity sparsity `0.001`、仅尺度异常 Cull，以及 screen-aware detail Split 对照配置。生命周期事件新增梯度分位数、梯度/opacity 阈值扫描和 Cull 原因遥测；验证器增加 metrics-only 模式，374 视图评估不再写出数 GiB 中间图。pre-optimizer Split 现消费配置中的 `revised_opacity`，旧厂商语义配置保持 `false`，只有显式 screen-detail 研究臂可设为 `true`。
+
+真实结果：V42a step 600 的梯度 P50/P95/P99 为 `2.11e-5 / 7.71e-5 / 1.50e-4`，证明原 `1.5e-4` 只选择约最高 1% 父点。改为 `7.5e-5` 后，V45b step 600 选择 `39,257` 个父点；其中 clone `39,170`、split 父点 `87`，仅删除 world/screen 异常 `767` 个，最终为 `863,951` 个高斯。374 个 Tile_1 Face4 视图上，V45b step 602 达到 PSNR `10.45167 dB`、alpha 均值 `0.60189`、alpha P05 均值 `0.08731`、alpha 低于 `0.95` 的像素比例 `0.60039`，均优于此前 V42b step 602 的 `10.42081 / 0.59933 / 0.08675 / 0.61299`。
+
+失败边界：V44a 把 opacity sparsity 从 `0.01` 降到 `0.001`，step 1002 仅恢复到 `9.54298 dB / alpha 0.58510`；V45a 完全关闭 opacity Cull 后 step 1002 也只有 `9.64908 / 0.59199`，证明 600 步后的退化不只是删点，而是当前 PPISP/opacity/拓扑联合目标继续训练会降低覆盖。V46a 将 `5,267` 个父点改为 screen-aware Split 后，PSNR/alpha 降到 `10.27435 / 0.58494`；V46b 启用 revised opacity 后进一步降到 `10.17067 / 0.57562`，因此 screen-detail 分支不晋级。
+
+验证方式：定向生命周期与门禁回归 `71 passed`，修改模块 Python 语法检查通过。V45b PLY 包含 `863,951` 个 SH0 Gaussian、大小 `58.7 MB`；最长轴 P50/P95 为 `7.4/18.0 mm`，可见高斯中 `25.3%` 的屏幕宽度仍大于 5 px，说明当前候选主要修复覆盖和首轮容量分配，尚未达到竞品终态薄盘形态。
+
+当前状态：`V45B_STEP602_CURRENT_TILE1_CHAMPION_LONG_RUN_BLOCKED`。当前最佳 PLY 为 `v45_geometry_cull_only/training_tile1_v45b_growth7p5e5_geometrycull_opacity1e3_review602/exports/snow_tile1_v45b_step602_sh0_full.ply`。不得从该节点直接长跑或扩展五 Tile；下一轮必须从 V45b 的固定候选出发，单独研究不降低真实 alpha 的形状优化或光度模型，不能同时重新启用 opacity Cull、screen-detail Split、MCMC、DA2 或天空。
+
+### 9.19 V47–V48 覆盖地板与形状单变量探针（2026-08-29）
+
+问题现象：V45b 的 SH0 结构和短程指标可用，但白色训练背景允许白雪通过降低 opacity 或缩小投影足迹来接近目标颜色，导致 SuperSplat 更换背景时出现透明雪堆。此前验证器又没有消费 Face4 LiDAR sidecar，`lidar_alpha_*` 指标为空，无法用真实 LiDAR 像素约束表面覆盖。V37 虽证明比例压平能改变高斯形状，却同时放开颜色、opacity、位置和生命周期，无法判断锐化是否会再次造成透明。
+
+修改文件：
+
+- `cloudstudio_3dgs/pipeline/mipmap_gate.py`
+- `cloudstudio_3dgs/training/checkpoint.py`
+- `cloudstudio_3dgs/training/ppisp.py`
+- `cloudstudio_3dgs/training/trainer.py`
+- `tools/build_v47_surface_alpha_probe.py`
+- `tools/build_v48_surface_shape_probe.py`
+- `tools/evaluate_checkpoint_validation.py`
+- `tools/promote_v26a_evaluation.py`
+- `tests/test_mipmap_gate.py`
+- `tests/test_training.py`
+
+修改内容：验证器现在从签名配置加载 Face4 LiDAR range sidecar，并支持确定性分层抽样和背景色挑战；日常短臂固定评估 48 个视图，8 个视图用于黑背景透明度挑战，只有晋级候选才运行全部 374 个 Tile_1 视图。V47 增加签名的 opacity-only 探针，冻结 means/scales/quats/SH0/PPISP 和 lifecycle，只用真实 LiDAR alpha 调整 opacity。V48 再从 V47e step 652 独立恢复，冻结点数、means、SH0、opacity 和 PPISP，仅允许 scales/quats 更新，同时保留 `LiDAR alpha=0.95` 的覆盖地板；V48b 使用 scales/quats LR `0.003/0.0005`、法线对齐与比例压平权重 `0.1/0.1`、目标短轴/切向几何均值比例 `0.15`，严格停止于 step 702。
+
+验证方式与结果：定向 Trainer/门禁回归 `71 passed, 1 deselected`；排除项仍是当前环境未构建 3DGUT 的已知 raster smoke。V47e 在固定 48 视图上相对 V45b 将 PSNR `10.2554→10.3004 dB`、LiDAR alpha 均值 `0.9448→0.9537`，证明覆盖损失可以关闭白背景捷径，但它不优化细节。V48a 强度过低，中位轴比仅 `2.162→2.177`。V48b 保持 `863,951` 点，means、SH0、opacity 与 PPISP 最大差均为 0；中位最短轴 `3.568→2.963 mm`，轴比 `2.162→2.599`。同一 48 视图上 PSNR 为 `10.5218 dB`、alpha 均值 `0.63623`、alpha P05 `0.07659`、LiDAR alpha 均值/P05 为 `0.95679/0.84879`。8 视图黑背景挑战相对 V47e 的 PSNR `10.4260→10.5031 dB`、alpha `0.57452→0.58502`、LiDAR alpha `0.95542→0.95905`，没有出现靠白背景掩盖的覆盖退化。深度 MAE 从 V47e 的 `0.5519 m` 轻微变为 `0.5639 m`；由于 means 完全冻结，这反映 splat 足迹和可见性变化，不是中心漂移，仍需视觉 ROI 复核。
+
+当前状态：`V48B_SHAPE_PROBE_NUMERIC_PASS_VISUAL_REVIEW_PENDING`。候选 PLY 为 `v48_surface_shape/training_tile1_v48b_scalequat_strong_ratio0p15_review702/exports/snow_tile1_v48b_step702_shapeonly_sh0_full.ply`，完整保留全部 `863,951` 个高斯。它只证明“覆盖受控条件下可以安全变薄并提高短程指标”，还没有达到竞品轴比约 12 的终态，也没有恢复纹理驱动的容量重分配。SuperSplat 墙面、雪堆和远景 ROI 通过前，不启动长训、拓扑增长或全 Tile。
+
+### 9.20 V49–V50 五 Tile 覆盖修复、形状精修与全域原鱼眼协调（2026-08-29）
+
+问题现象：V30 的全域外观较完整，但最终导出按 opacity `<0.005` 删除 `801,522` 个主体点，造成墙体、雪面和远景被独立天空或背景穿透。单 Tile V48b 已证明“先修覆盖、再改形状”不会移动中心，但尚未覆盖全场景；短阶段若继续随机有放回采样，又会反复看到少量照片而遗漏其他方向。
+
+修改文件：
+
+- `cloudstudio_3dgs/pipeline/mipmap_gate.py`
+- `cloudstudio_3dgs/training/exposure.py`
+- `cloudstudio_3dgs/training/trainer.py`
+- `tools/build_v49_full_area_surface_quality_phase.py`
+- `tools/build_v50_full_area_raw_fisheye_phase.py`
+- `tools/evaluate_checkpoint_validation.py`
+- `tests/test_mipmap_gate.py`
+- `tests/test_training.py`
+
+修改内容：五个既有 A0 Tile 均执行 50 步 opacity-only LiDAR alpha 覆盖修复，再执行 50 步 scales/quats-only 形状精修；means、SH0、点数和拓扑始终冻结。每一段配置同时绑定配置 SHA256 与 warm-start checkpoint SHA256，Trainer 启动时 fail-closed 验签。五 Tile 以唯一 core owner 合并，halo 重复点删除但不进行 opacity 裁剪。全域随后在原始鱼眼上执行 50 步短覆盖验证、250 步 Fisher–Yates 无放回 opacity-only 覆盖和 250 步 SH0 颜色/曝光协调；固定拓扑短臂允许无放回采样不足 20 epoch，自适应竞品臂仍强制 20 个完整 epoch。验证器继承 Trainer 的 3DGUT pinhole 路径，避免评估与训练 raster 模式不一致。
+
+验证方式与结果：六个旧且已被替代、无 PLY/SOG 的训练目录经用户明确确认后永久删除，共释放约 `32.041 GiB`；G 盘可用空间一度由 `8.816 GiB` 增至 `41.828 GiB`。五 Tile shape checkpoint 分别保留 `1,895,788 / 971,903 / 1,477,056 / 1,850,945 / 1,076,290` 个高斯，峰值显存均低于 `2.28 GiB`。core-owner 合并从 `7,271,982` 个带 halo 点得到 `7,036,339` 个唯一主体点。V49 全域 36 张原鱼眼验证为 PSNR `13.7846 dB`、SSIM `0.56825`、LiDAR alpha `0.80846`、深度 MAE `0.60871 m`；V50b 覆盖后提升到 `14.0019 / 0.5755 / 0.849 / 0.59961 m`，最弱视图 LiDAR alpha 从约 `0.66` 提升到 `0.736`。V50c 颜色协调后为 `14.097 dB / 0.5799`，逐张量 SHA256 证明 means/scales/quats/opacities 与 V50b 完全一致，仅 SH0 改变。8 张黑背景挑战的 LiDAR alpha 从 V49 的 `0.88194` 提升到 V50c 的 `0.9069`，最弱视图从 `0.67095` 提升到约 `0.748`。
+
+当前状态：`V50C_FULL_AREA_SURFACE_NUMERIC_PASS_VISUAL_REVIEW_PENDING`。无裁剪主体 PLY 为 `full_area_surface_quality_v50/exports/snow_full_area_v50c_surface_no_prune_sh0.ply`，完整包含 `7,036,339` 个 SH0 Gaussian，大小 `478.5 MB`，SHA256 为 `4bbf1ef211c68eb4dac4fc6f97f59a5ca9be44198fe9fef1fd3e43e36ff857f0`。可见高斯最长轴 P50/P95 为 `9.2/27.2 mm`，仅 `1.5%` 的可见点投影宽度超过 5 px。独立天空继续保持关闭：竞品天空确认使用 SH1，而仓库当前只有签名 SH1 初始化、没有独立天空训练器；旧 SH0 照片球壳已证实会透过前景串色，不得合入 V50c。下一步必须先通过 SuperSplat 墙体、雪堆、远树和 Tile 接缝视觉复核，再实现/验收真正独立的 SH1 天空优化与分层导出。

@@ -60,6 +60,7 @@ from typing import Any, Iterable, Mapping
 
 _VALID_PARAM_TYPES = ("no_crf", "crf")
 _VALID_MODES = ("per_camera", "per_image")
+_VALID_LR_SCHEDULES = ("constant", "linear_warmup_exponential_decay")
 
 # Upstream layout constants (match ppisp/src/ppisp_constants.h).
 COLOR_PARAMS = 8
@@ -87,6 +88,10 @@ class PpispConfig:
     param_type: str = "no_crf"
     mode: str = "per_camera"
     learning_rate: float = 2e-3  # upstream ppisp_lr
+    lr_schedule: str = "constant"
+    warmup_fraction: float = 1.0 / 30.0
+    warmup_start_multiplier: float = 0.01
+    final_lr_multiplier: float = 0.01
     # Regularization weights (upstream defaults).
     exposure_mean_weight: float = 1.0  # SmoothL1(beta=0.1) on exposure mean
     vig_center_weight: float = 0.02  # squared distance of optical center from 0
@@ -104,8 +109,21 @@ class PpispConfig:
             raise ValueError(
                 f"ppisp mode must be one of {_VALID_MODES}, got {self.mode!r}"
             )
-        if self.learning_rate <= 0.0:
-            raise ValueError("ppisp learning_rate must be positive")
+        if self.learning_rate < 0.0:
+            raise ValueError("ppisp learning_rate must be non-negative")
+        if self.lr_schedule not in _VALID_LR_SCHEDULES:
+            raise ValueError(
+                "ppisp lr_schedule must be one of "
+                f"{_VALID_LR_SCHEDULES}, got {self.lr_schedule!r}"
+            )
+        if not 0.0 < self.warmup_fraction < 1.0:
+            raise ValueError("ppisp warmup_fraction must be within (0, 1)")
+        if not 0.0 < self.warmup_start_multiplier <= 1.0:
+            raise ValueError(
+                "ppisp warmup_start_multiplier must be within (0, 1]"
+            )
+        if not 0.0 < self.final_lr_multiplier <= 1.0:
+            raise ValueError("ppisp final_lr_multiplier must be within (0, 1]")
         for name in (
             "exposure_mean_weight",
             "vig_center_weight",
@@ -123,6 +141,10 @@ class PpispConfig:
             "param_type": self.param_type,
             "mode": self.mode,
             "learning_rate": self.learning_rate,
+            "lr_schedule": self.lr_schedule,
+            "warmup_fraction": self.warmup_fraction,
+            "warmup_start_multiplier": self.warmup_start_multiplier,
+            "final_lr_multiplier": self.final_lr_multiplier,
             "exposure_mean_weight": self.exposure_mean_weight,
             "vig_center_weight": self.vig_center_weight,
             "vig_channel_weight": self.vig_channel_weight,
@@ -130,6 +152,40 @@ class PpispConfig:
             "color_mean_weight": self.color_mean_weight,
             "crf_channel_weight": self.crf_channel_weight,
         }
+
+    def learning_rate_for_step(self, *, step: int, total_steps: int) -> float:
+        """Return the deterministic PPISP LR for one zero-based training step.
+
+        ``linear_warmup_exponential_decay`` mirrors the recovered MipMap
+        BilateralGrid schedule: warm up from 1% to the base LR during the first
+        ``floor(total/30)`` steps, then decay exponentially to 1% at the final
+        step.  The formula is stateless so interrupted resumes are exact.
+        """
+
+        import math
+
+        if total_steps <= 0:
+            raise ValueError("ppisp total_steps must be positive")
+        if step < 0 or step >= total_steps:
+            raise ValueError("ppisp step must be within the training schedule")
+        if self.lr_schedule == "constant":
+            return float(self.learning_rate)
+        warmup_steps = max(1, int(math.floor(total_steps * self.warmup_fraction)))
+        if step < warmup_steps:
+            progress = float(step) / float(max(1, warmup_steps - 1))
+            multiplier = self.warmup_start_multiplier + progress * (
+                1.0 - self.warmup_start_multiplier
+            )
+        else:
+            remaining_steps = total_steps - warmup_steps
+            if remaining_steps <= 1:
+                progress = 1.0
+            else:
+                decay_steps = remaining_steps - 1
+                progress = float(step - warmup_steps) / float(decay_steps)
+            progress = min(max(progress, 0.0), 1.0)
+            multiplier = math.exp(math.log(self.final_lr_multiplier) * progress)
+        return float(self.learning_rate * multiplier)
 
 
 def _softplus_inverse(x: float, min_value: float = 0.0, epsilon: float = 1e-5) -> float:
@@ -270,11 +326,9 @@ class PpispCorrector:
     def make_optimizer(self) -> Any:
         """Adam over all PPISP parameters, matching our exposure module style.
 
-        Upstream nv-tlabs/ppisp uses Adam(lr=2e-3, eps=1e-15) plus a linear
-        warmup + exponential decay scheduler; LichtFeld-Studio's PPISP port
-        uses Adagrad(lr=0.1) instead. Adam at the upstream base lr without a
-        scheduler is the simple starting point here; switch to Adagrad 0.1 if
-        convergence on real captures is too slow.
+        Upstream nv-tlabs/ppisp uses Adam(lr=2e-3, eps=1e-15).  The trainer
+        applies the optional deterministic warmup/decay configured above by
+        rewriting this optimizer's param-group LR before each step.
         """
         import torch
 

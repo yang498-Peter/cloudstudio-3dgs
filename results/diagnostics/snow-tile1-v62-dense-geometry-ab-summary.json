@@ -1,0 +1,68 @@
+{
+  "schema_version": 1,
+  "kind": "tile1_dense_geometry_fixed_topology_ab_summary",
+  "status": "MESH_ONLY_NUMERIC_PASS_DA2_BLOCKED",
+  "dataset": "snow-20260224",
+  "tile_id": 1,
+  "training": {
+    "steps": 100,
+    "initial_and_final_gaussian_count": 971903,
+    "topology": "strict_fixed",
+    "view_count": 374,
+    "seed": 42
+  },
+  "validation": {
+    "frame_count": 24,
+    "space": "face4_pinhole_tile_views",
+    "sampling_policy": "deterministic_stratified_signed_view_order"
+  },
+  "arms": {
+    "control": {
+      "weights": {"da2": 0.0, "mesh_depth": 0.0, "mesh_normal": 0.0},
+      "psnr_db": 11.220557742016945,
+      "ssim": 0.5592465880574219,
+      "depth_mae_m": 0.04138883618482699,
+      "depth_rmse_m": 0.12037581339730725,
+      "alpha_mean": 0.6415039543062449,
+      "validation_report_sha256": "8bbfa5146a5721b54b0fb6b5bcb71a78147df71e11672545066a98bf8bd64781"
+    },
+    "all_dense_from_step_1": {
+      "weights": {"da2": 0.5, "mesh_depth": 0.5, "mesh_normal": 0.05},
+      "psnr_db": 10.988566428592685,
+      "ssim": 0.5548369912291249,
+      "depth_mae_m": 0.03402848667368138,
+      "depth_rmse_m": 0.09843777479545679,
+      "alpha_mean": 0.6258613231281439,
+      "delta_vs_control": {
+        "depth_mae_improvement_fraction": 0.17783417437197457,
+        "psnr_db": -0.23199131342425972,
+        "ssim": -0.004409596828297002,
+        "alpha_mean": -0.01564263117810094
+      },
+      "validation_report_sha256": "6c3ed44aeba240231a492ac3db437da1749bebd3d0dc434786279190a7246612"
+    },
+    "mesh_only": {
+      "weights": {"da2": 0.0, "mesh_depth": 0.5, "mesh_normal": 0.05},
+      "psnr_db": 11.209656465607734,
+      "ssim": 0.5589338081928807,
+      "depth_mae_m": 0.036748267086901855,
+      "depth_rmse_m": 0.1114720002078684,
+      "alpha_mean": 0.6394394257416328,
+      "delta_vs_control": {
+        "depth_mae_improvement_fraction": 0.11212127534106298,
+        "depth_rmse_improvement_fraction": 0.07396679563901516,
+        "psnr_db": -0.01090127640921068,
+        "ssim": -0.00031277986454114615,
+        "alpha_mean": -0.0020645285646120337
+      },
+      "validation_report_sha256": "5b13780e1e9398dd6c4f3120fccf26be0a3446398e9ed399e9247de36d1fd487"
+    }
+  },
+  "decision": {
+    "mesh_depth_and_normal": "ADMIT_TO_SIGNED_FIXED_TOPOLOGY_MAINLINE_CANDIDATE",
+    "da2": "BLOCK_UNTIL_PRODUCTION_CROSS_VIEW_CONFIDENCE_AND_BOUNDARY_GATES",
+    "adaptive_growth": "BLOCKED",
+    "long_training": "NOT_STARTED",
+    "vendor_mesh_topology_claim": "UNKNOWN; OPEN3D_BPA_IS_ONLY_A_CANDIDATE"
+  }
+}

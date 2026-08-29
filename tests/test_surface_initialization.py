@@ -7,6 +7,7 @@ import numpy as np
 from cloudstudio_3dgs.training.surface_initialization import (
     SurfaceInitializationConfig,
     build_surface_aligned_initialization,
+    cap_surface_initialization_scales,
 )
 
 
@@ -33,6 +34,19 @@ def _rotation_columns(quaternions: np.ndarray) -> np.ndarray:
 
 
 class SurfaceInitializationTests(unittest.TestCase):
+    def test_sparse_scale_tail_is_clamped_without_changing_small_axes(self) -> None:
+        scales = np.array(
+            [[0.01, 0.02, 0.005], [1.4, 0.04, 0.02]], dtype=np.float32
+        )
+        capped, report = cap_surface_initialization_scales(
+            scales, maximum_scale_m=0.08
+        )
+        np.testing.assert_allclose(capped[0], scales[0])
+        np.testing.assert_allclose(capped[1], [0.08, 0.04, 0.02])
+        self.assertEqual(report["clamped_gaussian_count"], 1)
+        self.assertEqual(report["clamped_axis_count"], 1)
+        self.assertAlmostEqual(report["after_max_m"], 0.08)
+
     def test_planar_points_start_as_normal_aligned_thin_gaussians(self) -> None:
         scales = np.array([0.02, 0.04, 0.08], dtype=np.float32)
         normals = np.array(

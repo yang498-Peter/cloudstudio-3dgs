@@ -41,6 +41,7 @@ if torch is not None:
             ErrorScoreConfig,
             ErrorScoreState,
             ErrorWeightedMCMCStrategy,
+            relocate_weighted,
             sample_add_weighted,
         )
         from cloudstudio_3dgs.training.gaussian_lifecycle import GaussianLifecycleState
@@ -49,7 +50,7 @@ if torch is not None:
         _IMPORT_ERROR = None
     except Exception as exc:  # pragma: no cover - e.g. CUDA-only gsplat build
         ErrorScoreConfig = ErrorScoreState = ErrorWeightedMCMCStrategy = None
-        GaussianLifecycleState = sample_add_weighted = None
+        GaussianLifecycleState = relocate_weighted = sample_add_weighted = None
         normalized_quat_to_rotmat = None
         _IMPORT_ERROR = exc
 else:  # pragma: no cover
@@ -996,6 +997,39 @@ class IndexSpaceTests(unittest.TestCase):
         self.assertEqual(int(out["anchor_index"].shape[0]), 5)
         self.assertEqual(int(out["anchor_confidence"].shape[0]), 5)
         self.assertEqual(out["applied_count"], 5)
+
+    def test_relocated_slot_uses_the_lidar_tangent_proposal(self) -> None:
+        means = np.array(
+            [[0.0, 0.0, 5.0], [0.2, 0.2, 0.002], [-0.3, 0.1, 0.002]]
+        )
+        params = self._params(means)
+        optimizers = self._optimizers(params)
+        before_count = len(params["means"])
+        out: dict = {}
+        strategy = ErrorWeightedMCMCStrategy(cap_max=1000)
+        with _patch_relocation(), mock.patch(
+            "cloudstudio_3dgs.training.error_weighted_mcmc._multinomial_sample",
+            return_value=torch.tensor([0]),
+        ):
+            dead, source = relocate_weighted(
+                params=params,
+                optimizers=optimizers,
+                state={},
+                mask=torch.tensor([True, False, False]),
+                binoms=strategy.initialize_state()["binoms"],
+                probs=torch.tensor([0.0, 1.0, 0.0]),
+                proposal=self._proposal(),
+                proposal_out=out,
+            )
+        self.assertEqual(len(params["means"]), before_count)
+        self.assertEqual(int(dead[0]), 0)
+        self.assertEqual(int(source[0]), 1)
+        self.assertTrue(bool(out["applied"][0]))
+        self.assertLess(float(params["means"][0, 2].detach().abs()), 0.01)
+        for name, optimizer in optimizers.items():
+            state = optimizer.state[params[name]]
+            for key in ("exp_avg", "exp_avg_sq"):
+                self.assertEqual(int(state[key].shape[0]), before_count)
 
 
 class StrategyProposalWiringTests(unittest.TestCase):

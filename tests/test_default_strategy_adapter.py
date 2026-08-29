@@ -212,6 +212,243 @@ class DefaultStrategyAdapterTests(unittest.TestCase):
         self.assertEqual((clone_count, split_count), (1, 1))
         self.assertEqual(len(params["means"]), 5)
 
+    def test_capacity_conserving_clone_preserves_coincident_alpha(self):
+        import torch
+
+        adapter = DefaultStrategyAdapter(
+            scene_scale=10.0,
+            refine_start_iter=500,
+            refine_stop_iter=2000,
+            refine_every=100,
+            reset_every=300,
+            grow_grad2d=0.00015,
+            prune_opa=0.1,
+            split_scale_m=0.2,
+            prune_scale_m=0.2,
+            exact_mipmap_lifecycle=True,
+            growth_min_opacity=0.15,
+            prune_opa_late=0.05,
+            prune_switch_step=1000,
+            reset_opacity_cap=0.2,
+            capacity_conserving_clone_opacity=True,
+        )
+        original_opacity = torch.tensor(0.64)
+        params = torch.nn.ParameterDict(
+            {
+                "means": torch.nn.Parameter(torch.zeros(1, 3)),
+                "scales": torch.nn.Parameter(torch.full((1, 3), 0.05).log()),
+                "quats": torch.nn.Parameter(
+                    torch.tensor([[1.0, 0.0, 0.0, 0.0]])
+                ),
+                "opacities": torch.nn.Parameter(original_opacity[None].logit()),
+                "colors": torch.nn.Parameter(torch.zeros(1, 3)),
+            }
+        )
+        optimizers = {
+            name: torch.optim.Adam([parameter], lr=1e-3)
+            for name, parameter in params.items()
+        }
+        state = {
+            "grad2d": torch.tensor([0.001]),
+            "count": torch.ones(1),
+            "radii": torch.zeros(1),
+            "scene_scale": 10.0,
+        }
+        clone_count, split_count = adapter._grow_mipmap(
+            params, optimizers, state
+        )
+        self.assertEqual((clone_count, split_count), (1, 0))
+        child_opacity = torch.sigmoid(params["opacities"].detach())
+        composited = 1.0 - torch.prod(1.0 - child_opacity)
+        self.assertTrue(torch.allclose(composited, original_opacity, atol=1e-6))
+        self.assertTrue(torch.allclose(child_opacity[0], child_opacity[1]))
+        self.assertTrue(
+            adapter._last_growth_event["capacity_conserving_clone_opacity"]
+        )
+
+    def test_pre_optimizer_vendor_lifecycle_remaps_current_gradients(self):
+        import torch
+
+        adapter = DefaultStrategyAdapter(
+            scene_scale=10.0,
+            refine_start_iter=500,
+            refine_stop_iter=2000,
+            refine_every=100,
+            reset_every=300,
+            grow_grad2d=0.00015,
+            prune_opa=0.1,
+            split_scale_m=0.2,
+            prune_scale_m=0.2,
+            prune_scale2d=0.15,
+            refine_scale2d_stop_iter=2000,
+            exact_mipmap_lifecycle=True,
+            growth_min_opacity=0.15,
+            prune_opa_late=0.05,
+            prune_switch_step=1000,
+            reset_opacity_cap=0.2,
+            revised_opacity=False,
+            lifecycle_execution_order="pre_optimizer_vendor",
+        )
+        params = torch.nn.ParameterDict(
+            {
+                "means": torch.nn.Parameter(
+                    torch.tensor(
+                        [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [2.0, 0.0, 0.0]]
+                    )
+                ),
+                "scales": torch.nn.Parameter(
+                    torch.tensor(
+                        [[0.1, 0.1, 0.1], [0.3, 0.3, 0.3], [0.1, 0.1, 0.1]]
+                    ).log()
+                ),
+                "quats": torch.nn.Parameter(
+                    torch.tensor([[1.0, 0.0, 0.0, 0.0]] * 3)
+                ),
+                "opacities": torch.nn.Parameter(
+                    torch.tensor([0.2, 0.2, 0.05]).logit()
+                ),
+                "colors": torch.nn.Parameter(torch.zeros(3, 3)),
+            }
+        )
+        optimizers = {
+            name: torch.optim.Adam([parameter], lr=1e-3)
+            for name, parameter in params.items()
+        }
+        # Materialize non-empty Adam moments before topology replacement.
+        for parameter in params.values():
+            parameter.grad = torch.ones_like(parameter)
+        for optimizer in optimizers.values():
+            optimizer.step()
+            optimizer.zero_grad(set_to_none=True)
+
+        row_gradient = torch.tensor([1.0, 2.0, 3.0])
+        for parameter in params.values():
+            view = (3,) + (1,) * (parameter.ndim - 1)
+            parameter.grad = row_gradient.view(view).expand_as(parameter).clone()
+        state = {
+            "grad2d": torch.tensor([0.001, 0.001, 0.0]),
+            "count": torch.ones(3),
+            "radii": torch.zeros(3),
+            "scene_scale": 10.0,
+        }
+        preserved = adapter._preserve_current_step_gradients(params, state)
+        clone_count, split_count = adapter._grow_mipmap(
+            params, optimizers, state
+        )
+        cull_count = adapter._prune_mipmap(
+            params, optimizers, state, step=500
+        )
+        adapter._restore_current_step_gradients(params, state, preserved)
+
+        self.assertEqual((clone_count, split_count, cull_count), (1, 1, 1))
+        self.assertEqual(len(params["means"]), 4)
+        # Split-first layout is rest[0], split children[1,1], clone child[0].
+        self.assertTrue(
+            torch.equal(
+                params["means"].grad[:, 0],
+                torch.tensor([1.0, 2.0, 2.0, 1.0]),
+            )
+        )
+        before_step = params["means"].detach().clone()
+        for optimizer in optimizers.values():
+            optimizer.step()
+            optimizer.zero_grad(set_to_none=True)
+        self.assertTrue(torch.all(params["means"].detach() != before_step))
+        means_state = optimizers["means"].state[params["means"]]
+        self.assertEqual(means_state["exp_avg"].shape[0], 4)
+        self.assertTrue(torch.all(means_state["exp_avg"].abs().sum(dim=1) > 0.0))
+
+    def test_pre_optimizer_vendor_requires_exact_lifecycle(self):
+        with self.assertRaisesRegex(ValueError, "requires exact_mipmap_lifecycle"):
+            DefaultStrategyAdapter(
+                lifecycle_execution_order="pre_optimizer_vendor"
+            )
+
+    def test_pre_optimizer_vendor_accepts_signed_deferred_reset_profile(self):
+        adapter = DefaultStrategyAdapter(
+            exact_mipmap_lifecycle=True,
+            lifecycle_execution_order="pre_optimizer_vendor",
+            reset_every=3000,
+            vendor_opacity_reset_profile="deferred_every3000_compatibility",
+            growth_min_opacity=0.15,
+            prune_opa=0.1,
+            prune_opa_late=0.05,
+            prune_switch_step=1000,
+            split_scale_m=0.2,
+            prune_scale_m=0.2,
+            reset_opacity_cap=0.2,
+        )
+        self.assertEqual(adapter.inner.reset_every, 3000)
+        self.assertEqual(
+            adapter.state_dict()["vendor_opacity_reset_profile"],
+            "deferred_every3000_compatibility",
+        )
+
+    def test_pre_optimizer_vendor_rejects_reset_profile_interval_mismatch(self):
+        with self.assertRaisesRegex(ValueError, "reset profile does not match"):
+            DefaultStrategyAdapter(
+                exact_mipmap_lifecycle=True,
+                lifecycle_execution_order="pre_optimizer_vendor",
+                reset_every=300,
+                vendor_opacity_reset_profile=(
+                    "deferred_every3000_compatibility"
+                ),
+                growth_min_opacity=0.15,
+                prune_opa=0.1,
+                prune_opa_late=0.05,
+                prune_switch_step=1000,
+                split_scale_m=0.2,
+                prune_scale_m=0.2,
+                reset_opacity_cap=0.2,
+            )
+
+    def test_capacity_cap_keeps_only_highest_gradient_births(self):
+        import torch
+
+        adapter = DefaultStrategyAdapter(
+            scene_scale=10.0,
+            refine_start_iter=500,
+            refine_stop_iter=2000,
+            refine_every=100,
+            reset_every=300,
+            grow_grad2d=0.00015,
+            prune_opa=0.1,
+            split_scale_m=0.2,
+            prune_scale_m=0.2,
+            exact_mipmap_lifecycle=True,
+            growth_min_opacity=0.15,
+            prune_opa_late=0.05,
+            prune_switch_step=1000,
+            reset_opacity_cap=0.2,
+            capacity_cap=5,
+        )
+        params = torch.nn.ParameterDict(
+            {
+                "means": torch.nn.Parameter(torch.zeros(3, 3)),
+                "scales": torch.nn.Parameter(torch.full((3, 3), 0.05).log()),
+                "quats": torch.nn.Parameter(
+                    torch.tensor([[1.0, 0.0, 0.0, 0.0]] * 3)
+                ),
+                "opacities": torch.nn.Parameter(torch.full((3,), 0.3).logit()),
+                "colors": torch.nn.Parameter(torch.zeros(3, 3)),
+            }
+        )
+        optimizers = {
+            name: torch.optim.Adam([parameter], lr=1e-3)
+            for name, parameter in params.items()
+        }
+        state = {
+            "grad2d": torch.tensor([0.001, 0.003, 0.002]),
+            "count": torch.ones(3),
+            "radii": torch.zeros(3),
+            "scene_scale": 10.0,
+        }
+        clone_count, split_count = adapter._grow_mipmap(
+            params, optimizers, state
+        )
+        self.assertEqual((clone_count, split_count), (2, 0))
+        self.assertEqual(len(params["means"]), 5)
+
     def test_lidar_birth_guard_blocks_unsupported_parent_and_projects_newborns(self):
         import numpy as np
         import torch
@@ -293,6 +530,506 @@ class DefaultStrategyAdapterTests(unittest.TestCase):
         )
         self.assertEqual(proposal.last_stats["applied"], 1)
 
+    def test_observation_aware_opacity_cull_requires_streak_and_caps_each_event(self):
+        import torch
+
+        adapter = DefaultStrategyAdapter(
+            scene_scale=10.0,
+            refine_start_iter=500,
+            refine_stop_iter=2000,
+            refine_every=100,
+            reset_every=300,
+            grow_grad2d=0.00015,
+            prune_opa=0.1,
+            split_scale_m=0.2,
+            prune_scale_m=0.2,
+            exact_mipmap_lifecycle=True,
+            growth_min_opacity=0.15,
+            prune_opa_late=0.05,
+            prune_switch_step=1000,
+            reset_opacity_cap=0.2,
+            opacity_cull_policy="observation_aware",
+            opacity_cull_min_observations=4,
+            opacity_cull_consecutive_events=2,
+            opacity_cull_grace_after_reset_steps=200,
+            opacity_cull_max_fraction=0.2,
+        )
+        params = torch.nn.ParameterDict(
+            {
+                "means": torch.nn.Parameter(torch.zeros(10, 3)),
+                "scales": torch.nn.Parameter(torch.full((10, 3), 0.05).log()),
+                "quats": torch.nn.Parameter(
+                    torch.tensor([[1.0, 0.0, 0.0, 0.0]] * 10)
+                ),
+                "opacities": torch.nn.Parameter(
+                    torch.tensor([0.01] * 6 + [0.3] * 4).logit()
+                ),
+                "colors": torch.nn.Parameter(torch.zeros(10, 3)),
+            }
+        )
+        optimizers = {
+            name: torch.optim.Adam([parameter], lr=1e-3)
+            for name, parameter in params.items()
+        }
+        state = {
+            "grad2d": torch.zeros(10),
+            "count": torch.full((10,), 4.0),
+            "radii": torch.zeros(10),
+            "scene_scale": 10.0,
+        }
+
+        self.assertEqual(
+            adapter._prune_mipmap(params, optimizers, state, step=500), 0
+        )
+        self.assertEqual(len(params["means"]), 10)
+        self.assertEqual(
+            adapter._prune_mipmap(params, optimizers, state, step=600), 2
+        )
+        self.assertEqual(len(params["means"]), 8)
+        self.assertEqual(
+            adapter._last_cull_event["raw_opacity_candidate_count"], 6
+        )
+        self.assertEqual(adapter._last_cull_event["selected_opacity_count"], 2)
+        self.assertEqual(adapter._last_cull_event["world_scale_count"], 0)
+
+    def test_observation_aware_cull_honours_post_reset_grace(self):
+        import torch
+
+        adapter = DefaultStrategyAdapter(
+            scene_scale=10.0,
+            refine_start_iter=500,
+            refine_stop_iter=2000,
+            refine_every=100,
+            reset_every=300,
+            grow_grad2d=0.00015,
+            prune_opa=0.1,
+            split_scale_m=0.2,
+            prune_scale_m=0.2,
+            exact_mipmap_lifecycle=True,
+            growth_min_opacity=0.15,
+            prune_opa_late=0.05,
+            prune_switch_step=1000,
+            reset_opacity_cap=0.2,
+            opacity_cull_policy="observation_aware",
+            opacity_cull_min_observations=1,
+            opacity_cull_consecutive_events=1,
+            opacity_cull_grace_after_reset_steps=200,
+        )
+        params = torch.nn.ParameterDict(
+            {
+                "means": torch.nn.Parameter(torch.zeros(2, 3)),
+                "scales": torch.nn.Parameter(torch.full((2, 3), 0.05).log()),
+                "quats": torch.nn.Parameter(
+                    torch.tensor([[1.0, 0.0, 0.0, 0.0]] * 2)
+                ),
+                "opacities": torch.nn.Parameter(torch.tensor([0.01, 0.3]).logit()),
+                "colors": torch.nn.Parameter(torch.zeros(2, 3)),
+            }
+        )
+        optimizers = {
+            name: torch.optim.Adam([parameter], lr=1e-3)
+            for name, parameter in params.items()
+        }
+        state = {
+            "grad2d": torch.zeros(2),
+            "count": torch.ones(2),
+            "radii": torch.zeros(2),
+            "scene_scale": 10.0,
+            "_cloudstudio_last_opacity_reset_step": 600,
+        }
+        self.assertEqual(
+            adapter._prune_mipmap(params, optimizers, state, step=800), 0
+        )
+        self.assertTrue(adapter._last_cull_event["grace_active"])
+        self.assertEqual(
+            adapter._prune_mipmap(params, optimizers, state, step=900), 1
+        )
+
+    def test_local_coverage_competition_preserves_one_representative_per_cell(self):
+        import torch
+
+        adapter = DefaultStrategyAdapter(
+            scene_scale=10.0,
+            refine_start_iter=500,
+            refine_stop_iter=2000,
+            refine_every=100,
+            reset_every=300,
+            grow_grad2d=0.00015,
+            prune_opa=0.1,
+            split_scale_m=0.2,
+            prune_scale_m=0.2,
+            exact_mipmap_lifecycle=True,
+            growth_min_opacity=0.15,
+            prune_opa_late=0.05,
+            prune_switch_step=1000,
+            reset_opacity_cap=0.2,
+            opacity_cull_policy="local_coverage_competition",
+            opacity_cull_min_observations=1,
+            opacity_cull_consecutive_events=1,
+            opacity_cull_max_fraction=1.0,
+            opacity_cull_local_voxel_m=0.02,
+        )
+        params = torch.nn.ParameterDict(
+            {
+                # First three rows share one cell. The fourth is the only row
+                # in its cell and must survive even though it is weak.
+                "means": torch.nn.Parameter(
+                    torch.tensor(
+                        [
+                            [0.001, 0.001, 0.001],
+                            [0.002, 0.001, 0.001],
+                            [0.003, 0.001, 0.001],
+                            [0.041, 0.001, 0.001],
+                        ]
+                    )
+                ),
+                "scales": torch.nn.Parameter(torch.full((4, 3), 0.005).log()),
+                "quats": torch.nn.Parameter(
+                    torch.tensor([[1.0, 0.0, 0.0, 0.0]] * 4)
+                ),
+                "opacities": torch.nn.Parameter(
+                    torch.tensor([0.01, 0.02, 0.03, 0.01]).logit()
+                ),
+                "colors": torch.nn.Parameter(torch.zeros(4, 3)),
+            }
+        )
+        optimizers = {
+            name: torch.optim.Adam([parameter], lr=1e-3)
+            for name, parameter in params.items()
+        }
+        state = {
+            "grad2d": torch.zeros(4),
+            "count": torch.ones(4),
+            "radii": torch.zeros(4),
+            "scene_scale": 10.0,
+        }
+        self.assertEqual(
+            adapter._prune_mipmap(params, optimizers, state, step=500), 2
+        )
+        remaining = torch.sigmoid(params["opacities"].detach())
+        self.assertTrue(torch.isclose(remaining, torch.tensor(0.03)).any())
+        self.assertTrue(torch.isclose(remaining, torch.tensor(0.01)).any())
+        self.assertEqual(
+            adapter._last_cull_event["local_competition_protected_count"], 2
+        )
+        self.assertEqual(
+            adapter._last_cull_event["local_competition_cell_count"], 2
+        )
+
+    def test_local_coverage_can_protect_a_broad_thin_surface_carrier(self):
+        import torch
+
+        adapter = DefaultStrategyAdapter(
+            scene_scale=10.0,
+            refine_start_iter=500,
+            refine_stop_iter=2000,
+            refine_every=100,
+            reset_every=300,
+            grow_grad2d=0.00015,
+            prune_opa=0.1,
+            split_scale_m=0.2,
+            prune_scale_m=0.2,
+            exact_mipmap_lifecycle=True,
+            growth_min_opacity=0.15,
+            prune_opa_late=0.05,
+            prune_switch_step=1000,
+            reset_opacity_cap=0.2,
+            opacity_cull_policy="local_coverage_competition",
+            opacity_cull_min_observations=1,
+            opacity_cull_consecutive_events=1,
+            opacity_cull_max_fraction=1.0,
+            opacity_cull_local_voxel_m=0.02,
+            opacity_cull_local_protection="opacity_tangent_area",
+        )
+        params = torch.nn.ParameterDict(
+            {
+                "means": torch.nn.Parameter(
+                    torch.tensor(
+                        [
+                            [0.001, 0.001, 0.001],
+                            [0.002, 0.001, 0.001],
+                        ]
+                    )
+                ),
+                # Row zero has lower opacity but sixteen times the tangential
+                # area, so it is the stronger surface-coverage carrier.
+                "scales": torch.nn.Parameter(
+                    torch.tensor(
+                        [[0.02, 0.02, 0.001], [0.005, 0.005, 0.001]]
+                    ).log()
+                ),
+                "quats": torch.nn.Parameter(
+                    torch.tensor([[1.0, 0.0, 0.0, 0.0]] * 2)
+                ),
+                "opacities": torch.nn.Parameter(
+                    torch.tensor([0.02, 0.03]).logit()
+                ),
+                "colors": torch.nn.Parameter(torch.zeros(2, 3)),
+            }
+        )
+        optimizers = {
+            name: torch.optim.Adam([parameter], lr=1e-3)
+            for name, parameter in params.items()
+        }
+        state = {
+            "grad2d": torch.zeros(2),
+            "count": torch.ones(2),
+            "radii": torch.zeros(2),
+            "scene_scale": 10.0,
+        }
+        self.assertEqual(
+            adapter._prune_mipmap(params, optimizers, state, step=500), 1
+        )
+        remaining = torch.sigmoid(params["opacities"].detach())
+        self.assertTrue(torch.isclose(remaining, torch.tensor(0.02)).any())
+        self.assertEqual(
+            adapter._last_cull_event["opacity_cull_local_protection"],
+            "opacity_tangent_area",
+        )
+
+    def test_local_alpha_budget_preserves_enough_rows_for_surface_coverage(self):
+        import torch
+
+        adapter = DefaultStrategyAdapter(
+            scene_scale=10.0,
+            refine_start_iter=500,
+            refine_stop_iter=2000,
+            refine_every=100,
+            reset_every=300,
+            grow_grad2d=0.00015,
+            prune_opa=0.1,
+            split_scale_m=0.2,
+            prune_scale_m=0.2,
+            exact_mipmap_lifecycle=True,
+            growth_min_opacity=0.15,
+            prune_opa_late=0.05,
+            prune_switch_step=1000,
+            reset_opacity_cap=0.2,
+            opacity_cull_policy="local_coverage_competition",
+            opacity_cull_min_observations=1,
+            opacity_cull_consecutive_events=1,
+            opacity_cull_max_fraction=1.0,
+            opacity_cull_local_voxel_m=0.02,
+            opacity_cull_local_protection="opacity_tangent_area",
+            opacity_cull_local_min_accumulated_alpha=0.15,
+        )
+        params = torch.nn.ParameterDict(
+            {
+                "means": torch.nn.Parameter(
+                    torch.tensor(
+                        [
+                            [0.001, 0.001, 0.001],
+                            [0.002, 0.001, 0.001],
+                            [0.003, 0.001, 0.001],
+                        ]
+                    )
+                ),
+                "scales": torch.nn.Parameter(
+                    torch.full((3, 3), 0.005).log()
+                ),
+                "quats": torch.nn.Parameter(
+                    torch.tensor([[1.0, 0.0, 0.0, 0.0]] * 3)
+                ),
+                "opacities": torch.nn.Parameter(
+                    torch.tensor([0.08, 0.08, 0.01]).logit()
+                ),
+                "colors": torch.nn.Parameter(torch.zeros(3, 3)),
+            }
+        )
+        optimizers = {
+            name: torch.optim.Adam([parameter], lr=1e-3)
+            for name, parameter in params.items()
+        }
+        state = {
+            "grad2d": torch.zeros(3),
+            "count": torch.ones(3),
+            "radii": torch.zeros(3),
+            "scene_scale": 10.0,
+        }
+        # 1-(1-.08)^2 = .1536, so both coverage carriers survive and only
+        # the third redundant row is removed.
+        self.assertEqual(
+            adapter._prune_mipmap(params, optimizers, state, step=500), 1
+        )
+        remaining = torch.sigmoid(params["opacities"].detach())
+        self.assertEqual(len(remaining), 2)
+        self.assertTrue(torch.allclose(remaining, torch.full((2,), 0.08)))
+
+    def test_cull_telemetry_separates_world_and_screen_scale_reasons(self):
+        import torch
+
+        adapter = DefaultStrategyAdapter(
+            scene_scale=10.0,
+            refine_start_iter=500,
+            refine_stop_iter=2000,
+            refine_every=100,
+            reset_every=300,
+            grow_grad2d=0.00015,
+            prune_opa=0.1,
+            split_scale_m=0.2,
+            prune_scale_m=0.2,
+            prune_scale2d=0.15,
+            exact_mipmap_lifecycle=True,
+            growth_min_opacity=0.15,
+            prune_opa_late=0.05,
+            prune_switch_step=1000,
+            reset_opacity_cap=0.2,
+        )
+        params = torch.nn.ParameterDict(
+            {
+                "means": torch.nn.Parameter(torch.zeros(3, 3)),
+                "scales": torch.nn.Parameter(
+                    torch.tensor(
+                        [[0.05, 0.05, 0.05], [0.3, 0.05, 0.05], [0.05, 0.05, 0.05]]
+                    ).log()
+                ),
+                "quats": torch.nn.Parameter(
+                    torch.tensor([[1.0, 0.0, 0.0, 0.0]] * 3)
+                ),
+                "opacities": torch.nn.Parameter(torch.full((3,), 0.3).logit()),
+                "colors": torch.nn.Parameter(torch.zeros(3, 3)),
+            }
+        )
+        optimizers = {
+            name: torch.optim.Adam([parameter], lr=1e-3)
+            for name, parameter in params.items()
+        }
+        state = {
+            "grad2d": torch.zeros(3),
+            "count": torch.ones(3),
+            "radii": torch.tensor([0.0, 0.0, 0.2]),
+            "scene_scale": 10.0,
+        }
+        self.assertEqual(
+            adapter._prune_mipmap(params, optimizers, state, step=500), 2
+        )
+        self.assertEqual(adapter._last_cull_event["world_scale_count"], 1)
+        self.assertEqual(adapter._last_cull_event["screen_scale_count"], 1)
+        self.assertEqual(
+            adapter._last_cull_event["forced_geometry_union_count"], 2
+        )
+
+    def test_large_footprint_priority_can_remove_blur_before_smaller_dead_points(self):
+        import torch
+
+        adapter = DefaultStrategyAdapter(
+            scene_scale=10.0,
+            refine_start_iter=500,
+            refine_stop_iter=2000,
+            refine_every=100,
+            reset_every=300,
+            grow_grad2d=0.00015,
+            prune_opa=0.1,
+            split_scale_m=0.2,
+            prune_scale_m=0.2,
+            exact_mipmap_lifecycle=True,
+            growth_min_opacity=0.15,
+            prune_opa_late=0.05,
+            prune_switch_step=1000,
+            reset_opacity_cap=0.2,
+            opacity_cull_policy="observation_aware",
+            opacity_cull_min_observations=1,
+            opacity_cull_consecutive_events=1,
+            opacity_cull_max_fraction=0.25,
+            opacity_cull_priority="lowest_opacity_per_footprint",
+            detail_split_policy="lidar_surface_screen_detail",
+            detail_split_scale_m=0.02,
+            detail_split_screen_radius=0.0035,
+        )
+        params = torch.nn.ParameterDict(
+            {
+                "means": torch.nn.Parameter(torch.zeros(4, 3)),
+                "scales": torch.nn.Parameter(
+                    torch.tensor(
+                        [[0.01] * 3, [0.05] * 3, [0.01] * 3, [0.01] * 3]
+                    ).log()
+                ),
+                "quats": torch.nn.Parameter(
+                    torch.tensor([[1.0, 0.0, 0.0, 0.0]] * 4)
+                ),
+                "opacities": torch.nn.Parameter(
+                    torch.tensor([0.01, 0.02, 0.3, 0.3]).logit()
+                ),
+                "colors": torch.nn.Parameter(torch.zeros(4, 3)),
+            }
+        )
+        optimizers = {
+            name: torch.optim.Adam([parameter], lr=1e-3)
+            for name, parameter in params.items()
+        }
+        state = {
+            "grad2d": torch.zeros(4),
+            "count": torch.ones(4),
+            "radii": torch.tensor([0.001, 0.01, 0.001, 0.001]),
+            "scene_scale": 10.0,
+        }
+        self.assertEqual(
+            adapter._prune_mipmap(params, optimizers, state, step=500), 1
+        )
+        remaining_opacity = torch.sigmoid(params["opacities"].detach())
+        self.assertTrue(
+            torch.isclose(remaining_opacity, torch.tensor(0.01), atol=1e-6).any()
+        )
+        self.assertFalse(
+            torch.isclose(remaining_opacity, torch.tensor(0.02), atol=1e-6).any()
+        )
+        self.assertEqual(
+            adapter._last_cull_event["opacity_cull_priority"],
+            "lowest_opacity_per_footprint",
+        )
+
+    def test_detail_split_requires_high_gradient_physical_and_screen_size(self):
+        import torch
+
+        adapter = DefaultStrategyAdapter(
+            scene_scale=10.0,
+            refine_start_iter=500,
+            refine_stop_iter=2000,
+            refine_every=100,
+            reset_every=300,
+            grow_grad2d=0.00015,
+            prune_opa=0.1,
+            split_scale_m=0.2,
+            prune_scale_m=0.2,
+            exact_mipmap_lifecycle=True,
+            growth_min_opacity=0.15,
+            prune_opa_late=0.05,
+            prune_switch_step=1000,
+            reset_opacity_cap=0.2,
+            detail_split_policy="lidar_surface_screen_detail",
+            detail_split_scale_m=0.02,
+            detail_split_screen_radius=0.0035,
+        )
+        params = torch.nn.ParameterDict(
+            {
+                "means": torch.nn.Parameter(torch.zeros(3, 3)),
+                "scales": torch.nn.Parameter(
+                    torch.tensor([[0.05] * 3, [0.05] * 3, [0.01] * 3]).log()
+                ),
+                "quats": torch.nn.Parameter(
+                    torch.tensor([[1.0, 0.0, 0.0, 0.0]] * 3)
+                ),
+                "opacities": torch.nn.Parameter(torch.full((3,), 0.3).logit()),
+                "colors": torch.nn.Parameter(torch.zeros(3, 3)),
+            }
+        )
+        optimizers = {
+            name: torch.optim.Adam([parameter], lr=1e-3)
+            for name, parameter in params.items()
+        }
+        state = {
+            "grad2d": torch.full((3,), 0.001),
+            "count": torch.ones(3),
+            "radii": torch.tensor([0.01, 0.002, 0.01]),
+            "scene_scale": 10.0,
+        }
+
+        clone_count, split_count = adapter._grow_mipmap(
+            params, optimizers, state
+        )
+        self.assertEqual(clone_count, 2)
+        self.assertEqual(split_count, 1)
+
 
 class BackendWiringTests(unittest.TestCase):
     def test_backend_flags_whether_the_pre_backward_hook_is_required(self):
@@ -345,6 +1082,23 @@ class PruningInvariantTests(unittest.TestCase):
             event = self._event(1000, 1200, strategy_prunes=prunes)
             self.assertEqual(event["new_gaussian_count"], 200)
             self.assertEqual(event["pruned_gaussian_count"], 0)
+
+    def test_exact_lifecycle_can_refine_on_inclusive_start_boundary(self):
+        from cloudstudio_3dgs.training.runtime_evidence import build_mcmc_step_event
+
+        event = build_mcmc_step_event(
+            step=500,
+            before={"gaussian_count": 1000, "dead_gaussian_count": 0},
+            after={"gaussian_count": 1050, "dead_gaussian_count": 0},
+            refine_start_iter=500,
+            refine_stop_iter=5610,
+            refine_every=100,
+            noise_injection_stop_iter=0,
+            strategy_prunes=True,
+            refine_start_inclusive=True,
+        )
+        self.assertTrue(event["refine_triggered"])
+        self.assertEqual(event["new_gaussian_count"], 50)
 
 
 if __name__ == "__main__":
@@ -445,7 +1199,7 @@ class GradientSourceTests(unittest.TestCase):
         config.validate()
         self.assertTrue(config.tangent_proposal.reject_unsupported_births)
 
-    def test_hard_birth_guard_is_rejected_on_mcmc_path(self):
+    def test_hard_birth_guard_is_supported_on_mcmc_path(self):
         config = TrainerConfig.from_dict(
             _minimal_config(
                 error_weighted_sampling={"enabled": True},
@@ -455,8 +1209,9 @@ class GradientSourceTests(unittest.TestCase):
                 },
             )
         )
-        with self.assertRaisesRegex(ValueError, "requires default_3dgs"):
-            config.validate()
+        config.validate()
+        self.assertNotEqual(config.densification_strategy, "default_3dgs")
+        self.assertTrue(config.tangent_proposal.reject_unsupported_births)
 
 
 class GradientIsolationTests(unittest.TestCase):

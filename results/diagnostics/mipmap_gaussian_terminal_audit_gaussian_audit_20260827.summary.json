@@ -1,0 +1,175 @@
+{
+  "scope": "completed snow-20260827 MipMap Gaussian terminal audit",
+  "source_script": "G:\\cloudstudio-3dgs\\results\\diagnostics\\mipmap_gaussian_terminal_audit_gaussian_audit_20260827.py",
+  "method": {
+    "coordinate_relation": "tile_local_xyz = las_world_xyz - [2.767020873831839, -4.222884545523638, 1.4150408912260555]",
+    "point_to_plane_sample": "100000 deterministic evenly-spaced level-0 records per tile",
+    "pca_k": 24,
+    "reliable_rule": "lambda0/sum(lambda)<0.02 and lambda1/lambda2>0.1",
+    "voxel_counts": "full LAS ROI and full level-0 GS",
+    "scale": "millimetres after exp(log_scale)",
+    "opacity": "probability after sigmoid(logit)",
+    "rotation": "quaternion normalized before orientation comparison"
+  },
+  "tile_summary": {
+    "Tile_0": {
+      "pnts_las_level0_ratio": [2700801, 2700799, 1773436, 0.6566333469],
+      "scale_short_middle_long_mm_p50": [0.714782, 1.996405, 8.546555],
+      "aspect_p50": 11.904884,
+      "opacity_probability_p50": 0.114794,
+      "nearest_las_mm_p50_p90_p95_p99": [14.326142, 37.650167, 56.627352, 470.684399],
+      "nearest_ge20mm_ge100mm_pct": [32.604, 2.487],
+      "reliable_pca_pct": 80.485,
+      "normal_abs_mm_reliable_p50_p90_p95_p99": [12.066126, 32.218600, 48.136133, 159.742081],
+      "tangent_mm_reliable_p50_p90_p95_p99": [5.203845, 15.457874, 21.774611, 147.391165],
+      "far_ge20mm_with_normal_lt5mm_conditional_pct": 1.239112,
+      "short_axis_normal_deg_p50_p90_p95": [9.185229, 30.741191, 55.120792],
+      "within15deg_within30deg_pct": [71.840716, 89.657700],
+      "voxel_0_5m": {
+        "las_gs_shared": [2429, 6389, 2299],
+        "gs_points_without_las_voxel_pct": 1.905397,
+        "ratio_p10_p50_p90_p95_p99": [0.075398, 0.386308, 3.0, 8.099818, 38.05],
+        "weighted_ratio": 0.645197,
+        "stable_nlas_ge100_count_and_ratio_p10_p50_p90_p95_p99": [1505, 0.062584, 0.303087, 1.276649, 2.031767, 8.441669]
+      },
+      "voxel_1m": {
+        "las_gs_shared": [661, 1944, 631],
+        "gs_points_without_las_voxel_pct": 0.971391,
+        "ratio_p10_p50_p90_p95_p99": [0.114622, 0.502066, 5.809524, 17.75, 77.5],
+        "weighted_ratio": 0.650726,
+        "stable_nlas_ge100_count_and_ratio_p10_p50_p90_p95_p99": [480, 0.105406, 0.380884, 1.407773, 1.941460, 5.544010]
+      }
+    },
+    "Tile_1": {
+      "pnts_las_level0_ratio": [1520716, 1520716, 1988450, 1.3075748529],
+      "scale_short_middle_long_mm_p50": [0.402956, 1.189214, 7.246783],
+      "aspect_p50": 16.271349,
+      "opacity_probability_p50": 0.117730,
+      "nearest_las_mm_p50_p90_p95_p99": [15.269388, 40.921566, 63.565279, 297.418432],
+      "nearest_ge20mm_ge100mm_pct": [33.285, 2.806],
+      "reliable_pca_pct": 92.895,
+      "normal_abs_mm_reliable_p50_p90_p95_p99": [10.826468, 36.041828, 53.928419, 145.376352],
+      "tangent_mm_reliable_p50_p90_p95_p99": [5.921294, 17.988726, 22.893007, 119.361770],
+      "far_ge20mm_with_normal_lt5mm_conditional_pct": 2.610786,
+      "short_axis_normal_deg_p50_p90_p95": [8.854340, 33.265364, 59.891755],
+      "within15deg_within30deg_pct": [72.051241, 88.601109],
+      "voxel_0_5m": {
+        "las_gs_shared": [1294, 4095, 1153],
+        "gs_points_without_las_voxel_pct": 1.382484,
+        "ratio_p10_p50_p90_p95_p99": [0.139181, 0.941258, 7.306667, 18.2, 76.757551],
+        "weighted_ratio": 1.297124,
+        "stable_nlas_ge100_count_and_ratio_p10_p50_p90_p95_p99": [704, 0.123120, 0.709663, 2.439257, 4.632205, 71.065516]
+      },
+      "voxel_1m": {
+        "las_gs_shared": [381, 1338, 336],
+        "gs_points_without_las_voxel_pct": 0.695064,
+        "ratio_p10_p50_p90_p95_p99": [0.212968, 1.115882, 11.904762, 33.25, 115.283333],
+        "weighted_ratio": 1.303772,
+        "stable_nlas_ge100_count_and_ratio_p10_p50_p90_p95_p99": [236, 0.203394, 0.856552, 3.216188, 5.095038, 33.774366]
+      }
+    },
+    "Tile_2": {
+      "pnts_las_level0_ratio": [1802271, 1802271, 1506518, 0.8358998175],
+      "scale_short_middle_long_mm_p50": [1.266332, 3.039839, 14.479273],
+      "aspect_p50": 10.082825,
+      "opacity_probability_p50": 0.115451,
+      "nearest_las_mm_p50_p90_p95_p99": [17.334159, 104.813256, 705.572566, 3194.527299],
+      "nearest_ge20mm_ge100mm_pct": [43.694, 10.184],
+      "reliable_pca_pct": 77.264,
+      "normal_abs_mm_reliable_p50_p90_p95_p99": [14.194155, 50.118362, 99.287789, 664.013237],
+      "tangent_mm_reliable_p50_p90_p95_p99": [6.064159, 39.489648, 237.893759, 2095.977107],
+      "far_ge20mm_with_normal_lt5mm_conditional_pct": 1.952213,
+      "short_axis_normal_deg_p50_p90_p95": [10.762927, 44.537375, 71.910394],
+      "within15deg_within30deg_pct": [64.085473, 84.435183],
+      "voxel_0_5m": {
+        "las_gs_shared": [2216, 11666, 2146],
+        "gs_points_without_las_voxel_pct": 8.408595,
+        "ratio_p10_p50_p90_p95_p99": [0.186167, 1.314286, 17.0, 30.0, 89.0],
+        "weighted_ratio": 0.767014,
+        "stable_nlas_ge100_count_and_ratio_p10_p50_p90_p95_p99": [998, 0.116110, 0.570362, 2.903975, 4.769105, 9.857284]
+      },
+      "voxel_1m": {
+        "las_gs_shared": [691, 3317, 685],
+        "gs_points_without_las_voxel_pct": 5.765547,
+        "ratio_p10_p50_p90_p95_p99": [0.316020, 2.071895, 38.159091, 74.4, 249.08],
+        "weighted_ratio": 0.787947,
+        "stable_nlas_ge100_count_and_ratio_p10_p50_p90_p95_p99": [375, 0.208020, 0.856576, 3.708975, 5.081019, 8.038814]
+      }
+    },
+    "Tile_3": {
+      "pnts_las_level0_ratio": [1221675, 1221671, 750498, 0.6143188655],
+      "scale_short_middle_long_mm_p50": [1.303523, 3.485009, 17.718776],
+      "aspect_p50": 11.570896,
+      "opacity_probability_p50": 0.107155,
+      "nearest_las_mm_p50_p90_p95_p99": [17.188956, 152.255717, 614.897342, 2784.267703],
+      "nearest_ge20mm_ge100mm_pct": [44.765, 12.084],
+      "reliable_pca_pct": 70.647,
+      "normal_abs_mm_reliable_p50_p90_p95_p99": [14.305980, 75.048804, 151.695440, 565.259640],
+      "tangent_mm_reliable_p50_p90_p95_p99": [5.798384, 53.888018, 280.134701, 1988.827775],
+      "far_ge20mm_with_normal_lt5mm_conditional_pct": 1.838490,
+      "short_axis_normal_deg_p50_p90_p95": [9.900553, 41.505730, 69.332950],
+      "within15deg_within30deg_pct": [67.026201, 85.283168],
+      "voxel_0_5m": {
+        "las_gs_shared": [2572, 9310, 2388],
+        "gs_points_without_las_voxel_pct": 10.530208,
+        "ratio_p10_p50_p90_p95_p99": [0.081946, 0.659679, 7.55, 16.0, 38.13],
+        "weighted_ratio": 0.553212,
+        "stable_nlas_ge100_count_and_ratio_p10_p50_p90_p95_p99": [981, 0.059113, 0.313095, 1.032520, 1.418033, 2.802170]
+      },
+      "voxel_1m": {
+        "las_gs_shared": [780, 2760, 746],
+        "gs_points_without_las_voxel_pct": 8.088363,
+        "ratio_p10_p50_p90_p95_p99": [0.131198, 1.002110, 18.888889, 33.725, 81.925],
+        "weighted_ratio": 0.566386,
+        "stable_nlas_ge100_count_and_ratio_p10_p50_p90_p95_p99": [382, 0.090234, 0.397612, 1.178146, 1.635180, 2.141896]
+      }
+    }
+  },
+  "common_parameter_evidence": {
+    "opacity_probability_min_across_tiles": [0.050000059, 0.050000002, 0.050000013, 0.050000081],
+    "opacity_below_0_05_pct_all_tiles": 0.0,
+    "sh_order": 0,
+    "ue_full_ply_f_rest_sample": "45 f_rest fields are exactly zero in 10000 deterministic records",
+    "rotation_order": "wxyz is strongly preferred over xyzw by shortest-axis/normal agreement",
+    "rotation_norm_note": "stored quaternion norms are not exactly one; normalize before interpreting orientation"
+  },
+  "long_tail": {
+    "nearest_las_ge500mm_sample_pct_tile0_to3": [0.970, 0.618, 5.817, 5.632],
+    "tile2_tile3_same_0_5m_las_voxel_pct": [0.292247, 0.301847],
+    "tile2_tile3_xy_boundary_distance_m_p50": [14.225596, 11.372389],
+    "tile2_tile3_extreme_long_axis_mm_p50": [91.719659, 104.755530],
+    "tile2_tile3_extreme_opacity_p50": [0.103129, 0.097469],
+    "interpretation_zh": "Tile_2/3 的极端长尾主要位于块内部且缺少同 voxel LAS 支持，不像简单 halo 泄漏；它们尺度更大、opacity 略低但并非全是濒死点。可解释为照片可见但 LAS 缺失的补面或低约束 Gaussian，但无中间 checkpoint 时不能区分连续移动、split 或 relocation。"
+  },
+  "overlap_recheck": {
+    "Tile_0__Tile_1_unified_rerun": {
+      "strict_las_and_gs": [33172, 47660, 31881],
+      "near_surface_common_parents": 2244,
+      "same_side_pct_vs_shuffled": [79.010695, 50.668449],
+      "signed_and_absolute_spearman": [0.696720, 0.498963],
+      "normal_abs_diff_mm_p50": 1.954858,
+      "existing_report_values": [2227, 79.79, 0.723, 0.522, 1.966],
+      "consistency_note_zh": "旧 Tile_0/1 审计实现与本统一脚本存在小口径差异；方向与结论稳定，但精确数字应绑定脚本版本。"
+    },
+    "Tile_0__Tile_2": {
+      "strict_las_and_gs": [70320, 42418, 64165],
+      "near_surface_common_parents": 4740,
+      "same_side_pct_vs_shuffled": [83.481013, 50.527426],
+      "signed_and_absolute_spearman": [0.751082, 0.490883],
+      "tile2_20to50mm_count_same_side_signed_rho_abs_rho": [1316, 96.428571, 0.730596, 0.269301]
+    },
+    "Tile_3__Tile_2": {
+      "strict_las_and_gs": [24497, 9624, 12755],
+      "near_surface_common_parents": 952,
+      "same_side_pct_vs_shuffled": [72.584034, 52.205882],
+      "signed_and_absolute_spearman": [0.548496, 0.343003],
+      "tile2_20to50mm_count_same_side_signed_rho_abs_rho": [358, 76.815642, 0.482807, 0.050860]
+    },
+    "limitations_zh": [
+      "共同 parent 只保留两块最终 GS 都命中同一 LAS anchor 的区域，仍有选择偏差。",
+      "mutual-nearest 更偏向挑选已经一致的 GS，只能作佐证。",
+      "窄 overlap 与小样本不足以证明全块机制，>=100 mm 尤其不稳定。",
+      "终态没有 Gaussian 身份或时间序列，不能区分 gradient move、split、cull 与 MCMC relocation。"
+    ]
+  }
+}

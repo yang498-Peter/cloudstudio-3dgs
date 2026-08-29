@@ -61,6 +61,8 @@ def export_checkpoint_ply(
     min_opacity: float = 0.0,
     layer: str = "all",
     sky_layer_report: Path | None = None,
+    surface_gaussian_count: int | None = None,
+    max_surface_scale_m: float | None = None,
 ) -> dict:
     import numpy as np
     import torch
@@ -76,6 +78,20 @@ def export_checkpoint_ply(
     opacity_logits = params["opacities"].detach().float().numpy().reshape(-1)
     if layer not in {"all", "surface", "sky"}:
         raise ValueError("layer must be one of: all, surface, sky")
+    capped_scale_count = 0
+    if (surface_gaussian_count is None) != (max_surface_scale_m is None):
+        raise ValueError(
+            "surface_gaussian_count and max_surface_scale_m must be provided together"
+        )
+    if surface_gaussian_count is not None and max_surface_scale_m is not None:
+        if not 0 < surface_gaussian_count <= len(means):
+            raise ValueError("surface_gaussian_count is outside checkpoint bounds")
+        if max_surface_scale_m <= 0.0:
+            raise ValueError("max_surface_scale_m must be positive")
+        maximum_log_scale = float(np.log(max_surface_scale_m))
+        surface_scales = scales_log[:surface_gaussian_count]
+        capped_scale_count = int(np.count_nonzero(surface_scales > maximum_log_scale))
+        np.minimum(surface_scales, maximum_log_scale, out=surface_scales)
 
     if "sh0" in params:
         f_dc = params["sh0"].detach().float().numpy().reshape(len(means), 3)
@@ -149,6 +165,7 @@ def export_checkpoint_ply(
         "sh_rest_coefficients": rest_coeffs,
         "bytes": output_path.stat().st_size,
         "fields": len(fields),
+        "surface_scale_values_capped": capped_scale_count,
     }
 
 
@@ -162,6 +179,8 @@ def main() -> int:
         default=0.0,
         help="drop gaussians below this sigmoid opacity (0 keeps all)",
     )
+    parser.add_argument("--surface-gaussian-count", type=int)
+    parser.add_argument("--max-surface-scale-m", type=float)
     parser.add_argument(
         "--layer",
         choices=("all", "surface", "sky"),
@@ -180,6 +199,8 @@ def main() -> int:
         min_opacity=args.min_opacity,
         layer=args.layer,
         sky_layer_report=args.sky_layer_report,
+        surface_gaussian_count=args.surface_gaussian_count,
+        max_surface_scale_m=args.max_surface_scale_m,
     )
     print(
         f"exported {report['gaussians_written']}/{report['gaussians_total']} gaussians, "

@@ -17,6 +17,31 @@ from cloudstudio_3dgs.training.runtime_evidence import (
 )
 
 
+def rendered_range_to_euclidean(
+    torch_module: Any,
+    rendered_range: Any,
+    sample: Any,
+    render_info: dict[str, Any] | None,
+) -> Any:
+    """Convert classic pinhole z-depth to the LiDAR ray-range contract."""
+
+    if rendered_range is None:
+        return None
+    semantics = (
+        render_info.get("cloudstudio_range_semantics")
+        if isinstance(render_info, dict)
+        else None
+    )
+    depth_scale = getattr(sample, "depth_to_range_scale", None)
+    if depth_scale is None or semantics == "euclidean_ray_range_m":
+        return rendered_range
+    return rendered_range * torch_module.as_tensor(
+        depth_scale,
+        dtype=rendered_range.dtype,
+        device=rendered_range.device,
+    )
+
+
 def verify_gsplat_runtime(lock_path: Path) -> dict[str, Any]:
     """Require the locked version and, for VCS installs, the exact clean commit."""
     lock = json.loads(Path(lock_path).read_text(encoding="utf-8"))
@@ -176,6 +201,7 @@ class GsplatBackend:
                                 (mcmc_config or {}).get("refine_stop_iter", 15000))
             settings.setdefault("refine_every",
                                 (mcmc_config or {}).get("refine_every", 100))
+            settings.setdefault("capacity_cap", int(cap_max) if cap_max else None)
             self.strategy = DefaultStrategyAdapter(**settings)
             self.needs_pre_backward = True
             self.needs_absgrad = bool(settings.get("absgrad", False))
@@ -437,6 +463,9 @@ class GsplatBackend:
             if camera_model == "pinhole"
             else torch.as_tensor(sample.radial_coeffs, device=self.device)[None]
         )
+        pinhole_with_ut = camera_model == "pinhole" and bool(
+            getattr(self, "pinhole_with_ut", False)
+        )
         render, alpha, info = self.rasterization(
             means=params["means"],
             quats=params["quats"],
@@ -473,14 +502,14 @@ class GsplatBackend:
             # rasterizer was asked to accumulate it - without this the strategy
             # raises on its first refine rather than silently degrading.
             **({"absgrad": True} if self.needs_absgrad else {}),
-            # Fisheye+eval3d "RGB-Ed" is expected HIT DISTANCE (Euclidean ray
-            # range, the supervision semantics). The classic pinhole path only
-            # offers Gaussian z-depth ("RGB+ED"); the per-face
-            # depth_to_range_scale factor converts it at the loss. Earlier
-            # face runs rendered RGB-Ed hit distance AND applied the factor -
-            # a double scaling of the depth supervision, fixed by this split.
+            # eval3d "RGB-Ed" is expected HIT DISTANCE (Euclidean ray range,
+            # the supervision semantics). The classic pinhole path only offers
+            # Gaussian z-depth ("RGB+ED"); the per-face depth_to_range_scale
+            # factor converts it at the loss. The UT pinhole compatibility path
+            # must use eval3d because the supported wheel does not expose the
+            # classic 2D raster operator.
             render_mode=(
-                ("RGB-Ed" if camera_model == "fisheye" else "RGB+ED")
+                ("RGB-Ed" if camera_model == "fisheye" or pinhole_with_ut else "RGB+ED")
                 if with_range
                 else "RGB"
             ),
@@ -490,13 +519,18 @@ class GsplatBackend:
             # are linear so UT adds nothing, and turning it off unlocks
             # gsplat's Mip-Splatting antialiased compensation, which the
             # 3DGUT path explicitly rejects.
-            with_ut=camera_model == "fisheye",
-            with_eval3d=camera_model == "fisheye",
+            with_ut=camera_model == "fisheye" or pinhole_with_ut,
+            with_eval3d=camera_model == "fisheye" or pinhole_with_ut,
             # gsplat requires standard global depth sorting whenever UT is off.
             global_z_order=camera_model != "fisheye",
             rasterize_mode="classic"
             if camera_model == "fisheye"
             else getattr(self, "pinhole_rasterize_mode", "classic"),
+        )
+        info["cloudstudio_range_semantics"] = (
+            "euclidean_ray_range_m"
+            if camera_model == "fisheye" or pinhole_with_ut
+            else "pinhole_z_depth_m"
         )
         rgb = render[0, ..., :3]
         if background_rgb is not None:
@@ -656,12 +690,28 @@ class GsplatBackend:
             noise_injection_stop_iter=self.strategy.noise_injection_stop_iter,
             noise_position_delta_max_m=noise_position_delta_max_m,
             strategy_prunes=self.strategy_prunes,
-            # The snapshots above were taken from this decision; re-deriving
-            # it inside the builder crashes on strategies whose boundary is
-            # inclusive (the exact MipMap lifecycle refines at step == start).
+            refine_start_inclusive=bool(
+                getattr(self.strategy, "exact_mipmap_lifecycle", False)
+            ),
+            # The snapshots above were taken from this decision; passing it
+            # outright is immune to any future boundary convention.
             refine=refine,
         )
         lifecycle = getattr(self.strategy, "last_lifecycle_event", None)
         if lifecycle is not None:
             event["classic_lifecycle"] = dict(lifecycle)
+            event["strategy"] = "default_3dgs"
+            event["relocated_count"] = 0
+            event["new_gaussian_count"] = int(lifecycle.get("clone_count", 0)) + int(
+                lifecycle.get("split_child_count", 0)
+            )
+            event["pruned_gaussian_count"] = int(lifecycle.get("cull_count", 0))
+        relocation = getattr(self.strategy, "last_relocation_event", None)
+        if refine and relocation is not None:
+            event["adaptive_relocation"] = dict(relocation)
+            # The generic MCMC event infers relocation from the number of
+            # opacity-dead rows before refinement. Bounded adaptive relocation
+            # deliberately processes only a subset, so the strategy's exact
+            # selected count is authoritative.
+            event["relocated_count"] = int(relocation.get("selected_count", 0))
         return event
