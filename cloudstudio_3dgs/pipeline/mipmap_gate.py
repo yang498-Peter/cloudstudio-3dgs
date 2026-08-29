@@ -29,6 +29,7 @@ SKY_BACKGROUND_READY_STATUS = "SKY_BACKGROUND_READY"
 UPSTREAM_DATA_READY_STATUS = "UPSTREAM_DATA_READY"
 TRAINING_IMPLEMENTATION_READY_STATUS = "TRAINING_IMPLEMENTATION_READY"
 FIXED_TOPOLOGY_EVALUATION_READY_STATUS = "FIXED_TOPOLOGY_EVALUATION_READY"
+SURFACE_FROZEN_TRAINING_READY_STATUS = "SURFACE_FROZEN_TRAINING_READY"
 ADAPTIVE_GROWTH_BOUNDARY_READY_STATUS = "ADAPTIVE_GROWTH_BOUNDARY_READY"
 ADAPTIVE_GROWTH_REVIEW_READY_STATUS = "ADAPTIVE_GROWTH_REVIEW_READY"
 ADAPTIVE_GROWTH_EVALUATION_READY_STATUS = "ADAPTIVE_GROWTH_EVALUATION_READY"
@@ -786,6 +787,88 @@ def advance_spatial_tile_gate_surface_only(
                 "training implementation contract has not been verified",
                 "a short GPU smoke has not verified that the Trainer consumes the signed inputs",
             ],
+            "bindings": bindings,
+        }
+    )
+    if evidence:
+        payload.setdefault("evidence", {}).update(copy.deepcopy(evidence))
+    return sign_gate(payload)
+
+
+def promote_surface_frozen_training_gate(
+    upstream_gate: dict[str, Any],
+    *,
+    ownership_contract: dict[str, Any],
+    fullres_smoke: dict[str, Any],
+    initialization_count: int,
+    capacity_cap: int,
+    evidence: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Authorize the surface route's frozen-topology training.
+
+    The existing authorizations do not describe this configuration. The
+    High/type-2 contract demands monocular depth, mesh supervision, a bilateral
+    grid and SIFT refinement, all of which this route deliberately leaves out;
+    the fixed-topology evaluation gate audits how a per-tile sidecar was
+    derived from a parent, which on a single tile spanning the whole scene has
+    no parent to derive from. Forcing either would mean fabricating evidence
+    for machinery that is not running.
+
+    What this route can actually prove is narrower and specific: the upstream
+    data is signed, every point belongs to exactly one tile, a full-resolution
+    GPU smoke consumed the real inputs and reported its true peak, and topology
+    is frozen so no growth machinery participates at all. Those are required
+    here, and the frozen declaration is what makes the shorter evidence set
+    sufficient - a run that later enables growth cannot use this gate.
+    """
+
+    verify_gate(upstream_gate)
+    if (
+        upstream_gate.get("status") != UPSTREAM_DATA_READY_STATUS
+        or upstream_gate.get("training_allowed") is not False
+    ):
+        raise ValueError("surface frozen training requires an UPSTREAM_DATA_READY gate")
+    if upstream_gate.get("route") != "surface_only":
+        raise ValueError("surface frozen training requires the surface-only route")
+
+    ownership_sha = str(ownership_contract.get("ownership_contract_sha256", ""))
+    if len(ownership_sha) != 64:
+        raise ValueError("core ownership contract is unsigned")
+
+    if fullres_smoke.get("topology_policy", {}).get("mode") != "strict_fixed":
+        raise ValueError("the smoke must have run with frozen topology")
+    if int(fullres_smoke.get("factor", 0)) != 1:
+        raise ValueError("the smoke must have run at full resolution")
+    peak_bytes = int(fullres_smoke.get("peak_vram_bytes", 0))
+    if peak_bytes <= 0:
+        raise ValueError("the smoke must report a measured peak VRAM")
+    smoke_count = int(fullres_smoke.get("gaussian_count", 0))
+    if smoke_count != int(initialization_count):
+        raise ValueError(
+            "the smoke did not carry the same population the run will train"
+        )
+    if int(capacity_cap) < int(initialization_count):
+        raise ValueError(
+            "capacity cap is below the initialisation it must accommodate"
+        )
+
+    bindings = dict(upstream_gate.get("bindings", {}))
+    bindings["core_ownership_contract_sha256"] = ownership_sha
+    payload = copy.deepcopy(upstream_gate)
+    payload.pop("gate_manifest_sha256", None)
+    payload.update(
+        {
+            "status": SURFACE_FROZEN_TRAINING_READY_STATUS,
+            "training_allowed": True,
+            "topology_policy": "strict_fixed",
+            "authorized_scope": {
+                "growth_allowed": False,
+                "initialization_count": int(initialization_count),
+                "capacity_cap": int(capacity_cap),
+                "measured_peak_vram_bytes": peak_bytes,
+                "resolution_factor": 1,
+            },
+            "blocking_reasons": [],
             "bindings": bindings,
         }
     )
@@ -1862,6 +1945,11 @@ def verify_training_gate(
         }
         and bool(gate.get("training_allowed", False))
     )
+    surface_frozen_ready = (
+        gate.get("status") == SURFACE_FROZEN_TRAINING_READY_STATUS
+        and bool(gate.get("training_allowed", False))
+        and gate.get("authorized_scope", {}).get("growth_allowed") is False
+    )
     smoke_ready = (
         allow_implementation_smoke
         and gate.get("status") == UPSTREAM_DATA_READY_STATUS
@@ -1871,6 +1959,7 @@ def verify_training_gate(
         not implementation_ready
         and not fixed_topology_ready
         and not adaptive_growth_ready
+        and not surface_frozen_ready
         and not smoke_ready
     ):
         next_stage = gate.get("next_required_stage", "unknown")
