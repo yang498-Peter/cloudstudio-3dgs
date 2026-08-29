@@ -179,6 +179,76 @@ def bytes_per_pixel(resolution_level: int) -> float:
     raise ValueError(f"unsupported resolution level: {resolution_level}")
 
 
+@dataclass(frozen=True)
+class GaussianResidencyModel:
+    """Predict a tile's peak VRAM from the gaussians that stay resident.
+
+    Views do not stay resident: the face dataset opens one sample per item and
+    releases it, so the sum of a tile's view pixels never occupies memory at
+    once. What does occupy memory is the gaussian population - parameters,
+    Adam moments and gradients - plus a fixed rasterizer workspace.
+
+    Defaults come from this machine's own full-resolution runs:
+
+        0.971M gaussians -> 0.892 GiB
+        7.036M gaussians -> 2.903 GiB
+
+    which fit base 0.570 GiB and 0.332 GiB per million. Peak arrives during
+    refinement, where clone and split briefly hold old and new tensors
+    together, so the multiplier is applied on top of the steady-state slope.
+    """
+
+    base_gib: float = 0.570
+    gib_per_million: float = 0.332
+    lifecycle_multiplier: float = 3.0
+    growth_ratio: float = 3.2
+
+    def validate(self) -> None:
+        if self.base_gib < 0.0:
+            raise ValueError("base_gib must be non-negative")
+        if self.gib_per_million <= 0.0:
+            raise ValueError("gib_per_million must be positive")
+        if self.lifecycle_multiplier < 1.0:
+            raise ValueError("lifecycle_multiplier must be at least one")
+        if self.growth_ratio < 1.0:
+            raise ValueError("growth_ratio must be at least one")
+
+    @property
+    def gib_per_million_peak(self) -> float:
+        return self.lifecycle_multiplier * self.gib_per_million
+
+    def peak_gib(self, anchor_count: int) -> float:
+        """Predicted peak for a tile seeded with ``anchor_count`` anchors."""
+        projected_millions = anchor_count * self.growth_ratio / 1e6
+        return self.base_gib + self.gib_per_million_peak * projected_millions
+
+    def anchor_capacity(self, budget_gib: float) -> int:
+        """Largest anchor count whose projected growth still fits the budget."""
+        usable = float(budget_gib) - self.base_gib
+        if usable <= 0.0:
+            return 0
+        millions = usable / self.gib_per_million_peak
+        return int(millions * 1e6 / self.growth_ratio)
+
+    def gaussian_cap(self, budget_gib: float) -> int:
+        """Absolute gaussian cap to hand the trainer so the budget is binding."""
+        usable = float(budget_gib) - self.base_gib
+        if usable <= 0.0:
+            return 0
+        return int(usable / self.gib_per_million_peak * 1e6)
+
+    def to_dict(self) -> dict[str, Any]:
+        self.validate()
+        return {
+            "base_gib": self.base_gib,
+            "gib_per_million": self.gib_per_million,
+            "lifecycle_multiplier": self.lifecycle_multiplier,
+            "growth_ratio": self.growth_ratio,
+            "gib_per_million_peak": self.gib_per_million_peak,
+            "calibration": "full-resolution runs on this machine, frozen topology",
+        }
+
+
 def startup_budget_gib(
     *,
     gpu0_available_gib: float | None,
@@ -199,7 +269,7 @@ def startup_budget_gib(
         "system_available_gib": float(system_available_gib),
         "ceiling_gib": float(ceiling_gib),
         "gpu_query_fallback": gpu0_available_gib is None,
-        "formula": "min(gpu0_available_if_known, 12_GiB, system_available)",
+        "formula": "min(gpu0_available_if_known, ceiling_gib, system_available)",
     }
 
 
@@ -375,6 +445,8 @@ def _build_tree(
     budget_bytes: float | None,
     force_depth: int | None,
     depth: int = 0,
+    residency: "GaussianResidencyModel | None" = None,
+    budget_gib: float | None = None,
 ) -> _Node:
     split_selected = _point_mask(split_table.points, box)
     cost_selected = _point_mask(cost_table.points, box)
@@ -382,17 +454,32 @@ def _build_tree(
     anchors = int(np.count_nonzero(split_selected))
     low_support = anchors < config.minimum_anchor_count and pixels < config.minimum_pixel_load
     node = _Node(box, depth, pixels, anchors, image_count, low_support)
-    raw_bytes = pixels * bytes_per_pixel(config.resolution_level)
     split_for_depth = force_depth is not None and depth < force_depth
-    split_for_budget = budget_bytes is not None and raw_bytes * config.split_estimate_multiplier > budget_bytes
+    if residency is not None and budget_gib is not None:
+        # Splitting is not free: every extra cut widens the halo, and a view
+        # inside two tiles is trained twice. Cut only while the population a
+        # tile would end up holding does not fit.
+        split_for_budget = residency.peak_gib(anchors) > float(budget_gib)
+    else:
+        raw_bytes = pixels * bytes_per_pixel(config.resolution_level)
+        split_for_budget = (
+            budget_bytes is not None
+            and raw_bytes * config.split_estimate_multiplier > budget_bytes
+        )
     if low_support or depth >= config.maximum_depth or not (split_for_depth or split_for_budget):
         return node
     split = _choose_split(split_table, split_selected, box, config)
     left_box, right_box = box.split(split["axis_index"], split["value"])
     node.split = split
     node.children = (
-        _build_tree(split_table, cost_table, left_box, config, budget_bytes, force_depth, depth + 1),
-        _build_tree(split_table, cost_table, right_box, config, budget_bytes, force_depth, depth + 1),
+        _build_tree(
+            split_table, cost_table, left_box, config, budget_bytes, force_depth,
+            depth + 1, residency, budget_gib,
+        ),
+        _build_tree(
+            split_table, cost_table, right_box, config, budget_bytes, force_depth,
+            depth + 1, residency, budget_gib,
+        ),
     )
     return node
 
@@ -448,11 +535,16 @@ def build_adaptive_tile_plan(
     force_depth: int | None = None,
     config: AdaptiveTilingConfig = AdaptiveTilingConfig(),
     source_bindings: Mapping[str, str] | None = None,
+    residency: GaussianResidencyModel | None = None,
 ) -> dict[str, Any]:
     """Build and sign one serial-training tile plan.
 
     ``force_depth`` is an explicit reproduction/test mode.  Production callers
     normally pass only the measured startup ``budget_gib``.
+
+    With ``residency`` the cut criterion is the population a tile would hold
+    rather than the sum of its view pixels, and the plan reports what the extra
+    cuts cost in repeated views.
     """
 
     config.validate()
@@ -484,6 +576,8 @@ def build_adaptive_tile_plan(
         config,
         None if budget_gib is None else budget_gib * GIB,
         force_depth,
+        residency=residency,
+        budget_gib=None if residency is None else budget_gib,
     )
     leaf_rows = []
     for index, leaf in enumerate(_leaves(tree)):
@@ -491,20 +585,24 @@ def build_adaptive_tile_plan(
         pixels, view_count, rectangles = _rectangle_summary(
             cost_table, selected, config, include_rectangles=True
         )
-        leaf_rows.append(
-            {
-                "tile_id": index,
-                "name": f"Tile_{index}",
-                "core_box": leaf.box.to_list(),
-                "training_and_export_box": leaf.box.expanded(config.spatial_halo_fraction_per_side).to_list(),
-                "anchor_count": leaf.anchors,
-                "pixel_load": pixels,
-                "valid_view_count": view_count,
-                "estimated_memory_gib": pixels * bytes_per_pixel(config.resolution_level) / GIB,
-                "low_support_discarded": leaf.low_support,
-                "views": rectangles,
-            }
-        )
+        row = {
+            "tile_id": index,
+            "name": f"Tile_{index}",
+            "core_box": leaf.box.to_list(),
+            "training_and_export_box": leaf.box.expanded(config.spatial_halo_fraction_per_side).to_list(),
+            "anchor_count": leaf.anchors,
+            "pixel_load": pixels,
+            "valid_view_count": view_count,
+            "estimated_memory_gib": pixels * bytes_per_pixel(config.resolution_level) / GIB,
+            "low_support_discarded": leaf.low_support,
+            "views": rectangles,
+        }
+        if residency is not None:
+            # A prediction the trainer cannot exceed: the cap turns the budget
+            # into an enforced limit instead of a hope about how growth lands.
+            row["predicted_peak_gib"] = residency.peak_gib(leaf.anchors)
+            row["gaussian_capacity_cap"] = residency.gaussian_cap(budget_gib)
+        leaf_rows.append(row)
     payload: dict[str, Any] = {
         "schema_version": TILE_PLAN_SCHEMA_VERSION,
         "kind": TILE_PLAN_KIND,
@@ -537,6 +635,26 @@ def build_adaptive_tile_plan(
         "retained_tile_count": sum(not row["low_support_discarded"] for row in leaf_rows),
         "tiles": leaf_rows,
     }
+    if residency is not None:
+        retained = [row for row in leaf_rows if not row["low_support_discarded"]]
+        instances = sum(int(row["valid_view_count"]) for row in retained)
+        unique = len(
+            {int(view["image_index"]) for row in retained for view in row["views"]
+             if "image_index" in view}
+        )
+        payload["residency_model"] = residency.to_dict()
+        payload["split_cost"] = {
+            "view_instances": instances,
+            "unique_views": unique,
+            # Every cut widens the halo, and a view landing in two tiles is
+            # trained in both. This is the price of splitting, stated instead
+            # of hidden in the tile count.
+            "halo_overlap_factor": (instances / unique) if unique else None,
+            "predicted_peak_gib_max": max(
+                (row["predicted_peak_gib"] for row in retained), default=None
+            ),
+            "budget_gib": budget_gib,
+        }
     payload["tile_plan_manifest_sha256"] = hashlib.sha256(
         canonical_json_bytes(payload)
     ).hexdigest()
