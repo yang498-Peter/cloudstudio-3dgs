@@ -35,6 +35,79 @@ def _atomic_json(path: Path, value: dict) -> None:
     write_json(path, value)
 
 
+def _select_offset(
+    results: list[dict], baseline: dict, alpha: float
+) -> tuple[dict, dict]:
+    """Adopt a non-zero offset only when it beats zero by a real margin.
+
+    Every offset renders the same rig frames, so the comparison against zero is
+    paired per frame. Taking the argmax of the mean alone adopts whichever
+    offset noise happens to favour, which on a flat sweep is a coin toss; a
+    paired test asks the question the audit actually cares about, namely whether
+    the timestamps are systematically wrong.
+    """
+    import numpy as np
+    from scipy import stats
+
+    base_by_image = {item["image_id"]: item["psnr_db"] for item in baseline["frames"]}
+    candidates = []
+    for item in results:
+        if item["offset_ms"] == 0.0:
+            continue
+        paired = [
+            (frame["psnr_db"], base_by_image[frame["image_id"]])
+            for frame in item["frames"]
+            if frame["image_id"] in base_by_image
+        ]
+        if len(paired) < 3:
+            continue
+        shifted = np.array([value for value, _ in paired], dtype=np.float64)
+        zero = np.array([value for _, value in paired], dtype=np.float64)
+        delta = shifted - zero
+        if float(delta.std()) == 0.0:
+            # A constant shift has no variance for the t statistic to divide
+            # by. Zero spread around a non-zero mean is the most consistent
+            # evidence there is, not the least, so decide it by its sign.
+            p_value = 1.0 if float(delta.mean()) == 0.0 else 0.0
+        else:
+            p_value = float(stats.ttest_rel(shifted, zero).pvalue)
+        candidates.append(
+            {
+                "offset_ms": item["offset_ms"],
+                "paired_frames": len(paired),
+                "mean_psnr_delta_db": float(delta.mean()),
+                "p_value": p_value,
+                "significant": bool(p_value < alpha and delta.mean() > 0.0),
+            }
+        )
+
+    leader = max(candidates, key=lambda c: c["mean_psnr_delta_db"], default=None)
+    adopted = baseline
+    reason = "no non-zero offset was measured"
+    if leader is not None:
+        if leader["significant"]:
+            adopted = next(
+                item for item in results if item["offset_ms"] == leader["offset_ms"]
+            )
+            reason = (
+                f"offset {leader['offset_ms']} ms improves PSNR by "
+                f"{leader['mean_psnr_delta_db']:.6f} dB with p={leader['p_value']:.4f}"
+            )
+        else:
+            reason = (
+                f"best candidate {leader['offset_ms']} ms gains only "
+                f"{leader['mean_psnr_delta_db']:.6f} dB at p={leader['p_value']:.4f}, "
+                f"which does not clear alpha={alpha}; keeping 0 ms"
+            )
+    selection = {
+        "rule": "paired_t_test_against_zero",
+        "significance_alpha": alpha,
+        "candidates": candidates,
+        "reason": reason,
+    }
+    return adopted, selection
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--config", required=True, type=Path)
@@ -44,7 +117,46 @@ def main() -> int:
     parser.add_argument("--factor", type=int, default=4, choices=(1, 2, 4))
     parser.add_argument("--maximum-rig-frames", type=int, default=8)
     parser.add_argument("--output", required=True, type=Path)
+    parser.add_argument(
+        "--significance-alpha",
+        type=float,
+        default=0.05,
+        help="a non-zero offset is adopted only below this paired-test p-value",
+    )
+    parser.add_argument(
+        "--reanalyze",
+        type=Path,
+        help=(
+            "recompute the selection from an existing report's per-frame "
+            "measurements instead of re-rendering"
+        ),
+    )
     args = parser.parse_args()
+    if args.reanalyze is not None:
+        source = json.loads(args.reanalyze.read_text(encoding="utf-8"))
+        results = source["results"]
+        baseline = next(
+            (item for item in results if item["offset_ms"] == 0.0), None
+        )
+        if baseline is None:
+            raise ValueError("source report has no 0 ms offset")
+        best, selection = _select_offset(results, baseline, args.significance_alpha)
+        report = dict(source)
+        report["best_offset_ms"] = best["offset_ms"]
+        report["best_psnr_improvement_db"] = float(
+            best["psnr_db_mean"] - baseline["psnr_db_mean"]
+        )
+        report["best_ssim_change"] = float(
+            best["ssim_mean"] - baseline["ssim_mean"]
+        )
+        report["selection"] = selection
+        report["reanalyzed_from"] = str(args.reanalyze.resolve())
+        _atomic_json(args.output, report)
+        print(
+            f"best_offset_ms={report['best_offset_ms']:.3f} "
+            f"({selection['reason']}) -> {args.output}"
+        )
+        return 0
     if args.maximum_rig_frames <= 0:
         parser.error("--maximum-rig-frames must be positive")
 
@@ -133,7 +245,7 @@ def main() -> int:
     baseline = next((item for item in results if item["offset_ms"] == 0.0), None)
     if baseline is None:
         raise ValueError("offset sweep must include 0 ms")
-    best = max(results, key=lambda item: item["psnr_db_mean"])
+    best, selection = _select_offset(results, baseline, args.significance_alpha)
     report = {
         "schema_version": "camera-time-sync-render-sweep-1.0",
         "config": str(args.config.resolve()),
@@ -150,6 +262,7 @@ def main() -> int:
             best["psnr_db_mean"] - baseline["psnr_db_mean"]
         ),
         "best_ssim_change": float(best["ssim_mean"] - baseline["ssim_mean"]),
+        "selection": selection,
     }
     _atomic_json(args.output, report)
     print(
