@@ -24,6 +24,7 @@ class GeometryRegularizationConfig:
     screen_clip_hardness: float = 1.5
     screen_clip_opacity_bump: float = 3.0
     max_world_size_m: float | None = None
+    world_shrink_factor: float | None = None
 
     def validate(self) -> None:
         weights = (
@@ -51,6 +52,13 @@ class GeometryRegularizationConfig:
             raise ValueError("screen_clip_opacity_bump must be non-negative")
         if self.max_world_size_m is not None and self.max_world_size_m <= 0.0:
             raise ValueError("max_world_size_m must be positive")
+        if self.world_shrink_factor is not None:
+            if not 0.0 < self.world_shrink_factor < 1.0:
+                raise ValueError("world_shrink_factor must be within (0, 1)")
+            if self.max_world_size_m is None:
+                raise ValueError(
+                    "world_shrink_factor requires max_world_size_m as its trigger"
+                )
 
     def to_dict(self) -> dict[str, Any]:
         self.validate()
@@ -66,6 +74,7 @@ class GeometryRegularizationConfig:
             "screen_clip_hardness": self.screen_clip_hardness,
             "screen_clip_opacity_bump": self.screen_clip_opacity_bump,
             "max_world_size_m": self.max_world_size_m,
+            "world_shrink_factor": self.world_shrink_factor,
         }
         if self.opacity_sparsity_scope != "all":
             result["opacity_sparsity_scope"] = self.opacity_sparsity_scope
@@ -234,5 +243,19 @@ def clip_oversized_gaussians(
             bound = math.log(config.max_world_size_m)
             over = params["scales"] > bound
             report["world_clamped_count"] = int(over.any(dim=1).sum())
-            params["scales"].clamp_(max=bound)
+            if config.world_shrink_factor is None:
+                params["scales"].clamp_(max=bound)
+            else:
+                # Per-axis clamping flattens the two long axes of an oversized
+                # splat into each other, destroying the anisotropy the shape
+                # regularizers are building. Scaling every axis of the offending
+                # splat by a constant keeps its aspect ratio and walks it under
+                # the bound over successive steps instead of snapping it.
+                selected = over.any(dim=1)
+                shrunk = int(selected.sum())
+                if shrunk:
+                    params["scales"][selected] += math.log(
+                        config.world_shrink_factor
+                    )
+                report["world_shrunk_count"] = shrunk
     return report
