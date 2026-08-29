@@ -15,7 +15,7 @@
 | 竞品表面高斯数 | `6,018,902` | **`22,452,075`**（`USAgs.ply` 头部 `element vertex`） | 容量基线差 **3.7×**；旧数字来自某个 level-0 分块而非完整交付件 |
 | 竞品天空 | "独立训练 100k **SH1**" | **SH0**，`f_rest` 属性数 = 0，点数恰为 `100,000` | 我方"必须先实现 SH1 天空训练器"的阻塞项前提不成立 |
 | 表面 SH | "参数结构 degree 1，终态 DC-only，训练期是否活跃未知" | 交付 PLY **无任何 `f_rest` 属性** | 见 §2 的完整裁决 |
-| clone/split 尺度分界 | `0.2` | **`0.15`**（硬编码 f64 @0x349940，asm 0xcea95） | 我方分界偏大，同等梯度下更少点被 split |
+| clone/split 尺度分界 | `0.2` | **`0.01`**（params ctor 立即数 @偏移 0x38，见 §12） | 首轮误记为 0.15，已在 §12 用构造函数反汇编纠正；0.01 是 percent-dense 风格阈值 |
 
 `USAgs.ply` 与 `sky.ply` 均为 14 个 float 属性：`x y z f_dc_0..2 opacity scale_0..2 rot_0..3`（无法线）。我方导出为 17 属性（多 `nx ny nz`）。**跨文件统计务必按实际属性数解析，不能写死 stride**——本次审计初版即因写死 14 而读错列，得出"我方最长轴 1.59 m"的伪结论，改正后为 12.8 mm。
 
@@ -68,9 +68,9 @@
 
 - `model+0xe8`（i32）= **绝对最大高斯数上限**，门控 `if (count >= cap) skip`（asm 0xce47b）。**不存在 `cap = C × initial_count` 的倍率形式**——我方文档里的"cap 倍率 C"是个不存在的概念，对齐时应匹配绝对上限。
 - `model+0x100`（i32）= 致密化间隔（`iter % interval`）
-- `model+0x11c`（f32）= 致密化梯度阈值 —— **`NOT RECOVERABLE`，宿主提供**。这反过来证实我方"必须现场按梯度分位定标"的做法是唯一正确路径（V42a 实测 P50/P95/P99 = 2.11e-5 / 7.71e-5 / 1.50e-4，据此定标 7.5e-5）。
-- clone/split 分界 **0.15**（硬编码），split 子点 scale **÷1.6**，子点数推断为 2
-- 裁剪阈值为字段 `[0x124/0x128/0x130]`，其缩放与加倍规则见 §5.1（**首轮报告的映射有误，已独立复核更正**）
+- 致密化梯度阈值 **默认 0.0002**（params ctor 偏移 0x34，见 §12）。宿主可覆盖；仍建议按本场景梯度分位定标（V42a 实测 P50/P95/P99 = 2.11e-5 / 7.71e-5 / 1.50e-4）。
+- clone/split 分界 **0.01**（params ctor 偏移 0x38，见 §12，**首轮误记 0.15 已纠正**），split 子点 scale **÷1.6**，子点数 2
+- 裁剪阈值为字段 `[0x124/0x128/0x130]`，其缩放规则见 §5.1；物理量与语义已由外部 RE 报告解出（见 §12）
 - 冗余裁剪分位 0.9999；梯度 epsilon 1e-8；初始 scale 0.1；SH degree 钳位 0–3
 - MCMC 路径独立存在（`AddNewGS` 里 `mulsd 1.05` = 每次 refine +5%）
 
@@ -80,9 +80,9 @@
 iter % interval != 0            -> return
 平均梯度
 若启用 且 count < cap:
-    Split   (scale > 0.15, 子点 ÷1.6)
-    Clone   (scale <= 0.15)
-OpacityCull
+    Split   (scale > 0.01, 子点 ÷1.6)   # 0.01 见 §12
+    Clone   (scale <= 0.01)
+OpacityCull   # 本轮无 split/clone 时阈值放宽, 见 §5.1
 可选 RedundancyCull
 ```
 
@@ -126,11 +126,13 @@ OpacityCull
 
 另需注意 `0xcf2e2–0xcf2ea` 在传参前对三个寄存器做了重排，callee 收到的顺序与加载顺序不同。
 
-同时核实的常量：`0x349920` = f32 `0.25`；`0x34995c` = f32 `5.0`；`0x349940` = f64 `0.15`（clone/split 分界）；`0x349948` = **f32** `1.6`（split 除数，首轮记为 f64）；`0x349950` = f64 `1.05`（MCMC 增长）；`0x349958` = f32 `3.0`。
+同时核实的常量：`0x349920` = f32 `0.25`；`0x34995c` = f32 `5.0`；`0x349948` = **f32** `1.6`（split 除数）；`0x349950` = f64 `1.05`（MCMC 增长）；`0x349958` = f32 `3.0`。（注：`0x349940` = f64 `0.15` 存在，但**不是** clone/split 分界——真正的分界是 params 偏移 0x38 = 0.01，见 §12。首轮把这个无关 f64 误当分界。）
 
-**仍未确定**：`0x124/0x128/0x130` 各自对应哪个物理量（透明度 / 屏幕半径 / 世界尺度），以及 `r15b` 区分的是哪两类步。在这两点确定前**不得**把该机制并入训练器——知道乘数而不知道乘在什么上，等于没有。
+**物理量与语义已确定（外部 RE 报告 + §12 交叉验证）**：`0x128` = opacity 阈值（×0.25）、`0x124` = 世界尺度阈值（×5.0）、`0x130` = 屏幕统计阈值（×5.0）；`r15b` = "本轮 clone+split 是否为 0"。
 
-**方法论记录**：这条结论从"单次报告"到"可用证据"的差别，恰好体现在一处会导致错误实现的映射错位上。任何来自单次反汇编的数值，实施前必须独立复核。
+**语义纠正**：这个分支不是崩塌元凶，而是**安全阀**——当本轮没有新生高斯时，把三个 cull 阈值放宽（opacity 门降低、尺度/屏幕门升高），即**少删点**，避免"不补新点却继续删"。我原先怀疑它是 V33a/V40 裁剪崩塌的成因，方向正好相反。另有一处我方独立发现、外部报告未覆盖：opacity 阈值 `0x128` 在训练前半段（step < 总数/2）额外 ×2，即早期 opacity 裁剪更激进。
+
+**方法论记录**：0x38=0.01 与首轮 0.15 的冲突，是**第二次**单次反汇编结论被独立复核推翻（第一次是裁剪系数错位）。任何来自单次静态分析的数值/映射，实施前必须自己复核。
 
 ## 6. 竞品实际消费的监督信号
 
@@ -218,9 +220,70 @@ seg map 由外部预计算，经 `Catalog::GetUndistortSegMapPath(unsigned int i
 1. **容量目标从"匹配 6.0M"改为"匹配 22.4M"**。这是最大的单点差距，且直接对应用户的画质反馈。
 2. **薄片形态是第一优先级**：最短轴中位 5.0 mm → 目标 0.43 mm，轴比 2.3 → 10.2。竞品有专门的 `GetScaleRatioLoss`，我方 V48b 已验证该方向安全（覆盖不降）但强度远不够。
 3. **生命周期顺序对齐两处**：Split 先于 Clone；生命周期先于 Adam。
-4. **clone/split 分界 0.2 → 0.15**。
-5. **裁剪阈值的分步缩放与前半段加倍**是我方从未实现的机制，仍是 V33a/V40 系列"裁剪要么崩塌要么无效"的头号候选解释。精确语义见 §5.1（已复核，含首轮报告的三处更正）。**但在确定 `0x124/0x128/0x130` 各自对应哪个物理量之前不得实施**——乘数已知、被乘数未知。
+4. **clone/split 分界用 0.01 的 percent-dense 约定**（不是我此前误记的 0.15）；big-scale 阈值 0.2。
+5. **实现 `ShrinkBigScaleGS`（新，高优先级）**：每个优化器 step 后，对最大轴 > 0.2m 的高斯三轴 ×0.8（递归收缩，非硬 clamp）。这是竞品从未在我方复现的抗巨型高斯安全阀，**直接打击我方 762m 包围盒里的离群漂浮**。精确逻辑见 §12。
+6. **裁剪安全阀（语义已定，可实施）**：本轮无 split/clone 时放宽三个 cull 阈值（opacity ×0.25、space ×5、screen ×5），少删点。这是防崩塌机制,不是崩塌成因（此前假设已纠正,见 §5.1）。
 6. **天空按 100k / SH0 / 各向同性 / opacity P50 0.10 复刻**，独立导出。
 7. DA2 与 mesh 深度在竞品是**在用**的；我方权重 0 的决策基于"LiDAR 是更强真值"这一自有理由，可保留，但不能再写成"竞品也不用"。
 8. 我方交付件的离群漂浮物需在导出前按场景 ROI 裁剪（竞品包围盒紧致，且流程里有显式 `Cut(AlignedBox, SceneROI, margin)`）。
-9. **外观模型要么补齐要么明说不补**：若要对齐，需实现 `[N,12,8,16,16]` 逐相机网格 + 单位初始化 + 三线性切片 + TV 损失 + 独立 Adam(lr 2e-3)；PPISP 无法表达 guidance 相关的空间变化校正。这一项影响的是跨相机色彩一致性，不直接影响锐度，优先级低于 §11.1–2。
+9. **外观模型要么补齐要么明说不补**：若要对齐，需实现 `[N,12,8,16,16]` 逐相机网格 + 单位初始化 + 三线性切片 + TV 损失 + 独立 Adam(lr 2e-3)；PPISP 无法表达 guidance 相关的空间变化校正。这一项影响的是跨相机色彩一致性，不直接影响锐度，优先级低于 §11.1–2。竞品另有更轻的一层 `ApplyColorHarmonization`：逐相机 `exp(g_c)·I + b_c`（g,b 初始 0，独立 Adam lr 0.001）——比双边网格便宜得多，可先上这层。
+
+## 12. 完整参数默认表（外部 RE 报告 + 本机构造函数反汇编交叉验证，2026-08-30）
+
+用户提供了两份更深入的外部逆向文档（`gaussian_splat_reverse_engineering.md`、`gaussian_splat_reconstructed_pseudocode.cpp`）。经核对，它们描述的二进制 **SHA-256 与本机对象逐位相同**（`a910b39d…`），因此其地址、偏移、常量全部适用。我用 capstone 独立反汇编了 `GaussianSplatTrainingParams` 构造函数（`0x1800a3630`）的立即数写入，与外部报告**逐项吻合**。以下为构造函数直接写入的默认值（[P] 级）：
+
+| 偏移 | 默认值 | 语义 |
+|---|---:|---|
+| 0x20 | **0.2** | SSIM lambda → RGB = **0.8·L1 + 0.2·(1−SSIM)** |
+| 0x24 | 100 | refine 间隔 |
+| 0x28 | 500 | refine 起始 step |
+| 0x30 | 30 | 每 30 个 refine 周期做一次 opacity reset（=每 3000 步） |
+| 0x34 | **0.0002** | 致密化 2D 梯度阈值 |
+| 0x38 | **0.01** | clone/split 尺度阈值（percent-dense 风格） |
+| 0x48 | 0.2 | 大高斯世界尺度阈值（ShrinkBigScaleGS + Cull 共用） |
+| 0x4c | 0.05 | opacity cull 阈值 |
+| 0x50 | 0.2 | opacity reset 上限 |
+| 0x54 | 0.1 | screen 统计 cull 阈值 |
+| 0x5c | 0.015 | 单视图法线一致性权重（planar，step≥3000 生效） |
+| 0xbc / 0xc0 | 1.6e-4 / 1.6e-6 | means LR / final LR |
+| 0xc4 | 5e-3 | scale LR |
+| 0xc8 | 1e-3 | quaternion LR |
+| 0xcc | 2.5e-3 | SH DC LR |
+| 0xd0 | 1.25e-4 | SH rest LR（=2.5e-3/20） |
+| 0xd4 | 5e-2 | opacity LR |
+| 0x10c/0x110/0x114 | 16/16/8 | 双边网格 X/Y/depth |
+| 0x118 | 0.002 | 双边网格 LR |
+
+**大量几何增强损失默认权重为 0**（depth、normal、sky、scale-thin、scale-ratio、opacity 正则、MCMC、SIFT、bilateral 全部默认关）。即 DLL 是"能力全集"，默认主线是标准 RGB 3DGS；竞品交付件的薄片形态/几何质量来自**上层项目配置打开这些项并给非零权重**，不是 DLL 默认。
+
+### 12.1 直接可用的机制（源码级还原，可照抄）
+
+- **单步主循环顺序**（[P]）：`GetMonoDepth → UpdateLR → ZeroGrad → forward/forward_planar → (bilateral) → RGB loss → 可选几何损失 → backward → AfterTrain/AfterTrainMCMC（生命周期）→ OptimizersStep → ShrinkBigScaleGS（每步）→ 可选 SIFT`。生命周期在 Adam **之前**，ShrinkBigScaleGS 在 Adam **之后每步必调**。
+
+- **`ShrinkBigScaleGS(threshold=0.2)`**（[P]，我方缺失）：
+  ```
+  s = exp(log_scales); mask = max(s,axis) > 0.2m; mask[:protected] = false
+  log_scales[mask] += log(0.8)   # 三轴一起 ×0.8，递归收缩非硬 clamp
+  ```
+  例：1.0m → 0.8 → 0.64 → … 直到 ≤0.2m。与 CullGS 的 0.2m 世界尺度删除构成**双层巨型高斯防护**。
+
+- **Scale 形态正则**（[P]，达成薄片/圆盘的关键）：按三轴升序 `s0≤s1≤s2`
+  - `GetScaleLoss = w·mean(s0)` —— 压最短轴 → 变薄
+  - `GetScaleMeanLoss = w·mean(s)` —— 控整体尺寸
+  - `GetScaleRatioLoss = w·mean((s2/(s1+1e-8) − 1)²)` —— 两大轴趋等 → 圆盘而非细椭
+  - thin + ratio 同开 ⇒ 薄圆盘。这正是竞品轴比 10.2 的来源，也是我方 V48b 方向对但强度不足的精确修法。
+
+- **无方向法线一致性**（[P]）：`GetNormalLoss` 先判 `N1·N2<0` 则翻转 N2，再取 L1；正反朝向不影响面匹配。
+
+- **opacity 二值化**（[P]）：`GetOpacityLoss = w·mean(exp(−(o−0.5)²/0.05))`，惩罚 o≈0.5，逼 opacity 向 0/1 两端。
+
+- **cull 安全阀**（[P]，见 §5.1）：本轮无 births → opacity 门 ×0.25、space/screen 门 ×5，少删点。
+
+- **MCMC 路径**（[P]，默认关）：51×51 二项表、relocation kernel、每次 refine +5% 增长（`floor(1.05·N)`，cap 默认 INT_MAX）、noise_lr 5e5 各向异性位置噪声。默认走经典 clone/split/cull，MCMC 是可切换项。竞品交付件用的是经典路径。
+
+- **means LR schedule**（[P]）：`t=clamp(step/maxSteps,0,1)`，`LR=exp((1−t)·ln(1.6e-4)+t·ln(1.6e-6))`，log 空间指数插值。
+
+### 12.2 对我方 SOP 配方的两处修正
+
+1. **RGB 权重**：SOP §16 写的是 `0.6·L1 + 0.4·(1−SSIM)`，竞品默认是 **`0.8·L1 + 0.2·(1−SSIM)`**（lambda=0.2，[P]）。来源不同，需以 A/B 定夺；至少不应把 0.6/0.4 当成"复刻竞品"。
+2. **clone/split 分界**：SOP/我此前口径 0.2 或 0.15 均不对，竞品是 **0.01**（percent-dense × 场景尺度约定）。
