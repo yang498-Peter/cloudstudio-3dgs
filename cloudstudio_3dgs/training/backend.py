@@ -17,6 +17,31 @@ from cloudstudio_3dgs.training.runtime_evidence import (
 )
 
 
+def rendered_range_to_euclidean(
+    torch_module: Any,
+    rendered_range: Any,
+    sample: Any,
+    render_info: dict[str, Any] | None,
+) -> Any:
+    """Convert classic pinhole z-depth to the LiDAR ray-range contract."""
+
+    if rendered_range is None:
+        return None
+    semantics = (
+        render_info.get("cloudstudio_range_semantics")
+        if isinstance(render_info, dict)
+        else None
+    )
+    depth_scale = getattr(sample, "depth_to_range_scale", None)
+    if depth_scale is None or semantics == "euclidean_ray_range_m":
+        return rendered_range
+    return rendered_range * torch_module.as_tensor(
+        depth_scale,
+        dtype=rendered_range.dtype,
+        device=rendered_range.device,
+    )
+
+
 def verify_gsplat_runtime(lock_path: Path) -> dict[str, Any]:
     """Require the locked version and, for VCS installs, the exact clean commit."""
     lock = json.loads(Path(lock_path).read_text(encoding="utf-8"))

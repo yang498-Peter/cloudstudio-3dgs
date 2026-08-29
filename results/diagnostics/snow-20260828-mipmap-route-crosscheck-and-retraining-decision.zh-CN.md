@@ -128,3 +128,55 @@ step 502 原鱼眼验证为 PSNR `6.9918 dB`、SSIM `0.45841`、alpha 均值 `0.
 实验只做 Tile_1：A0 固定拓扑和 V34a step 1002 直接复用，不重复消耗 GPU；V35a 从相同初始化独立跑到 step 1002，只新增上述屏幕足迹条件 split/cull priority，其他 loss、PPISP、LiDAR 守卫和 observation-aware cull 均保持不变。只有 V35a 同时满足墙体/远树/雪面 alpha 不低于 V34a、LiDAR 距离 P95 不超过 `1 cm`、无 `>0.3 m` 漂移点、投影足迹 `>5 px` 比例明显下降、固定 ROI 清晰度和 SSIM 不退化，才允许继续 2618。竞品的 opacity-mean `0.01` 不在 V35a 同时开启；我方缺少竞品 DA2/mesh 的同等有效监督，直接把当前 `1e-4` 放大 100 倍会把锐化与容量稀疏化混为一个变量，并可能重新造成墙体透明。若 V35a 锐化通过但低贡献雾点仍高，再用独立 V35b 单变量短臂定标 opacity-mean。
 
 当前状态为 `V35_SCREEN_DETAIL_ARM_IMPLEMENTED_NOT_RUN`。代码门禁和相关回归已通过，尚未启动训练、未生成新的 PLY，也未把该增强宣称为竞品原样行为。
+
+## 9. V35–V38 复盘与竞品语义重新收敛（2026-08-29）
+
+问题现象：V35 的普通 projected-gradient 只得到弱纹理趋势；V36a 删除过强，V36b 虽把 Tile_1 短程 PSNR 提到 `7.047 dB`，但纹理—密度相关仅 `rho=0.0037`，opacity 中位数只有 `0.0368`，约 `72.7%` 高斯低于 `0.1`，真实渲染 alpha 仍低。V37a 的比例式压平将可见短轴中位数从约 `3.49 mm` 降到 `2.75 mm`、轴比从约 `2.14` 提到 `2.82`，证明形状损失有效，但没有解决透明和容量重分配。随后准备的 V38a 叠加 LiDAR alpha 目标与 2 cm 局部累计 alpha 保护，仍是在自定义世界体素中代理真实渲染覆盖，不能视为竞品机制。
+
+复盘确认的根因：当前 Trainer 顺序为 `backward -> Gaussian Adam step -> Split/Clone/Cull`，竞品静态审计恢复的是 `backward -> Split/Clone/Cull -> Gaussian Adam step`；当前 V36/V37 还启用了竞品没有证据支持的 LiDAR 硬出生守卫、局部 Cull 保护、单轮删除上限、detail split、薄盘目标，并使用 `revised_opacity=true`，而竞品 Split 子点直接重复父 opacity。现有 PPISP 也不是竞品 `[N_camera,12,8,16,16]` BilateralGrid；DA2、mesh depth/normal 与 SIFT 仍未形成等价消费闭环。因此同名 `1.5e-4` 梯度阈值不能被宣称为等价定标。
+
+修改文件：`cloudstudio_3dgs/training/default_strategy_adapter.py`、`cloudstudio_3dgs/training/lidar_normals.py`、`cloudstudio_3dgs/training/trainer.py`、`cloudstudio_3dgs/pipeline/mipmap_gate.py`、`tools/build_v26a_boundary_gate.py`、`tools/promote_v26a_evaluation.py` 及对应测试。上述代码保留为可关闭的研究能力；LiDAR alpha 和局部累计 alpha 不进入下一条竞品语义主臂。
+
+验证与停止证据：定向回归为 `143 passed, 1 deselected`；排除项只依赖当前未加载的 3DGUT 栅格器，不是本轮回归失败。V38a 在约 step 240 被强制终止，尚未到 step 500 首次拓扑事件，只有监控日志，不构成有效实验、checkpoint 或晋级证据。
+
+优化决策：下一版先实现并单测签名的 `pre_optimizer` lifecycle；必须显式处理拓扑变换后的参数梯度与 Adam state，不能简单移动函数调用导致当前步梯度丢失。同时按竞品顺序执行 `Split -> Clone -> Cull -> Reset`，关闭 `revised_opacity` 和所有 CloudStudio Cull/alpha/薄盘补丁，形成厂商语义臂。BilateralGrid、dense mesh/normal、DA2 分别作为后续正交 A/B，不与生命周期时序修复同轮加入；其中 DA2 仍保持可选，不能因竞品使用就覆盖 LiDAR 权威几何。
+
+当前状态：`V38A_ABORTED_VENDOR_SEMANTICS_REWORK_REQUIRED`。禁止继续 V36/V37/V38 长训，下一步先完成 CPU 梯度/optimizer-state 变换测试和 2-step GPU smoke，再跑 Tile_1 step 502；通过后只延长到能经历 reset 后下一次 Cull 的短 review，不直接进入全 Tile。
+
+## 10. V40–V46 生命周期定标结论（2026-08-29）
+
+用户对 V40a step 502 PLY 的视觉反馈是雪堆略透明、细节提升不明显。全 374 个 Tile_1 Face4 视图复核证明，问题不是“训练步数不够”：V40a step 502 为 PSNR `10.34543 dB`、alpha `0.57453`；V42b step 602 通过普通梯度阈值 `7.5e-5` 提升到 `10.42081 / 0.59933`，但同路线继续到 step 1002 后又明显下降。
+
+梯度和 Cull 遥测给出了可重复的原因。step 600 普通 projected-gradient 的 P50/P95/P99 为 `2.11e-5 / 7.71e-5 / 1.50e-4`，因此竞品阈值 `1.5e-4` 在我方 PPISP/LiDAR-only 环境只选择约最高 1% 父点；`7.5e-5` 才接近高纹理 5% 分位。另一方面，即使把 opacity sparsity 从 `0.01` 降为 `0.001`，使用 `0.04` Cull 的 V44a 到 step 1002 仍有 PSNR `9.54298`、alpha `0.58510`；完全关闭 opacity Cull、只保留 world/screen 异常删除的 V45a 也仅为 `9.64908 / 0.59199`。这说明 600 步后的损失来自持续 opacity/光度/拓扑联合优化，不只是 Cull 删除数量。
+
+当前通过的组合是 V45b step 602：从相同 V40a step 502 checkpoint 只再训练 100 步，使用普通梯度 `7.5e-5`、deferred reset、可见高斯 opacity sparsity `0.001`，关闭 opacity 阈值删除但保留 world/screen 尺度异常删除。step 600 clone `39,170`、split 父点 `87`、几何异常 cull `767`，事件后为 `863,951` 个高斯。374 视图指标为 PSNR `10.45167 dB`、alpha `0.60189`、alpha P05 `0.08731`、alpha 不足比例 `0.60039`，是当前同口径最优节点。
+
+screen-aware Split 没有通过。V46a 把同一批候选中的 split 父点从 `87` 提高到 `5,267`，总点数保持相同，但 PSNR/alpha 下降到 `10.27435 / 0.58494`；启用 revised opacity 的 V46b 进一步下降到 `10.17067 / 0.57562`。因此“大屏幕高斯直接 Split”会在当前阶段损坏覆盖，不能用作锐化捷径。
+
+V45b 完整 PLY 位于 `outputs/snow-20260224-full-20260825/v45_geometry_cull_only/training_tile1_v45b_growth7p5e5_geometrycull_opacity1e3_review602/exports/snow_tile1_v45b_step602_sh0_full.ply`，包含 `863,951` 个 SH0 Gaussian，大小 `58.7 MB`。最长轴 P50/P95 为 `7.4/18.0 mm`，最短轴 P50 为 `3.5 mm`，轴比 P50 为 `2.14`；可见高斯中仍有 `25.3%` 宽于 5 px。因此它是覆盖和短程视觉指标的当前最佳，不是最终竞品级薄盘终态。
+
+当前决策为 `V45B_STEP602_CURRENT_TILE1_CHAMPION_LONG_RUN_BLOCKED`：保留并导出 V45b，V44/V45a/V46 均只作为失败或诊断证据，不启动长跑和全 Tile。下一项研究只能单变量处理形状/光度，不得把 MCMC、DA2、天空、opacity Cull 和 screen-detail Split 同时重新加入。
+
+## 11. V47–V48 单变量覆盖与形状验证（2026-08-29）
+
+问题现象：V45b 在白背景上具有当前最佳短程指标，但白雪可通过降低 opacity 或缩小高斯足迹露出白背景来减小 RGB 误差，SuperSplat 的非白背景因此会暴露透明洞。原 Face4 验证又没有加载真实 LiDAR sidecar，不能量化 LiDAR 命中区域的 alpha。另一方面，现有高斯最短轴中位数约 `3.57 mm`、轴比约 `2.16`，仍显著厚于竞品薄盘，模糊和覆盖问题必须解耦处理。
+
+修改文件：`cloudstudio_3dgs/pipeline/mipmap_gate.py`、`cloudstudio_3dgs/training/checkpoint.py`、`cloudstudio_3dgs/training/ppisp.py`、`cloudstudio_3dgs/training/trainer.py`、`tools/build_v47_surface_alpha_probe.py`、`tools/build_v48_surface_shape_probe.py`、`tools/evaluate_checkpoint_validation.py`、`tools/promote_v26a_evaluation.py`、`tests/test_mipmap_gate.py`、`tests/test_training.py`。
+
+修改内容：Face4 验证正式消费配置绑定的稀疏 LiDAR range；短实验统一使用同一组确定性分层 48 视图，黑背景仅抽 8 视图，全 374 视图只留给晋级候选。V47 只训练 opacity 并冻结其余参数，用 dilate-3 的 LiDAR alpha 目标排除白背景捷径。V48 以 V47e step 652 为不可变起点，关闭后续 lifecycle，冻结点数、means、SH0、opacity 与 PPISP，只训练 scales/quats；比例压平仅作用于可信平面 LiDAR anchor，LiDAR alpha 继续维持真实表面覆盖。
+
+结果：V47e 的 48 视图 PSNR/alpha/LiDAR alpha 为 `10.3004/0.62386/0.95366`。V48a 的 `0.01` 压平权重只使轴比中位数到 `2.177`，信号太弱。V48b 将 scales/quats LR 定标为 `0.003/0.0005`，法线对齐和压平权重为 `0.1/0.1`，50 步后点数仍为 `863,951`，means、SH0、opacity、PPISP 均逐值不变；中位最短轴降到 `2.963 mm`、轴比升到 `2.599`。固定 48 视图 PSNR/alpha/LiDAR alpha 为 `10.5218/0.63623/0.95679`，黑背景 8 视图也从 V47e 的 `10.4260/0.57452/0.95542` 提升到 `10.5031/0.58502/0.95905`。说明提升来自高斯形状和投影覆盖，不是删点、降 opacity 或白背景作弊。
+
+当前判断：`V48B_NUMERIC_PASS_VISUAL_PENDING`。它已经优于 V47e 的覆盖和锐化代理，但中位轴比仍远低于竞品终态，且深度 MAE 随投影足迹变化轻微上升到 `0.5639 m`。在 SuperSplat 固定视角确认墙体、雪堆和远景没有新增孔洞前，不继续增加权重、不恢复 projected-gradient lifecycle，也不扩展全场。候选 PLY：`outputs/snow-20260224-full-20260825/v48_surface_shape/training_tile1_v48b_scalequat_strong_ratio0p15_review702/exports/snow_tile1_v48b_step702_shapeonly_sh0_full.ply`。
+
+## 12. V62 连续 LiDAR mesh 与 DA2 独立消费 A/B（2026-08-29）
+
+问题现象：V61 全场结果仍有透明墙面、地面空洞和接缝；既有 Trainer 只有约 3%–5% 像素的稀疏 LiDAR range，不能在 LiDAR 射线之间提供连续表面和法线监督。竞品审计确认其把逐视图 mesh depth、mesh normal 与经 mesh 鲁棒米制定标的 DA2 分成三路 loss，并按完整视图 epoch 分阶段启停，而不是融合成一张硬深度。
+
+修改文件：`cloudstudio_3dgs/data/mesh_geometry.py`、`cloudstudio_3dgs/training/dataset.py`、`cloudstudio_3dgs/training/face_dataset.py`、`cloudstudio_3dgs/training/trainer.py`、`cloudstudio_3dgs/training/mipmap_loss_schedule.py`、`tools/build_lidar_mesh_candidate.py`、`tools/rasterize_lidar_mesh_face4_probe.py`、`tools/build_da2_mesh_aligned_tile_manifest.py`、`tools/audit_mesh_cross_view_consistency.py`、`tools/build_v62_dense_geometry_smoke.py`、`tools/build_v62_dense_geometry_ab.py` 及对应测试。
+
+修改内容：Trainer 现可校验并独立加载签名的 `mesh_depth + mesh_normal + confidence + valid` sidecar；mesh depth 使用竞品恢复的远距离压缩函数，mesh normal 使用渲染深度重建法线的兼容代理并做半球对齐 L1。DA2、mesh depth、mesh normal 的 loss、有效权重和 mask 覆盖均进入运行遥测。竞品 `[5V,10V,5V]` schedule 保留 20 个完整 view epoch 门禁，同时允许配置权重对每一路进行缩放或关闭，使未经验证的 DA2 不会阻断已验证的 LiDAR mesh 主线。当前 Open3D BPA 只标记为候选连续表面算法，不能宣称是竞品未恢复的建网拓扑。
+
+Tile_1 使用 374 张全分辨率 Face4，固定 `971,903` 个高斯、相同 seed 和视图顺序完成 100-step A/B。对照臂 24 视图为 PSNR `11.2206 dB`、SSIM `0.559247`、LiDAR depth MAE/RMSE `4.139/12.038 cm`、alpha `0.641504`。三路从 step 1 满权重开启时，depth MAE 改善到 `3.403 cm`（`17.8%`），但 PSNR/SSIM 降到 `10.9886/0.554837`，alpha 降到 `0.625861`。关闭 DA2、只保留 mesh depth `0.5` 与 mesh normal `0.05` 后，depth MAE/RMSE 为 `3.675/11.147 cm`，相对对照改善 `11.2%/7.4%`；PSNR 仅变化 `-0.011 dB`、SSIM `-0.000313`、alpha `-0.002065`。加权 loss 审计证明退化主要由当前 DA2 `0.5` 主导，而不是 mesh depth。
+
+验证方式：mesh/DA2/调度/Trainer 定向回归 `71 passed`；四个 100-step 训练均完成且点数严格不变，峰值显存约 `2.06–2.40 GiB`；固定 24 视图按签名顺序完成 metrics-only 对照。当前状态为 `V62_MESH_ONLY_NUMERIC_PASS_DA2_BLOCKED`。mesh-only 可以接入后续固定拓扑分阶段主线；DA2 必须先补生产级跨视图一致性置信度、深度边界/遮挡门禁和失败视图剔除，不能直接以 `0.5` 晋级。正式长训和 adaptive Grow/Cull 仍未授权通过本轮短 A/B。

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Cut five trained snow Tiles to unique cores and merge one full-scene checkpoint."""
+"""Merge five trained snow Tiles using a signed core-only or halo policy."""
 
 from __future__ import annotations
 
@@ -86,6 +86,15 @@ def main() -> int:
     )
     parser.add_argument("--output-checkpoint", required=True, type=Path)
     parser.add_argument("--output-report", required=True, type=Path)
+    parser.add_argument(
+        "--merge-policy",
+        choices=("core_owner_only", "retain_full_halo"),
+        default="core_owner_only",
+        help=(
+            "core_owner_only keeps one hard owner per point; retain_full_halo "
+            "keeps every trained Tile row, matching the observed MipMap export policy"
+        ),
+    )
     parser.add_argument("--tolerance-m", type=float, default=1e-5)
     args = parser.parse_args()
 
@@ -143,7 +152,12 @@ def main() -> int:
         owners[inside_global] = assign_core_owners(
             means[inside_global], tiles, tolerance_m=args.tolerance_m
         )
-        keep = owners == tile_id
+        core_keep = owners == tile_id
+        keep = (
+            core_keep
+            if args.merge_policy == "core_owner_only"
+            else np.ones(len(means), dtype=bool)
+        )
         keep_tensor = torch.from_numpy(keep)
         for key in parameter_keys:
             value = params[key].detach().cpu()
@@ -158,15 +172,16 @@ def main() -> int:
                 "checkpoint_sha256": _sha256(checkpoint_path),
                 "completed_steps": int(payload.get("step", -1)),
                 "input_gaussian_count": int(len(means)),
-                "core_gaussian_count": int(np.count_nonzero(keep)),
-                "discarded_halo_or_outside_count": int(np.count_nonzero(~keep)),
-                "core_dead_opacity_below_0_005_count": int(
+                "core_gaussian_count": int(np.count_nonzero(core_keep)),
+                "retained_gaussian_count": int(np.count_nonzero(keep)),
+                "discarded_by_merge_policy_count": int(np.count_nonzero(~keep)),
+                "retained_dead_opacity_below_0_005_count": int(
                     torch.count_nonzero(opacity[keep_tensor] < 0.005).item()
                 ),
             }
         )
         completed_steps.append(int(payload.get("step", -1)))
-        del payload, params, means, owners, keep, keep_tensor, opacity
+        del payload, params, means, owners, core_keep, keep, keep_tensor, opacity
 
     assert parameter_keys is not None and first_identity is not None
     combined = {key: torch.cat(merged[key], dim=0) for key in parameter_keys}
@@ -174,15 +189,20 @@ def main() -> int:
     source_total = int(sum(record["input_gaussian_count"] for record in records))
     report = {
         "schema_version": 1,
-        "kind": "snow_v28_core_owner_checkpoint_merge_v1",
+        "kind": "snow_v28_tile_checkpoint_merge_v2",
         "status": "PASS",
+        "merge_policy": args.merge_policy,
         "tile_inputs_manifest_sha256": manifest_sha,
         "coordinate_transform_sha256": coordinate_sha,
         "tile_count": len(tiles),
         "source_gaussian_count": source_total,
-        "merged_core_gaussian_count": total,
-        "discarded_halo_or_outside_count": source_total - total,
-        "shared_boundary_rule": "minimum_tile_id",
+        "merged_gaussian_count": total,
+        "discarded_by_merge_policy_count": source_total - total,
+        "shared_boundary_rule": (
+            "minimum_tile_id"
+            if args.merge_policy == "core_owner_only"
+            else "retain_every_tile_training_and_export_halo_without_deduplication"
+        ),
         "records": records,
     }
     report["merge_report_sha256"] = hashlib.sha256(
@@ -191,7 +211,8 @@ def main() -> int:
     identity = copy.deepcopy(first_identity)
     identity.update(
         {
-            "kind": "snow_v28_merged_core_checkpoint",
+            "kind": "snow_v28_merged_tile_checkpoint_v2",
+            "merge_policy": args.merge_policy,
             "tile_inputs_manifest_sha256": manifest_sha,
             "merge_report_sha256": report["merge_report_sha256"],
             "source_tile_checkpoint_sha256": {
@@ -217,7 +238,8 @@ def main() -> int:
     ).hexdigest()
     _write_json(args.output_report, report)
     print(
-        f"merged {total}/{source_total} core-owned Gaussians -> {args.output_checkpoint}"
+        f"merged {total}/{source_total} Gaussians with {args.merge_policy} "
+        f"-> {args.output_checkpoint}"
     )
     return 0
 

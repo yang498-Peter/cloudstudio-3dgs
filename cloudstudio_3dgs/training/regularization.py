@@ -13,6 +13,7 @@ class GeometryRegularizationConfig:
 
     enabled: bool = True
     opacity_sparsity_weight: float = 1e-4
+    opacity_sparsity_scope: str = "all"
     scale_upper_weight: float = 1e-4
     scale_upper_tail_fraction: float = 1.0
     anisotropy_weight: float = 1e-4
@@ -32,6 +33,10 @@ class GeometryRegularizationConfig:
         )
         if any(float(value) < 0.0 for value in weights):
             raise ValueError("geometry regularization weights must be non-negative")
+        if self.opacity_sparsity_scope not in {"all", "visible_current_view"}:
+            raise ValueError(
+                "opacity_sparsity_scope must be 'all' or 'visible_current_view'"
+            )
         if not 0.0 < self.scale_upper_tail_fraction <= 1.0:
             raise ValueError("scale_upper_tail_fraction must be within (0, 1]")
         if self.max_scale_ratio_to_reference <= 1.0:
@@ -62,6 +67,8 @@ class GeometryRegularizationConfig:
             "screen_clip_opacity_bump": self.screen_clip_opacity_bump,
             "max_world_size_m": self.max_world_size_m,
         }
+        if self.opacity_sparsity_scope != "all":
+            result["opacity_sparsity_scope"] = self.opacity_sparsity_scope
         # Omit the compatibility value so existing Australian P5 contracts and
         # checkpoints remain byte-for-byte identifiable. Opt-in tail risk is
         # still explicit and signed.
@@ -75,6 +82,7 @@ def geometry_regularization_terms(
     *,
     reference_scale_m: float,
     config: GeometryRegularizationConfig,
+    visibility_mask: Any | None = None,
 ) -> dict[str, Any]:
     """Return differentiable, metric-space penalties and their weighted sum."""
     config.validate()
@@ -94,14 +102,43 @@ def geometry_regularization_terms(
     if not config.enabled:
         return {
             "opacity_sparsity": zero,
+            "opacity_sparsity_active_count": 0,
+            "opacity_sparsity_active_fraction": zero,
             "scale_upper": zero,
             "scale_over_limit_fraction": zero,
             "scale_upper_tail_count": 0,
             "anisotropy": zero,
             "total": zero,
         }
-    # Mean opacity pushes unsupported translucent fog toward MCMC's prune path.
-    opacity_sparsity = opacity.mean()
+    # Mean opacity pushes unsupported translucent fog toward the prune path.
+    # The recovered vendor route applies it to every active Gaussian.  That is
+    # a poor LiDAR-first warm-up when one cropped Tile view sees only a subset
+    # of a nearly one-point-per-return initialization: an invisible surface
+    # receives a negative opacity gradient on hundreds of unrelated views and
+    # no compensating RGB gradient.  The opt-in visible scope preserves the
+    # same loss on the current raster support while removing that sampling
+    # bias; it does not add an alpha target or protect any local voxel.
+    opacity_active_count = int(opacity.shape[0])
+    opacity_active_fraction = opacity.new_ones(())
+    if config.opacity_sparsity_scope == "visible_current_view":
+        if visibility_mask is None:
+            raise ValueError(
+                "visible_current_view opacity sparsity requires a visibility mask"
+            )
+        visible = torch.as_tensor(
+            visibility_mask,
+            dtype=torch.bool,
+            device=opacity.device,
+        ).reshape(-1)
+        if visible.shape != opacity.shape:
+            raise ValueError("visibility mask and opacity counts differ")
+        opacity_active_count = int(visible.sum().item())
+        opacity_active_fraction = visible.to(opacity.dtype).mean()
+        opacity_sparsity = (
+            opacity[visible].mean() if opacity_active_count else zero
+        )
+    else:
+        opacity_sparsity = opacity.mean()
     max_scale = scales.max(dim=1).values
     min_scale = scales.min(dim=1).values.clamp_min(1e-12)
     # Soft barriers begin only outside metric bounds, preserving normal geometry.
@@ -138,6 +175,8 @@ def geometry_regularization_terms(
     )
     return {
         "opacity_sparsity": opacity_sparsity,
+        "opacity_sparsity_active_count": opacity_active_count,
+        "opacity_sparsity_active_fraction": opacity_active_fraction,
         "scale_upper": scale_upper,
         "scale_over_limit_fraction": scale_over_limit_fraction,
         "scale_upper_tail_count": int(tail_count),

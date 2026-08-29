@@ -1,9 +1,8 @@
-"""Deterministic LiDAR-first Face4 loss schedule for the snow task.
+"""Deterministic Face4 loss schedules for the snow task.
 
-This module is a CPU-only schedule oracle.  It deliberately does not claim
-    that deferred DA2 or mesh experiments are required. Consumers bind each
-    non-zero weight to measured LiDAR or image supervision before the
-matching supervision implementation before a training gate can advance.
+This module is a CPU-only schedule oracle. Consumers must bind each non-zero
+weight to a signed, measured supervision artifact before a training gate can
+advance.
 """
 
 from __future__ import annotations
@@ -97,5 +96,80 @@ def high_type2_schedule_contract(view_count: int) -> dict[str, Any]:
             "mesh": "DEFERRED_OPTIONAL_WEIGHT_ZERO",
             "independent_sky_optimizer": "REQUIRED_NOT_IMPLEMENTED_BY_THIS_MODULE",
         },
+        "training_allowed": False,
+    }
+
+
+def competitor_high_type2_loss_weights(
+    step: int, view_count: int
+) -> MipMapLossWeights:
+    """Recovered MipMap High/type-2 loss schedule.
+
+    DA2 validity is a per-view gate and is therefore represented by the scalar
+    weight here; an invalid affine calibration must still disable that view.
+    Boundary comparisons follow the recovered strict ``step > boundary``
+    call-sites.
+    """
+
+    step = int(step)
+    view_count = int(view_count)
+    if view_count <= 0:
+        raise ValueError("view_count must be positive")
+    total_steps = 20 * view_count
+    if step < 0 or step >= total_steps:
+        raise ValueError(f"step must be within [0, {total_steps})")
+
+    five_v = 5 * view_count
+    ten_v = 10 * view_count
+    fifteen_v = 15 * view_count
+    if step <= five_v:
+        stage = "mono_mesh_normal_bootstrap"
+        mesh_depth = 0.0
+    elif step <= ten_v:
+        stage = "dense_geometry_growth_early"
+        mesh_depth = 0.5
+    elif step <= fifteen_v:
+        stage = "dense_geometry_growth_late"
+        mesh_depth = 0.25
+    else:
+        stage = "rendered_surface_polish"
+        mesh_depth = 0.0
+    return MipMapLossWeights(
+        stage=stage,
+        rgb_l1=0.6,
+        rgb_dssim=0.4,
+        da2_depth=0.5,
+        mesh_depth=mesh_depth,
+        mesh_normal=0.05 if step > 0 else 0.0,
+        sparse_lidar_range=0.0,
+        lidar_surface_normal=0.0,
+        rendered_depth_normal_consistency=0.01 if step > fifteen_v else 0.0,
+        opacity_mean=0.01,
+        sky_opacity=0.04 if step >= ten_v else 0.0,
+    )
+
+
+def competitor_high_type2_schedule_contract(view_count: int) -> dict[str, Any]:
+    """Fail-closed contract for the recovered competitor-equivalent arm."""
+
+    view_count = int(view_count)
+    if view_count <= 0:
+        raise ValueError("view_count must be positive")
+    boundaries = [0, 5 * view_count, 5 * view_count + 1, 10 * view_count,
+                  10 * view_count + 1, 15 * view_count, 15 * view_count + 1]
+    return {
+        "view_count": view_count,
+        "total_steps": 20 * view_count,
+        "stage_epochs": [5, 10, 5],
+        "weights_at_boundaries": [
+            competitor_high_type2_loss_weights(step, view_count).to_dict()
+            for step in boundaries
+        ],
+        "required_signed_inputs": [
+            "face4_rgb_and_renderer_mask",
+            "mesh_depth_normal_sidecar",
+            "da2_relative_depth_with_per_view_mesh_affine",
+        ],
+        "mesh_topology_algorithm": "UNKNOWN_VENDOR_IMPLEMENTATION",
         "training_allowed": False,
     }

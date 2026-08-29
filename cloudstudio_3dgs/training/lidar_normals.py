@@ -201,13 +201,21 @@ class NormalAlignmentConfig:
     enabled: bool = False
     weight_align: float = 0.01
     weight_flatten: float = 0.01
+    weight_point_to_plane: float = 0.0
     planarity_gate: float = 0.6
     max_anchor_distance_m: float = 0.10
     refresh_every: int = 500
+    flatten_mode: str = "absolute_m"
     flatten_target_m: float = 0.02
+    flatten_ratio_target: float = 0.15
+    point_to_plane_huber_delta_m: float = 0.02
 
     def validate(self) -> None:
-        if self.weight_align < 0.0 or self.weight_flatten < 0.0:
+        if (
+            self.weight_align < 0.0
+            or self.weight_flatten < 0.0
+            or self.weight_point_to_plane < 0.0
+        ):
             raise ValueError("normal alignment weights must be non-negative")
         if not 0.0 <= self.planarity_gate <= 1.0:
             raise ValueError("planarity_gate must be within [0, 1]")
@@ -215,8 +223,14 @@ class NormalAlignmentConfig:
             raise ValueError("max_anchor_distance_m must be positive")
         if self.refresh_every < 1:
             raise ValueError("refresh_every must be at least one")
+        if self.flatten_mode not in {"absolute_m", "tangent_ratio"}:
+            raise ValueError("flatten_mode must be absolute_m or tangent_ratio")
         if self.flatten_target_m <= 0.0:
             raise ValueError("flatten_target_m must be positive")
+        if not 0.0 < self.flatten_ratio_target < 1.0:
+            raise ValueError("flatten_ratio_target must be within (0, 1)")
+        if self.point_to_plane_huber_delta_m <= 0.0:
+            raise ValueError("point_to_plane_huber_delta_m must be positive")
 
     def to_dict(self) -> dict[str, Any]:
         self.validate()
@@ -224,10 +238,14 @@ class NormalAlignmentConfig:
             "enabled": self.enabled,
             "weight_align": self.weight_align,
             "weight_flatten": self.weight_flatten,
+            "weight_point_to_plane": self.weight_point_to_plane,
             "planarity_gate": self.planarity_gate,
             "max_anchor_distance_m": self.max_anchor_distance_m,
             "refresh_every": self.refresh_every,
+            "flatten_mode": self.flatten_mode,
             "flatten_target_m": self.flatten_target_m,
+            "flatten_ratio_target": self.flatten_ratio_target,
+            "point_to_plane_huber_delta_m": self.point_to_plane_huber_delta_m,
         }
 
 
@@ -280,12 +298,13 @@ class LidarNormalAnchors:
         self.field = field
         self.config = config
         self.anchor_normal: Any = None  # torch [N, 3] on CPU
+        self.anchor_position: Any = None  # torch [N, 3] on CPU
         self.planarity: Any = None  # torch [N] on CPU
         self.distance: Any = None  # torch [N] on CPU
         self.valid: Any = None  # torch bool [N] on CPU
         self.anchored_count = 0
         self.stale = True
-        self._device_cache: dict[Any, tuple[Any, Any, Any]] = {}
+        self._device_cache: dict[Any, tuple[Any, Any, Any, Any]] = {}
 
     def refresh(self, means: Any) -> int:
         """Re-anchor every Gaussian to its nearest LiDAR point.
@@ -297,9 +316,12 @@ class LidarNormalAnchors:
         points = means.detach().cpu().to(torch.float64).numpy()
         if points.ndim != 2 or points.shape[1] != 3:
             raise ValueError("means must have shape [N, 3]")
-        distance, normal, planarity, _ = self.field.query(points, k=1)
+        distance, normal, planarity, index = self.field.query(points, k=1)
         self.anchor_normal = torch.from_numpy(
             np.ascontiguousarray(normal, dtype=np.float32)
+        )
+        self.anchor_position = torch.from_numpy(
+            np.ascontiguousarray(self.field.xyz[index], dtype=np.float32)
         )
         self.planarity = torch.from_numpy(
             np.ascontiguousarray(planarity, dtype=np.float32)
@@ -315,11 +337,12 @@ class LidarNormalAnchors:
         self._device_cache.clear()
         return self.anchored_count
 
-    def _anchors_on(self, device: Any) -> tuple[Any, Any, Any]:
+    def _anchors_on(self, device: Any) -> tuple[Any, Any, Any, Any]:
         cached = self._device_cache.get(device)
         if cached is None:
             cached = (
                 self.anchor_normal.to(device),
+                self.anchor_position.to(device),
                 self.planarity.to(device),
                 self.valid.to(device),
             )
@@ -334,7 +357,7 @@ class LidarNormalAnchors:
         means are exposed as ``align_raw`` / ``flatten_raw`` for logging.
         """
         torch = __import__("torch")
-        required = {"scales", "quats"}
+        required = {"means", "scales", "quats"}
         if not required <= set(params):
             raise ValueError("normal alignment requires scales and quats")
         scales_log = params["scales"]
@@ -349,8 +372,10 @@ class LidarNormalAnchors:
         result = {
             "align": zero,
             "flatten": zero,
+            "point_to_plane": zero,
             "align_raw": zero,
             "flatten_raw": zero,
+            "point_to_plane_raw": zero,
             "total": zero,
             "anchored_count": 0,
             "stale": False,
@@ -368,7 +393,7 @@ class LidarNormalAnchors:
             result["stale"] = True
             return result
         device = scales_log.device
-        normal, planarity, valid = self._anchors_on(device)
+        normal, anchor_position, planarity, valid = self._anchors_on(device)
         count = int(valid.sum())
         result["anchored_count"] = count
         if count == 0:
@@ -394,22 +419,61 @@ class LidarNormalAnchors:
         cos = (u_min * normal[valid].to(scales_valid.dtype)).sum(dim=1)
         align_raw = (weight * (1.0 - cos.square())).sum() / weight_sum
 
-        # Only excess thickness beyond the target is penalized.
-        min_scale = torch.exp(
-            scales_valid.gather(1, min_index.view(-1, 1)).squeeze(1)
-        )
-        excess = torch.relu(min_scale - float(self.config.flatten_target_m))
+        # Only excess thickness beyond the selected target is penalized. The
+        # original absolute-metre ceiling is retained for compatibility. The
+        # ratio mode is scale invariant and therefore distinguishes a true
+        # surface disk from a merely small but still round Gaussian.
+        scales_m = torch.exp(scales_valid)
+        min_scale = scales_m.gather(
+            1, min_index.view(-1, 1)
+        ).squeeze(1)
+        if self.config.flatten_mode == "tangent_ratio":
+            sorted_scale = torch.sort(scales_m, dim=1).values
+            tangent_geometric_mean = torch.sqrt(
+                (sorted_scale[:, 1] * sorted_scale[:, 2]).clamp_min(_EPS)
+            )
+            thickness = min_scale / tangent_geometric_mean
+            target = float(self.config.flatten_ratio_target)
+        else:
+            thickness = min_scale
+            target = float(self.config.flatten_target_m)
+        excess = torch.relu(thickness - target)
         flatten_raw = (weight * excess.square()).sum() / weight_sum
+
+        # A soft surface tether: only displacement along the LiDAR normal is
+        # penalized.  Tangential motion remains free, which is the essential
+        # difference from nearest-point locking and lets projected RGB
+        # gradients redistribute centers along a real wall or snow surface.
+        means_valid = params["means"][valid]
+        signed_distance = (
+            (means_valid - anchor_position[valid].to(means_valid.dtype))
+            * normal[valid].to(means_valid.dtype)
+        ).sum(dim=1)
+        absolute_distance = signed_distance.abs()
+        delta = float(self.config.point_to_plane_huber_delta_m)
+        point_to_plane_per_row = torch.where(
+            absolute_distance <= delta,
+            0.5 * signed_distance.square() / delta,
+            absolute_distance - 0.5 * delta,
+        )
+        point_to_plane_raw = (
+            weight * point_to_plane_per_row
+        ).sum() / weight_sum
 
         align = float(self.config.weight_align) * align_raw
         flatten = float(self.config.weight_flatten) * flatten_raw
+        point_to_plane = (
+            float(self.config.weight_point_to_plane) * point_to_plane_raw
+        )
         result.update(
             {
                 "align": align,
                 "flatten": flatten,
+                "point_to_plane": point_to_plane,
                 "align_raw": align_raw,
                 "flatten_raw": flatten_raw,
-                "total": align + flatten,
+                "point_to_plane_raw": point_to_plane_raw,
+                "total": align + flatten + point_to_plane,
             }
         )
         return result

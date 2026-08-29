@@ -109,8 +109,8 @@ class PpispConfig:
             raise ValueError(
                 f"ppisp mode must be one of {_VALID_MODES}, got {self.mode!r}"
             )
-        if self.learning_rate <= 0.0:
-            raise ValueError("ppisp learning_rate must be positive")
+        if self.learning_rate < 0.0:
+            raise ValueError("ppisp learning_rate must be non-negative")
         if self.lr_schedule not in _VALID_LR_SCHEDULES:
             raise ValueError(
                 "ppisp lr_schedule must be one of "

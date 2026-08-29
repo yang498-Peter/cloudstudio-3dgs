@@ -38,6 +38,14 @@ TRAINING_READY_STATUS = TRAINING_IMPLEMENTATION_READY_STATUS
 TRAINING_IMPLEMENTATION_CONTRACT_SCHEMA_VERSION = 1
 TRAINING_IMPLEMENTATION_CONTRACT_KIND = "mipmap_training_implementation_contract"
 MIPMAP_HIGH_TYPE2_PRESET = "lidar_first_face4_snow_v1"
+
+
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
 INDEPENDENT_AT_ALGORITHM = "independent_pos_prior_shared_single_focal_kb4_at_v2"
 
 # The snow scene uses five LiDAR-first adaptive tiles. V27 keeps a fixed
@@ -268,6 +276,11 @@ def fixed_topology_evaluation_arm_fingerprint(config: dict[str, Any]) -> str:
         "color_model": config.get("color_model"),
         "sh_degree": config.get("sh_degree"),
         "da2_depth_weight": config.get("da2_depth_weight"),
+        "mesh_depth_weight": config.get("mesh_depth_weight", 0.0),
+        "mesh_normal_weight": config.get("mesh_normal_weight", 0.0),
+        "competitor_loss_schedule_enabled": config.get(
+            "competitor_loss_schedule_enabled", False
+        ),
         "lidar_admission_enabled": bool(
             (config.get("lidar_admission") or {}).get("enabled", False)
         ),
@@ -790,10 +803,21 @@ def advance_fixed_topology_evaluation_gate(
     required_true = (
         "directional_pass",
         "phase_a_geometry_frozen",
-        "core_only_merge_contract",
     )
     if any(evidence.get(key) is not True for key in required_true):
         raise ValueError("fixed-topology readiness is missing required PASS evidence")
+    merge_contract = evidence.get("actual_merge_contract")
+    if merge_contract is None:
+        if evidence.get("core_only_merge_contract") is not True:
+            raise ValueError("fixed-topology readiness is missing a merge contract")
+    elif merge_contract == "core_owner_only":
+        if evidence.get("core_only_merge_contract") is not True:
+            raise ValueError("core-owner merge evidence is inconsistent")
+    elif merge_contract == "retain_full_halo":
+        if evidence.get("halo_overlap_retained") is not True:
+            raise ValueError("full-halo merge evidence is inconsistent")
+    else:
+        raise ValueError("fixed-topology readiness has an unsupported merge contract")
     if (
         evaluation_plan.get("kind") != "fixed_topology_evaluation_plan_v1"
         or evaluation_plan.get("training_allowed") is not False
@@ -815,12 +839,43 @@ def advance_fixed_topology_evaluation_gate(
             raise ValueError(f"fixed-topology arm {arm_name!r} targets another Tile")
         if config.get("max_steps") != evaluation_plan.get("steps", {}).get("total"):
             raise ValueError(f"fixed-topology arm {arm_name!r} has another step count")
+        config_sha = config.get("config_manifest_sha256")
+        if config_sha is not None:
+            unsigned_config = copy.deepcopy(config)
+            unsigned_config.pop("config_manifest_sha256", None)
+            actual_config_sha = hashlib.sha256(
+                canonical_json_bytes(unsigned_config)
+            ).hexdigest()
+            if len(str(config_sha)) != 64 or actual_config_sha != config_sha:
+                raise ValueError(
+                    f"fixed-topology arm {arm_name!r} config signature mismatch"
+                )
+            planned_config_sha = arm.get("config_manifest_sha256")
+            if planned_config_sha is not None and planned_config_sha != config_sha:
+                raise ValueError(
+                    f"fixed-topology arm {arm_name!r} plan binds another config"
+                )
+        warm_start_sha = arm.get("warm_start_checkpoint_sha256")
+        if warm_start_sha is not None and len(str(warm_start_sha)) != 64:
+            raise ValueError(
+                f"fixed-topology arm {arm_name!r} has invalid warm-start SHA256"
+            )
         allowed_arms.append(
             {
                 "arm": arm_name,
                 "run_id": str(config.get("run_id", "")),
                 "topology_mode": mode,
                 "fingerprint_sha256": fixed_topology_evaluation_arm_fingerprint(config),
+                **(
+                    {"config_manifest_sha256": config_sha}
+                    if config_sha is not None
+                    else {}
+                ),
+                **(
+                    {"warm_start_checkpoint_sha256": warm_start_sha}
+                    if warm_start_sha is not None
+                    else {}
+                ),
             }
         )
     if not allowed_arms:
@@ -881,29 +936,90 @@ def advance_adaptive_growth_gate(
         canonical_json_bytes(unsigned_config)
     ).hexdigest() != config_sha:
         raise ValueError("adaptive growth config signature mismatch")
+    warm_start_value = signed_config.get("warm_start_checkpoint")
+    resume_value = signed_config.get("resume_checkpoint")
+    if warm_start_value is not None and resume_value is not None:
+        raise ValueError(
+            "adaptive growth warm-start and resume checkpoints are mutually exclusive"
+        )
+    warm_start_sha: str | None = None
+    if warm_start_value is not None:
+        warm_start_path = Path(str(warm_start_value))
+        if not warm_start_path.is_file():
+            raise ValueError(
+                f"adaptive growth warm-start checkpoint is missing: {warm_start_path}"
+            )
+        warm_start_sha = _sha256_file(warm_start_path)
 
     topology = signed_config.get("topology_policy", {})
     proposal = signed_config.get("tangent_proposal", {})
     regularization = signed_config.get("geometry_regularization", {})
     strategy = signed_config.get("default_strategy", {})
+    lifecycle_execution_order = strategy.get(
+        "lifecycle_execution_order", "post_optimizer_gsplat"
+    )
+    if lifecycle_execution_order not in {
+        "post_optimizer_gsplat",
+        "pre_optimizer_vendor",
+    }:
+        raise ValueError("adaptive growth lifecycle execution order is invalid")
+    vendor_pre_optimizer = lifecycle_execution_order == "pre_optimizer_vendor"
     detail_split_policy = strategy.get("detail_split_policy", "vendor_0_2m")
     if detail_split_policy not in {
         "vendor_0_2m",
         "lidar_surface_screen_detail",
     }:
         raise ValueError("adaptive growth detail split policy is invalid")
+    capacity_conserving_clone_opacity = strategy.get(
+        "capacity_conserving_clone_opacity", False
+    )
+    if not isinstance(capacity_conserving_clone_opacity, bool):
+        raise ValueError(
+            "adaptive growth capacity-conserving clone flag must be boolean"
+        )
+    vendor_cull_warmup_profile = strategy.get(
+        "vendor_cull_warmup_profile", "exact_0p10_to_0p05"
+    )
+    vendor_cull_thresholds = {
+        "exact_0p10_to_0p05": (0.1, 0.05),
+        "compatibility_uniform_0p05": (0.05, 0.05),
+        "calibrated_uniform_0p04": (0.04, 0.04),
+        "calibrated_geometry_only_0p00": (0.0, 0.0),
+    }
+    if vendor_pre_optimizer:
+        cull_thresholds = vendor_cull_thresholds.get(vendor_cull_warmup_profile)
+        if cull_thresholds is None:
+            raise ValueError("adaptive growth vendor cull warm-up profile is invalid")
+    else:
+        cull_thresholds = (0.1, 0.05)
+    vendor_opacity_reset_profile = strategy.get(
+        "vendor_opacity_reset_profile", "exact_every300"
+    )
+    vendor_reset_intervals = {
+        "exact_every300": 300,
+        "deferred_every3000_compatibility": 3000,
+    }
+    expected_reset_every = vendor_reset_intervals.get(
+        vendor_opacity_reset_profile
+    )
+    if expected_reset_every is None:
+        raise ValueError("adaptive growth vendor opacity reset profile is invalid")
     required_strategy = {
         "exact_mipmap_lifecycle": True,
         "growth_min_opacity": 0.15,
         "split_scale_m": 0.2,
         "prune_scale_m": 0.2,
-        "prune_opa": 0.1,
-        "prune_opa_late": 0.05,
+        "prune_opa": cull_thresholds[0],
+        "prune_opa_late": cull_thresholds[1],
         "prune_switch_step": 3740,
         "prune_scale2d": 0.15,
-        "reset_every": 300,
+        "reset_every": expected_reset_every,
         "reset_opacity_cap": 0.2,
-        "revised_opacity": True,
+        "revised_opacity": (
+            detail_split_policy == "lidar_surface_screen_detail"
+            if vendor_pre_optimizer
+            else True
+        ),
     }
     mismatched_strategy = {
         key: (expected, strategy.get(key))
@@ -918,6 +1034,8 @@ def advance_adaptive_growth_gate(
     gradient_profiles = {
         (True, 0.00015): "legacy_absgrad_1p5e4",
         (False, 0.00015): "vendor_plain_1p5e4",
+        (False, 0.000075): "calibrated_plain_7p5e5",
+        (False, 0.0001): "calibrated_plain_1e4",
         (True, 0.0004): "absgrad_4e4",
         (True, 0.0008): "absgrad_8e4",
         (True, 0.0012): "absgrad_1p2e3",
@@ -925,6 +1043,12 @@ def advance_adaptive_growth_gate(
     gradient_profile = gradient_profiles.get(gradient_pair)
     if gradient_profile is None:
         raise ValueError("adaptive growth gradient semantics are not approved")
+    if vendor_pre_optimizer and gradient_profile not in {
+        "vendor_plain_1p5e4",
+        "calibrated_plain_7p5e5",
+        "calibrated_plain_1e4",
+    }:
+        raise ValueError("pre-optimizer vendor lifecycle requires plain gradients")
     if detail_split_policy == "lidar_surface_screen_detail":
         if strategy.get("detail_split_scale_m") != 0.02:
             raise ValueError("adaptive detail split scale must be 0.02 m")
@@ -933,49 +1057,283 @@ def advance_adaptive_growth_gate(
                 "adaptive detail split screen radius must be 0.0035"
             )
     cull_policy = strategy.get("opacity_cull_policy", "immediate")
-    if cull_policy not in {"immediate", "observation_aware"}:
+    if cull_policy not in {
+        "immediate",
+        "observation_aware",
+        "local_coverage_competition",
+    }:
         raise ValueError("adaptive growth opacity cull policy is invalid")
-    if cull_policy == "observation_aware":
+    if vendor_pre_optimizer and cull_policy != "immediate":
+        raise ValueError("pre-optimizer vendor lifecycle requires immediate cull")
+    if cull_policy in {
+        "observation_aware",
+        "local_coverage_competition",
+    }:
         required_cull_protection = {
             "opacity_cull_min_observations": 4,
             "opacity_cull_consecutive_events": 2,
-            "opacity_cull_grace_after_reset_steps": 200,
-            "opacity_cull_max_fraction": 0.05,
+            "opacity_cull_grace_after_reset_steps": (
+                100 if cull_policy == "local_coverage_competition" else 200
+            ),
         }
         if any(
             strategy.get(key) != expected
             for key, expected in required_cull_protection.items()
         ):
             raise ValueError("adaptive growth cull protection parameters differ")
-    required_regularization = {
-        "enabled": True,
-        "opacity_sparsity_weight": 1e-4,
-        "scale_upper_weight": 1e-4,
-        "max_scale_ratio_to_reference": 8.0,
-    }
+        if strategy.get("opacity_cull_max_fraction") not in {0.02, 0.05}:
+            raise ValueError("adaptive growth cull cap must be 0.02 or 0.05")
+    if (
+        cull_policy == "local_coverage_competition"
+        and strategy.get("opacity_cull_local_voxel_m") != 0.02
+    ):
+        raise ValueError("local coverage cull voxel must be 0.02 m")
+    local_protection = strategy.get(
+        "opacity_cull_local_protection", "opacity"
+    )
+    if cull_policy == "local_coverage_competition" and local_protection not in {
+        "opacity",
+        "opacity_tangent_area",
+    }:
+        raise ValueError("local coverage protection metric is invalid")
+    local_alpha_budget = strategy.get(
+        "opacity_cull_local_min_accumulated_alpha", 0.0
+    )
+    if cull_policy == "local_coverage_competition" and local_alpha_budget not in {
+        0.0,
+        0.5,
+    }:
+        raise ValueError("local coverage alpha budget must be 0 or 0.5")
+    if vendor_pre_optimizer:
+        vendor_cull_defaults = {
+            "opacity_cull_min_observations": 0,
+            "opacity_cull_consecutive_events": 1,
+            "opacity_cull_grace_after_reset_steps": 0,
+            "opacity_cull_max_fraction": 1.0,
+            "opacity_cull_priority": "lowest_opacity",
+            "opacity_cull_local_min_accumulated_alpha": 0.0,
+        }
+        if any(
+            strategy.get(key, expected) != expected
+            for key, expected in vendor_cull_defaults.items()
+        ):
+            raise ValueError(
+                "pre-optimizer vendor lifecycle forbids CloudStudio cull protections"
+            )
+    required_regularization = (
+        {
+            "enabled": True,
+            "scale_upper_weight": 0.0,
+            "max_scale_ratio_to_reference": 8.0,
+        }
+        if vendor_pre_optimizer
+        else {
+            "enabled": True,
+            "opacity_sparsity_weight": 1e-4,
+            "scale_upper_weight": 1e-4,
+            "max_scale_ratio_to_reference": 8.0,
+        }
+    )
     if any(
         regularization.get(key) != expected
         for key, expected in required_regularization.items()
     ):
         raise ValueError("adaptive growth geometry regularization differs")
+    opacity_sparsity_weight = regularization.get("opacity_sparsity_weight")
+    approved_opacity_sparsity_weights = (
+        {0.0, 0.01, 0.001} if vendor_pre_optimizer else {1e-4}
+    )
+    if opacity_sparsity_weight not in approved_opacity_sparsity_weights:
+        raise ValueError(
+            "adaptive growth opacity sparsity weight is not approved"
+        )
+    opacity_sparsity_scope = regularization.get("opacity_sparsity_scope", "all")
+    if opacity_sparsity_scope not in {"all", "visible_current_view"}:
+        raise ValueError("adaptive growth opacity sparsity scope is invalid")
+    if not vendor_pre_optimizer and opacity_sparsity_scope != "all":
+        raise ValueError(
+            "current-view opacity sparsity is approved only for the signed "
+            "vendor-order LiDAR compatibility arm"
+        )
+    if opacity_sparsity_weight == 0.001 and opacity_sparsity_scope != (
+        "visible_current_view"
+    ):
+        raise ValueError(
+            "calibrated opacity sparsity requires current-view visibility scope"
+        )
+    opacity_sparsity_profile = (
+        "disabled_surface_alpha_probe"
+        if opacity_sparsity_weight == 0.0
+        else (
+            "visible_current_view_calibrated_1e3"
+            if opacity_sparsity_weight == 0.001
+            else "visible_current_view_lidar_compat"
+        )
+        if opacity_sparsity_scope == "visible_current_view"
+        else "vendor_active_slice"
+        if vendor_pre_optimizer
+        else "legacy_all_gaussians"
+    )
     shape_pair = (
         regularization.get("anisotropy_weight"),
         regularization.get("max_anisotropy"),
     )
     shape_profiles = {
         (1e-4, 10.0): "legacy_axis_ratio_10",
-        (0.0, 256.0): "thin_surfel_unpenalized",
+        (0.0, 256.0): (
+            "vendor_no_shape_penalty"
+            if vendor_pre_optimizer
+            else "thin_surfel_unpenalized"
+        ),
     }
     shape_profile = shape_profiles.get(shape_pair)
     if shape_profile is None:
         raise ValueError("adaptive growth shape regularization is not approved")
+    if vendor_pre_optimizer and shape_profile != "vendor_no_shape_penalty":
+        raise ValueError("pre-optimizer vendor lifecycle forbids shape penalties")
+    normal_alignment = signed_config.get("lidar_normal_alignment", {})
+    point_to_plane_pair = (
+        normal_alignment.get("weight_point_to_plane", 0.0),
+        normal_alignment.get("point_to_plane_huber_delta_m", 0.02),
+    )
+    surface_motion_profiles = {
+        (0.0, 0.02): "birth_guard_only",
+        (0.01, 0.02): "soft_point_to_plane_2cm",
+    }
+    surface_motion_profile = surface_motion_profiles.get(point_to_plane_pair)
+    if vendor_pre_optimizer and point_to_plane_pair == (0.0, 0.02):
+        surface_motion_profile = "vendor_no_point_to_plane"
+    if surface_motion_profile is None:
+        raise ValueError("adaptive growth surface motion profile is not approved")
+    if (
+        vendor_pre_optimizer
+        and surface_motion_profile != "vendor_no_point_to_plane"
+    ):
+        raise ValueError(
+            "pre-optimizer vendor lifecycle forbids point-to-plane motion penalties"
+        )
+    if (
+        surface_motion_profile == "soft_point_to_plane_2cm"
+        and normal_alignment.get("enabled") is not True
+    ):
+        raise ValueError("soft point-to-plane requires normal alignment")
+    flatten_profile_key = (
+        normal_alignment.get("flatten_mode", "absolute_m"),
+        normal_alignment.get("weight_flatten", 0.01),
+        (
+            normal_alignment.get("flatten_ratio_target", 0.15)
+            if normal_alignment.get("flatten_mode", "absolute_m")
+            == "tangent_ratio"
+            else normal_alignment.get("flatten_target_m", 0.02)
+        ),
+    )
+    flatten_profiles = {
+        ("absolute_m", 0.01, 0.02): "legacy_20mm_ceiling",
+        ("absolute_m", 0.1, 0.001): "thin_surface_1mm",
+        ("tangent_ratio", 0.01, 0.15): "thin_surface_ratio_0p15",
+        ("tangent_ratio", 0.1, 0.15): "thin_surface_ratio_0p15_strong",
+        ("absolute_m", 0.0, 0.02): "disabled",
+    }
+    flatten_profile = flatten_profiles.get(flatten_profile_key)
+    if flatten_profile is None:
+        raise ValueError("adaptive growth flatten profile is not approved")
+    surface_shape_probe_requested = (
+        vendor_pre_optimizer
+        and signed_config.get("learning_rates", {}).get("means") == 0.0
+        and signed_config.get("learning_rates", {}).get("colors") == 0.0
+        and signed_config.get("learning_rates", {}).get("opacities") == 0.0
+        and (
+            signed_config.get("learning_rates", {}).get("scales"),
+            signed_config.get("learning_rates", {}).get("quats"),
+            normal_alignment.get("weight_align"),
+            normal_alignment.get("weight_flatten"),
+            flatten_profile,
+        )
+        in {
+            (0.001, 0.0002, 0.01, 0.01, "thin_surface_ratio_0p15"),
+            (0.003, 0.0005, 0.1, 0.1, "thin_surface_ratio_0p15_strong"),
+        }
+        and signed_config.get("ppisp", {}).get("learning_rate") == 0.0
+        and signed_config.get("lidar_range_weight") == 0.0
+        and signed_config.get("lidar_alpha_weight") == 1.0
+        and signed_config.get("lidar_alpha_target", 0.95) == 0.95
+        and signed_config.get("lidar_alpha_dilation_radius_px", 0) == 3
+        and regularization.get("opacity_sparsity_weight") == 0.0
+        and normal_alignment.get("enabled") is True
+        and normal_alignment.get("weight_point_to_plane", 0.0) == 0.0
+        and signed_config.get("mcmc_refine_stop_iter") == 602
+        and strategy.get("refine_scale2d_stop_iter") == 602
+    )
+    if (
+        vendor_pre_optimizer
+        and flatten_profile != "disabled"
+        and not surface_shape_probe_requested
+    ):
+        raise ValueError("pre-optimizer vendor lifecycle forbids flatten penalties")
+    lidar_alpha_pair = (
+        signed_config.get("lidar_alpha_weight", 0.0),
+        signed_config.get("lidar_alpha_target", 0.95),
+        signed_config.get("lidar_alpha_dilation_radius_px", 0),
+    )
+    lidar_alpha_profiles = {
+        (0.0, 0.95, 0): "disabled",
+        (0.02, 0.95, 0): "signed_lidar_alpha_floor_0p95",
+        (0.1, 0.95, 0): "signed_lidar_alpha_floor_0p95_weight0p1",
+        (0.1, 0.95, 3): "signed_lidar_alpha_floor_0p95_weight0p1_dilate3",
+        (1.0, 0.95, 3): "signed_lidar_alpha_floor_0p95_weight1_dilate3",
+    }
+    lidar_alpha_profile = lidar_alpha_profiles.get(lidar_alpha_pair)
+    if lidar_alpha_profile is None:
+        raise ValueError("adaptive growth LiDAR alpha profile is not approved")
+    frozen_lifecycle_probe = (
+        vendor_pre_optimizer
+        and lidar_alpha_profile
+        in {
+            "signed_lidar_alpha_floor_0p95",
+            "signed_lidar_alpha_floor_0p95_weight0p1",
+            "signed_lidar_alpha_floor_0p95_weight0p1_dilate3",
+            "signed_lidar_alpha_floor_0p95_weight1_dilate3",
+        }
+        and opacity_sparsity_profile == "disabled_surface_alpha_probe"
+        and signed_config.get("mcmc_refine_stop_iter") == 602
+    )
+    surface_alpha_probe = frozen_lifecycle_probe and signed_config.get(
+        "learning_rates"
+    ) == {
+        "means": 0.0,
+        "scales": 0.0,
+        "quats": 0.0,
+        "colors": 0.0,
+        "opacities": 0.05,
+    }
+    surface_shape_probe = frozen_lifecycle_probe and surface_shape_probe_requested
+    if frozen_lifecycle_probe and not (
+        surface_alpha_probe or surface_shape_probe
+    ):
+        raise ValueError("signed frozen-lifecycle probe learning rates are not approved")
+    if surface_alpha_probe:
+        if signed_config.get("ppisp", {}).get("learning_rate") != 0.0:
+            raise ValueError("surface alpha probe must freeze PPISP")
+        if signed_config.get("lidar_range_weight") != 0.0:
+            raise ValueError("surface alpha probe permits RGB and LiDAR alpha losses only")
+        if strategy.get("refine_scale2d_stop_iter") != 602:
+            raise ValueError("surface alpha probe must disable future screen-size lifecycle")
+    if surface_shape_probe and signed_config.get("controlled_stop_after_steps") not in {
+        677,
+        702,
+    }:
+        raise ValueError("surface shape probe permits only 25 or 50 additional steps")
+    expected_gradient_source = "total_loss" if vendor_pre_optimizer else "rgb_only"
+    expected_proposal_enabled = not vendor_pre_optimizer
     if (
         topology.get("mode") != "adaptive_growth"
         or signed_config.get("densification_strategy") != "default_3dgs"
-        or signed_config.get("densification_gradient_source") != "rgb_only"
+        or signed_config.get("densification_gradient_source")
+        != expected_gradient_source
         or signed_config.get("mcmc_refine_start_iter") != 500
         or signed_config.get("mcmc_refine_every") != 100
-        or signed_config.get("mcmc_refine_stop_iter") != 5610
+        or signed_config.get("mcmc_refine_stop_iter")
+        != (602 if surface_alpha_probe or surface_shape_probe else 5610)
         or signed_config.get("max_steps") != 7480
         or signed_config.get("factor") != 1
         or signed_config.get("cap_max") != 2_200_000
@@ -983,8 +1341,11 @@ def advance_adaptive_growth_gate(
         or signed_config.get("da2_depth_weight") != 0.0
         or signed_config.get("mcmc_noise_lr") != 0.0
         or signed_config.get("mcmc_noise_injection_stop_iter") != 0
-        or proposal.get("enabled") is not True
-        or proposal.get("reject_unsupported_births") is not True
+        or bool(proposal.get("enabled")) != expected_proposal_enabled
+        or (
+            expected_proposal_enabled
+            and proposal.get("reject_unsupported_births") is not True
+        )
         or signed_config.get("error_weighted_sampling", {}).get("enabled", False)
     ):
         raise ValueError("adaptive growth config violates the V26 LiDAR-first scope")
@@ -1035,6 +1396,8 @@ def advance_adaptive_growth_gate(
     payload.pop("gate_manifest_sha256", None)
     bindings = dict(payload.get("bindings", {}))
     bindings["adaptive_growth_config_manifest_sha256"] = config_sha
+    if warm_start_sha is not None:
+        bindings["adaptive_growth_warm_start_checkpoint_sha256"] = warm_start_sha
     if boundary_sha is not None:
         bindings["adaptive_growth_boundary_report_sha256"] = boundary_sha
     payload.update(
@@ -1048,6 +1411,11 @@ def advance_adaptive_growth_gate(
             "cloudstudio_cull_enhancement": {
                 "policy": cull_policy,
                 "source": "cloudstudio_observation_coverage_safety",
+                "max_fraction_per_event": strategy.get(
+                    "opacity_cull_max_fraction"
+                ),
+                "local_protection": local_protection,
+                "local_min_accumulated_alpha": local_alpha_budget,
             },
             "cloudstudio_detail_split_enhancement": {
                 "policy": detail_split_policy,
@@ -1057,13 +1425,78 @@ def advance_adaptive_growth_gate(
                     "detail_split_screen_radius"
                 ),
             },
+            "cloudstudio_clone_opacity_enhancement": {
+                "capacity_conserving": capacity_conserving_clone_opacity,
+                "formula": (
+                    "q=1-sqrt(1-p)"
+                    if capacity_conserving_clone_opacity
+                    else None
+                ),
+            },
             "projected_gradient_profile": gradient_profile,
+            "lifecycle_execution_order": lifecycle_execution_order,
+            "vendor_cull_warmup_profile": (
+                vendor_cull_warmup_profile if vendor_pre_optimizer else None
+            ),
+            "vendor_opacity_reset_profile": (
+                vendor_opacity_reset_profile if vendor_pre_optimizer else None
+            ),
+            "opacity_sparsity_profile": opacity_sparsity_profile,
             "shape_regularization_profile": shape_profile,
+            "surface_motion_profile": surface_motion_profile,
+            "flatten_profile": flatten_profile,
+            "lidar_alpha_profile": lidar_alpha_profile,
             "adaptive_growth": {
                 "profile": (
-                    "v33a_lidar_guarded_classic_growth_ppisp"
-                    if signed_config.get("ppisp", {}).get("enabled") is True
-                    else "v26a_lidar_guarded_classic_growth"
+                    (
+                        (
+                            "v47b_opacity_only_surface_alpha_probe"
+                            if surface_alpha_probe
+                            else (
+                                "v48b_strong_scale_quaternion_surface_shape_probe"
+                                if flatten_profile
+                                == "thin_surface_ratio_0p15_strong"
+                                else "v48a_scale_quaternion_surface_shape_probe"
+                            )
+                            if surface_shape_probe
+                            else "v47_vendor_pre_optimizer_lidar_alpha_ppisp_compat"
+                            if lidar_alpha_profile
+                            in {
+                                "signed_lidar_alpha_floor_0p95",
+                                "signed_lidar_alpha_floor_0p95_weight0p1",
+                                "signed_lidar_alpha_floor_0p95_weight0p1_dilate3",
+                                "signed_lidar_alpha_floor_0p95_weight1_dilate3",
+                            }
+                            else "v46_vendor_pre_optimizer_screen_detail_ppisp_compat"
+                            if detail_split_policy
+                            == "lidar_surface_screen_detail"
+                            else "v45_vendor_pre_optimizer_geometry_cull_only_ppisp_compat"
+                            if vendor_cull_warmup_profile
+                            == "calibrated_geometry_only_0p00"
+                            else "v44_vendor_pre_optimizer_reduced_opacity_ppisp_compat"
+                            if opacity_sparsity_profile
+                            == "visible_current_view_calibrated_1e3"
+                            else (
+                                "v41_vendor_pre_optimizer_deferred_reset_ppisp_compat"
+                                if vendor_opacity_reset_profile
+                                == "deferred_every3000_compatibility"
+                                else "v40_vendor_pre_optimizer_visible_opacity_ppisp_compat"
+                            )
+                        )
+                        if opacity_sparsity_scope == "visible_current_view"
+                        else (
+                            "v39b_vendor_pre_optimizer_cull0p05_ppisp_compat"
+                            if vendor_cull_warmup_profile
+                            == "compatibility_uniform_0p05"
+                            else "v39_vendor_pre_optimizer_classic_ppisp_compat"
+                        )
+                    )
+                    if vendor_pre_optimizer
+                    else (
+                        "v33a_lidar_guarded_classic_growth_ppisp"
+                        if signed_config.get("ppisp", {}).get("enabled") is True
+                        else "v26a_lidar_guarded_classic_growth"
+                    )
                 ),
                 "stage": stage,
                 "tile_id": signed_config.get("mipmap_tile_id"),
@@ -1078,6 +1511,12 @@ def advance_adaptive_growth_gate(
                     if signed_config.get("ppisp", {}).get("enabled") is True
                     else "scalar_exposure_or_none"
                 ),
+                "resume_allowed_lineage_differences": (
+                    ["scale_calibration_sha256"]
+                    if surface_alpha_probe or surface_shape_probe
+                    else []
+                ),
+                "warm_start_checkpoint_sha256": warm_start_sha,
             },
         }
     )
@@ -1279,7 +1718,10 @@ def verify_training_gate(
     face_manifest_sha256: str | None,
     allow_implementation_smoke: bool = False,
     fixed_topology_arm_fingerprint_sha256: str | None = None,
+    fixed_topology_config_manifest_sha256: str | None = None,
+    fixed_topology_warm_start_checkpoint_sha256: str | None = None,
     adaptive_growth_config_manifest_sha256: str | None = None,
+    adaptive_growth_warm_start_checkpoint_sha256: str | None = None,
 ) -> str:
     """Reject training until implementation passed, except an explicit bounded smoke."""
     if face_manifest_sha256 is None:
@@ -1345,12 +1787,37 @@ def verify_training_gate(
         )
     if fixed_topology_ready:
         allowed = gate.get("fixed_topology_evaluation", {}).get("allowed_arms", [])
-        allowed_fingerprints = {
-            str(arm.get("fingerprint_sha256", "")) for arm in allowed
-        }
-        if fixed_topology_arm_fingerprint_sha256 not in allowed_fingerprints:
+        matching_arms = [
+            arm
+            for arm in allowed
+            if str(arm.get("fingerprint_sha256", ""))
+            == fixed_topology_arm_fingerprint_sha256
+        ]
+        if not matching_arms:
             raise ValueError(
                 "Trainer config is not an authorized fixed-topology evaluation arm"
+            )
+        signed_config_shas = {
+            str(arm.get("config_manifest_sha256"))
+            for arm in matching_arms
+            if arm.get("config_manifest_sha256") is not None
+        }
+        if signed_config_shas and (
+            fixed_topology_config_manifest_sha256 not in signed_config_shas
+        ):
+            raise ValueError(
+                "Trainer config is not the signed fixed-topology evaluation arm"
+            )
+        warm_start_shas = {
+            str(arm.get("warm_start_checkpoint_sha256"))
+            for arm in matching_arms
+            if arm.get("warm_start_checkpoint_sha256") is not None
+        }
+        if warm_start_shas and (
+            fixed_topology_warm_start_checkpoint_sha256 not in warm_start_shas
+        ):
+            raise ValueError(
+                "Trainer warm-start checkpoint is not the signed fixed-topology source"
             )
         if gate.get("fixed_topology_evaluation", {}).get(
             "adaptive_growth_allowed"
@@ -1366,6 +1833,16 @@ def verify_training_gate(
         ):
             raise ValueError(
                 "Trainer config is not the signed adaptive-growth evaluation arm"
+            )
+        expected_warm_start_sha = bindings.get(
+            "adaptive_growth_warm_start_checkpoint_sha256"
+        )
+        if expected_warm_start_sha is not None and (
+            adaptive_growth_warm_start_checkpoint_sha256
+            != expected_warm_start_sha
+        ):
+            raise ValueError(
+                "Trainer warm-start checkpoint is not the signed adaptive-growth source"
             )
         adaptive = gate.get("adaptive_growth", {})
         if adaptive.get("mcmc_allowed") not in {False, True}:

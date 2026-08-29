@@ -39,6 +39,7 @@ silently sees no gradient at all.
 
 from __future__ import annotations
 
+import math
 from typing import Any
 
 DENSIFICATION_STRATEGIES = ("error_weighted_mcmc", "default_3dgs")
@@ -91,9 +92,16 @@ class DefaultStrategyAdapter:
         opacity_cull_grace_after_reset_steps: int = 0,
         opacity_cull_max_fraction: float = 1.0,
         opacity_cull_priority: str = "lowest_opacity",
+        opacity_cull_local_voxel_m: float = 0.02,
+        opacity_cull_local_protection: str = "opacity",
+        opacity_cull_local_min_accumulated_alpha: float = 0.0,
         detail_split_policy: str = "vendor_0_2m",
         detail_split_scale_m: float = 0.02,
         detail_split_screen_radius: float = 0.0035,
+        capacity_conserving_clone_opacity: bool = False,
+        lifecycle_execution_order: str = "post_optimizer_gsplat",
+        vendor_cull_warmup_profile: str = "exact_0p10_to_0p05",
+        vendor_opacity_reset_profile: str = "exact_every300",
     ) -> None:
         from gsplat.strategy import DefaultStrategy
 
@@ -123,15 +131,34 @@ class DefaultStrategyAdapter:
         )
         self.opacity_cull_max_fraction = float(opacity_cull_max_fraction)
         self.opacity_cull_priority = str(opacity_cull_priority)
+        self.opacity_cull_local_voxel_m = float(opacity_cull_local_voxel_m)
+        self.opacity_cull_local_protection = str(
+            opacity_cull_local_protection
+        )
+        self.opacity_cull_local_min_accumulated_alpha = float(
+            opacity_cull_local_min_accumulated_alpha
+        )
         self.detail_split_policy = str(detail_split_policy)
         self.detail_split_scale_m = float(detail_split_scale_m)
         self.detail_split_screen_radius = float(detail_split_screen_radius)
+        self.capacity_conserving_clone_opacity = bool(
+            capacity_conserving_clone_opacity
+        )
+        self.lifecycle_execution_order = str(lifecycle_execution_order)
+        self.vendor_cull_warmup_profile = str(vendor_cull_warmup_profile)
+        self.vendor_opacity_reset_profile = str(vendor_opacity_reset_profile)
         self.last_lifecycle_event: dict[str, Any] | None = None
         self._last_surface_birth_event: dict[str, Any] | None = None
+        self._last_growth_event: dict[str, Any] | None = None
         self._last_cull_event: dict[str, Any] | None = None
-        if self.opacity_cull_policy not in {"immediate", "observation_aware"}:
+        if self.opacity_cull_policy not in {
+            "immediate",
+            "observation_aware",
+            "local_coverage_competition",
+        }:
             raise ValueError(
-                "opacity_cull_policy must be immediate or observation_aware"
+                "opacity_cull_policy must be immediate, observation_aware, "
+                "or local_coverage_competition"
             )
         if self.opacity_cull_min_observations < 0:
             raise ValueError("opacity_cull_min_observations must be non-negative")
@@ -148,11 +175,73 @@ class DefaultStrategyAdapter:
             "lowest_opacity_per_footprint",
         }:
             raise ValueError("opacity_cull_priority is invalid")
+        if self.opacity_cull_local_voxel_m <= 0.0:
+            raise ValueError("opacity_cull_local_voxel_m must be positive")
+        if self.opacity_cull_local_protection not in {
+            "opacity",
+            "opacity_tangent_area",
+        }:
+            raise ValueError("opacity_cull_local_protection is invalid")
+        if not 0.0 <= self.opacity_cull_local_min_accumulated_alpha < 1.0:
+            raise ValueError(
+                "opacity_cull_local_min_accumulated_alpha must be within [0, 1)"
+            )
         if self.detail_split_policy not in {
             "vendor_0_2m",
             "lidar_surface_screen_detail",
         }:
             raise ValueError("detail_split_policy is invalid")
+        if self.lifecycle_execution_order not in {
+            "post_optimizer_gsplat",
+            "pre_optimizer_vendor",
+        }:
+            raise ValueError("lifecycle_execution_order is invalid")
+        if (
+            self.lifecycle_execution_order == "pre_optimizer_vendor"
+            and not self.exact_mipmap_lifecycle
+        ):
+            raise ValueError(
+                "pre_optimizer_vendor requires exact_mipmap_lifecycle"
+            )
+        if self.vendor_cull_warmup_profile not in {
+            "exact_0p10_to_0p05",
+            "compatibility_uniform_0p05",
+            "calibrated_uniform_0p04",
+            "calibrated_geometry_only_0p00",
+        }:
+            raise ValueError("vendor_cull_warmup_profile is invalid")
+        vendor_reset_intervals = {
+            "exact_every300": 300,
+            "deferred_every3000_compatibility": 3000,
+        }
+        expected_reset_every = vendor_reset_intervals.get(
+            self.vendor_opacity_reset_profile
+        )
+        if expected_reset_every is None:
+            raise ValueError("vendor_opacity_reset_profile is invalid")
+        if self.lifecycle_execution_order == "pre_optimizer_vendor":
+            if prune_opa_late is None:
+                raise ValueError(
+                    "pre_optimizer_vendor requires prune_opa_late"
+                )
+            expected_cull_thresholds = {
+                "exact_0p10_to_0p05": (0.1, 0.05),
+                "compatibility_uniform_0p05": (0.05, 0.05),
+                "calibrated_uniform_0p04": (0.04, 0.04),
+                "calibrated_geometry_only_0p00": (0.0, 0.0),
+            }[self.vendor_cull_warmup_profile]
+            actual_cull_thresholds = (float(prune_opa), float(prune_opa_late))
+            if actual_cull_thresholds != expected_cull_thresholds:
+                raise ValueError(
+                    "vendor cull warm-up profile does not match opacity "
+                    f"thresholds: expected={expected_cull_thresholds}, "
+                    f"actual={actual_cull_thresholds}"
+                )
+            if int(reset_every) != expected_reset_every:
+                raise ValueError(
+                    "vendor opacity reset profile does not match reset interval: "
+                    f"expected={expected_reset_every}, actual={int(reset_every)}"
+                )
         if self.detail_split_scale_m <= 0.0:
             raise ValueError("detail_split_scale_m must be positive")
         if not 0.0 < self.detail_split_screen_radius < 1.0:
@@ -160,7 +249,7 @@ class DefaultStrategyAdapter:
         if self.exact_mipmap_lifecycle:
             if growth_min_opacity is None or not 0.0 < growth_min_opacity < 1.0:
                 raise ValueError("exact MipMap lifecycle requires growth_min_opacity")
-            if prune_opa_late is None or not 0.0 < prune_opa_late < 1.0:
+            if prune_opa_late is None or not 0.0 <= prune_opa_late < 1.0:
                 raise ValueError("exact MipMap lifecycle requires prune_opa_late")
             if prune_switch_step is None or prune_switch_step <= 0:
                 raise ValueError("exact MipMap lifecycle requires prune_switch_step")
@@ -226,7 +315,7 @@ class DefaultStrategyAdapter:
 
     def initialize_state(self) -> dict[str, Any]:
         state = self.inner.initialize_state(scene_scale=self.scene_scale)
-        if self.opacity_cull_policy == "observation_aware":
+        if self.opacity_cull_policy != "immediate":
             # These are per-Gaussian tensors on purpose. gsplat's duplicate,
             # split and remove operations apply the same topology transform to
             # every tensor in strategy state, so the protection survives
@@ -239,7 +328,7 @@ class DefaultStrategyAdapter:
     def _ensure_cull_tracking(
         self, params: Any, state: dict[str, Any]
     ) -> None:
-        if self.opacity_cull_policy != "observation_aware":
+        if self.opacity_cull_policy == "immediate":
             return
         import torch
 
@@ -282,6 +371,14 @@ class DefaultStrategyAdapter:
     ) -> None:
         """``lr`` is accepted and dropped: only MCMC's noise term consumes it."""
         if self.exact_mipmap_lifecycle:
+            preserved_gradients = None
+            if (
+                self.lifecycle_execution_order == "pre_optimizer_vendor"
+                and self.is_refine_step(step)
+            ):
+                preserved_gradients = self._preserve_current_step_gradients(
+                    params, state
+                )
             self._step_post_backward_mipmap(
                 params=params,
                 optimizers=optimizers,
@@ -289,6 +386,10 @@ class DefaultStrategyAdapter:
                 step=step,
                 info=info,
             )
+            if preserved_gradients is not None:
+                self._restore_current_step_gradients(
+                    params, state, preserved_gradients
+                )
             return
         self.inner.step_post_backward(
             params=params, optimizers=optimizers, state=state, step=step, info=info
@@ -307,6 +408,64 @@ class DefaultStrategyAdapter:
             and step % self.refine_every == 0
         )
 
+    def _preserve_current_step_gradients(
+        self, params: Any, state: dict[str, Any]
+    ) -> dict[str, Any | None]:
+        """Keep the backward result across pre-Adam topology replacement.
+
+        gsplat's topology ops replace every ``Parameter`` and correctly reshape
+        Adam's moment tensors, but the replacement parameters deliberately have
+        no ``.grad``.  That is correct for gsplat's normal post-optimizer order;
+        in the recovered vendor order it would silently drop the current step.
+        A per-row source index is carried through the same duplicate/split/remove
+        transforms, then used to restore each parameter's gradient.
+        """
+
+        import torch
+
+        key = "_cloudstudio_current_step_gradient_source"
+        if key in state:
+            raise RuntimeError("stale pre-optimizer gradient provenance")
+        count = len(params["means"])
+        state[key] = torch.arange(
+            count, dtype=torch.int64, device=params["means"].device
+        )
+        return {
+            name: None if parameter.grad is None else parameter.grad.detach().clone()
+            for name, parameter in params.items()
+        }
+
+    def _restore_current_step_gradients(
+        self,
+        params: Any,
+        state: dict[str, Any],
+        gradients: dict[str, Any | None],
+    ) -> None:
+        key = "_cloudstudio_current_step_gradient_source"
+        provenance = state.pop(key, None)
+        if provenance is None:
+            raise RuntimeError("pre-optimizer topology lost gradient provenance")
+        if len(provenance) != len(params["means"]):
+            raise RuntimeError("pre-optimizer gradient provenance count mismatch")
+        if provenance.numel() == 0:
+            raise RuntimeError("pre-optimizer lifecycle removed every Gaussian")
+        for name, parameter in params.items():
+            source = gradients.get(name)
+            if source is None:
+                parameter.grad = None
+                continue
+            if source.ndim == 0 or source.shape[0] <= int(provenance.max().item()):
+                raise RuntimeError(
+                    f"pre-optimizer gradient provenance is invalid for {name}"
+                )
+            parameter.grad = source[provenance].clone()
+        if self.last_lifecycle_event is not None:
+            self.last_lifecycle_event["execution_order"] = (
+                self.lifecycle_execution_order
+            )
+            self.last_lifecycle_event["current_step_gradient_remapped"] = True
+            self.last_lifecycle_event["gradient_row_count"] = int(len(provenance))
+
     def _grow_mipmap(
         self,
         params: Any,
@@ -320,8 +479,86 @@ class DefaultStrategyAdapter:
         import torch
         from gsplat.strategy.ops import duplicate, split
 
+        def duplicate_selected(mask: Any) -> None:
+            """Duplicate rows without changing their initial alpha budget."""
+
+            selected = torch.where(mask)[0]
+            revised_logits = None
+            if self.capacity_conserving_clone_opacity and selected.numel():
+                parent_opacity = torch.sigmoid(
+                    params["opacities"][selected].detach()
+                )
+                # Two coincident rows with opacity q composite to 1-(1-q)^2.
+                # Solving for the original alpha p gives q=1-sqrt(1-p), so a
+                # clone cannot instantly thicken a measured surface before
+                # the optimizer has separated the pair.
+                revised_opacity = 1.0 - torch.sqrt(
+                    (1.0 - parent_opacity).clamp_min(0.0)
+                )
+                revised_logits = torch.logit(
+                    revised_opacity.clamp(1e-6, 1.0 - 1e-6)
+                )
+            duplicate(
+                params=params,
+                optimizers=optimizers,
+                state=state,
+                mask=mask,
+                scene=scene,
+            )
+            if revised_logits is not None:
+                with torch.no_grad():
+                    reshaped = revised_logits.reshape_as(
+                        params["opacities"][selected]
+                    )
+                    params["opacities"].index_copy_(0, selected, reshaped)
+                    params["opacities"][-selected.numel() :].copy_(reshaped)
+
         gradients = state["grad2d"] / state["count"].clamp_min(1)
         opacity = torch.sigmoid(params["opacities"].flatten())
+        observed = state["count"] > 0
+        finite_observed_gradients = gradients[
+            observed & torch.isfinite(gradients)
+        ].float()
+        gradient_quantiles = {}
+        if finite_observed_gradients.numel():
+            quantile_levels = torch.tensor(
+                [0.5, 0.9, 0.95, 0.99, 0.999],
+                dtype=finite_observed_gradients.dtype,
+                device=finite_observed_gradients.device,
+            )
+            quantile_values = torch.quantile(
+                finite_observed_gradients, quantile_levels
+            ).tolist()
+            gradient_quantiles = {
+                label: float(value)
+                for label, value in zip(
+                    ("p50", "p90", "p95", "p99", "p999"),
+                    quantile_values,
+                )
+            }
+            gradient_quantiles["max"] = float(
+                finite_observed_gradients.max().item()
+            )
+        gradient_thresholds = (
+            0.00005,
+            0.000075,
+            0.0001,
+            0.000125,
+            0.00015,
+            0.0002,
+            0.0003,
+        )
+        opacity_floors = (0.05, 0.1, 0.15)
+        threshold_sweep = {
+            f"grad_gt_{gradient_threshold:.7f}_opacity_gt_{opacity_floor:.2f}": int(
+                (
+                    (gradients > gradient_threshold)
+                    & (opacity > opacity_floor)
+                ).sum().item()
+            )
+            for gradient_threshold in gradient_thresholds
+            for opacity_floor in opacity_floors
+        }
         eligible = gradients > float(self.inner.grow_grad2d)
         eligible &= opacity > float(self.growth_min_opacity)
         growth_candidate_count = int(eligible.sum().item())
@@ -329,6 +566,13 @@ class DefaultStrategyAdapter:
             self.surface_birth_proposal is not None
             and self.surface_birth_proposal.config.reject_unsupported_births
         )
+        if (
+            guarded_births
+            and self.lifecycle_execution_order == "pre_optimizer_vendor"
+        ):
+            raise RuntimeError(
+                "pre_optimizer_vendor forbids the CloudStudio surface birth guard"
+            )
         if guarded_births:
             eligible &= self.surface_birth_proposal.eligible_parent_mask(
                 params["means"]
@@ -371,6 +615,19 @@ class DefaultStrategyAdapter:
         split_mask = eligible & (~small | detail_split_mask)
         duplicate_count = int(duplicate_mask.sum().item())
         split_count = int(split_mask.sum().item())
+        self._last_growth_event = {
+            "gradient_threshold": float(self.inner.grow_grad2d),
+            "opacity_floor": float(self.growth_min_opacity),
+            "observed_gaussian_count": int(observed.sum().item()),
+            "gradient_quantiles": gradient_quantiles,
+            "threshold_sweep_counts": threshold_sweep,
+            "selected_parent_count": int(eligible.sum().item()),
+            "clone_parent_count": duplicate_count,
+            "split_parent_count": split_count,
+            "capacity_conserving_clone_opacity": (
+                self.capacity_conserving_clone_opacity
+            ),
+        }
         parent_means = None
         if guarded_births and (duplicate_count or split_count):
             clone_indices = torch.where(duplicate_mask)[0]
@@ -382,33 +639,55 @@ class DefaultStrategyAdapter:
                 ],
                 dim=0,
             )
-        if duplicate_count:
-            duplicate(
-                params=params,
-                optimizers=optimizers,
-                state=state,
-                mask=duplicate_mask,
-                scene=scene,
-            )
-        if split_count:
-            split_mask = torch.cat(
-                [
-                    split_mask,
-                    torch.zeros(
-                        duplicate_count,
-                        dtype=torch.bool,
-                        device=split_mask.device,
-                    ),
-                ]
-            )
-            split(
-                params=params,
-                optimizers=optimizers,
-                state=state,
-                mask=split_mask,
-                revised_opacity=self.inner.revised_opacity,
-                scene=scene,
-            )
+        if self.lifecycle_execution_order == "pre_optimizer_vendor":
+            # The recovered native order is Split -> Clone -> Cull.  The masks
+            # are disjoint and were computed on the original rows. After Split,
+            # non-split rows lead the tensor and split children occupy the tail,
+            # so remap the clone mask onto that layout before duplicating.
+            if split_count:
+                original_split_mask = split_mask
+                split(
+                    params=params,
+                    optimizers=optimizers,
+                    state=state,
+                    mask=original_split_mask,
+                    revised_opacity=self.inner.revised_opacity,
+                    scene=scene,
+                )
+                duplicate_mask = torch.cat(
+                    [
+                        duplicate_mask[~original_split_mask],
+                        torch.zeros(
+                            2 * split_count,
+                            dtype=torch.bool,
+                            device=duplicate_mask.device,
+                        ),
+                    ]
+                )
+            if duplicate_count:
+                duplicate_selected(duplicate_mask)
+        else:
+            if duplicate_count:
+                duplicate_selected(duplicate_mask)
+            if split_count:
+                split_mask = torch.cat(
+                    [
+                        split_mask,
+                        torch.zeros(
+                            duplicate_count,
+                            dtype=torch.bool,
+                            device=split_mask.device,
+                        ),
+                    ]
+                )
+                split(
+                    params=params,
+                    optimizers=optimizers,
+                    state=state,
+                    mask=split_mask,
+                    revised_opacity=self.inner.revised_opacity,
+                    scene=scene,
+                )
         if parent_means is not None:
             # ``split`` removes its parents, keeps all non-split rows, then
             # appends two children per parent.  Duplicates therefore precede
@@ -468,6 +747,12 @@ class DefaultStrategyAdapter:
         )
         opacity = torch.sigmoid(params["opacities"].flatten())
         raw_opacity_mask = opacity < opacity_threshold
+        opacity_threshold_sweep_counts = {
+            f"opacity_lt_{threshold:.3f}": int(
+                (opacity < threshold).sum().item()
+            )
+            for threshold in (0.01, 0.02, 0.03, 0.04, 0.05, 0.075, 0.1)
+        }
         maximum_scale = torch.exp(params["scales"]).max(dim=-1).values
         world_scale_mask = maximum_scale > float(self.prune_scale_m)
         radii = state.get("radii")
@@ -477,7 +762,9 @@ class DefaultStrategyAdapter:
 
         opacity_mask = raw_opacity_mask.clone()
         grace_active = False
-        if self.opacity_cull_policy == "observation_aware":
+        local_competition_protected_count = 0
+        local_competition_cell_count = 0
+        if self.opacity_cull_policy != "immediate":
             self._ensure_cull_tracking(params, state)
             streak = state["_cloudstudio_cull_low_streak"]
             observations = state["_cloudstudio_cull_observations"]
@@ -502,6 +789,101 @@ class DefaultStrategyAdapter:
             opacity_mask &= streak >= self.opacity_cull_consecutive_events
             if grace_active:
                 opacity_mask &= False
+
+            if (
+                self.opacity_cull_policy == "local_coverage_competition"
+                and bool(opacity_mask.any())
+            ):
+                # Low-texture regions need a real death path, but deleting the
+                # only local representative is exactly how the V33 route made
+                # walls transparent.  Keep the strongest-opacity Gaussian in
+                # every small world-space cell and let the remaining low-
+                # opacity rows compete for removal.  This is deliberately a
+                # topology guard, not a texture heuristic: projected gradient
+                # still decides births, while learned contribution decides
+                # which redundant local rows leave.
+                grid = torch.floor(
+                    params["means"].detach() / self.opacity_cull_local_voxel_m
+                ).to(torch.int64)
+                offset = 1 << 20
+                shifted = grid + offset
+                if bool(((shifted < 0) | (shifted >= (1 << 21))).any()):
+                    raise RuntimeError(
+                        "local cull voxel index exceeds signed 21-bit encoding"
+                    )
+                keys = (
+                    (shifted[:, 0] << 42)
+                    | (shifted[:, 1] << 21)
+                    | shifted[:, 2]
+                )
+                _, inverse = torch.unique(keys, return_inverse=True)
+                local_competition_cell_count = int(inverse.max().item()) + 1
+                protection_score = opacity
+                if self.opacity_cull_local_protection == "opacity_tangent_area":
+                    # A low-texture wall is efficiently represented by a few
+                    # broad, thin disks. Protecting only the highest opacity
+                    # row can discard that coverage carrier in favour of a
+                    # small bright splat. The two largest physical axes are a
+                    # view-independent proxy for tangential surface area.
+                    physical_scale = torch.exp(params["scales"].detach())
+                    tangent_area = torch.topk(
+                        physical_scale, k=2, dim=-1
+                    ).values.prod(dim=-1)
+                    protection_score = opacity * tangent_area
+                if self.opacity_cull_local_min_accumulated_alpha > 0.0:
+                    # Sort by cell, then by coverage score within each cell.
+                    # Protect the leading rows until their composited alpha
+                    # reaches the signed local budget. This turns the guard
+                    # from "keep one point" into "keep a surface", while low-
+                    # contribution surplus rows remain eligible for removal.
+                    score_order = torch.argsort(
+                        protection_score, descending=True, stable=True
+                    )
+                    order = score_order[
+                        torch.argsort(inverse[score_order], stable=True)
+                    ]
+                    ordered_cell = inverse[order]
+                    optical_depth = -torch.log1p(
+                        -opacity[order].clamp(max=1.0 - 1e-6)
+                    )
+                    cumulative = torch.cumsum(optical_depth, dim=0)
+                    first = torch.ones_like(ordered_cell, dtype=torch.bool)
+                    first[1:] = ordered_cell[1:] != ordered_cell[:-1]
+                    start = torch.where(first)[0]
+                    prefix = torch.zeros_like(start, dtype=cumulative.dtype)
+                    nonzero = start > 0
+                    prefix[nonzero] = cumulative[start[nonzero] - 1]
+                    cell_prefix = torch.empty(
+                        local_competition_cell_count,
+                        dtype=cumulative.dtype,
+                        device=cumulative.device,
+                    )
+                    cell_prefix[ordered_cell[start]] = prefix
+                    before = cumulative - optical_depth - cell_prefix[ordered_cell]
+                    target_depth = -math.log1p(
+                        -self.opacity_cull_local_min_accumulated_alpha
+                    )
+                    protected = torch.zeros_like(opacity_mask)
+                    protected[order] = before < target_depth
+                else:
+                    strongest = torch.full(
+                        (local_competition_cell_count,),
+                        -torch.inf,
+                        dtype=protection_score.dtype,
+                        device=protection_score.device,
+                    )
+                    strongest.scatter_reduce_(
+                        0,
+                        inverse,
+                        protection_score,
+                        reduce="amax",
+                        include_self=True,
+                    )
+                    protected = protection_score >= strongest[inverse]
+                local_competition_protected_count = int(
+                    (opacity_mask & protected).sum().item()
+                )
+                opacity_mask &= ~protected
 
             maximum_opacity_culls = int(
                 len(opacity_mask) * self.opacity_cull_max_fraction
@@ -531,10 +913,41 @@ class DefaultStrategyAdapter:
         forced_geometry_mask = world_scale_mask | screen_scale_mask
         remove_mask = opacity_mask | forced_geometry_mask
         prune_count = int(remove_mask.sum().item())
+        observation_count = state.get("count")
+        raw_candidate_observed_count = None
+        raw_candidate_zero_observation_count = None
+        raw_candidate_observation_p50 = None
+        raw_candidate_observation_p95 = None
+        if (
+            observation_count is not None
+            and observation_count.numel() == raw_opacity_mask.numel()
+        ):
+            observation_count = observation_count.reshape(-1).to(torch.float32)
+            candidate_observations = observation_count[raw_opacity_mask]
+            if candidate_observations.numel():
+                raw_candidate_observed_count = int(
+                    (candidate_observations > 0).sum().item()
+                )
+                raw_candidate_zero_observation_count = int(
+                    (candidate_observations <= 0).sum().item()
+                )
+                raw_candidate_observation_p50 = float(
+                    torch.quantile(candidate_observations, 0.50).item()
+                )
+                raw_candidate_observation_p95 = float(
+                    torch.quantile(candidate_observations, 0.95).item()
+                )
         self._last_cull_event = {
             "policy": self.opacity_cull_policy,
             "opacity_threshold": float(opacity_threshold),
             "raw_opacity_candidate_count": int(raw_opacity_mask.sum().item()),
+            "opacity_threshold_sweep_counts": opacity_threshold_sweep_counts,
+            "raw_candidate_observed_count": raw_candidate_observed_count,
+            "raw_candidate_zero_observation_count": (
+                raw_candidate_zero_observation_count
+            ),
+            "raw_candidate_observation_p50": raw_candidate_observation_p50,
+            "raw_candidate_observation_p95": raw_candidate_observation_p95,
             "selected_opacity_count": int(opacity_mask.sum().item()),
             "world_scale_count": int(world_scale_mask.sum().item()),
             "screen_scale_count": int(screen_scale_mask.sum().item()),
@@ -548,6 +961,17 @@ class DefaultStrategyAdapter:
             "grace_after_reset_steps": self.opacity_cull_grace_after_reset_steps,
             "max_opacity_cull_fraction": self.opacity_cull_max_fraction,
             "opacity_cull_priority": self.opacity_cull_priority,
+            "opacity_cull_local_voxel_m": self.opacity_cull_local_voxel_m,
+            "opacity_cull_local_protection": (
+                self.opacity_cull_local_protection
+            ),
+            "opacity_cull_local_min_accumulated_alpha": (
+                self.opacity_cull_local_min_accumulated_alpha
+            ),
+            "local_competition_cell_count": local_competition_cell_count,
+            "local_competition_protected_count": (
+                local_competition_protected_count
+            ),
             "total_cull_count": prune_count,
         }
         if prune_count:
@@ -574,6 +998,7 @@ class DefaultStrategyAdapter:
 
         self.last_lifecycle_event = None
         self._last_surface_birth_event = None
+        self._last_growth_event = None
         self._last_cull_event = None
         if step >= self.refine_stop_iter:
             return
@@ -596,7 +1021,7 @@ class DefaultStrategyAdapter:
                 state=state,
                 value=float(self.reset_opacity_cap),
             )
-            if self.opacity_cull_policy == "observation_aware":
+            if self.opacity_cull_policy != "immediate":
                 state["_cloudstudio_cull_low_streak"].zero_()
                 state["_cloudstudio_cull_observations"].zero_()
                 state["_cloudstudio_last_opacity_reset_step"] = int(step)
@@ -621,6 +1046,10 @@ class DefaultStrategyAdapter:
         if self._last_surface_birth_event is not None:
             self.last_lifecycle_event["surface_birth_guard"] = dict(
                 self._last_surface_birth_event
+            )
+        if self._last_growth_event is not None:
+            self.last_lifecycle_event["growth_diagnostics"] = dict(
+                self._last_growth_event
             )
         if self._last_cull_event is not None:
             self.last_lifecycle_event["cull_reasons"] = dict(
@@ -655,6 +1084,9 @@ class DefaultStrategyAdapter:
             "refine_stop_iter": int(self.inner.refine_stop_iter),
             "refine_every": int(self.inner.refine_every),
             "exact_mipmap_lifecycle": self.exact_mipmap_lifecycle,
+            "lifecycle_execution_order": self.lifecycle_execution_order,
+            "vendor_cull_warmup_profile": self.vendor_cull_warmup_profile,
+            "vendor_opacity_reset_profile": self.vendor_opacity_reset_profile,
             "growth_min_opacity": self.growth_min_opacity,
             "prune_opa_late": self.prune_opa_late,
             "prune_switch_step": self.prune_switch_step,
@@ -673,9 +1105,19 @@ class DefaultStrategyAdapter:
             ),
             "opacity_cull_max_fraction": self.opacity_cull_max_fraction,
             "opacity_cull_priority": self.opacity_cull_priority,
+            "opacity_cull_local_voxel_m": self.opacity_cull_local_voxel_m,
+            "opacity_cull_local_protection": (
+                self.opacity_cull_local_protection
+            ),
+            "opacity_cull_local_min_accumulated_alpha": (
+                self.opacity_cull_local_min_accumulated_alpha
+            ),
             "detail_split_policy": self.detail_split_policy,
             "detail_split_scale_m": self.detail_split_scale_m,
             "detail_split_screen_radius": self.detail_split_screen_radius,
+            "capacity_conserving_clone_opacity": (
+                self.capacity_conserving_clone_opacity
+            ),
             # The resolved metric meaning of the two normalised scale gates.
             "effective_split_scale_m": float(
                 self.inner.grow_scale3d * self.scene_scale

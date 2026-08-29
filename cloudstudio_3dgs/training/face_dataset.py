@@ -144,6 +144,8 @@ class FaceCacheDataset:
         mono_depth_root: Path | None = None,
         face_lidar_geometry_manifest_path: Path | None = None,
         face_lidar_geometry_root: Path | None = None,
+        mesh_geometry_manifest_path: Path | None = None,
+        mesh_geometry_root: Path | None = None,
     ) -> None:
         if (mono_depth_manifest_path is None) != (mono_depth_root is None):
             raise ValueError(
@@ -154,6 +156,10 @@ class FaceCacheDataset:
         ):
             raise ValueError(
                 "face_lidar_geometry_manifest_path and root must be provided together"
+            )
+        if (mesh_geometry_manifest_path is None) != (mesh_geometry_root is None):
+            raise ValueError(
+                "mesh_geometry_manifest_path and mesh_geometry_root must be provided together"
             )
         face_manifest_path = Path(face_manifest_path)
         self.manifest = json.loads(face_manifest_path.read_text(encoding="utf-8"))
@@ -296,6 +302,37 @@ class FaceCacheDataset:
                     "Face4 LiDAR geometry has missing independent artifacts: "
                     f"{missing_geometry[:4]}"
                 )
+        self.mesh_geometry_manifest_sha256 = None
+        self.mesh_geometry_root = (
+            None if mesh_geometry_root is None else Path(mesh_geometry_root)
+        )
+        self._mesh_geometry_by_sample: dict[str, dict[str, Any]] = {}
+        if mesh_geometry_manifest_path is not None:
+            from cloudstudio_3dgs.data.mesh_geometry import (
+                verify_mesh_geometry_manifest,
+            )
+
+            mesh_geometry = json.loads(
+                Path(mesh_geometry_manifest_path).read_text(encoding="utf-8")
+            )
+            self.mesh_geometry_manifest_sha256 = verify_mesh_geometry_manifest(
+                mesh_geometry
+            )
+            if (
+                mesh_geometry.get("source_face_manifest_sha256")
+                != self.face_manifest_sha256
+            ):
+                raise ValueError("mesh geometry is bound to a different Face4 cache")
+            if mesh_geometry.get("split") != self.manifest.get("split"):
+                raise ValueError("mesh geometry and Face4 manifests use different splits")
+            self._mesh_geometry_by_sample = {
+                str(record["sample_id"]): record
+                for record in mesh_geometry.get("records", [])
+            }
+            if len(self._mesh_geometry_by_sample) != len(
+                mesh_geometry.get("records", [])
+            ):
+                raise ValueError("mesh geometry manifest contains duplicate sample IDs")
 
         tile_by_sample: dict[str, dict[str, int]] | None = None
         if tile_views is not None:
@@ -406,6 +443,17 @@ class FaceCacheDataset:
                 raise ValueError(
                     "Face4 LiDAR geometry does not cover selected views: "
                     f"{missing_lidar[:4]}"
+                )
+        if self._mesh_geometry_by_sample:
+            selected_ids = {
+                f"{record['image_id']}{SAMPLE_ID_SEPARATOR}{entry['face_id']}"
+                for record, entry, _crop in self._samples
+            }
+            missing_mesh = sorted(selected_ids - set(self._mesh_geometry_by_sample))
+            if missing_mesh:
+                raise ValueError(
+                    "mesh geometry does not cover selected Tile views: "
+                    f"{missing_mesh[:4]}"
                 )
         if not self._samples:
             raise ValueError("face cache contains no usable face samples")
@@ -717,6 +765,47 @@ class FaceCacheDataset:
                 & (mono_depth_range > 0.0)
             )
 
+        mesh_depth_range = None
+        mesh_normal_camera = None
+        mesh_confidence = None
+        mesh_depth_valid = None
+        mesh_geometry_cache_path = None
+        mesh_record = self._mesh_geometry_by_sample.get(
+            f"{base_image_id}{SAMPLE_ID_SEPARATOR}{face_id}"
+        )
+        if mesh_record is not None:
+            if crop is None or dict(mesh_record.get("crop", {})) != dict(crop):
+                raise ValueError(
+                    f"mesh geometry crop does not match selected Tile crop for "
+                    f"{base_image_id}/{face_id}"
+                )
+            assert self.mesh_geometry_root is not None
+            mesh_geometry_cache_path = _safe_artifact(
+                self.mesh_geometry_root, str(mesh_record["path"])
+            )
+            self._verify(
+                mesh_geometry_cache_path,
+                str(mesh_record["sha256"]),
+                "mesh geometry",
+            )
+            with np.load(mesh_geometry_cache_path, allow_pickle=False) as payload:
+                required = {
+                    "depth_range_m", "normal_camera", "confidence", "valid", "shape"
+                }
+                if not required.issubset(payload.files):
+                    raise ValueError("mesh geometry cache is missing required arrays")
+                mesh_depth_range = np.asarray(payload["depth_range_m"], np.float32)
+                mesh_normal_camera = np.asarray(payload["normal_camera"], np.float32)
+                mesh_confidence = np.asarray(payload["confidence"], np.float32)
+                mesh_depth_valid = np.asarray(payload["valid"], bool)
+            mesh_shape = (int(crop["height"]), int(crop["width"]))
+            if mesh_depth_range.shape != mesh_shape:
+                raise ValueError("mesh geometry depth shape differs from Tile crop")
+            if mesh_normal_camera.shape != (*mesh_shape, 3):
+                raise ValueError("mesh geometry normal shape differs from Tile crop")
+            if mesh_confidence.shape != mesh_shape or mesh_depth_valid.shape != mesh_shape:
+                raise ValueError("mesh geometry mask/confidence shape differs from Tile crop")
+
         c2w_base = np.asarray(image_record["c2w"], dtype=np.float64)
         face_to_base = np.eye(4, dtype=np.float64)
         face_to_base[:3, :3] = face.R_face
@@ -741,6 +830,17 @@ class FaceCacheDataset:
             sensor_coords = None if sensor_coords is None else np.ascontiguousarray(sensor_coords[y:bottom, x:right])
             K[0, 2] -= float(x)
             K[1, 2] -= float(y)
+        mesh_depth_mask = None
+        if mesh_depth_range is not None:
+            assert mesh_depth_valid is not None and mesh_confidence is not None
+            mesh_depth_mask = (
+                rgb_mask
+                & mesh_depth_valid
+                & np.isfinite(mesh_depth_range)
+                & (mesh_depth_range > 0.0)
+                & np.isfinite(mesh_confidence)
+                & (mesh_confidence > 0.0)
+            )
         if not np.any(rgb_mask):
             raise ValueError(f"cropped face {base_image_id}/{face_id} has an empty mask")
 
@@ -770,4 +870,9 @@ class FaceCacheDataset:
             mono_depth_range_m=mono_depth_range,
             mono_depth_mask=mono_depth_mask,
             mono_depth_cache_path=mono_depth_cache_path,
+            mesh_depth_range_m=mesh_depth_range,
+            mesh_normal_camera=mesh_normal_camera,
+            mesh_confidence=mesh_confidence,
+            mesh_depth_mask=mesh_depth_mask,
+            mesh_geometry_cache_path=mesh_geometry_cache_path,
         )

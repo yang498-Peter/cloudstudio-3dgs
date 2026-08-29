@@ -286,6 +286,506 @@ class MipMapPipelineGateTests(unittest.TestCase):
             "thin_surfel_unpenalized",
         )
 
+        local_cull_config = copy.deepcopy(vendor_gradient_config)
+        local_cull_config["run_id"] = "v36-local-coverage-boundary"
+        local_cull_config["default_strategy"].update(
+            {
+                "opacity_cull_policy": "local_coverage_competition",
+                "opacity_cull_min_observations": 4,
+                "opacity_cull_consecutive_events": 2,
+                "opacity_cull_grace_after_reset_steps": 100,
+                "opacity_cull_max_fraction": 0.05,
+                "opacity_cull_local_voxel_m": 0.02,
+            }
+        )
+        local_cull_config.setdefault("lidar_normal_alignment", {}).update(
+            {
+                "enabled": True,
+                "weight_point_to_plane": 0.01,
+                "point_to_plane_huber_delta_m": 0.02,
+            }
+        )
+        local_cull_config.pop("config_manifest_sha256")
+        local_cull_config["config_manifest_sha256"] = hashlib.sha256(
+            canonical_json_bytes(local_cull_config)
+        ).hexdigest()
+        local_cull_gate = advance_adaptive_growth_gate(
+            _upstream_data_gate(), local_cull_config, stage="boundary"
+        )
+        self.assertEqual(
+            local_cull_gate["cloudstudio_cull_enhancement"]["policy"],
+            "local_coverage_competition",
+        )
+        self.assertEqual(
+            local_cull_gate["surface_motion_profile"],
+            "soft_point_to_plane_2cm",
+        )
+
+        coverage_cull_config = copy.deepcopy(local_cull_config)
+        coverage_cull_config["run_id"] = "v36b-coverage-weighted-boundary"
+        coverage_cull_config["default_strategy"].update(
+            {
+                "opacity_cull_max_fraction": 0.02,
+                "opacity_cull_local_protection": "opacity_tangent_area",
+            }
+        )
+        coverage_cull_config["lidar_normal_alignment"].update(
+            {"weight_flatten": 0.1, "flatten_target_m": 0.001}
+        )
+        coverage_cull_config.pop("config_manifest_sha256")
+        coverage_cull_config["config_manifest_sha256"] = hashlib.sha256(
+            canonical_json_bytes(coverage_cull_config)
+        ).hexdigest()
+        coverage_cull_gate = advance_adaptive_growth_gate(
+            _upstream_data_gate(), coverage_cull_config, stage="boundary"
+        )
+        self.assertEqual(
+            coverage_cull_gate["cloudstudio_cull_enhancement"][
+                "local_protection"
+            ],
+            "opacity_tangent_area",
+        )
+        self.assertEqual(
+            coverage_cull_gate["cloudstudio_cull_enhancement"][
+                "max_fraction_per_event"
+            ],
+            0.02,
+        )
+        self.assertEqual(
+            coverage_cull_gate["flatten_profile"], "thin_surface_1mm"
+        )
+
+        ratio_flatten_config = copy.deepcopy(coverage_cull_config)
+        ratio_flatten_config["run_id"] = "v37-ratio-flatten-boundary"
+        ratio_flatten_config["lidar_normal_alignment"].update(
+            {
+                "weight_flatten": 0.01,
+                "flatten_mode": "tangent_ratio",
+                "flatten_ratio_target": 0.15,
+            }
+        )
+        ratio_flatten_config.update(
+            {"lidar_alpha_weight": 0.02, "lidar_alpha_target": 0.95}
+        )
+        ratio_flatten_config["default_strategy"][
+            "opacity_cull_local_min_accumulated_alpha"
+        ] = 0.5
+        ratio_flatten_config.pop("config_manifest_sha256")
+        ratio_flatten_config["config_manifest_sha256"] = hashlib.sha256(
+            canonical_json_bytes(ratio_flatten_config)
+        ).hexdigest()
+        ratio_flatten_gate = advance_adaptive_growth_gate(
+            _upstream_data_gate(), ratio_flatten_config, stage="boundary"
+        )
+        self.assertEqual(
+            ratio_flatten_gate["flatten_profile"],
+            "thin_surface_ratio_0p15",
+        )
+        self.assertEqual(
+            ratio_flatten_gate["lidar_alpha_profile"],
+            "signed_lidar_alpha_floor_0p95",
+        )
+        self.assertEqual(
+            ratio_flatten_gate["cloudstudio_cull_enhancement"][
+                "local_min_accumulated_alpha"
+            ],
+            0.5,
+        )
+
+        vendor_pre_optimizer_config = copy.deepcopy(config)
+        vendor_pre_optimizer_config["run_id"] = "v39-vendor-pre-optimizer"
+        vendor_pre_optimizer_config["densification_gradient_source"] = "total_loss"
+        vendor_pre_optimizer_config["default_strategy"].update(
+            {
+                "lifecycle_execution_order": "pre_optimizer_vendor",
+                "absgrad": False,
+                "revised_opacity": False,
+                "detail_split_policy": "vendor_0_2m",
+                "opacity_cull_policy": "immediate",
+                "opacity_cull_min_observations": 0,
+                "opacity_cull_consecutive_events": 1,
+                "opacity_cull_grace_after_reset_steps": 0,
+                "opacity_cull_max_fraction": 1.0,
+                "opacity_cull_priority": "lowest_opacity",
+                "opacity_cull_local_min_accumulated_alpha": 0.0,
+            }
+        )
+        vendor_pre_optimizer_config["tangent_proposal"] = {
+            "enabled": False,
+            "reject_unsupported_births": False,
+        }
+        vendor_pre_optimizer_config["geometry_regularization"].update(
+            {
+                "opacity_sparsity_weight": 0.01,
+                "scale_upper_weight": 0.0,
+                "anisotropy_weight": 0.0,
+                "max_anisotropy": 256.0,
+            }
+        )
+        vendor_pre_optimizer_config["lidar_normal_alignment"] = {
+            "weight_point_to_plane": 0.0,
+            "point_to_plane_huber_delta_m": 0.02,
+            "weight_flatten": 0.0,
+            "flatten_mode": "absolute_m",
+            "flatten_target_m": 0.02,
+        }
+        vendor_pre_optimizer_config["lidar_alpha_weight"] = 0.0
+        vendor_pre_optimizer_config["lidar_alpha_target"] = 0.95
+        vendor_pre_optimizer_config.pop("config_manifest_sha256")
+        vendor_pre_optimizer_config["config_manifest_sha256"] = hashlib.sha256(
+            canonical_json_bytes(vendor_pre_optimizer_config)
+        ).hexdigest()
+        vendor_pre_optimizer_gate = advance_adaptive_growth_gate(
+            _upstream_data_gate(),
+            vendor_pre_optimizer_config,
+            stage="boundary",
+        )
+        self.assertEqual(
+            vendor_pre_optimizer_gate["lifecycle_execution_order"],
+            "pre_optimizer_vendor",
+        )
+        self.assertEqual(
+            vendor_pre_optimizer_gate["adaptive_growth"]["profile"],
+            "v39_vendor_pre_optimizer_classic_ppisp_compat",
+        )
+
+        warmup_safe_vendor_config = copy.deepcopy(vendor_pre_optimizer_config)
+        warmup_safe_vendor_config["run_id"] = "v39b-vendor-cull-warmup-0p05"
+        warmup_safe_vendor_config["default_strategy"].update(
+            {
+                "vendor_cull_warmup_profile": "compatibility_uniform_0p05",
+                "prune_opa": 0.05,
+                "prune_opa_late": 0.05,
+            }
+        )
+        warmup_safe_vendor_config.pop("config_manifest_sha256")
+        warmup_safe_vendor_config["config_manifest_sha256"] = hashlib.sha256(
+            canonical_json_bytes(warmup_safe_vendor_config)
+        ).hexdigest()
+        warmup_safe_gate = advance_adaptive_growth_gate(
+            _upstream_data_gate(), warmup_safe_vendor_config, stage="boundary"
+        )
+        self.assertEqual(
+            warmup_safe_gate["vendor_cull_warmup_profile"],
+            "compatibility_uniform_0p05",
+        )
+        self.assertEqual(
+            warmup_safe_gate["adaptive_growth"]["profile"],
+            "v39b_vendor_pre_optimizer_cull0p05_ppisp_compat",
+        )
+
+        visible_opacity_config = copy.deepcopy(warmup_safe_vendor_config)
+        visible_opacity_config["run_id"] = "v40-visible-opacity-sparsity"
+        visible_opacity_config["geometry_regularization"][
+            "opacity_sparsity_scope"
+        ] = "visible_current_view"
+        visible_opacity_config.pop("config_manifest_sha256")
+        visible_opacity_config["config_manifest_sha256"] = hashlib.sha256(
+            canonical_json_bytes(visible_opacity_config)
+        ).hexdigest()
+        visible_opacity_gate = advance_adaptive_growth_gate(
+            _upstream_data_gate(), visible_opacity_config, stage="boundary"
+        )
+        self.assertEqual(
+            visible_opacity_gate["opacity_sparsity_profile"],
+            "visible_current_view_lidar_compat",
+        )
+        self.assertEqual(
+            visible_opacity_gate["adaptive_growth"]["profile"],
+            "v40_vendor_pre_optimizer_visible_opacity_ppisp_compat",
+        )
+
+        deferred_reset_config = copy.deepcopy(visible_opacity_config)
+        deferred_reset_config["run_id"] = "v41-deferred-opacity-reset"
+        deferred_reset_config["default_strategy"].update(
+            {
+                "vendor_opacity_reset_profile": (
+                    "deferred_every3000_compatibility"
+                ),
+                "reset_every": 3000,
+            }
+        )
+        deferred_reset_config.pop("config_manifest_sha256")
+        deferred_reset_config["config_manifest_sha256"] = hashlib.sha256(
+            canonical_json_bytes(deferred_reset_config)
+        ).hexdigest()
+        deferred_reset_gate = advance_adaptive_growth_gate(
+            _upstream_data_gate(), deferred_reset_config, stage="boundary"
+        )
+        self.assertEqual(
+            deferred_reset_gate["vendor_opacity_reset_profile"],
+            "deferred_every3000_compatibility",
+        )
+        self.assertEqual(
+            deferred_reset_gate["adaptive_growth"]["profile"],
+            "v41_vendor_pre_optimizer_deferred_reset_ppisp_compat",
+        )
+
+        calibrated_gradient_config = copy.deepcopy(deferred_reset_config)
+        calibrated_gradient_config["run_id"] = "v42-calibrated-gradient"
+        calibrated_gradient_config["default_strategy"]["grow_grad2d"] = (
+            0.000075
+        )
+        calibrated_gradient_config.pop("config_manifest_sha256")
+        calibrated_gradient_config["config_manifest_sha256"] = hashlib.sha256(
+            canonical_json_bytes(calibrated_gradient_config)
+        ).hexdigest()
+        calibrated_gradient_gate = advance_adaptive_growth_gate(
+            _upstream_data_gate(), calibrated_gradient_config, stage="boundary"
+        )
+        self.assertEqual(
+            calibrated_gradient_gate["projected_gradient_profile"],
+            "calibrated_plain_7p5e5",
+        )
+
+        calibrated_cull_config = copy.deepcopy(deferred_reset_config)
+        calibrated_cull_config["run_id"] = "v42-calibrated-cull"
+        calibrated_cull_config["default_strategy"].update(
+            {
+                "vendor_cull_warmup_profile": "calibrated_uniform_0p04",
+                "prune_opa": 0.04,
+                "prune_opa_late": 0.04,
+            }
+        )
+        calibrated_cull_config.pop("config_manifest_sha256")
+        calibrated_cull_config["config_manifest_sha256"] = hashlib.sha256(
+            canonical_json_bytes(calibrated_cull_config)
+        ).hexdigest()
+        calibrated_cull_gate = advance_adaptive_growth_gate(
+            _upstream_data_gate(), calibrated_cull_config, stage="boundary"
+        )
+        self.assertEqual(
+            calibrated_cull_gate["vendor_cull_warmup_profile"],
+            "calibrated_uniform_0p04",
+        )
+
+        calibrated_opacity_config = copy.deepcopy(deferred_reset_config)
+        calibrated_opacity_config["run_id"] = "v44-calibrated-opacity-sparsity"
+        calibrated_opacity_config["geometry_regularization"][
+            "opacity_sparsity_weight"
+        ] = 0.001
+        calibrated_opacity_config.pop("config_manifest_sha256")
+        calibrated_opacity_config["config_manifest_sha256"] = hashlib.sha256(
+            canonical_json_bytes(calibrated_opacity_config)
+        ).hexdigest()
+        calibrated_opacity_gate = advance_adaptive_growth_gate(
+            _upstream_data_gate(), calibrated_opacity_config, stage="boundary"
+        )
+        self.assertEqual(
+            calibrated_opacity_gate["opacity_sparsity_profile"],
+            "visible_current_view_calibrated_1e3",
+        )
+        self.assertEqual(
+            calibrated_opacity_gate["adaptive_growth"]["profile"],
+            "v44_vendor_pre_optimizer_reduced_opacity_ppisp_compat",
+        )
+
+        geometry_cull_only_config = copy.deepcopy(calibrated_opacity_config)
+        geometry_cull_only_config["run_id"] = "v45-geometry-cull-only"
+        geometry_cull_only_config["default_strategy"].update(
+            {
+                "vendor_cull_warmup_profile": (
+                    "calibrated_geometry_only_0p00"
+                ),
+                "prune_opa": 0.0,
+                "prune_opa_late": 0.0,
+            }
+        )
+        geometry_cull_only_config.pop("config_manifest_sha256")
+        geometry_cull_only_config["config_manifest_sha256"] = hashlib.sha256(
+            canonical_json_bytes(geometry_cull_only_config)
+        ).hexdigest()
+        geometry_cull_only_gate = advance_adaptive_growth_gate(
+            _upstream_data_gate(), geometry_cull_only_config, stage="boundary"
+        )
+        self.assertEqual(
+            geometry_cull_only_gate["vendor_cull_warmup_profile"],
+            "calibrated_geometry_only_0p00",
+        )
+        self.assertEqual(
+            geometry_cull_only_gate["adaptive_growth"]["profile"],
+            "v45_vendor_pre_optimizer_geometry_cull_only_ppisp_compat",
+        )
+
+        screen_detail_config = copy.deepcopy(geometry_cull_only_config)
+        screen_detail_config["run_id"] = "v46-screen-detail-split"
+        screen_detail_config["default_strategy"].update(
+            {
+                "detail_split_policy": "lidar_surface_screen_detail",
+                "detail_split_scale_m": 0.02,
+                "detail_split_screen_radius": 0.0035,
+                "revised_opacity": True,
+            }
+        )
+        screen_detail_config.pop("config_manifest_sha256")
+        screen_detail_config["config_manifest_sha256"] = hashlib.sha256(
+            canonical_json_bytes(screen_detail_config)
+        ).hexdigest()
+        screen_detail_gate = advance_adaptive_growth_gate(
+            _upstream_data_gate(), screen_detail_config, stage="boundary"
+        )
+        self.assertEqual(
+            screen_detail_gate["cloudstudio_detail_split_enhancement"][
+                "policy"
+            ],
+            "lidar_surface_screen_detail",
+        )
+        self.assertEqual(
+            screen_detail_gate["adaptive_growth"]["profile"],
+            "v46_vendor_pre_optimizer_screen_detail_ppisp_compat",
+        )
+
+        lidar_alpha_config = copy.deepcopy(geometry_cull_only_config)
+        lidar_alpha_config["run_id"] = "v47-lidar-alpha-surface-floor"
+        lidar_alpha_config.update(
+            {"lidar_alpha_weight": 0.02, "lidar_alpha_target": 0.95}
+        )
+        lidar_alpha_config.pop("config_manifest_sha256")
+        lidar_alpha_config["config_manifest_sha256"] = hashlib.sha256(
+            canonical_json_bytes(lidar_alpha_config)
+        ).hexdigest()
+        lidar_alpha_gate = advance_adaptive_growth_gate(
+            _upstream_data_gate(), lidar_alpha_config, stage="boundary"
+        )
+        self.assertEqual(
+            lidar_alpha_gate["lidar_alpha_profile"],
+            "signed_lidar_alpha_floor_0p95",
+        )
+        self.assertEqual(
+            lidar_alpha_gate["adaptive_growth"]["profile"],
+            "v47_vendor_pre_optimizer_lidar_alpha_ppisp_compat",
+        )
+
+        opacity_only_probe = copy.deepcopy(lidar_alpha_config)
+        opacity_only_probe["run_id"] = "v47b-opacity-only-probe"
+        opacity_only_probe["mcmc_refine_stop_iter"] = 602
+        opacity_only_probe["default_strategy"]["refine_scale2d_stop_iter"] = 602
+        opacity_only_probe["controlled_stop_after_steps"] = 702
+        opacity_only_probe["lidar_range_weight"] = 0.0
+        opacity_only_probe["learning_rates"] = {
+            "means": 0.0,
+            "scales": 0.0,
+            "quats": 0.0,
+            "opacities": 0.05,
+            "colors": 0.0,
+        }
+        opacity_only_probe["geometry_regularization"][
+            "opacity_sparsity_weight"
+        ] = 0.0
+        opacity_only_probe["ppisp"] = {"enabled": True, "learning_rate": 0.0}
+        opacity_only_probe.pop("config_manifest_sha256")
+        opacity_only_probe["config_manifest_sha256"] = hashlib.sha256(
+            canonical_json_bytes(opacity_only_probe)
+        ).hexdigest()
+        probe_report = {
+            "status": "ADAPTIVE_GROWTH_BOUNDARY_PASS",
+            "checkpoint_sha256": "8" * 64,
+            "source_trainer_config_sha256": "9" * 64,
+        }
+        probe_report["boundary_report_sha256"] = hashlib.sha256(
+            canonical_json_bytes(probe_report)
+        ).hexdigest()
+        opacity_only_gate = advance_adaptive_growth_gate(
+            _upstream_data_gate(),
+            opacity_only_probe,
+            stage="review",
+            boundary_report=probe_report,
+        )
+        self.assertEqual(
+            opacity_only_gate["opacity_sparsity_profile"],
+            "disabled_surface_alpha_probe",
+        )
+        self.assertEqual(
+            opacity_only_gate["adaptive_growth"]["profile"],
+            "v47b_opacity_only_surface_alpha_probe",
+        )
+        self.assertEqual(
+            opacity_only_gate["adaptive_growth"][
+                "resume_allowed_lineage_differences"
+            ],
+            ["scale_calibration_sha256"],
+        )
+
+        shape_probe = copy.deepcopy(opacity_only_probe)
+        shape_probe["run_id"] = "v48a-surface-shape-probe"
+        shape_probe["controlled_stop_after_steps"] = 702
+        shape_probe["lidar_alpha_weight"] = 1.0
+        shape_probe["lidar_alpha_dilation_radius_px"] = 3
+        shape_probe["learning_rates"] = {
+            "means": 0.0,
+            "scales": 0.001,
+            "quats": 0.0002,
+            "opacities": 0.0,
+            "colors": 0.0,
+        }
+        shape_probe["lidar_normal_alignment"].update(
+            {
+                "enabled": True,
+                "weight_align": 0.01,
+                "weight_flatten": 0.01,
+                "weight_point_to_plane": 0.0,
+                "flatten_mode": "tangent_ratio",
+                "flatten_ratio_target": 0.15,
+            }
+        )
+        shape_probe.pop("config_manifest_sha256")
+        shape_probe["config_manifest_sha256"] = hashlib.sha256(
+            canonical_json_bytes(shape_probe)
+        ).hexdigest()
+        shape_gate = advance_adaptive_growth_gate(
+            _upstream_data_gate(),
+            shape_probe,
+            stage="review",
+            boundary_report=probe_report,
+        )
+        self.assertEqual(
+            shape_gate["adaptive_growth"]["profile"],
+            "v48a_scale_quaternion_surface_shape_probe",
+        )
+        self.assertEqual(shape_gate["flatten_profile"], "thin_surface_ratio_0p15")
+
+        strong_shape_probe = copy.deepcopy(shape_probe)
+        strong_shape_probe["run_id"] = "v48b-strong-surface-shape-probe"
+        strong_shape_probe["learning_rates"].update(
+            {"scales": 0.003, "quats": 0.0005}
+        )
+        strong_shape_probe["lidar_normal_alignment"].update(
+            {"weight_align": 0.1, "weight_flatten": 0.1}
+        )
+        strong_shape_probe.pop("config_manifest_sha256")
+        strong_shape_probe["config_manifest_sha256"] = hashlib.sha256(
+            canonical_json_bytes(strong_shape_probe)
+        ).hexdigest()
+        strong_shape_gate = advance_adaptive_growth_gate(
+            _upstream_data_gate(),
+            strong_shape_probe,
+            stage="review",
+            boundary_report=probe_report,
+        )
+        self.assertEqual(
+            strong_shape_gate["adaptive_growth"]["profile"],
+            "v48b_strong_scale_quaternion_surface_shape_probe",
+        )
+        self.assertEqual(
+            strong_shape_gate["flatten_profile"],
+            "thin_surface_ratio_0p15_strong",
+        )
+
+        invalid_vendor_config = copy.deepcopy(vendor_pre_optimizer_config)
+        invalid_vendor_config["default_strategy"][
+            "opacity_cull_max_fraction"
+        ] = 0.02
+        invalid_vendor_config.pop("config_manifest_sha256")
+        invalid_vendor_config["config_manifest_sha256"] = hashlib.sha256(
+            canonical_json_bytes(invalid_vendor_config)
+        ).hexdigest()
+        with self.assertRaisesRegex(
+            ValueError, "forbids CloudStudio cull protections"
+        ):
+            advance_adaptive_growth_gate(
+                _upstream_data_gate(), invalid_vendor_config, stage="boundary"
+            )
+
         absgrad_config = copy.deepcopy(vendor_gradient_config)
         absgrad_config["run_id"] = "v35-absgrad-calibration-boundary"
         absgrad_config["default_strategy"].update(

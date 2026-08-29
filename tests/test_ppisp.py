@@ -67,8 +67,9 @@ class PpispConfigTest(unittest.TestCase):
             PpispConfig(param_type="crf_only").validate()
         with self.assertRaises(ValueError):
             PpispConfig(mode="per_pixel").validate()
-        with self.assertRaises(ValueError):
-            PpispConfig(learning_rate=0.0).validate()
+        # A zero LR is the signed freeze mechanism used by shape/opacity-only
+        # phases; it must remain valid while negative rates stay rejected.
+        PpispConfig(learning_rate=0.0).validate()
         with self.assertRaises(ValueError):
             PpispConfig(learning_rate=-1e-3).validate()
         with self.assertRaises(ValueError):

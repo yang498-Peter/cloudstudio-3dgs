@@ -27,8 +27,8 @@ class ExposureCompensationConfig:
     mean_anchor_beta: float = 0.1
 
     def validate(self) -> None:
-        if self.learning_rate <= 0.0:
-            raise ValueError("exposure learning_rate must be positive")
+        if self.learning_rate < 0.0:
+            raise ValueError("exposure learning_rate must be non-negative")
         if self.regularization_weight < 0.0:
             raise ValueError("exposure regularization_weight must be non-negative")
         if self.max_abs_log_gain <= 0.0:

@@ -1,12 +1,29 @@
 import unittest
 
 from cloudstudio_3dgs.training.mipmap_loss_schedule import (
+    competitor_high_type2_loss_weights,
+    competitor_high_type2_schedule_contract,
     high_type2_loss_weights,
     high_type2_schedule_contract,
 )
 
 
 class MipMapLossScheduleTests(unittest.TestCase):
+    def test_competitor_dense_geometry_boundaries(self) -> None:
+        views = 10
+        self.assertEqual(competitor_high_type2_loss_weights(0, views).mesh_normal, 0.0)
+        self.assertEqual(competitor_high_type2_loss_weights(1, views).mesh_normal, 0.05)
+        self.assertEqual(competitor_high_type2_loss_weights(5 * views, views).mesh_depth, 0.0)
+        self.assertEqual(competitor_high_type2_loss_weights(5 * views + 1, views).mesh_depth, 0.5)
+        self.assertEqual(competitor_high_type2_loss_weights(10 * views + 1, views).mesh_depth, 0.25)
+        late = competitor_high_type2_loss_weights(15 * views + 1, views)
+        self.assertEqual(late.mesh_depth, 0.0)
+        self.assertEqual(late.rendered_depth_normal_consistency, 0.01)
+        self.assertEqual(late.da2_depth, 0.5)
+        contract = competitor_high_type2_schedule_contract(374)
+        self.assertFalse(contract["training_allowed"])
+        self.assertEqual(contract["mesh_topology_algorithm"], "UNKNOWN_VENDOR_IMPLEMENTATION")
+
     def test_exact_epoch_boundaries(self) -> None:
         views = 10
         expected = {

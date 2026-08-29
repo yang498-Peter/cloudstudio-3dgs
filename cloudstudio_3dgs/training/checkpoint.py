@@ -279,6 +279,7 @@ def load_checkpoint(
     auxiliary_params: dict[str, Any] | None = None,
     auxiliary_optimizers: dict[str, Any] | None = None,
     allowed_source_trainer_config_sha256: str | None = None,
+    allowed_lineage_difference_keys: tuple[str, ...] = (),
 ) -> tuple[int, Any, Any, dict[str, Any]]:
     import torch
 
@@ -298,8 +299,19 @@ def load_checkpoint(
         expected_lineage = dict(expected_identity)
         source_lineage.pop("trainer_config_sha256", None)
         expected_lineage.pop("trainer_config_sha256", None)
+        for key in allowed_lineage_difference_keys:
+            source_lineage.pop(key, None)
+            expected_lineage.pop(key, None)
         if source_lineage != expected_lineage:
-            raise ValueError("checkpoint lineage differs beyond the authorized config transition")
+            differing = sorted(
+                key
+                for key in set(source_lineage) | set(expected_lineage)
+                if source_lineage.get(key) != expected_lineage.get(key)
+            )
+            raise ValueError(
+                "checkpoint lineage differs beyond the authorized config transition: "
+                f"{differing}"
+            )
     checkpoint_params = payload["params"]
     if set(checkpoint_params) != set(params):
         raise ValueError("checkpoint parameter names do not match the trainer")

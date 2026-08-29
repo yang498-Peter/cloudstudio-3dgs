@@ -20,7 +20,11 @@ from cloudstudio_3dgs.data.person_masks import PersonMaskConfig, build_person_ma
 from cloudstudio_3dgs.data.point_cloud import write_binary_ply
 from cloudstudio_3dgs.evaluation.splits import SplitConfig, build_split_manifest, write_split_manifest
 from cloudstudio_3dgs.geometry.lidar_projection import SparseDepthMap
-from cloudstudio_3dgs.training.backend import GsplatBackend, verify_gsplat_runtime
+from cloudstudio_3dgs.training.backend import (
+    GsplatBackend,
+    rendered_range_to_euclidean,
+    verify_gsplat_runtime,
+)
 from cloudstudio_3dgs.training.checkpoint import load_checkpoint, save_checkpoint
 from cloudstudio_3dgs.training.contracts import (
     build_coordinate_transform_manifest,
@@ -51,6 +55,7 @@ from cloudstudio_3dgs.training.regularization import (
 )
 from cloudstudio_3dgs.training.trainer import (
     TrainerConfig,
+    _current_view_visibility_mask,
     _range_directionality_audit,
     _render_supervision_loss,
     _warm_start_from_checkpoint,
@@ -1120,6 +1125,67 @@ class TorchTrainingContractTests(unittest.TestCase):
         )
         self.assertAlmostEqual(float(loss.detach()), 2.2, places=6)
 
+    def test_lidar_alpha_coverage_penalizes_only_signed_depth_pixels(self) -> None:
+        import torch
+        from types import SimpleNamespace
+
+        rendered = torch.zeros((2, 2, 3), dtype=torch.float32)
+        alpha = torch.tensor(
+            [[0.5, 0.95], [0.0, 0.0]],
+            dtype=torch.float32,
+            requires_grad=True,
+        )
+
+        class Backend:
+            @staticmethod
+            def render(*args, **kwargs):
+                return rendered, None, alpha, {}
+
+        Backend.torch = torch
+        config = TrainerConfig.from_dict(
+            {
+                "run_id": "lidar-alpha-formula",
+                "trainer_preset": "custom",
+                "dataset_manifest": "dataset.json",
+                "recording_root": "recording",
+                "mask_manifest": "masks.json",
+                "mask_root": "masks",
+                "split_manifest": "split.json",
+                "initialization_ply": "sparse_pc.ply",
+                "output_dir": "run",
+                "gsplat_lock": "upstream/gsplat.lock.json",
+                "require_person_masks": False,
+                "rgb_l1_weight": 1.0,
+                "rgb_ssim_weight": 0.0,
+                "lidar_range_weight": 0.0,
+                "lidar_alpha_weight": 2.0,
+                "lidar_alpha_target": 0.9,
+            }
+        )
+        tensors = {
+            "rgb": torch.zeros((2, 2, 3)),
+            "rgb_mask": torch.ones((2, 2), dtype=torch.bool),
+            "depth_mask": torch.tensor([[True, True], [False, False]]),
+            "confidence": torch.tensor([[1.0, 0.5], [1.0, 1.0]]),
+        }
+        loss, _, _, _, info = _render_supervision_loss(
+            backend=Backend(),
+            params={},
+            sample=SimpleNamespace(camera_model="fisheye"),
+            tensors=tensors,
+            config=config,
+        )
+        expected_raw = (0.4**2) / 1.5
+        self.assertAlmostEqual(
+            float(info["cloudstudio_lidar_alpha_loss"].detach()),
+            expected_raw,
+            places=6,
+        )
+        self.assertAlmostEqual(float(loss.detach()), 2.0 * expected_raw, places=6)
+        loss.backward()
+        self.assertLess(float(alpha.grad[0, 0]), 0.0)
+        self.assertEqual(float(alpha.grad[1, 0]), 0.0)
+
     def test_eval3d_euclidean_range_is_not_scaled_twice(self) -> None:
         import torch
         from types import SimpleNamespace
@@ -1174,6 +1240,31 @@ class TorchTrainingContractTests(unittest.TestCase):
             config=config,
         )
         self.assertEqual(float(range_loss.detach()), 0.0)
+
+    def test_classic_pinhole_z_depth_is_scaled_to_euclidean_range(self) -> None:
+        import torch
+        from types import SimpleNamespace
+
+        rendered_range = torch.full((2, 2), 2.0, dtype=torch.float32)
+        converted = rendered_range_to_euclidean(
+            torch,
+            rendered_range,
+            SimpleNamespace(
+                depth_to_range_scale=np.full((2, 2), 1.25, dtype=np.float32)
+            ),
+            {"cloudstudio_range_semantics": "pinhole_z_depth_m"},
+        )
+        self.assertTrue(torch.allclose(converted, torch.full((2, 2), 2.5)))
+
+        unchanged = rendered_range_to_euclidean(
+            torch,
+            rendered_range,
+            SimpleNamespace(
+                depth_to_range_scale=np.full((2, 2), 1.25, dtype=np.float32)
+            ),
+            {"cloudstudio_range_semantics": "euclidean_ray_range_m"},
+        )
+        self.assertIs(unchanged, rendered_range)
 
     def test_masked_losses_ignore_invalid_pixels_and_use_range_confidence(self) -> None:
         import torch
@@ -1585,6 +1676,44 @@ class TorchTrainingContractTests(unittest.TestCase):
             {"source": "depth_mask", "dilation_radius_px": 3},
         )
 
+    def test_lidar_alpha_coverage_is_signed_and_requires_depth(self) -> None:
+        base = {
+            "run_id": "lidar-alpha-coverage",
+            "trainer_preset": "custom",
+            "dataset_manifest": "dataset.json",
+            "recording_root": "recording",
+            "mask_manifest": "masks.json",
+            "mask_root": "masks",
+            "split_manifest": "split.json",
+            "initialization_ply": "sparse_pc.ply",
+            "output_dir": "run",
+            "gsplat_lock": "upstream/gsplat.lock.json",
+            "require_person_masks": False,
+            "lidar_range_weight": 0.0,
+            "lidar_alpha_weight": 0.02,
+            "lidar_alpha_target": 0.95,
+        }
+        with self.assertRaisesRegex(ValueError, "LiDAR loss weight"):
+            TrainerConfig.from_dict(base).validate()
+        config = TrainerConfig.from_dict(
+            {**base, "depth_manifest": "depth.json", "depth_root": "depth"}
+        )
+        config.validate()
+        contract = config.contract_dict()
+        self.assertEqual(
+            contract["loss_weights"]["lidar_alpha_coverage"], 0.02
+        )
+        self.assertEqual(
+            contract["loss_contract"]["lidar_alpha_coverage"],
+            {
+                "enabled": True,
+                "source": "signed_lidar_depth_mask",
+                "target": 0.95,
+                "dilation_radius_px": 0,
+                "loss": "confidence_weighted_squared_deficit",
+            },
+        )
+
     def test_rgb_gradient_loss_is_explicit_and_signed(self) -> None:
         config = TrainerConfig.from_dict(
             {
@@ -1846,6 +1975,14 @@ class RenderScaleContractTests(unittest.TestCase):
         self.assertAlmostEqual(float(exposure.gain("right").detach()), 2.0)
         self.assertGreater(float(exposure.prior_loss().detach()), 0.0)
 
+    def test_exposure_compensator_accepts_zero_lr_for_frozen_warm_start(self) -> None:
+        exposure = ExposureCompensator(
+            ["left"],
+            config=ExposureCompensationConfig(enabled=True, learning_rate=0.0),
+            device="cpu",
+        )
+        self.assertEqual(exposure.make_optimizer().param_groups[0]["lr"], 0.0)
+
     def test_exposure_zero_mean_projection_removes_brightness_degeneracy(self) -> None:
         import torch
 
@@ -2092,6 +2229,45 @@ class RenderScaleContractTests(unittest.TestCase):
         self.assertTrue(torch.isfinite(params["scales"].grad).all())
         with self.assertRaisesRegex(ValueError, "tail_fraction"):
             GeometryRegularizationConfig(scale_upper_tail_fraction=0.0).validate()
+
+    def test_visible_opacity_sparsity_only_updates_current_raster_support(self) -> None:
+        import torch
+
+        opacities = torch.tensor([-2.0, 0.0, 2.0], requires_grad=True)
+        params = {
+            "opacities": opacities,
+            "scales": torch.full((3, 3), 0.01).log().requires_grad_(),
+        }
+        visibility = _current_view_visibility_mask(
+            torch.tensor([[[2.0, 1.0], [0.0, 0.0], [3.0, 2.0]]]),
+            gaussian_count=3,
+        )
+        self.assertEqual(visibility.tolist(), [True, False, True])
+        terms = geometry_regularization_terms(
+            params,
+            reference_scale_m=0.01,
+            config=GeometryRegularizationConfig(
+                opacity_sparsity_weight=1.0,
+                opacity_sparsity_scope="visible_current_view",
+            ),
+            visibility_mask=visibility,
+        )
+        self.assertEqual(terms["opacity_sparsity_active_count"], 2)
+        self.assertAlmostEqual(
+            float(terms["opacity_sparsity_active_fraction"]), 2.0 / 3.0
+        )
+        terms["total"].backward()
+        self.assertGreater(float(opacities.grad[0]), 0.0)
+        self.assertEqual(float(opacities.grad[1]), 0.0)
+        self.assertGreater(float(opacities.grad[2]), 0.0)
+        with self.assertRaisesRegex(ValueError, "visibility mask"):
+            geometry_regularization_terms(
+                params,
+                reference_scale_m=0.01,
+                config=GeometryRegularizationConfig(
+                    opacity_sparsity_scope="visible_current_view"
+                ),
+            )
 
     def test_backend_initializes_per_point_metric_knn_scales(self) -> None:
         import torch
