@@ -113,7 +113,18 @@ L =  w_rgb·[(1−λ_dssim)·L1 + λ_dssim·(1−SSIM)]      # GetLoss，带 mas
 
 `mipmap::bilateral_grid` 命名空间下的完整 CUDA kernel 组：`slice_forward` / `slice_forward_chw` / `slice_backward` / `slice_backward_chw` / `tv_forward_stage1` / `tv_forward_stage2` / `tv_backward` / **`adam_update`** / `init_identity` / `accumulate_grad`。`BatchTraning` 直接接收一个 `BilateralGrid` 参数。
 
-即：竞品的逐相机外观模型是**带 TV 正则、自带 Adam 优化器的可学习双边网格**。我方 PPISP 是受控光度模型，**不是等价实现**——这一点 SOP §9.17 已经写对，本次审计给出了正面证据。精确张量形状待 report_B 补充。
+即：竞品的逐相机外观模型是**带 TV 正则、自带 Adam 优化器的可学习双边网格**。我方 PPISP 是受控光度模型，**不是等价实现**——这一点 SOP §9.17 已经写对，本次审计给出了正面证据。
+
+**精确形状已证实为 `[N_cameras, 12, 8, 16, 16]`**，取自 `BilateralGrid` 构造函数（RVA `0xfc0b0`）分配的 rank-5 张量：`shape[1]` 是硬编码字面量 `12`（3×4 仿射颜色变换），其余维度取自 `GaussianSplatTrainingParams` 字段 `0x10c/0x110/0x114`，其**内建默认值 `16, 16, 8`** 从参数构造函数 `0xa37ba` 恢复（guidance/深度分箱 8，网格 H×W 16×16）。维度可被调用方覆盖，但这组默认值与 gsplat 的经典双边网格一致。
+
+其余已恢复要点：
+
+- 每格 3×4 仿射，逐像素**三线性切片**（HWC 与 CHW 两种输出布局都已接线），`init_identity` 单位初始化
+- 逐相机索引直接用**训练图像下标**（守卫串 `BilateralGrid::apply/backward: image_idx out of range`），无学习式查表
+- TV 平滑损失真实接线（两阶段前向归约 + 反向，损失例程 `0xfe19d`）；TV 权重数值 `NOT RECOVERABLE`（候选默认 `params[+0x11c]=5.0`，仅为相邻配置位推断）
+- **自带融合 CUDA Adam**（非 `torch::optim::Adam`），含 m/v 与梯度累加器，**LR 默认 0.002**（`params[+0x118]` = f32 `0x3b03126f`，与 gsplat 2e-3 一致）；betas/eps `NOT RECOVERABLE`
+
+**重要更正**：字符串 `"Exposure … Range -4.0 to +4.0"` **不是厂商模型**，而是 exiv2 内嵌的 Adobe Camera Raw / XMP `crs:` 元数据样板（周围是 `CropUnits`、`AutoExposure`、`Exposure2012` 等）。竞品**没有独立的逐图曝光标量**，全局亮度被吸收进仿射网格的偏置列。我方若要对齐，需要的是网格本身，而不是再加一个曝光参数。
 
 ## 8. 端到端流程（用于流程固化对照）
 
@@ -149,7 +160,7 @@ seg map 由外部预计算，经 `Catalog::GetUndistortSegMapPath(unsigned int i
 - `GaussianSplatTrainingParams` 的字段名与默认值（宿主侧）
 - opacity reset 的数值与间隔（经指针表加载，邻近无立即数）
 - 实际使用的 `shDeg` 实参、迭代总数、LR 调度、致密化起止步
-- BilateralGrid 精确张量形状（report_B 待归档）
+- BilateralGrid 的 Adam betas/eps、精确 TV 权重、设备端切片数学（在 SASS 中）
 - 分块数/切分几何（上游 DLL）
 - `RunScaffold` 的确切角色
 
@@ -165,3 +176,4 @@ seg map 由外部预计算，经 `Catalog::GetUndistortSegMapPath(unsigned int i
 6. **天空按 100k / SH0 / 各向同性 / opacity P50 0.10 复刻**，独立导出。
 7. DA2 与 mesh 深度在竞品是**在用**的；我方权重 0 的决策基于"LiDAR 是更强真值"这一自有理由，可保留，但不能再写成"竞品也不用"。
 8. 我方交付件的离群漂浮物需在导出前按场景 ROI 裁剪（竞品包围盒紧致，且流程里有显式 `Cut(AlignedBox, SceneROI, margin)`）。
+9. **外观模型要么补齐要么明说不补**：若要对齐，需实现 `[N,12,8,16,16]` 逐相机网格 + 单位初始化 + 三线性切片 + TV 损失 + 独立 Adam(lr 2e-3)；PPISP 无法表达 guidance 相关的空间变化校正。这一项影响的是跨相机色彩一致性，不直接影响锐度，优先级低于 §11.1–2。
