@@ -694,6 +694,90 @@ def advance_spatial_tile_gate(
     return sign_gate(payload)
 
 
+SURFACE_ONLY_DEFERRED_STAGES = (
+    "da2_monocular_depth",
+    "independent_sky_background",
+)
+
+
+def advance_spatial_tile_gate_surface_only(
+    lidar_gate: dict[str, Any],
+    tile_plan: dict[str, Any],
+    *,
+    deferral_reason: str,
+    evidence: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Advance a LiDAR-depth gate straight to the Tile plan on the surface route.
+
+    The ordered chain places monocular depth and sky evidence ahead of spatial
+    tiling, but the planner reads neither: its geometry comes from LiDAR
+    visibility and the point cloud bounds, and the sky gate only carried the
+    upstream hashes forward. Requiring them made the surface route wait on a
+    signal whose training weight is zero.
+
+    Those two stages are recorded here as deliberately deferred, with the reason
+    kept in the gate, rather than marked complete. A gate produced this way can
+    never reach training-ready for a route that needs them: the deferral list
+    travels with it, and the sky product remains unbuilt until it is asked for
+    on its own terms.
+    """
+
+    verify_gate(lidar_gate)
+    if (
+        lidar_gate.get("status") != LIDAR_DEPTH_READY_STATUS
+        or lidar_gate.get("training_allowed") is not False
+        or tuple(lidar_gate.get("completed_stages", [])) != ORDERED_STAGES[:12]
+    ):
+        raise ValueError("surface-only tiling requires an exact LIDAR_DEPTH_READY gate")
+    if not str(deferral_reason).strip():
+        raise ValueError("surface-only tiling requires a recorded deferral reason")
+    tile_sha = verify_adaptive_tile_plan(tile_plan)
+    bindings = dict(lidar_gate.get("bindings", {}))
+    plan_bindings = tile_plan.get("source_bindings", {})
+    required = {
+        "training_dataset_manifest_sha256": bindings.get(
+            "training_dataset_manifest_sha256"
+        ),
+        "face4_train_manifest_sha256": bindings.get("face4_train_manifest_sha256"),
+        "lidar_depth_manifest_sha256": bindings.get("lidar_depth_manifest_sha256"),
+    }
+    if {key: plan_bindings.get(key) for key in required} != required:
+        raise ValueError("spatial Tile plan is bound to different training inputs")
+    if plan_bindings.get("sky_train_evidence_manifest_sha256") is not None:
+        raise ValueError(
+            "surface-only tiling rejects a Tile plan that claims sky evidence"
+        )
+    if int(tile_plan.get("retained_tile_count", 0)) <= 0:
+        raise ValueError("spatial Tile plan retains no trainable tiles")
+    bindings["spatial_tile_plan_manifest_sha256"] = tile_sha
+    completed = [
+        stage
+        for stage in ORDERED_STAGES[:15]
+        if stage not in SURFACE_ONLY_DEFERRED_STAGES
+    ]
+    payload = copy.deepcopy(lidar_gate)
+    payload.pop("gate_manifest_sha256", None)
+    payload.update(
+        {
+            "status": UPSTREAM_DATA_READY_STATUS,
+            "training_allowed": False,
+            "route": "surface_only",
+            "completed_stages": completed,
+            "deferred_stages": list(SURFACE_ONLY_DEFERRED_STAGES),
+            "deferral_reason": str(deferral_reason),
+            "next_required_stage": ORDERED_STAGES[15],
+            "blocking_reasons": [
+                "training implementation contract has not been verified",
+                "a short GPU smoke has not verified that the Trainer consumes the signed inputs",
+            ],
+            "bindings": bindings,
+        }
+    )
+    if evidence:
+        payload.setdefault("evidence", {}).update(copy.deepcopy(evidence))
+    return sign_gate(payload)
+
+
 def advance_training_implementation_gate(
     upstream_gate: dict[str, Any],
     implementation_contract: dict[str, Any],
@@ -703,10 +787,25 @@ def advance_training_implementation_gate(
     """Allow Tile training only after the implementation contract passes."""
 
     verify_gate(upstream_gate)
+    surface_only = upstream_gate.get("route") == "surface_only"
+    if surface_only:
+        expected_stages = tuple(
+            stage
+            for stage in ORDERED_STAGES[:15]
+            if stage not in SURFACE_ONLY_DEFERRED_STAGES
+        )
+        if tuple(upstream_gate.get("deferred_stages", [])) != SURFACE_ONLY_DEFERRED_STAGES:
+            raise ValueError(
+                "surface-only gate must declare exactly the deferred stages"
+            )
+        if not str(upstream_gate.get("deferral_reason", "")).strip():
+            raise ValueError("surface-only gate must carry its deferral reason")
+    else:
+        expected_stages = ORDERED_STAGES[:15]
     if (
         upstream_gate.get("status") != UPSTREAM_DATA_READY_STATUS
         or upstream_gate.get("training_allowed") is not False
-        or tuple(upstream_gate.get("completed_stages", [])) != ORDERED_STAGES[:15]
+        or tuple(upstream_gate.get("completed_stages", [])) != expected_stages
     ):
         raise ValueError(
             "training implementation requires an exact UPSTREAM_DATA_READY gate"
@@ -716,15 +815,16 @@ def advance_training_implementation_gate(
     )
     bindings = dict(upstream_gate.get("bindings", {}))
     contract_bindings = implementation_contract.get("source_bindings", {})
-    required_bindings = {
-        key: bindings.get(key)
-        for key in (
-            "training_dataset_manifest_sha256",
-            "face4_train_manifest_sha256",
-            "da2_train_manifest_sha256",
-            "spatial_tile_plan_manifest_sha256",
-        )
-    }
+    binding_keys = [
+        "training_dataset_manifest_sha256",
+        "face4_train_manifest_sha256",
+        "spatial_tile_plan_manifest_sha256",
+    ]
+    if not surface_only:
+        # The surface route never produced a monocular-depth cache, so demanding
+        # its hash here would only be satisfiable by inventing one.
+        binding_keys.insert(2, "da2_train_manifest_sha256")
+    required_bindings = {key: bindings.get(key) for key in binding_keys}
     if {key: contract_bindings.get(key) for key in required_bindings} != required_bindings:
         raise ValueError(
             "training implementation contract is bound to different upstream inputs"
