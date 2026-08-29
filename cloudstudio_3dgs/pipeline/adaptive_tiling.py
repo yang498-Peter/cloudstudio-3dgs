@@ -190,16 +190,19 @@ class GaussianResidencyModel:
 
     Defaults come from this machine's own full-resolution runs:
 
-        0.971M gaussians -> 0.892 GiB
-        7.036M gaussians -> 2.903 GiB
+        0.971M gaussians ->  0.892 GiB
+        7.036M gaussians ->  2.903 GiB
+       18.758M gaussians -> 10.011 GiB
 
-    which fit base 0.570 GiB and 0.332 GiB per million. Peak arrives during
-    refinement, where clone and split briefly hold old and new tensors
-    together, so the multiplier is applied on top of the steady-state slope.
+    The slope is fitted at the largest point, not across all three. The two
+    small runs are dominated by the fixed workspace, and extrapolating their
+    apparent slope understated an 18.76M scene by 47 percent. Peak arrives
+    during refinement, where clone and split briefly hold old and new tensors
+    together, so the multiplier applies on top of the steady-state slope.
     """
 
     base_gib: float = 0.570
-    gib_per_million: float = 0.332
+    gib_per_million: float = 0.5033
     lifecycle_multiplier: float = 3.0
     growth_ratio: float = 3.2
 

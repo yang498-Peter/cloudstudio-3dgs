@@ -15,7 +15,10 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from cloudstudio_3dgs.pipeline.mipmap_gate import advance_spatial_tile_gate
+from cloudstudio_3dgs.pipeline.mipmap_gate import (
+    advance_spatial_tile_gate,
+    advance_spatial_tile_gate_surface_only,
+)
 
 
 def _read(path: Path) -> dict:
@@ -32,20 +35,40 @@ def _sha256_file(path: Path) -> str:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--sky-gate", type=Path, required=True)
+    upstream = parser.add_mutually_exclusive_group(required=True)
+    upstream.add_argument("--sky-gate", type=Path)
+    upstream.add_argument(
+        "--lidar-depth-gate",
+        type=Path,
+        help="surface route: advance straight from the LiDAR depth gate",
+    )
+    parser.add_argument(
+        "--deferral-reason",
+        type=str,
+        help="required on the surface route: why sky and mono depth are deferred",
+    )
     parser.add_argument("--tile-plan", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
-    gate = advance_spatial_tile_gate(
-        _read(args.sky_gate),
-        _read(args.tile_plan),
-        evidence={
-            "spatial_tile_plan": {
-                "path": str(args.tile_plan.resolve()),
-                "sha256": _sha256_file(args.tile_plan),
-            }
-        },
-    )
+    evidence = {
+        "spatial_tile_plan": {
+            "path": str(args.tile_plan.resolve()),
+            "sha256": _sha256_file(args.tile_plan),
+        }
+    }
+    if args.lidar_depth_gate is not None:
+        if not (args.deferral_reason or "").strip():
+            parser.error("--deferral-reason is required with --lidar-depth-gate")
+        gate = advance_spatial_tile_gate_surface_only(
+            _read(args.lidar_depth_gate),
+            _read(args.tile_plan),
+            deferral_reason=args.deferral_reason,
+            evidence=evidence,
+        )
+    else:
+        gate = advance_spatial_tile_gate(
+            _read(args.sky_gate), _read(args.tile_plan), evidence=evidence
+        )
     args.output.parent.mkdir(parents=True, exist_ok=True)
     descriptor, name = tempfile.mkstemp(
         prefix=f".{args.output.name}.", suffix=".tmp", dir=args.output.parent

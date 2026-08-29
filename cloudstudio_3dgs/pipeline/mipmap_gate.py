@@ -365,7 +365,23 @@ def verify_gate(gate: dict[str, Any]) -> str:
     if gate.get("profile") != GATE_PROFILE:
         raise ValueError("unexpected MipMap pipeline gate profile")
     completed = tuple(str(value) for value in gate.get("completed_stages", []))
-    if completed != ORDERED_STAGES[: len(completed)]:
+    deferred = tuple(str(value) for value in gate.get("deferred_stages", []))
+    if deferred:
+        # A route may declare stages deferred, but only ones it names, and the
+        # rest must still appear in order with nothing else missing. This is a
+        # prefix with stated holes, not an arbitrary subsequence.
+        if gate.get("route") != "surface_only" or deferred != SURFACE_ONLY_DEFERRED_STAGES:
+            raise ValueError("unrecognized deferred-stage declaration")
+        if not str(gate.get("deferral_reason", "")).strip():
+            raise ValueError("deferred stages require a recorded reason")
+        allowed = tuple(
+            stage for stage in ORDERED_STAGES if stage not in deferred
+        )
+        if completed != allowed[: len(completed)]:
+            raise ValueError(
+                "MipMap pipeline stages are missing, reordered, or skipped"
+            )
+    elif completed != ORDERED_STAGES[: len(completed)]:
         raise ValueError("MipMap pipeline stages are missing, reordered, or skipped")
     return expected
 
@@ -1863,7 +1879,21 @@ def verify_training_gate(
             f"{gate.get('status')!r}; next required stage is {next_stage!r}. "
             "UPSTREAM_DATA_READY does not authorize training"
         )
-    if tuple(gate.get("completed_stages", [])) != ORDERED_STAGES[:15]:
+    if gate.get("route") == "surface_only":
+        if tuple(gate.get("deferred_stages", [])) != SURFACE_ONLY_DEFERRED_STAGES:
+            raise ValueError(
+                "surface-only gate must declare exactly the deferred stages"
+            )
+        if not str(gate.get("deferral_reason", "")).strip():
+            raise ValueError("surface-only gate must carry its deferral reason")
+        expected_stages = tuple(
+            stage
+            for stage in ORDERED_STAGES[:15]
+            if stage not in SURFACE_ONLY_DEFERRED_STAGES
+        )
+    else:
+        expected_stages = ORDERED_STAGES[:15]
+    if tuple(gate.get("completed_stages", [])) != expected_stages:
         raise ValueError(
             "MipMap training gate must complete every stage through spatial_tile_plan"
         )

@@ -16,11 +16,25 @@ from cloudstudio_3dgs.pipeline.adaptive_tiling import (
 )
 
 
-def test_defaults_match_the_measured_fit():
-    """0.971M -> 0.892 GiB and 7.036M -> 2.903 GiB, frozen topology."""
+def test_defaults_match_the_largest_measured_run():
+    """18.758M gaussians peaked at 10.011 GiB, frozen topology, factor 1."""
     steady = GaussianResidencyModel(lifecycle_multiplier=1.0, growth_ratio=1.0)
-    assert steady.peak_gib(971_903) == pytest.approx(0.892, abs=0.01)
-    assert steady.peak_gib(7_036_339) == pytest.approx(2.906, abs=0.01)
+    assert steady.peak_gib(18_757_869) == pytest.approx(10.011, abs=0.02)
+
+
+def test_small_runs_would_have_understated_the_slope():
+    """Why the fit is anchored at the large point rather than across all three.
+
+    The two small runs sit mostly in the fixed workspace, so their apparent
+    slope is shallow; carrying it to 18.76M understated the real peak by
+    roughly half.
+    """
+    optimistic = GaussianResidencyModel(
+        gib_per_million=0.332, lifecycle_multiplier=1.0, growth_ratio=1.0
+    )
+    assert optimistic.peak_gib(18_757_869) < 7.0
+    steady = GaussianResidencyModel(lifecycle_multiplier=1.0, growth_ratio=1.0)
+    assert steady.peak_gib(18_757_869) / optimistic.peak_gib(18_757_869) > 1.4
 
 
 def test_peak_scales_with_the_refinement_transient():
