@@ -45,6 +45,35 @@ from typing import Any
 DENSIFICATION_STRATEGIES = ("error_weighted_mcmc", "default_3dgs")
 
 
+_QUANTILE_INPUT_LIMIT = 1 << 24
+_QUANTILE_SAMPLE_SIZE = 1 << 20
+
+
+def _sampled_quantile(values: Any, levels: Any) -> Any:
+    """torch.quantile, but on a bounded sample when the input is large.
+
+    torch.quantile refuses inputs beyond 2**24 elements, which a healthy
+    population crosses mid-run - and these are telemetry percentiles, so
+    losing the run to a diagnostic is the worst possible trade. A million
+    element sample carries a percentile far more precisely than it is ever
+    read. The sample uses its own generator so training RNG is untouched and
+    the reported numbers stay reproducible.
+    """
+    import torch
+
+    if values.numel() > _QUANTILE_INPUT_LIMIT:
+        generator = torch.Generator(device=values.device)
+        generator.manual_seed(0)
+        index = torch.randint(
+            values.numel(),
+            (_QUANTILE_SAMPLE_SIZE,),
+            device=values.device,
+            generator=generator,
+        )
+        values = values[index]
+    return torch.quantile(values, levels)
+
+
 class DefaultStrategyAdapter:
     """gsplat ``DefaultStrategy`` behind the attribute surface MCMC exposes."""
 
@@ -559,7 +588,7 @@ class DefaultStrategyAdapter:
                 dtype=finite_observed_gradients.dtype,
                 device=finite_observed_gradients.device,
             )
-            quantile_values = torch.quantile(
+            quantile_values = _sampled_quantile(
                 finite_observed_gradients, quantile_levels
             ).tolist()
             gradient_quantiles = {
@@ -652,7 +681,7 @@ class DefaultStrategyAdapter:
             label: float(value)
             for label, value in zip(
                 ("p05", "p10", "p50", "p90", "p95"),
-                torch.quantile(
+                _sampled_quantile(
                     opacity.float(),
                     torch.tensor(
                         [0.05, 0.1, 0.5, 0.9, 0.95], device=opacity.device
@@ -677,7 +706,7 @@ class DefaultStrategyAdapter:
                 levels = torch.tensor(
                     [0.5, 0.9, 0.95, 0.99, 0.999], device=equivalent_seen.device
                 )
-                q = torch.quantile(equivalent_seen, levels).tolist()
+                q = _sampled_quantile(equivalent_seen, levels).tolist()
                 footprint_audit = {
                     "equivalent_grad_p50": float(q[0]),
                     "equivalent_grad_p90": float(q[1]),
@@ -695,10 +724,10 @@ class DefaultStrategyAdapter:
         convention_audit = {}
         if window_sums.numel():
             convention_audit = {
-                "window_sum_p90": float(torch.quantile(window_sums, 0.9)),
-                "window_sum_p99": float(torch.quantile(window_sums, 0.99)),
-                "observations_p50": float(torch.quantile(observation_counts, 0.5)),
-                "observations_p90": float(torch.quantile(observation_counts, 0.9)),
+                "window_sum_p90": float(_sampled_quantile(window_sums, 0.9)),
+                "window_sum_p99": float(_sampled_quantile(window_sums, 0.99)),
+                "observations_p50": float(_sampled_quantile(observation_counts, 0.5)),
+                "observations_p90": float(_sampled_quantile(observation_counts, 0.9)),
             }
         self._last_growth_event = {
             "gradient_threshold": float(self.inner.grow_grad2d),
@@ -1050,10 +1079,10 @@ class DefaultStrategyAdapter:
                     (candidate_observations <= 0).sum().item()
                 )
                 raw_candidate_observation_p50 = float(
-                    torch.quantile(candidate_observations, 0.50).item()
+                    _sampled_quantile(candidate_observations, 0.50).item()
                 )
                 raw_candidate_observation_p95 = float(
-                    torch.quantile(candidate_observations, 0.95).item()
+                    _sampled_quantile(candidate_observations, 0.95).item()
                 )
         self._last_cull_event = {
             "policy": self.opacity_cull_policy,
