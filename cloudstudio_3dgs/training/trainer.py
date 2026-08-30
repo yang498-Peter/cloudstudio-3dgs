@@ -1190,11 +1190,20 @@ class TrainerConfig:
                         "pre-optimizer vendor lifecycle permits only the signed "
                         "LiDAR alpha compatibility profile"
                     )
-                if self.lidar_alpha_dilation_radius_px not in (
+                allowed_dilation = (
                     {0, 3}
                     if opacity_only_surface_alpha_probe or surface_shape_probe
                     else {0}
-                ):
+                )
+                if self.surface_alpha_floor_profile:
+                    # Dilating each LiDAR hit is how the floor reaches surfaces
+                    # the scanner barely returns from. Measured 2026-08-31: a
+                    # white vehicle body went transparent while its tyres and
+                    # shadow stayed solid - bright surfaces can hide behind a
+                    # bright sky because the composite still matches, and
+                    # specular paint is exactly where LiDAR support is thinnest.
+                    allowed_dilation = set(range(17))
+                if self.lidar_alpha_dilation_radius_px not in allowed_dilation:
                     raise ValueError(
                         "pre-optimizer vendor lifecycle permits only the signed "
                         "surface-alpha dilation profile"
@@ -2162,6 +2171,24 @@ def _register_frozen_tail_hooks(params: dict[str, Any], start: int) -> int:
         parameter.register_hook(_zero_tail)
         registered += 1
     return registered
+
+
+def _warm_start_lacks_monocular_depth(path: Path) -> bool:
+    """True when the warm-start source carried no monocular depth lineage.
+
+    Distinguishes adding a supervision source from swapping one: only the
+    former is compatible with reusing a checkpoint's model state.
+    """
+    import torch
+
+    payload = torch.load(Path(path), map_location="cpu", weights_only=False)
+    identity = payload.get("identity")
+    if not isinstance(identity, dict):
+        return False
+    nested = identity.get("source_identity", {})
+    return not identity.get("mono_depth_manifest_sha256") and not (
+        isinstance(nested, dict) and nested.get("mono_depth_manifest_sha256")
+    )
 
 
 def _warm_start_from_checkpoint(
@@ -3457,16 +3484,26 @@ def train(
     warm_start: dict[str, Any] | None = None
     if config.warm_start_checkpoint is not None:
         if "source_identity" in checkpoint_identity:
+            mutable_lineage = {
+                "trainer_config_sha256",
+                "scale_calibration_sha256",
+                "initialization_geometry_sha256",
+                "surface_initialization_sha256",
+            }
+            if (
+                config.mono_depth_manifest is not None
+                and _warm_start_lacks_monocular_depth(config.warm_start_checkpoint)
+            ):
+                # ADDING a supervision source is not the same as swapping one.
+                # The gaussians keep their frame, initialization and renderer;
+                # only the loss gains a term. Swaps are still refused - this
+                # only opens the case where the source carried no monocular
+                # depth lineage at all.
+                mutable_lineage.add("mono_depth_manifest_sha256")
             warm_start_lineage = {
                 key: value
                 for key, value in checkpoint_identity.items()
-                if key
-                not in {
-                    "trainer_config_sha256",
-                    "scale_calibration_sha256",
-                    "initialization_geometry_sha256",
-                    "surface_initialization_sha256",
-                }
+                if key not in mutable_lineage
             }
         else:
             lineage_keys = (

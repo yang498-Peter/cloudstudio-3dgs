@@ -371,7 +371,10 @@ def verify_gate(gate: dict[str, Any]) -> str:
         # A route may declare stages deferred, but only ones it names, and the
         # rest must still appear in order with nothing else missing. This is a
         # prefix with stated holes, not an arbitrary subsequence.
-        if gate.get("route") != "surface_only" or deferred != SURFACE_ONLY_DEFERRED_STAGES:
+        if (
+            gate.get("route") != "surface_only"
+            or deferred not in RECOGNISED_SURFACE_DEFERRALS
+        ):
             raise ValueError("unrecognized deferred-stage declaration")
         if not str(gate.get("deferral_reason", "")).strip():
             raise ValueError("deferred stages require a recorded reason")
@@ -715,6 +718,15 @@ SURFACE_ONLY_DEFERRED_STAGES = (
     "da2_monocular_depth",
     "independent_sky_background",
 )
+# Once monocular depth is actually built and bound, the route defers only the
+# sky. A shorter deferral list is a stronger claim than the full one, so both
+# are recognised - and only these two, so a route still cannot defer whatever
+# it likes.
+SURFACE_SKY_ONLY_DEFERRED_STAGES = ("independent_sky_background",)
+RECOGNISED_SURFACE_DEFERRALS = (
+    SURFACE_ONLY_DEFERRED_STAGES,
+    SURFACE_SKY_ONLY_DEFERRED_STAGES,
+)
 
 
 def advance_spatial_tile_gate_surface_only(
@@ -877,6 +889,63 @@ def promote_surface_frozen_training_gate(
     return sign_gate(payload)
 
 
+def bind_monocular_depth_into_surface_gate(
+    training_gate: dict[str, Any],
+    train_manifest: dict[str, Any],
+    val_manifest: dict[str, Any],
+    *,
+    evidence: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Un-defer monocular depth on an authorized surface-route training gate.
+
+    The surface route deferred monocular depth because no checkpoint for it
+    existed. Sparse LiDAR then proved unable to defend bright specular
+    surfaces - a white vehicle body rendered see-through while its tyres and
+    shadow stayed solid, because a bright sky behind a half-transparent white
+    surface still composites to white. Near-full-pixel monocular depth is the
+    defence the reference delivery has there, so the caches were built and
+    this records them: both manifests are verified and bound, and monocular
+    depth leaves the deferred list. Everything already authorized carries
+    across unchanged, and the sky stage stays deferred - per-view prerendered
+    backdrops serve that role on this route.
+    """
+
+    verify_gate(training_gate)
+    if training_gate.get("status") != SURFACE_FROZEN_TRAINING_READY_STATUS:
+        raise ValueError(
+            "monocular depth binds onto an authorized surface training gate"
+        )
+    deferred = tuple(training_gate.get("deferred_stages", []))
+    if "da2_monocular_depth" not in deferred:
+        raise ValueError("this gate does not defer monocular depth")
+
+    train_sha = verify_mono_depth_manifest(train_manifest)
+    val_sha = verify_mono_depth_manifest(val_manifest)
+    for name, manifest in (("train", train_manifest), ("val", val_manifest)):
+        if not manifest.get("complete_face_cache", False):
+            raise ValueError(f"{name} monocular depth cache is incomplete")
+
+    bindings = dict(training_gate.get("bindings", {}))
+    bindings["da2_train_manifest_sha256"] = train_sha
+    bindings["da2_val_manifest_sha256"] = val_sha
+    payload = copy.deepcopy(training_gate)
+    payload.pop("gate_manifest_sha256", None)
+    payload["bindings"] = bindings
+    payload["deferred_stages"] = [
+        stage for stage in deferred if stage != "da2_monocular_depth"
+    ]
+    # A stage that is no longer deferred must appear among the completed ones,
+    # in pipeline order, or the prefix check reads it as skipped.
+    completed = set(training_gate.get("completed_stages", []))
+    completed.add("da2_monocular_depth")
+    payload["completed_stages"] = [
+        stage for stage in ORDERED_STAGES if stage in completed
+    ]
+    if evidence:
+        payload.setdefault("evidence", {}).update(copy.deepcopy(evidence))
+    return sign_gate(payload)
+
+
 def advance_training_implementation_gate(
     upstream_gate: dict[str, Any],
     implementation_contract: dict[str, Any],
@@ -888,15 +957,14 @@ def advance_training_implementation_gate(
     verify_gate(upstream_gate)
     surface_only = upstream_gate.get("route") == "surface_only"
     if surface_only:
-        expected_stages = tuple(
-            stage
-            for stage in ORDERED_STAGES[:15]
-            if stage not in SURFACE_ONLY_DEFERRED_STAGES
-        )
-        if tuple(upstream_gate.get("deferred_stages", [])) != SURFACE_ONLY_DEFERRED_STAGES:
+        declared = tuple(upstream_gate.get("deferred_stages", []))
+        if declared not in RECOGNISED_SURFACE_DEFERRALS:
             raise ValueError(
-                "surface-only gate must declare exactly the deferred stages"
+                "surface-only gate must declare a recognised deferral set"
             )
+        expected_stages = tuple(
+            stage for stage in ORDERED_STAGES[:15] if stage not in declared
+        )
         if not str(upstream_gate.get("deferral_reason", "")).strip():
             raise ValueError("surface-only gate must carry its deferral reason")
     else:
@@ -1969,16 +2037,15 @@ def verify_training_gate(
             "UPSTREAM_DATA_READY does not authorize training"
         )
     if gate.get("route") == "surface_only":
-        if tuple(gate.get("deferred_stages", [])) != SURFACE_ONLY_DEFERRED_STAGES:
+        declared = tuple(gate.get("deferred_stages", []))
+        if declared not in RECOGNISED_SURFACE_DEFERRALS:
             raise ValueError(
-                "surface-only gate must declare exactly the deferred stages"
+                "surface-only gate must declare a recognised deferral set"
             )
         if not str(gate.get("deferral_reason", "")).strip():
             raise ValueError("surface-only gate must carry its deferral reason")
         expected_stages = tuple(
-            stage
-            for stage in ORDERED_STAGES[:15]
-            if stage not in SURFACE_ONLY_DEFERRED_STAGES
+            stage for stage in ORDERED_STAGES[:15] if stage not in declared
         )
     else:
         expected_stages = ORDERED_STAGES[:15]
