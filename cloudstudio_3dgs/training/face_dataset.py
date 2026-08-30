@@ -876,3 +876,43 @@ class FaceCacheDataset:
             mesh_depth_mask=mesh_depth_mask,
             mesh_geometry_cache_path=mesh_geometry_cache_path,
         )
+
+    def camera_sample(self, index: int) -> Any:
+        """Camera-only view of one sample: pose, intrinsics, size - no artifact IO.
+
+        Mirrors ``__getitem__``'s camera math exactly (same face rotation and
+        the same crop offset applied to the principal point) so an offline
+        per-view render sees the training camera bit for bit, while skipping
+        the image/mask/depth loading and hash verification that dominate the
+        full sample's cost by orders of magnitude.
+        """
+        from types import SimpleNamespace
+
+        image_record, face_entry, crop = self._samples[index]
+        camera_id = str(image_record["camera_id"])
+        face_id = str(face_entry["face_id"])
+        face = self._faces[(camera_id, face_id)]
+
+        c2w_base = np.asarray(image_record["c2w"], dtype=np.float64)
+        face_to_base = np.eye(4, dtype=np.float64)
+        face_to_base[:3, :3] = face.R_face
+        c2w = (c2w_base @ face_to_base).astype(np.float32)
+
+        K = face.K_face.astype(np.float32).copy()
+        width, height = int(face.width), int(face.height)
+        if crop is not None:
+            K[0, 2] -= float(crop["x"])
+            K[1, 2] -= float(crop["y"])
+            width, height = int(crop["width"]), int(crop["height"])
+
+        return SimpleNamespace(
+            image_id=f"{image_record['image_id']}{SAMPLE_ID_SEPARATOR}{face_id}",
+            rig_frame_id=str(image_record["rig_frame_id"]),
+            camera_id=camera_id,
+            c2w=c2w,
+            K=K,
+            radial_coeffs=np.zeros(4, dtype=np.float32),
+            width=width,
+            height=height,
+            camera_model="pinhole",
+        )

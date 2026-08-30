@@ -35,6 +35,16 @@ def main() -> int:
         "--background", type=float, nargs=3, default=(1.0, 1.0, 1.0),
         help="colour behind the layer where even it is transparent",
     )
+    parser.add_argument(
+        "--limit", type=int,
+        help="render only the first N views (equivalence smoke runs)",
+    )
+    parser.add_argument(
+        "--verify-against", type=Path,
+        help="directory of previously baked images; every rendered view is "
+        "compared pixel-for-pixel and any mismatch is an error",
+    )
+    parser.add_argument("--save-threads", type=int, default=8)
     args = parser.parse_args()
 
     import hashlib
@@ -84,31 +94,61 @@ def main() -> int:
 
     args.output.mkdir(parents=True, exist_ok=True)
     views: dict[str, dict] = {}
-    for index in range(len(dataset)):
-        sample = dataset[index]
-        with torch.no_grad():
-            rendered, _, _, _ = backend.render(
-                dome, sample, with_range=False,
-                background_rgb=tuple(args.background),
-            )
-        image = (
-            rendered.detach().clamp(0.0, 1.0).cpu().numpy() * 255.0
-        ).astype(np.uint8)
+
+    # The render itself is milliseconds of GPU over 100k gaussians; loading
+    # the full training sample (photo + masks + hash checks) was two orders
+    # of magnitude more, and PNG encoding is CPU-bound. So: camera-only
+    # samples, and encoding/saving on worker threads.
+    from concurrent.futures import ThreadPoolExecutor
+
+    def encode_and_save(name: str, image: np.ndarray) -> None:
         picture = Image.fromarray(image)
         if args.downsample > 1:
             picture = picture.resize(
                 (picture.width // args.downsample, picture.height // args.downsample),
                 Image.BILINEAR,
             )
-        name = sample.image_id.replace(":", "_") + ".png"
         picture.save(args.output / name)
-        views[sample.image_id] = {
-            "file": name,
-            "height": picture.height,
-            "width": picture.width,
-        }
-        if index % 200 == 0:
-            print(f"  {index + 1}/{len(dataset)}", flush=True)
+        if args.verify_against is not None:
+            with Image.open(args.verify_against / name) as previous:
+                reference = np.asarray(previous.convert("RGB"), dtype=np.int16)
+            fresh = np.asarray(picture.convert("RGB"), dtype=np.int16)
+            if reference.shape != fresh.shape:
+                raise ValueError(f"verification shape mismatch for {name}")
+            worst = int(np.abs(reference - fresh).max())
+            if worst > 1:
+                raise ValueError(
+                    f"verification mismatch for {name}: max |delta| = {worst}"
+                )
+
+    total = len(dataset) if args.limit is None else min(args.limit, len(dataset))
+    with ThreadPoolExecutor(max_workers=args.save_threads) as pool:
+        pending = []
+        for index in range(total):
+            sample = dataset.camera_sample(index)
+            with torch.no_grad():
+                rendered, _, _, _ = backend.render(
+                    dome, sample, with_range=False,
+                    background_rgb=tuple(args.background),
+                )
+            image = (
+                rendered.detach().clamp(0.0, 1.0).cpu().numpy() * 255.0
+            ).astype(np.uint8)
+            name = sample.image_id.replace(":", "_") + ".png"
+            pending.append(pool.submit(encode_and_save, name, image))
+            views[sample.image_id] = {
+                "file": name,
+                "height": sample.height // max(1, args.downsample),
+                "width": sample.width // max(1, args.downsample),
+            }
+            if index % 200 == 0:
+                print(f"  {index + 1}/{total}", flush=True)
+        for task in pending:
+            task.result()
+
+    if args.limit is not None:
+        print(f"limit={args.limit}: smoke run, no manifest written")
+        return 0
 
     manifest_path = args.output / f"view_background_manifest_{args.split}.json"
     signature = write_view_background_manifest(
