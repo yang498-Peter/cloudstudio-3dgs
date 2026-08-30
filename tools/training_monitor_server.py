@@ -42,6 +42,119 @@ def _gpu_status() -> dict:
         return {}
 
 
+def _morphology(params: dict) -> dict:
+    """Shape and opacity distributions, which the per-step metrics never carry.
+
+    The step metrics report loss terms; whether the population is actually
+    thin, disk-shaped and opaque enough to survive a background change is a
+    property of the parameters themselves, and only a checkpoint has those.
+    """
+    scales = params.get("scales")
+    opacities = params.get("opacities")
+    if scales is None or opacities is None:
+        return {}
+    try:
+        import numpy as np
+        import torch
+
+        scale_m = torch.exp(torch.as_tensor(scales).detach().float()).numpy()
+        opacity = torch.sigmoid(
+            torch.as_tensor(opacities).detach().float().reshape(-1)
+        ).numpy()
+        if scale_m.ndim != 2 or scale_m.shape[1] != 3:
+            return {}
+        ordered = np.sort(scale_m, axis=1)
+        shortest, middle, longest = ordered[:, 0], ordered[:, 1], ordered[:, 2]
+        ratio = longest / np.maximum(shortest, 1e-12)
+        tangent = longest / np.maximum(middle, 1e-12)
+        return {
+            "shape_longest_axis_p50_mm": float(np.percentile(longest, 50) * 1000.0),
+            "shape_shortest_axis_p50_mm": float(np.percentile(shortest, 50) * 1000.0),
+            "shape_axis_ratio_p50": float(np.percentile(ratio, 50)),
+            "shape_tangent_ratio_p50": float(np.percentile(tangent, 50)),
+            "shape_opacity_p50": float(np.percentile(opacity, 50)),
+            "shape_opacity_below_0p1_fraction": float(np.mean(opacity < 0.1)),
+        }
+    except (ImportError, RuntimeError, ValueError, TypeError):
+        return {}
+
+
+class CompareRunner:
+    """One-click three-way comparison, at most one render at a time.
+
+    The render is a subprocess so a CUDA failure there can never take the
+    dashboard down with it; state is what the page polls.
+    """
+
+    def __init__(self, command_path: Path | None, output_dir: Path | None) -> None:
+        self.command_path = command_path
+        self.output_dir = output_dir
+        self.lock = threading.Lock()
+        self.state: dict = {"state": "idle"}
+
+    def start(self) -> dict:
+        if self.command_path is None or not self.command_path.is_file():
+            return {"accepted": False, "reason": "compare command is not configured"}
+        with self.lock:
+            if self.state.get("state") == "running":
+                return {"accepted": False, "reason": "a render is already running"}
+            self.state = {"state": "running", "started_unix": time.time()}
+        threading.Thread(target=self._run, daemon=True).start()
+        return {"accepted": True}
+
+    def _run(self) -> None:
+        try:
+            completed = subprocess.run(
+                ["cmd", "/c", str(self.command_path)],
+                capture_output=True,
+                text=True,
+                timeout=1800,
+            )
+            tail = "\n".join(
+                (completed.stdout + "\n" + completed.stderr).strip().splitlines()[-12:]
+            )
+            with self.lock:
+                self.state = {
+                    "state": "done" if completed.returncode == 0 else "error",
+                    "returncode": completed.returncode,
+                    "finished_unix": time.time(),
+                    "output_tail": tail,
+                }
+        except (OSError, subprocess.SubprocessError) as error:
+            with self.lock:
+                self.state = {
+                    "state": "error",
+                    "finished_unix": time.time(),
+                    "output_tail": str(error),
+                }
+
+    def status(self) -> dict:
+        with self.lock:
+            status = dict(self.state)
+        images: list[dict] = []
+        summary: dict = {}
+        if self.output_dir is not None and self.output_dir.is_dir():
+            for path in sorted(self.output_dir.glob("*.png")):
+                images.append(
+                    {"name": path.name, "mtime_unix": path.stat().st_mtime}
+                )
+            summary = _read_json(self.output_dir / "compare_summary.json")
+        status["images"] = images
+        status["summary"] = summary
+        return status
+
+    def image_bytes(self, name: str) -> bytes | None:
+        if self.output_dir is None or "/" in name or "\\" in name or ".." in name:
+            return None
+        path = self.output_dir / name
+        if not path.is_file() or path.suffix.lower() != ".png":
+            return None
+        try:
+            return path.read_bytes()
+        except OSError:
+            return None
+
+
 class MonitorState:
     def __init__(self, *, data_root: Path, cache_path: Path, configs: list[Path]) -> None:
         self.data_root = data_root.resolve()
@@ -98,11 +211,13 @@ class MonitorState:
             training = checkpoint.get("training_state", {})
             params = checkpoint.get("params", {})
             step = int(checkpoint.get("step", 0))
+            metrics = dict(training.get("last_metrics", {}))
+            metrics.update(_morphology(params))
             record = {
                 "timestamp_unix": path.stat().st_mtime,
                 "completed_steps": step,
                 "gaussian_count": len(params.get("means", [])),
-                "metrics": training.get("last_metrics", {}),
+                "metrics": metrics,
                 "latest_optimization_audit": (
                     training.get("optimization_audits", [])[-1]
                     if training.get("optimization_audits")
@@ -204,15 +319,63 @@ def main() -> int:
     parser.add_argument("--html", type=Path, default=Path(__file__).with_name("training_monitor.html"))
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8792)
+    parser.add_argument(
+        "--compare-cmd",
+        type=Path,
+        help="batch file that renders the photo/ours/reference strips",
+    )
+    parser.add_argument(
+        "--compare-dir",
+        type=Path,
+        help="directory the compare command writes its PNG strips into",
+    )
     args = parser.parse_args()
     state = MonitorState(
         data_root=args.data_root, cache_path=args.cache, configs=args.config
     )
+    compare = CompareRunner(args.compare_cmd, args.compare_dir)
     html = args.html.read_bytes()
 
     class Handler(BaseHTTPRequestHandler):
+        def do_POST(self) -> None:  # noqa: N802
+            route = urlparse(self.path).path
+            if route == "/api/compare/run":
+                payload = json.dumps(
+                    compare.start(), ensure_ascii=False, separators=(",", ":")
+                ).encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json; charset=utf-8")
+                self.send_header("Content-Length", str(len(payload)))
+                self.end_headers()
+                self.wfile.write(payload)
+                return
+            self.send_error(404)
+
         def do_GET(self) -> None:  # noqa: N802
             route = urlparse(self.path).path
+            if route == "/api/compare/status":
+                payload = json.dumps(
+                    compare.status(), ensure_ascii=False, separators=(",", ":")
+                ).encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json; charset=utf-8")
+                self.send_header("Cache-Control", "no-store")
+                self.send_header("Content-Length", str(len(payload)))
+                self.end_headers()
+                self.wfile.write(payload)
+                return
+            if route.startswith("/compare/"):
+                image = compare.image_bytes(route[len("/compare/"):])
+                if image is None:
+                    self.send_error(404)
+                    return
+                self.send_response(200)
+                self.send_header("Content-Type", "image/png")
+                self.send_header("Cache-Control", "no-store")
+                self.send_header("Content-Length", str(len(image)))
+                self.end_headers()
+                self.wfile.write(image)
+                return
             if route == "/api/status":
                 payload = json.dumps(
                     state.snapshot(), ensure_ascii=False, separators=(",", ":")

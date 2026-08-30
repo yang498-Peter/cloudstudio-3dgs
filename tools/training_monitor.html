@@ -12,14 +12,60 @@
     .runs{display:grid;grid-template-columns:repeat(auto-fit,minmax(330px,1fr));gap:14px;margin:20px 0}.run{padding:16px}.runhead{display:flex;justify-content:space-between;gap:10px}.pill{padding:4px 8px;border-radius:99px;background:#1d2a3e;color:var(--accent);font-size:11px}.bar{height:9px;background:#080d16;border-radius:9px;overflow:hidden;margin:13px 0}.bar i{display:block;height:100%;background:linear-gradient(90deg,#38bdf8,#55d6be);border-radius:inherit}.stats{display:grid;grid-template-columns:repeat(4,1fr);gap:8px}.stats .value{font-size:16px}.run label{display:flex;align-items:center;gap:8px;margin-top:12px;color:var(--muted)}
     .panel{padding:18px;margin-top:16px}.controls{display:flex;flex-wrap:wrap;gap:12px;align-items:center;margin-bottom:14px}select,button{background:#0a1220;color:var(--text);border:1px solid var(--line);padding:8px 11px;border-radius:8px}button{cursor:pointer}.legend{display:flex;flex-wrap:wrap;gap:14px;margin-left:auto}.legend span{display:flex;gap:6px;align-items:center}.dot{width:9px;height:9px;border-radius:50%}canvas{width:100%;height:430px;display:block;background:#0a101c;border-radius:10px}.foot{display:flex;justify-content:space-between;margin-top:10px;color:var(--muted);font-size:12px}.empty{padding:36px;text-align:center;color:var(--muted)}
     @media(max-width:800px){.top{display:block}.gpu{margin-top:16px;min-width:0}.stats{grid-template-columns:repeat(2,1fr)}canvas{height:330px}}
+    .tbl{width:100%;border-collapse:collapse;font-size:13px}
+    .tbl th{text-align:left;color:#8fa2bd;font-weight:600;padding:8px 10px;border-bottom:1px solid #243249;position:sticky;top:0;background:#111a27}
+    .tbl td{padding:8px 10px;border-bottom:1px solid #1b2636;vertical-align:top}
+    .tbl td.num,.tbl th.num{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}
+    .tbl code{color:#55d6be;font-size:12px}
+    .tbl tr:hover td{background:#16202e}
+    #glossary,#shape{overflow-x:auto;max-height:520px;overflow-y:auto}
+    .explain{margin-top:12px;padding:12px 14px;background:#16202e;border-radius:8px;border-left:3px solid #55d6be}
+    .explain .note{margin-top:6px;color:#f59e0b;font-size:13px}
   </style>
 </head>
 <body><main>
   <div class="top"><div><div class="eyebrow">LiDAR-first / fixed topology</div><h1>3DGS 训练实时监控</h1><div class="muted" id="updated">正在连接本机监控服务…</div></div><div class="gpu" id="gpu"></div></div>
   <section class="runs" id="runs"><div class="empty">等待训练数据</div></section>
-  <section class="panel"><div class="controls"><strong>多轮叠加曲线</strong><select id="metric"></select><button id="all">全选</button><button id="none">清空</button><div class="legend" id="legend"></div></div><canvas id="chart"></canvas><div class="foot"><span>横轴：已完成 step（只显示已持久化证据）</span><span id="range"></span></div></section>
+  <section class="panel" id="shapepanel"><div class="controls"><strong>形态对标</strong><span class="muted">来自最新检查点的真实参数分布，不是损失项</span></div><div id="shape"><div class="empty">等待检查点</div></div></section>
+  <section class="panel" id="cmppanel"><div class="controls"><strong>三方对照</strong><span class="muted">左＝真实照片 · 中＝我方最新检查点 · 右＝参考交付（同一相机位姿）</span><button id="cmprun">一键出图</button><span class="muted" id="cmpstate"></span></div><div id="cmpimgs"><div class="empty">还没有对照图，点"一键出图"生成（约 1–2 分钟，用最新检查点渲染）</div></div></section>
+  <section class="panel"><div class="controls"><strong>多轮叠加曲线</strong><select id="metric"></select><button id="all">全选</button><button id="none">清空</button><div class="legend" id="legend"></div></div><canvas id="chart"></canvas><div class="foot"><span>横轴：已完成 step（只显示已持久化证据）</span><span id="range"></span></div><div id="explain" class="explain"></div></section>
+  <section class="panel"><div class="controls"><strong>指标词典</strong><span class="muted">每步只渲染一个视图，单点跳动大，要看趋势不看单点</span></div><div id="glossary"></div></section>
 </main><script>
 const palette=['#55d6be','#60a5fa','#f59e0b','#f472b6','#a78bfa','#fb7185','#34d399','#facc15'];
+// 参考水平取自交付件实测；D1 是我方上一版交付，用来看走了多远。
+const REF={shape_opacity_p50:{ref:0.1974,d1:0.5724},shape_opacity_below_0p1_fraction:{ref:0.2138,d1:0.3384},shape_axis_ratio_p50:{ref:10.235,d1:2.297},shape_shortest_axis_p50_mm:{ref:0.428,d1:5.006},shape_longest_axis_p50_mm:{ref:4.407,d1:12.818},gaussian_count:{ref:22450000,d1:7453193}};
+const DICT={
+ loss:['总损失','下面各项按权重加总的结果。','↓ 下降','单看它不够——它可能因为某一项好转而下降，同时另一项在恶化。'],
+ rgb_l1:['像素平均误差','渲染图与真实照片逐像素求差再平均。','↓ 下降','最直接的"像不像"。持续下降就是在学。'],
+ rgb_ssim_loss:['结构相似度损失','比逐像素更接近人眼：看边缘、纹理、结构。','↓ 下降','比 rgb_l1 更能反映"看着清不清楚"。'],
+ rgb_local_ssim_loss:['局部结构相似度','同上，按局部窗口计算。','↓ 下降','与 rgb_ssim_loss 同源，本配置下两者相同。'],
+ lidar_range_loss:['LiDAR 距离损失','高斯到激光雷达实测表面的距离偏差。','↓ 下降','几何对不对的主判据。它涨而 point_to_plane 不涨，多半是采样噪声。'],
+ lidar_alpha_loss:['覆盖地板损失','惩罚"该有表面的地方不够不透明"。','↓ 下降','★最关键。白背景下白墙可以靠变透明骗过颜色指标，这一项专门堵死它。'],
+ lidar_alpha_support_fraction:['覆盖地板生效像素比','本步有多少像素受这一项约束。','观察','太低说明该步抽到的视图 LiDAR 回波少，指标噪声会变大。'],
+ lidar_normal_align_raw:['法向对齐偏差','高斯最短轴与表面法向的夹角偏差。','↓ 下降','高斯该"贴"在面上。变薄过程中它可能被拉偏，要盯。'],
+ lidar_normal_flatten_raw:['厚度超标量','最短轴超出目标厚度多少。','↓ 下降','直接对应"薄不薄"。'],
+ lidar_point_to_plane_raw_m:['中心离面距离(米)','高斯中心偏离表面的实际距离。','↓ 下降','比 range_loss 更直接。它小就说明几何是贴着的。'],
+ opacity_sparsity:['不透明度稀疏项','推动整体不透明度下降，压制冗余高斯。','观察','它和覆盖地板是一对拉锯，要一起看。'],
+ anisotropy:['各向异性','高斯有多"扁"。','↑ 上升','★锐利度的直接来源。越高越像薄片。'],
+ scale_over_limit_fraction:['超尺寸比例','最长轴超过 0.2m 上限的高斯占比。','↓ 下降','保形收缩机制在起效的证据。'],
+ scale_upper:['尺度上界项','对过大高斯的惩罚量。','↓ 下降','和上一条一起看。'],
+ geometry_regularization:['几何正则合计','形状类正则的加总。','观察','数值很小属正常。'],
+ rgb_mask_valid_fraction:['监督像素占比','每张图有多少像素参与训练（掩膜外不算）。','稳定','应当基本恒定；突变说明掩膜或数据出问题。'],
+ depth_mask_valid_fraction:['深度像素占比','本步有 LiDAR 回波的像素比例。','观察','很低是正常的，激光点本就稀疏。'],
+ effective_lidar_alpha_weight:['覆盖地板权重(生效值)','这一项到底开没开。','必须>0','★配错就是 0，等于没开。曾经踩过这个坑。'],
+ effective_lidar_range_weight:['LiDAR 距离权重(生效值)','应为 0.05。','常数','偏离说明调度改了它。'],
+ effective_da2_depth_weight:['单目深度权重(生效值)','本路线不用单目深度，应恒为 0。','恒为 0',''],
+ effective_mesh_depth_weight:['网格深度权重(生效值)','本路线不用网格监督，应恒为 0。','恒为 0',''],
+ effective_mesh_normal_weight:['网格法向权重(生效值)','同上，应恒为 0。','恒为 0',''],
+ effective_geometry_lr_scale:['几何学习率倍率','分阶段冻结/放开几何时的倍率。','按阶段',''],
+ opacity_sparsity_active_fraction:['参与稀疏项的高斯比例','应为 1.0。','恒为 1',''],
+ shape_opacity_p50:['★不透明度中位数','所有高斯不透明度的中位数。','接近参考 0.197','★太低=表面发虚，换背景就穿帮。太高=糊。'],
+ shape_opacity_below_0p1_fraction:['★近乎透明的比例','不透明度低于 0.1 的高斯占比。','↓ 越低越好','★超过参考的 21% 就要警惕，说明大量高斯没在承担表面。'],
+ shape_axis_ratio_p50:['★轴比中位数','最长轴 ÷ 最短轴。','接近参考 10.2','★衡量"薄片程度"。我方历史只有 2.3。'],
+ shape_tangent_ratio_p50:['切向比中位数','最长轴 ÷ 中间轴。','接近 1.0','=1 是圆盘（要的），远大于 1 是针状（不要的）。'],
+ shape_shortest_axis_p50_mm:['最短轴中位数(毫米)','高斯的厚度。','↓ 逼近 0.43mm','★竞品是亚毫米薄片，我方历史是 5mm 胖团。'],
+ shape_longest_axis_p50_mm:['最长轴中位数(毫米)','高斯的展布尺寸。','↓ 逼近 4.4mm','越小越能表达细节。'],
+ gaussian_count:['高斯总数','当前模型的高斯数量。','接近参考 2245 万','冻结拓扑下应恒定不变。']};
 let payload={runs:[]}, selected=new Set(), metric='loss';
 const fmt=(v,d=4)=>v==null?'—':Number(v).toLocaleString(undefined,{maximumFractionDigits:d});
 function gpuView(g){return [['GPU',`${fmt(g.utilization_percent,0)}%`],['显存',`${fmt(g.memory_used_mib,0)} / ${fmt(g.memory_total_mib,0)} MiB`],['温度/功耗',`${fmt(g.temperature_c,0)}°C · ${fmt(g.power_w,0)}W`]].map(x=>`<div><div class="label">${x[0]}</div><div class="value">${x[1]}</div></div>`).join('')}
@@ -27,6 +73,31 @@ function metricKeys(){const s=new Set();payload.runs.forEach(r=>r.series.forEach
 function updateMetrics(){const keys=metricKeys();if(!keys.includes(metric))metric=keys.includes('loss')?'loss':keys[0];const el=document.querySelector('#metric');el.innerHTML=keys.map(k=>`<option ${k===metric?'selected':''}>${k}</option>`).join('')}
 function runCards(){const el=document.querySelector('#runs');if(!payload.runs.length){el.innerHTML='<div class="empty">尚未注册训练配置</div>';return}el.innerHTML=payload.runs.map((r,i)=>{if(!selected.size&&r.completed_steps>0)selected.add(r.run_id);const m=r.latest_metrics||{};return `<article class="run"><div class="runhead"><div><div class="label">${r.topology_mode||'—'}</div><strong>${r.run_id}</strong></div><span class="pill">${r.status}</span></div><div class="bar"><i style="width:${(r.progress_fraction*100).toFixed(2)}%"></i></div><div class="stats"><div><div class="label">持久化步数</div><div class="value">${fmt(r.completed_steps,0)} / ${fmt(r.max_steps,0)}</div></div><div><div class="label">阶段</div><div class="value">${r.phase||'—'}</div></div><div><div class="label">Loss</div><div class="value">${fmt(m.loss)}</div></div><div><div class="label">高斯</div><div class="value">${fmt(r.gaussian_count,0)}</div></div></div><label><input type="checkbox" data-run="${r.run_id}" ${selected.has(r.run_id)?'checked':''}> 加入曲线对比</label></article>`}).join('');el.querySelectorAll('input').forEach(x=>x.onchange=()=>{x.checked?selected.add(x.dataset.run):selected.delete(x.dataset.run);draw()})}
 function draw(){const c=document.querySelector('#chart'),dpr=devicePixelRatio||1,w=c.clientWidth,h=c.clientHeight;c.width=w*dpr;c.height=h*dpr;const x=c.getContext('2d');x.scale(dpr,dpr);x.clearRect(0,0,w,h);const runs=payload.runs.filter(r=>selected.has(r.run_id));let pts=[];runs.forEach(r=>r.series.forEach(p=>{const v=p.metrics?.[metric];if(typeof v==='number'&&isFinite(v))pts.push([p.completed_steps,v])}));if(!pts.length){x.fillStyle='#8fa2bd';x.textAlign='center';x.fillText('所选轮次暂无该指标的持久化数据',w/2,h/2);return}let xmin=Math.min(...pts.map(p=>p[0])),xmax=Math.max(...pts.map(p=>p[0]));let ymin=Math.min(...pts.map(p=>p[1])),ymax=Math.max(...pts.map(p=>p[1]));if(xmin===xmax){xmin=0;xmax=Math.max(1,xmax)}if(ymin===ymax){ymin-=.5;ymax+=.5}const pad={l:72,r:24,t:24,b:46},pw=w-pad.l-pad.r,ph=h-pad.t-pad.b,xx=v=>pad.l+(v-xmin)/(xmax-xmin)*pw,yy=v=>pad.t+(ymax-v)/(ymax-ymin)*ph;x.strokeStyle='#243249';x.fillStyle='#8fa2bd';x.font='12px Segoe UI';for(let i=0;i<=5;i++){const y=pad.t+ph*i/5;x.beginPath();x.moveTo(pad.l,y);x.lineTo(w-pad.r,y);x.stroke();const val=ymax-(ymax-ymin)*i/5;x.textAlign='right';x.fillText(fmt(val,5),pad.l-10,y+4)}for(let i=0;i<=6;i++){const vx=xmin+(xmax-xmin)*i/6,px=xx(vx);x.beginPath();x.moveTo(px,pad.t);x.lineTo(px,h-pad.b);x.stroke();x.textAlign='center';x.fillText(fmt(vx,0),px,h-18)}runs.forEach((r,i)=>{const arr=r.series.map(p=>[p.completed_steps,p.metrics?.[metric]]).filter(p=>typeof p[1]==='number'&&isFinite(p[1]));if(!arr.length)return;x.strokeStyle=palette[i%palette.length];x.lineWidth=2;x.beginPath();arr.forEach((p,j)=>j?x.lineTo(xx(p[0]),yy(p[1])):x.moveTo(xx(p[0]),yy(p[1])));x.stroke();arr.forEach(p=>{x.fillStyle=palette[i%palette.length];x.beginPath();x.arc(xx(p[0]),yy(p[1]),3,0,Math.PI*2);x.fill()})});document.querySelector('#range').textContent=`${metric}: ${fmt(ymin,5)} → ${fmt(ymax,5)}`;document.querySelector('#legend').innerHTML=runs.map((r,i)=>`<span><i class="dot" style="background:${palette[i%palette.length]}"></i>${r.run_id}</span>`).join('')}
-async function refresh(){try{const r=await fetch('/api/status',{cache:'no-store'});payload=await r.json();document.querySelector('#updated').textContent=`最后刷新 ${new Date(payload.updated_at_unix*1000).toLocaleString()} · 每 ${payload.refresh_seconds}s 自动刷新`;document.querySelector('#gpu').innerHTML=gpuView(payload.gpu||{});runCards();updateMetrics();draw()}catch(e){document.querySelector('#updated').textContent=`监控连接失败：${e}`}}
-document.querySelector('#metric').onchange=e=>{metric=e.target.value;draw()};document.querySelector('#all').onclick=()=>{payload.runs.forEach(r=>selected.add(r.run_id));runCards();draw()};document.querySelector('#none').onclick=()=>{selected.clear();runCards();draw()};addEventListener('resize',draw);refresh();setInterval(refresh,5000);
+function latestShape(){let best=null;payload.runs.forEach(r=>r.series.forEach(p=>{if(p.metrics&&p.metrics.shape_opacity_p50!=null&&(!best||p.completed_steps>best.step))best={step:p.completed_steps,run:r.run_id,m:p.metrics,count:p.gaussian_count}}));return best}
+function shapeView(){const el=document.querySelector('#shape'),b=latestShape();
+ if(!b){el.innerHTML='<div class="empty">尚无检查点形态数据（检查点每若干千步写一次）</div>';return}
+ const rows=['gaussian_count','shape_opacity_p50','shape_opacity_below_0p1_fraction','shape_axis_ratio_p50','shape_tangent_ratio_p50','shape_shortest_axis_p50_mm','shape_longest_axis_p50_mm'];
+ const cells=rows.map(k=>{const d=DICT[k]||[k,'','',''];const v=k==='gaussian_count'?b.count:b.m[k];const R=REF[k]||{};
+  const pct=(a,c)=>(a==null||c==null)?'—':(c===0?'—':(a/c*100).toFixed(0)+'%');
+  return `<tr><td><strong>${d[0]}</strong><div class="muted">${d[1]}</div></td><td class="num">${fmt(v,4)}</td><td class="num">${fmt(R.d1,4)}</td><td class="num">${fmt(R.ref,4)}</td><td class="num">${pct(v,R.ref)}</td></tr>`}).join('');
+ el.innerHTML=`<div class="muted" style="margin-bottom:8px">取自 ${b.run} 的 step ${fmt(b.step,0)} 检查点</div><table class="tbl"><thead><tr><th>指标</th><th class="num">现在</th><th class="num">D1(上一版)</th><th class="num">参考水平</th><th class="num">达成度</th></tr></thead><tbody>${cells}</tbody></table>`}
+function explainView(){const d=DICT[metric];const el=document.querySelector('#explain');
+ if(!d){el.innerHTML='';return}
+ el.innerHTML=`<strong>${d[0]}</strong>（${metric}）　<span class="pill">${d[2]}</span><div class="muted">${d[1]}</div>${d[3]?`<div class="note">${d[3]}</div>`:''}`}
+function glossaryView(){const keys=Object.keys(DICT);
+ document.querySelector('#glossary').innerHTML=`<table class="tbl"><thead><tr><th>指标</th><th>中文名</th><th>含义</th><th>期望方向</th><th>怎么看</th></tr></thead><tbody>`+
+ keys.map(k=>{const d=DICT[k];return `<tr><td><code>${k}</code></td><td><strong>${d[0]}</strong></td><td>${d[1]}</td><td class="pill">${d[2]}</td><td class="muted">${d[3]||''}</td></tr>`}).join('')+`</tbody></table>`}
+async function refresh(){try{const r=await fetch('/api/status',{cache:'no-store'});payload=await r.json();document.querySelector('#updated').textContent=`最后刷新 ${new Date(payload.updated_at_unix*1000).toLocaleString()} · 每 ${payload.refresh_seconds}s 自动刷新`;document.querySelector('#gpu').innerHTML=gpuView(payload.gpu||{});runCards();updateMetrics();draw();shapeView();explainView()}catch(e){document.querySelector('#updated').textContent=`监控连接失败：${e}`}}
+let cmpBusy=false;
+async function cmpRefresh(){try{const r=await fetch('/api/compare/status',{cache:'no-store'});const s=await r.json();const st=document.querySelector('#cmpstate'),el=document.querySelector('#cmpimgs'),btn=document.querySelector('#cmprun');
+ cmpBusy=s.state==='running';btn.disabled=cmpBusy;btn.textContent=cmpBusy?'渲染中…':'一键出图';
+ if(s.state==='running')st.textContent=`渲染中，开始于 ${new Date(s.started_unix*1000).toLocaleTimeString()}`;
+ else if(s.state==='error')st.textContent=`上次渲染失败：${(s.output_tail||'').slice(-160)}`;
+ else if(s.summary&&s.summary.step!=null)st.textContent=`当前图来自 step ${Number(s.summary.step).toLocaleString()} · ${Number(s.summary.gaussian_count).toLocaleString()} 高斯 · 对齐残差 ${s.summary.reference_alignment_median_nn_m!=null?(s.summary.reference_alignment_median_nn_m*100).toFixed(1)+'cm':'—'}`;
+ else st.textContent='';
+ if(s.images&&s.images.length){el.innerHTML=s.images.map(im=>`<a href="/compare/${im.name}" target="_blank" title="点开看原图"><img src="/compare/${im.name}?t=${im.mtime_unix}" style="width:100%;display:block;border-radius:8px;margin:6px 0" loading="lazy"></a>`).join('')}
+}catch(e){}}
+document.querySelector('#cmprun').onclick=async()=>{if(cmpBusy)return;const st=document.querySelector('#cmpstate');st.textContent='正在启动渲染…';try{const r=await fetch('/api/compare/run',{method:'POST'});const a=await r.json();if(!a.accepted)st.textContent=`未启动：${a.reason||''}`}catch(e){st.textContent=`启动失败：${e}`}cmpRefresh()};
+glossaryView();
+document.querySelector('#metric').onchange=e=>{metric=e.target.value;draw();explainView()};document.querySelector('#all').onclick=()=>{payload.runs.forEach(r=>selected.add(r.run_id));runCards();draw()};document.querySelector('#none').onclick=()=>{selected.clear();runCards();draw()};addEventListener('resize',draw);refresh();setInterval(refresh,5000);cmpRefresh();setInterval(cmpRefresh,7000);
 </script></body></html>
