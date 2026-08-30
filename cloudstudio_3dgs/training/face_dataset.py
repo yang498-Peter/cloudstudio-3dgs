@@ -39,7 +39,7 @@ from PIL import Image
 from cloudstudio_3dgs.data.depth_cache import load_sparse_depth
 from cloudstudio_3dgs.data.manifest import canonical_json_bytes
 from cloudstudio_3dgs.data.mono_depth import (
-    sample_bilinear_at_source_pixels,
+    resize_to_source_grid,
     verify_mono_depth_manifest,
 )
 from cloudstudio_3dgs.geometry.fisheye_faces import FaceSpec
@@ -743,16 +743,8 @@ class FaceCacheDataset:
                 if "relative_depth" not in payload:
                     raise ValueError("DA2 cache has no relative_depth array")
                 relative = np.asarray(payload["relative_depth"], dtype=np.float32)
-            yy, xx = np.meshgrid(
-                np.arange(face.height, dtype=np.float64),
-                np.arange(face.width, dtype=np.float64),
-                indexing="ij",
-            )
-            relative_full = sample_bilinear_at_source_pixels(
-                relative,
-                xx,
-                yy,
-                source_shape=(face.height, face.width),
+            relative_full = resize_to_source_grid(
+                relative, (face.height, face.width)
             )
             alignment = mono_record["alignment"]
             mono_depth_range = (

@@ -217,6 +217,31 @@ def fit_metric_affine_ransac_torch(
     }
 
 
+def resize_to_source_grid(
+    image: np.ndarray, source_shape: tuple[int, int]
+) -> np.ndarray:
+    """Resample a DA2 raster onto every pixel centre of its source face.
+
+    Equivalent to calling ``sample_bilinear_at_source_pixels`` with a full
+    coordinate grid - both use the half-pixel-centre convention - but this is
+    the whole-grid case, so it delegates to a vectorised kernel instead of
+    materialising two float64 coordinate arrays per call. Measured on a
+    518x1036 cache resampled to 1456x2912: 0.899 s for the general path
+    against 0.004 s here, worst-case difference 9e-5 on unit-range values.
+    The general path was consuming two thirds of every training step.
+    """
+    import torch
+
+    values = torch.from_numpy(np.ascontiguousarray(image, dtype=np.float32))
+    resized = torch.nn.functional.interpolate(
+        values[None, None],
+        size=(int(source_shape[0]), int(source_shape[1])),
+        mode="bilinear",
+        align_corners=False,
+    )
+    return resized[0, 0].numpy()
+
+
 def sample_bilinear_at_source_pixels(
     image: np.ndarray,
     source_x: np.ndarray,
