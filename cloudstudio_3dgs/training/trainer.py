@@ -4317,6 +4317,15 @@ def train(
                     "lifecycle_grad_sum_p99": growth.get(
                         "gradient_convention_audit", {}
                     ).get("window_sum_p99"),
+                    "lifecycle_equiv_grad_p99": growth.get(
+                        "footprint_weighted_audit", {}
+                    ).get("equivalent_grad_p99"),
+                    "lifecycle_equiv_grad_p50": growth.get(
+                        "footprint_weighted_audit", {}
+                    ).get("equivalent_grad_p50"),
+                    "lifecycle_equiv_selected_00015": growth.get(
+                        "footprint_weighted_audit", {}
+                    ).get("equivalent_selected_at_00015"),
                     "lifecycle_observations_p50": growth.get(
                         "gradient_convention_audit", {}
                     ).get("observations_p50"),

@@ -642,6 +642,32 @@ class DefaultStrategyAdapter:
         # observation counts lets a probe settle that question from one run.
         window_sums = state["grad2d"][observed & torch.isfinite(gradients)].float()
         observation_counts = state["count"][observed].float()
+        footprint_audit = {}
+        footprint_sum = state.get("_footprint_grad_sum")
+        if footprint_sum is not None and len(footprint_sum) == len(gradients):
+            footprint_weight = state["_footprint_weight_sum"]
+            equivalent = footprint_sum / footprint_weight.clamp_min(1e-8)
+            seen = footprint_weight > 0
+            equivalent_seen = equivalent[seen & torch.isfinite(equivalent)]
+            if equivalent_seen.numel():
+                levels = torch.tensor(
+                    [0.5, 0.9, 0.95, 0.99, 0.999], device=equivalent_seen.device
+                )
+                q = torch.quantile(equivalent_seen, levels).tolist()
+                footprint_audit = {
+                    "equivalent_grad_p50": float(q[0]),
+                    "equivalent_grad_p90": float(q[1]),
+                    "equivalent_grad_p95": float(q[2]),
+                    "equivalent_grad_p99": float(q[3]),
+                    "equivalent_grad_p999": float(q[4]),
+                    "equivalent_selected_at_00015": int(
+                        (equivalent_seen > 1.5e-4).sum()
+                    ),
+                    "equivalent_selected_at_0002": int(
+                        (equivalent_seen > 2.0e-4).sum()
+                    ),
+                    "equivalent_observed_count": int(equivalent_seen.numel()),
+                }
         convention_audit = {}
         if window_sums.numel():
             convention_audit = {
@@ -658,6 +684,7 @@ class DefaultStrategyAdapter:
             "threshold_sweep_counts": threshold_sweep,
             "opacity_quantiles": opacity_quantiles,
             "gradient_convention_audit": convention_audit,
+            "footprint_weighted_audit": footprint_audit,
             "fraction_opacity_below_0p10": float((opacity < 0.10).float().mean()),
             "fraction_opacity_above_0p15": float((opacity > 0.15).float().mean()),
             "gradient_only_candidate_count": int(
@@ -1055,6 +1082,59 @@ class DefaultStrategyAdapter:
             )
         return prune_count
 
+    def _accumulate_footprint_weighted_gradient(
+        self, params: Any, state: dict[str, Any], info: dict[str, Any]
+    ) -> None:
+        """Second, read-only accumulator for the recovered densification score.
+
+        The published DefaultStrategy scales the projected gradient per-axis by
+        width/2 and height/2, then takes a plain per-observation mean. The
+        recovered contract instead norms first, scales isotropically by
+        0.5*max(1600, W, H), and takes a FOOTPRINT-weighted mean (each view's
+        weight is the gaussian's projected radius there). This computes that
+        score alongside ours - it selects nothing and prunes nothing; a probe
+        reads its quantiles to decide whether the recovered 0.00015 threshold
+        even lives in the same unit as our 0.00015.
+        """
+        import torch
+
+        key = self.inner.key_for_gradient
+        packed = info.get("gaussian_ids") is not None and info[key].grad.dim() == 2
+        raw = info[key].grad.detach()
+        n_gaussian = len(next(iter(params.values())))
+        if state.get("_footprint_grad_sum") is None:
+            state["_footprint_grad_sum"] = torch.zeros(
+                n_gaussian, device=raw.device
+            )
+            state["_footprint_weight_sum"] = torch.zeros(
+                n_gaussian, device=raw.device
+            )
+        # A warm start / topology change resizes the population; grow the
+        # diagnostic buffers to match rather than crashing on the stale length.
+        if len(state["_footprint_grad_sum"]) != n_gaussian:
+            state["_footprint_grad_sum"] = torch.zeros(
+                n_gaussian, device=raw.device
+            )
+            state["_footprint_weight_sum"] = torch.zeros(
+                n_gaussian, device=raw.device
+            )
+
+        width = float(info["width"])
+        height = float(info["height"])
+        screen_scale = 0.5 * max(1600.0, width, height)
+        if packed:
+            gs_ids = info["gaussian_ids"]
+            radii = info["radii"].max(dim=-1).values.float()
+            grad_norm = raw.norm(dim=-1)
+        else:
+            visible = (info["radii"] > 0.0).all(dim=-1)
+            gs_ids = torch.where(visible)[1]
+            radii = info["radii"][visible].max(dim=-1).values.float()
+            grad_norm = raw[visible].norm(dim=-1)
+        contribution = radii * screen_scale * grad_norm
+        state["_footprint_grad_sum"].index_add_(0, gs_ids, contribution)
+        state["_footprint_weight_sum"].index_add_(0, gs_ids, radii)
+
     def _step_post_backward_mipmap(
         self,
         *,
@@ -1074,6 +1154,7 @@ class DefaultStrategyAdapter:
         if step >= self.refine_stop_iter:
             return
         self.inner._update_state(params, state, info, packed=False)
+        self._accumulate_footprint_weighted_gradient(params, state, info)
         if not self.is_refine_step(step):
             return
         self._ensure_cull_tracking(params, state)
@@ -1110,6 +1191,9 @@ class DefaultStrategyAdapter:
         state["count"].zero_()
         if state.get("radii") is not None:
             state["radii"].zero_()
+        if state.get("_footprint_grad_sum") is not None:
+            state["_footprint_grad_sum"].zero_()
+            state["_footprint_weight_sum"].zero_()
         self.last_lifecycle_event = {
             "before_count": int(before),
             "clone_count": clone_count,
