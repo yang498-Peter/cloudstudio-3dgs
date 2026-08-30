@@ -764,17 +764,18 @@ class DefaultStrategyAdapter:
         *,
         step: int,
         scene: Any | None = None,
-        births_this_cycle: int | None = None,
+        densify_allowed: bool | None = None,
     ) -> int:
         """Apply recovered early/late opacity, world, and screen cull gates.
 
-        The recovered contract carries an anti-starvation branch: in a cycle
-        where densification could not add anything, culling relaxes instead
-        of running at full strength (opacity threshold x0.25, world and
-        screen limits x5) - the system never lets death run unopposed while
-        birth is stalled. Its absence is the measured root cause of the
-        v6-v8 population collapses (one audited cycle: 1,030 would-be births
-        against 1,760,109 would-be deaths).
+        The recovered contract carries an anti-starvation branch keyed on the
+        DENSIFICATION GATE, not on how many parents happened to qualify: when
+        this cycle was not permitted to densify at all (outside the refine
+        window, or the population sits at the absolute cap), culling relaxes
+        (opacity threshold x0.25, world and screen limits x5) instead of
+        running at full strength. A permitted cycle that merely selected zero
+        parents still culls at full strength - that is the recovered
+        semantics, and the distinction is load-bearing.
         """
 
         import torch
@@ -789,8 +790,8 @@ class DefaultStrategyAdapter:
         screen_limit = float(self.inner.prune_scale2d)
         relaxed_cull_only = (
             self.relaxed_cull_when_no_growth
-            and births_this_cycle is not None
-            and births_this_cycle <= 0
+            and densify_allowed is not None
+            and not densify_allowed
         )
         if relaxed_cull_only:
             opacity_threshold *= 0.25
@@ -1065,12 +1066,16 @@ class DefaultStrategyAdapter:
         clone_count, split_count = self._grow_mipmap(
             params, optimizers, state
         )
+        densify_allowed = step < self.refine_stop_iter and (
+            self.capacity_cap is None
+            or len(params["means"]) < self.capacity_cap
+        )
         cull_count = self._prune_mipmap(
             params,
             optimizers,
             state,
             step=step,
-            births_this_cycle=clone_count + 2 * split_count,
+            densify_allowed=densify_allowed,
         )
         reset = step % int(self.inner.reset_every) == 0
         if reset and self.lifecycle_dry_run:
