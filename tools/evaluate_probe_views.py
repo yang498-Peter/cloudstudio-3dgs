@@ -24,10 +24,23 @@ if str(ROOT) not in sys.path:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--config", type=Path, required=True)
-    parser.add_argument("--checkpoint", type=Path, required=True)
+    parser.add_argument("--checkpoint", type=Path)
+    parser.add_argument(
+        "--reference-ply",
+        type=Path,
+        help="score a delivery PLY instead of a checkpoint, so the reference "
+        "and our runs are read on the identical battery",
+    )
+    parser.add_argument(
+        "--reference-alignment",
+        type=Path,
+        help="JSON carrying the rigid transform that brings the PLY into our frame",
+    )
     parser.add_argument("--views", type=int, default=48)
     parser.add_argument("--output", type=Path)
     args = parser.parse_args()
+    if (args.checkpoint is None) == (args.reference_ply is None):
+        parser.error("pass exactly one of --checkpoint or --reference-ply")
 
     import torch
 
@@ -63,12 +76,33 @@ def main() -> int:
             device=device,
         )
 
-    payload = torch.load(args.checkpoint, map_location="cpu", weights_only=False)
-    params = {
-        key: value.to(device) if hasattr(value, "to") else value
-        for key, value in payload["params"].items()
-    }
-    step = int(payload.get("step", 0))
+    if args.reference_ply is not None:
+        import numpy as _np
+
+        from tools.build_three_way_compare import _load_ply_gaussians
+
+        transform = None
+        if args.reference_alignment is not None:
+            transform = _np.asarray(
+                json.loads(args.reference_alignment.read_text(encoding="utf-8"))[
+                    "transform"
+                ],
+                dtype=_np.float64,
+            )
+        loaded = _load_ply_gaussians(args.reference_ply, transform)
+        params = {
+            key: value.to(device) for key, value in loaded.items()
+        }
+        step = -1
+        source = str(args.reference_ply)
+    else:
+        payload = torch.load(args.checkpoint, map_location="cpu", weights_only=False)
+        params = {
+            key: value.to(device) if hasattr(value, "to") else value
+            for key, value in payload["params"].items()
+        }
+        step = int(payload.get("step", 0))
+        source = str(args.checkpoint)
 
     stride = max(1, len(dataset) // args.views)
     picks = list(range(0, len(dataset), stride))[: args.views]
@@ -119,7 +153,7 @@ def main() -> int:
                     )
 
     report = {
-        "checkpoint": str(args.checkpoint),
+        "source": source,
         "step": step,
         "gaussian_count": int(len(params["means"])),
         "views": len(picks),

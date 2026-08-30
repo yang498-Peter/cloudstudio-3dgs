@@ -133,6 +133,7 @@ class DefaultStrategyAdapter:
         vendor_opacity_reset_profile: str = "exact_every300",
         lifecycle_dry_run: bool = False,
         relaxed_cull_when_no_growth: bool = False,
+        relaxed_cull_at_capacity: bool = True,
         growth_metric: str = "count_mean",
     ) -> None:
         from gsplat.strategy import DefaultStrategy
@@ -184,6 +185,15 @@ class DefaultStrategyAdapter:
         # contract is broken.
         self.lifecycle_dry_run = bool(lifecycle_dry_run)
         self.relaxed_cull_when_no_growth = bool(relaxed_cull_when_no_growth)
+        # Whether sitting at the capacity cap counts as "cannot densify" for the
+        # anti-starvation branch. It does by the recovered contract, but a run
+        # that saturates its cap for tens of thousands of steps is a regime the
+        # reference never enters, and there relaxation stops removing dead mass:
+        # measured here, near-transparent share climbed 18.6% -> 28.8% after the
+        # ceiling was reached, which is exactly the axis where the reference
+        # delivery leads us (alpha p05 0.425 vs 0.238). Separating the two
+        # triggers lets that be tested rather than assumed.
+        self.relaxed_cull_at_capacity = bool(relaxed_cull_at_capacity)
         # Which statistic the growth threshold is compared against.
         # "count_mean": per-axis screen scaling, plain per-observation mean
         #   (the published DefaultStrategy).
@@ -1215,9 +1225,12 @@ class DefaultStrategyAdapter:
         clone_count, split_count = self._grow_mipmap(
             params, optimizers, state
         )
-        densify_allowed = step < self.refine_stop_iter and (
-            self.capacity_cap is None
-            or len(params["means"]) < self.capacity_cap
+        at_capacity = (
+            self.capacity_cap is not None
+            and len(params["means"]) >= self.capacity_cap
+        )
+        densify_allowed = step < self.refine_stop_iter and not (
+            at_capacity and self.relaxed_cull_at_capacity
         )
         cull_count = self._prune_mipmap(
             params,
