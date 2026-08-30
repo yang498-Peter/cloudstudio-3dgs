@@ -1021,7 +1021,10 @@ class TrainerConfig:
                     )
             expected_lifecycle = {
                 "growth_min_opacity": 0.15,
-                "split_scale_m": 0.2,
+                # Corrected reverse (2026-08-30): the split/clone size boundary
+                # is 0.15 m; the world-size CULL limit stays 0.2 m. The two had
+                # been conflated at 0.2 in earlier recoveries.
+                "split_scale_m": 0.15,
                 "prune_scale_m": 0.2,
                 "prune_opa": expected_prune_opa,
                 "prune_opa_late": expected_prune_opa_late,
@@ -2543,6 +2546,20 @@ def _render_supervision_loss(
         # and validation renders stay at gain 1.0.
         rendered = rendered * rgb_gain
     l1 = masked_rgb_l1(rendered, tensors["rgb"], tensors["rgb_mask"])
+    with backend.torch.no_grad():
+        # Masked train-view PSNR, on the same pixels the L1 sees. One view is
+        # noisy; the dashboard reads the trend, and it is the unit every
+        # published comparison speaks in.
+        masked_mse = (
+            ((rendered - tensors["rgb"]) ** 2)
+            .mean(dim=-1)[tensors["rgb_mask"]]
+            .mean()
+        )
+        rgb_psnr = float(
+            (-10.0 * backend.torch.log10(masked_mse.clamp_min(1e-10)))
+            .detach()
+            .cpu()
+        )
     rgb_gradient_l1 = None
     if config.rgb_gradient_weight > 0.0:
         rgb_gradient_l1 = masked_rgb_gradient_l1(
@@ -2764,6 +2781,7 @@ def _render_supervision_loss(
         lidar_rgb_l1
     )
     info["cloudstudio_rgb_gradient_l1"] = rgb_gradient_l1
+    info["cloudstudio_rgb_psnr"] = rgb_psnr
     info["cloudstudio_lidar_rgb_support_fraction"] = (
         None
         if lidar_rgb_l1 is None
@@ -3413,6 +3431,7 @@ def train(
     last_metrics: dict[str, Any] = {}
     initial_loss: float | None = None
     best_loss = float("inf")
+    last_seen_lifecycle_event: dict[str, Any] | None = None
     mcmc_telemetry: dict[str, Any] | None = None
     golden_history: list[dict[str, Any]] = []
     best_golden: dict[str, Any] | None = None
@@ -4190,6 +4209,7 @@ def train(
                 tensors["mesh_mask"].float().mean().detach().cpu()
             ),
             "rgb_l1": float(l1.detach().cpu()),
+            "rgb_psnr": info.get("cloudstudio_rgb_psnr"),
             "rgb_gradient_l1": None
             if info["cloudstudio_rgb_gradient_l1"] is None
             else float(info["cloudstudio_rgb_gradient_l1"].detach().cpu()),
@@ -4263,11 +4283,58 @@ def train(
             if normal_terms is None
             else float(normal_terms["point_to_plane_raw"].detach().cpu()),
         }
+        lifecycle_event = getattr(
+            getattr(backend, "strategy", None), "last_lifecycle_event", None
+        )
+        if lifecycle_event is not None:
+            # The adapter refreshes this on refine steps only; carrying the
+            # last-known event on every persisted record is what makes
+            # birth/death visible on the dashboard instead of dying on the
+            # strategy object (persistence is sparser than the refine cadence).
+            last_seen_lifecycle_event = lifecycle_event
+            growth = lifecycle_event.get("growth_diagnostics", {})
+            cull = lifecycle_event.get("cull_reasons", {})
+            quantiles = growth.get("gradient_quantiles", {})
+            last_metrics.update(
+                {
+                    "lifecycle_cull_total": lifecycle_event.get("cull_count"),
+                    "lifecycle_after_count": lifecycle_event.get("after_count"),
+                    "lifecycle_clone_parents": growth.get("clone_parent_count"),
+                    "lifecycle_split_parents": growth.get("split_parent_count"),
+                    "lifecycle_growth_eligible": growth.get("selected_parent_count"),
+                    "lifecycle_grad_threshold": growth.get("gradient_threshold"),
+                    "lifecycle_grad_p90": quantiles.get("p90"),
+                    "lifecycle_grad_p99": quantiles.get("p99"),
+                    "lifecycle_frac_op_below_010": growth.get(
+                        "fraction_opacity_below_0p10"
+                    ),
+                    "lifecycle_frac_op_above_015": growth.get(
+                        "fraction_opacity_above_0p15"
+                    ),
+                    "lifecycle_grad_only_candidates": growth.get(
+                        "gradient_only_candidate_count"
+                    ),
+                    "lifecycle_cull_opacity": cull.get("selected_opacity_count"),
+                    "lifecycle_cull_world_scale": cull.get("world_scale_count"),
+                    "lifecycle_cull_screen_scale": cull.get("screen_scale_count"),
+                    "lifecycle_cull_opacity_threshold": cull.get("opacity_threshold"),
+                    "lifecycle_relaxed_cull": (
+                        None
+                        if cull.get("relaxed_cull_only") is None
+                        else int(bool(cull.get("relaxed_cull_only")))
+                    ),
+                }
+            )
         if initial_loss is None:
             initial_loss = last_metrics["loss"]
         best_loss = min(best_loss, last_metrics["loss"])
         completed = step + 1
-        if completed == 1 or completed % 10 == 0 or audit_due:
+        if (
+            completed == 1
+            or completed % 10 == 0
+            or audit_due
+            or lifecycle_event is not None
+        ):
             _append_monitor_event(
                 monitor_progress_path,
                 {

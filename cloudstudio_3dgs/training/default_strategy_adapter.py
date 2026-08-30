@@ -102,6 +102,8 @@ class DefaultStrategyAdapter:
         lifecycle_execution_order: str = "post_optimizer_gsplat",
         vendor_cull_warmup_profile: str = "exact_0p10_to_0p05",
         vendor_opacity_reset_profile: str = "exact_every300",
+        lifecycle_dry_run: bool = False,
+        relaxed_cull_when_no_growth: bool = False,
     ) -> None:
         from gsplat.strategy import DefaultStrategy
 
@@ -145,6 +147,13 @@ class DefaultStrategyAdapter:
             capacity_conserving_clone_opacity
         )
         self.lifecycle_execution_order = str(lifecycle_execution_order)
+        # Audit mode: compute every selection, quantile and would-be count at
+        # each refine boundary, publish them, and apply NOTHING - no clone, no
+        # split, no cull, no opacity reset. One 500-step probe under this flag
+        # replaces a thousand steps of guessing which side of the birth/death
+        # contract is broken.
+        self.lifecycle_dry_run = bool(lifecycle_dry_run)
+        self.relaxed_cull_when_no_growth = bool(relaxed_cull_when_no_growth)
         self.vendor_cull_warmup_profile = str(vendor_cull_warmup_profile)
         self.vendor_opacity_reset_profile = str(vendor_opacity_reset_profile)
         self.last_lifecycle_event: dict[str, Any] | None = None
@@ -615,19 +624,40 @@ class DefaultStrategyAdapter:
         split_mask = eligible & (~small | detail_split_mask)
         duplicate_count = int(duplicate_mask.sum().item())
         split_count = int(split_mask.sum().item())
+        opacity_quantiles = {
+            label: float(value)
+            for label, value in zip(
+                ("p05", "p10", "p50", "p90", "p95"),
+                torch.quantile(
+                    opacity.float(),
+                    torch.tensor(
+                        [0.05, 0.1, 0.5, 0.9, 0.95], device=opacity.device
+                    ),
+                ).tolist(),
+            )
+        }
         self._last_growth_event = {
             "gradient_threshold": float(self.inner.grow_grad2d),
             "opacity_floor": float(self.growth_min_opacity),
             "observed_gaussian_count": int(observed.sum().item()),
             "gradient_quantiles": gradient_quantiles,
             "threshold_sweep_counts": threshold_sweep,
+            "opacity_quantiles": opacity_quantiles,
+            "fraction_opacity_below_0p10": float((opacity < 0.10).float().mean()),
+            "fraction_opacity_above_0p15": float((opacity > 0.15).float().mean()),
+            "gradient_only_candidate_count": int(
+                (gradients > float(self.inner.grow_grad2d)).sum().item()
+            ),
             "selected_parent_count": int(eligible.sum().item()),
             "clone_parent_count": duplicate_count,
             "split_parent_count": split_count,
             "capacity_conserving_clone_opacity": (
                 self.capacity_conserving_clone_opacity
             ),
+            "dry_run": self.lifecycle_dry_run,
         }
+        if self.lifecycle_dry_run:
+            return 0, 0
         parent_means = None
         if guarded_births and (duplicate_count or split_count):
             clone_indices = torch.where(duplicate_mask)[0]
@@ -734,8 +764,18 @@ class DefaultStrategyAdapter:
         *,
         step: int,
         scene: Any | None = None,
+        births_this_cycle: int | None = None,
     ) -> int:
-        """Apply recovered early/late opacity, world, and screen cull gates."""
+        """Apply recovered early/late opacity, world, and screen cull gates.
+
+        The recovered contract carries an anti-starvation branch: in a cycle
+        where densification could not add anything, culling relaxes instead
+        of running at full strength (opacity threshold x0.25, world and
+        screen limits x5) - the system never lets death run unopposed while
+        birth is stalled. Its absence is the measured root cause of the
+        v6-v8 population collapses (one audited cycle: 1,030 would-be births
+        against 1,760,109 would-be deaths).
+        """
 
         import torch
         from gsplat.strategy.ops import remove
@@ -745,6 +785,17 @@ class DefaultStrategyAdapter:
             if step >= int(self.prune_switch_step)
             else float(self.inner.prune_opa)
         )
+        world_limit = float(self.prune_scale_m)
+        screen_limit = float(self.inner.prune_scale2d)
+        relaxed_cull_only = (
+            self.relaxed_cull_when_no_growth
+            and births_this_cycle is not None
+            and births_this_cycle <= 0
+        )
+        if relaxed_cull_only:
+            opacity_threshold *= 0.25
+            world_limit *= 5.0
+            screen_limit *= 5.0
         opacity = torch.sigmoid(params["opacities"].flatten())
         raw_opacity_mask = opacity < opacity_threshold
         opacity_threshold_sweep_counts = {
@@ -754,11 +805,11 @@ class DefaultStrategyAdapter:
             for threshold in (0.01, 0.02, 0.03, 0.04, 0.05, 0.075, 0.1)
         }
         maximum_scale = torch.exp(params["scales"]).max(dim=-1).values
-        world_scale_mask = maximum_scale > float(self.prune_scale_m)
+        world_scale_mask = maximum_scale > world_limit
         radii = state.get("radii")
         screen_scale_mask = torch.zeros_like(raw_opacity_mask)
         if radii is not None:
-            screen_scale_mask = radii > float(self.inner.prune_scale2d)
+            screen_scale_mask = radii > screen_limit
 
         opacity_mask = raw_opacity_mask.clone()
         grace_active = False
@@ -973,7 +1024,11 @@ class DefaultStrategyAdapter:
                 local_competition_protected_count
             ),
             "total_cull_count": prune_count,
+            "relaxed_cull_only": relaxed_cull_only,
         }
+        if self.lifecycle_dry_run:
+            self._last_cull_event["dry_run"] = True
+            return 0
         if prune_count:
             remove(
                 params=params,
@@ -1011,9 +1066,15 @@ class DefaultStrategyAdapter:
             params, optimizers, state
         )
         cull_count = self._prune_mipmap(
-            params, optimizers, state, step=step
+            params,
+            optimizers,
+            state,
+            step=step,
+            births_this_cycle=clone_count + 2 * split_count,
         )
         reset = step % int(self.inner.reset_every) == 0
+        if reset and self.lifecycle_dry_run:
+            reset = False
         if reset:
             reset_opa(
                 params=params,
