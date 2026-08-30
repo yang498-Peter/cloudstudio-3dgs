@@ -20,6 +20,13 @@ def main() -> int:
     parser.add_argument("--source-las", required=True, type=Path)
     parser.add_argument("--expected-las-sha256", required=True)
     parser.add_argument("--output", required=True, type=Path)
+    parser.add_argument(
+        "--voxel-decimate-m",
+        type=float,
+        help="keep the first LAS point per voxel of this size (recorded in "
+        "the signed manifest); a VRAM concession for single-Tile adaptive "
+        "training - the reference recipe splits space instead",
+    )
     parser.add_argument("--force", action="store_true")
     args = parser.parse_args()
     manifest = materialize_lidar_tile_inputs(
@@ -27,6 +34,7 @@ def main() -> int:
         args.source_las,
         args.output,
         expected_point_cloud_sha256=args.expected_las_sha256,
+        voxel_decimate_m=args.voxel_decimate_m,
         force=args.force,
     )
     print(

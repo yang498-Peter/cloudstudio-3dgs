@@ -5,6 +5,7 @@ from __future__ import annotations
 import copy
 import hashlib
 import json
+import math
 import os
 from pathlib import Path
 from typing import Any
@@ -52,10 +53,24 @@ def materialize_lidar_tile_inputs(
     expected_point_cloud_sha256: str,
     force: bool = False,
     chunk_size: int = 1_000_000,
+    voxel_decimate_m: float | None = None,
 ) -> dict[str, Any]:
-    """Stream the LAS once and write one halo-inclusive initialization PLY per Tile."""
+    """Stream the LAS once and write one halo-inclusive initialization PLY per Tile.
+
+    ``voxel_decimate_m`` keeps the first point per voxel of that size. It is a
+    VRAM concession for single-Tile adaptive training on small cards - the
+    reference recipe runs full density and splits SPACE instead - so the
+    decimation is recorded in the signed manifest, never silent. The KNN
+    footprint initialization downstream scales with local spacing, so thinner
+    input yields proportionally larger starting footprints rather than holes.
+    """
 
     import laspy
+
+    if voxel_decimate_m is not None and (
+        not math.isfinite(voxel_decimate_m) or voxel_decimate_m <= 0.0
+    ):
+        raise ValueError("voxel_decimate_m must be finite and positive")
 
     tile_plan_path = Path(tile_plan_path).resolve()
     source_las = Path(source_las).resolve()
@@ -86,10 +101,13 @@ def materialize_lidar_tile_inputs(
     record_paths = [output_root / f".{tile['name']}.records.tmp" for tile in tiles]
     streams = [path.open("wb") for path in record_paths]
     counts = [0 for _ in tiles]
+    seen_voxels: list[set[int]] = [set() for _ in tiles]
+    source_point_total = 0
     try:
         with laspy.open(source_las) as reader:
             for chunk in reader.chunk_iterator(chunk_size):
                 xyz = np.column_stack([chunk.x, chunk.y, chunk.z]).astype(np.float64)
+                source_point_total += len(xyz)
                 dimensions = set(chunk.point_format.dimension_names)
                 if {"red", "green", "blue"} <= dimensions:
                     source_rgb = np.column_stack([chunk.red, chunk.green, chunk.blue])
@@ -104,6 +122,28 @@ def materialize_lidar_tile_inputs(
                     selected = np.flatnonzero(keep)
                     if not len(selected):
                         continue
+                    if voxel_decimate_m is not None:
+                        cells = np.floor(
+                            (xyz[selected] - box[0]) / voxel_decimate_m
+                        ).astype(np.int64)
+                        spans = (
+                            np.floor((box[1] - box[0]) / voxel_decimate_m).astype(
+                                np.int64
+                            )
+                            + 2
+                        )
+                        keys = (
+                            cells[:, 0] * spans[1] + cells[:, 1]
+                        ) * spans[2] + cells[:, 2]
+                        registry = seen_voxels[index]
+                        fresh_rows = []
+                        for row, key in enumerate(keys.tolist()):
+                            if key not in registry:
+                                registry.add(key)
+                                fresh_rows.append(row)
+                        if not fresh_rows:
+                            continue
+                        selected = selected[np.asarray(fresh_rows, dtype=np.int64)]
                     records = np.empty(len(selected), dtype=record_dtype)
                     records["x"] = xyz[selected, 0]
                     records["y"] = xyz[selected, 1]
@@ -168,6 +208,12 @@ def materialize_lidar_tile_inputs(
         "tile_count": len(output_tiles),
         "tiles": output_tiles,
     }
+    if voxel_decimate_m is not None:
+        payload["voxel_decimation"] = {
+            "voxel_m": float(voxel_decimate_m),
+            "policy": "first_point_per_voxel",
+            "source_point_total": int(source_point_total),
+        }
     payload["tile_inputs_manifest_sha256"] = hashlib.sha256(
         canonical_json_bytes(payload)
     ).hexdigest()
