@@ -117,6 +117,21 @@ def main() -> int:
 
     device = raw.get("device", "cuda:0")
 
+    backgrounds = None
+    if raw.get("background_image_manifest"):
+        # Render both models over the same baked backdrop the training sees;
+        # a white void where the training composites sky would make every
+        # strip lie about the current state.
+        from cloudstudio_3dgs.training.view_backgrounds import (
+            ViewBackgroundLibrary,
+        )
+
+        backgrounds = ViewBackgroundLibrary(
+            Path(raw["background_image_manifest"]),
+            Path(raw["background_image_root"]),
+            device=device,
+        )
+
     def to_device(params):
         return {
             key: value.to(device) if hasattr(value, "to") else value
@@ -149,13 +164,21 @@ def main() -> int:
         photo = np.asarray(sample.image, dtype=np.uint8)
         panels = [("photo", photo)]
 
+        view_background = tuple(args.background)
+        if backgrounds is not None:
+            view_background = backgrounds.background_for(
+                sample.image_id,
+                height=photo.shape[0],
+                width=photo.shape[1],
+                torch=torch,
+            )
         for label, params in (("ours", ours), ("reference", reference)):
             if params is None:
                 continue
             with torch.no_grad():
                 rendered, _, _, _ = backend.render(
                     params, sample, with_range=False,
-                    background_rgb=tuple(args.background),
+                    background_rgb=view_background,
                 )
             image = (
                 rendered.detach().clamp(0.0, 1.0).cpu().numpy() * 255.0
@@ -179,6 +202,8 @@ def main() -> int:
 
     summary = {
         "checkpoint": str(args.checkpoint.resolve()),
+        "run_id": raw.get("run_id"),
+        "checkpoint_run": args.checkpoint.resolve().parent.parent.name,
         "step": step,
         "gaussian_count": int(len(ours["means"])),
         "reference_ply": str(args.reference_ply) if args.reference_ply else None,

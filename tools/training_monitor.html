@@ -104,7 +104,7 @@ async function cmpRefresh(){try{const r=await fetch('/api/compare/status',{cache
  cmpBusy=s.state==='running';btn.disabled=cmpBusy;btn.textContent=cmpBusy?'渲染中…':'一键出图';
  if(s.state==='running')st.textContent=`渲染中，开始于 ${new Date(s.started_unix*1000).toLocaleTimeString()}`;
  else if(s.state==='error')st.textContent=`上次渲染失败：${(s.output_tail||'').slice(-160)}`;
- else if(s.summary&&s.summary.step!=null)st.textContent=`当前图来自 step ${Number(s.summary.step).toLocaleString()} · ${Number(s.summary.gaussian_count).toLocaleString()} 高斯 · 对齐残差 ${s.summary.reference_alignment_median_nn_m!=null?(s.summary.reference_alignment_median_nn_m*100).toFixed(1)+'cm':'—'}`;
+ else if(s.summary&&s.summary.step!=null)st.textContent=`当前图来自【${s.summary.checkpoint_run||s.summary.run_id||'?'}】step ${Number(s.summary.step).toLocaleString()} · ${Number(s.summary.gaussian_count).toLocaleString()} 高斯 · 对齐残差 ${s.summary.reference_alignment_median_nn_m!=null?(s.summary.reference_alignment_median_nn_m*100).toFixed(1)+'cm':'—'}`;
  else st.textContent='';
  if(s.images&&s.images.length){el.innerHTML=s.images.map(im=>`<a href="/compare/${im.name}" target="_blank" title="点开看原图"><img src="/compare/${im.name}?t=${im.mtime_unix}" style="width:100%;display:block;border-radius:8px;margin:6px 0" loading="lazy"></a>`).join('')}
 }catch(e){}}
