@@ -80,6 +80,33 @@ def _atomic_json(path: Path, value: dict[str, Any]) -> None:
         raise
 
 
+def _verify_raw_circle_criterion(raw_mask: dict[str, Any]) -> dict[str, Any]:
+    """Accept either form of the fisheye validity circle, and record which.
+
+    The circle exists to drop the outer ring where the lens stops being usable.
+    A fixed pixel radius expresses that only for the camera it was measured on;
+    an incidence-angle limit expresses it directly and transfers between
+    cameras. Both are accepted, and the criterion is written into the gate so a
+    reader never has to guess which one produced the masks.
+    """
+    profile = raw_mask.get("valid_mask_profile")
+    if profile == "principal_point_circle_v1":
+        radius = float(raw_mask.get("valid_radius_px", 0.0))
+        if radius <= 0.0:
+            raise ValueError("principal-point circle needs a positive radius")
+        return {"kind": "radius_px", "valid_radius_px": radius}
+    theta = raw_mask.get("theta_max_deg")
+    if theta is None:
+        raise ValueError(
+            "raw mask must state either a principal-point radius or a maximum "
+            "incidence angle"
+        )
+    theta = float(theta)
+    if not 0.0 < theta <= 180.0:
+        raise ValueError("theta_max_deg must be within (0, 180]")
+    return {"kind": "theta_max_deg", "theta_max_deg": theta}
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--raw-dataset", required=True, type=Path)
@@ -121,17 +148,22 @@ def main() -> int:
     raw_mask_sha = verify_mask_manifest(raw_mask)
     if raw_mask.get("dataset_manifest_sha256") != raw_sha:
         raise ValueError("raw circle mask is bound to another dataset")
-    if raw_mask.get("valid_mask_profile") != "principal_point_circle_v1" or not (
-        abs(float(raw_mask.get("valid_radius_px", 0.0)) - 1200.0) <= 1e-9
-    ):
-        raise ValueError("raw mask must be the fixed 1200 px principal-point circle")
+    raw_mask_criterion = _verify_raw_circle_criterion(raw_mask)
 
     raw_person = _read(args.raw_person_mask)
     raw_person_sha = verify_person_mask_manifest(raw_person)
+    # The base layer is identified by the hash, not by what the composition
+    # string calls it; two generations of the mask builder spell the same
+    # left-hand operand differently.
+    person_composition = str(raw_person.get("composition", ""))
     if (
         raw_person.get("dataset_manifest_sha256") != raw_sha
         or raw_person.get("base_mask_manifest_sha256") != raw_mask_sha
-        or raw_person.get("composition") != "circle_valid & ~person_dynamic_mask"
+        or person_composition
+        not in {
+            "circle_valid & ~person_dynamic_mask",
+            "base_rgb_mask & ~person_dynamic_mask",
+        }
     ):
         raise ValueError("raw person masks are not composed with the raw circle mask")
 
@@ -192,12 +224,18 @@ def main() -> int:
 
     training_mask = _read(args.training_circle_mask)
     training_mask_sha = verify_mask_manifest(training_mask)
-    if (
-        training_mask.get("dataset_manifest_sha256") != training_sha
-        or training_mask.get("valid_mask_profile") != "principal_point_circle_v1"
-        or abs(float(training_mask.get("valid_radius_px", 0.0)) - 1200.0) > 1e-9
-    ):
+    if training_mask.get("dataset_manifest_sha256") != training_sha:
         raise ValueError("training circle masks were not rebuilt after AT")
+    training_mask_criterion = _verify_raw_circle_criterion(training_mask)
+    if training_mask_criterion != raw_mask_criterion:
+        # Rebinding after AT re-signs the same geometry against new poses. A
+        # different validity criterion on the two sides would mean the features
+        # that produced the AT and the pixels that supervise training disagree
+        # about which part of the lens is usable.
+        raise ValueError(
+            "training circle masks use a different validity criterion than the "
+            "raw masks that fed the AT"
+        )
     training_person = _read(args.training_person_mask)
     training_person_sha = verify_person_mask_manifest(training_person)
     if (
@@ -268,6 +306,8 @@ def main() -> int:
             if resolved.is_dir()
             else _file_sha(resolved),
         }
+    evidence["raw_circle_criterion"] = raw_mask_criterion
+    evidence["raw_person_composition"] = person_composition
     payload = {
         "schema_version": GATE_SCHEMA_VERSION,
         "profile": GATE_PROFILE,
