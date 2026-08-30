@@ -29,6 +29,13 @@ def main() -> int:
     parser.add_argument("--opacity", type=float, default=0.02)
     parser.add_argument("--rgb", type=float, nargs=3, default=(0.45, 0.58, 0.78))
     parser.add_argument("--min-world-z-direction", type=float, default=0.0)
+    parser.add_argument(
+        "--prebaked",
+        type=Path,
+        help="checkpoint-convention .pt holding an already-fitted dome; "
+        "appended verbatim instead of building the procedural cap "
+        "(the procedural shape arguments are ignored)",
+    )
     parser.add_argument("--force", action="store_true")
     args = parser.parse_args()
     report = augment_checkpoint_with_sky(
@@ -44,6 +51,7 @@ def main() -> int:
             rgb=tuple(args.rgb),
             min_world_z_direction=args.min_world_z_direction,
         ),
+        prebaked_dome=args.prebaked,
         force=args.force,
     )
     print(
