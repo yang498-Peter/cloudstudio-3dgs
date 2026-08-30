@@ -104,6 +104,7 @@ class DefaultStrategyAdapter:
         vendor_opacity_reset_profile: str = "exact_every300",
         lifecycle_dry_run: bool = False,
         relaxed_cull_when_no_growth: bool = False,
+        growth_metric: str = "count_mean",
     ) -> None:
         from gsplat.strategy import DefaultStrategy
 
@@ -154,6 +155,19 @@ class DefaultStrategyAdapter:
         # contract is broken.
         self.lifecycle_dry_run = bool(lifecycle_dry_run)
         self.relaxed_cull_when_no_growth = bool(relaxed_cull_when_no_growth)
+        # Which statistic the growth threshold is compared against.
+        # "count_mean": per-axis screen scaling, plain per-observation mean
+        #   (the published DefaultStrategy).
+        # "footprint_weighted": norm first, isotropic 0.5*max(1600,W,H) scale,
+        #   mean weighted by each view's projected radius (recovered contract).
+        # The two differ by roughly an order of magnitude on this scene, so a
+        # threshold carried across without the matching statistic selects a
+        # completely different population.
+        if growth_metric not in {"count_mean", "footprint_weighted"}:
+            raise ValueError(
+                "growth_metric must be count_mean or footprint_weighted"
+            )
+        self.growth_metric = str(growth_metric)
         self.vendor_cull_warmup_profile = str(vendor_cull_warmup_profile)
         self.vendor_opacity_reset_profile = str(vendor_opacity_reset_profile)
         self.last_lifecycle_event: dict[str, Any] | None = None
@@ -522,9 +536,19 @@ class DefaultStrategyAdapter:
                     params["opacities"].index_copy_(0, selected, reshaped)
                     params["opacities"][-selected.numel() :].copy_(reshaped)
 
-        gradients = state["grad2d"] / state["count"].clamp_min(1)
+        if self.growth_metric == "footprint_weighted":
+            weight_sum = state.get("_footprint_weight_sum")
+            if weight_sum is None or len(weight_sum) != len(params["means"]):
+                raise RuntimeError(
+                    "footprint_weighted growth needs its accumulator; it is "
+                    "filled every step by _accumulate_footprint_weighted_gradient"
+                )
+            gradients = state["_footprint_grad_sum"] / weight_sum.clamp_min(1e-8)
+            observed = weight_sum > 0
+        else:
+            gradients = state["grad2d"] / state["count"].clamp_min(1)
+            observed = state["count"] > 0
         opacity = torch.sigmoid(params["opacities"].flatten())
-        observed = state["count"] > 0
         finite_observed_gradients = gradients[
             observed & torch.isfinite(gradients)
         ].float()
