@@ -294,6 +294,15 @@ class TrainerConfig:
     # have an owner and the white background stops pressing scene gaussians
     # toward transparency.
     sky_shell_checkpoint: Path | None = None
+    # Parameter rows from this index on render but never optimize: their
+    # gradients are zeroed every step. A baked far-field layer is a static
+    # backdrop, not a training variable - left trainable, any pixel whose ray
+    # reaches it (through under-opaque foreground) feeds it a constant
+    # directional gradient that Adam normalizes into full-size steps, and the
+    # layer drains to transparency within a few thousand steps. Freezing it
+    # redirects that same gradient onto the foreground, which must become
+    # opaque enough to occlude the backdrop - the desired direction.
+    frozen_tail_start: int | None = None
     # What loss the densification criterion differentiates. "rgb_only" scores
     # births from L1+SSIM alone, the way Kerbl et al. trained; under "total_loss"
     # the LiDAR range and normal terms leak into means2d.grad through the shared
@@ -502,6 +511,7 @@ class TrainerConfig:
                 "learning_rates",
                 "warm_start_min_opacity",
                 "warm_start_scale_multiplier",
+                "frozen_tail_start",
                 "final_evaluation_artifacts",
                 "mipmap_tile_id",
                 "implementation_smoke_only",
@@ -640,6 +650,18 @@ class TrainerConfig:
             ):
                 raise ValueError(
                     "fresh exposure_log_gains requires exposure compensation"
+                )
+        if self.frozen_tail_start is not None:
+            if (
+                not isinstance(self.frozen_tail_start, int)
+                or isinstance(self.frozen_tail_start, bool)
+                or self.frozen_tail_start < 0
+            ):
+                raise ValueError("frozen_tail_start must be a non-negative integer")
+            if self.topology_policy.mode != "strict_fixed":
+                raise ValueError(
+                    "frozen_tail_start requires strict_fixed topology: any "
+                    "relocation or pruning would scramble the frozen rows"
                 )
         if not 0.0 <= float(self.warm_start_min_opacity) < 1.0:
             raise ValueError("warm_start_min_opacity must be within [0, 1)")
@@ -2074,6 +2096,29 @@ def _sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 
+def _register_frozen_tail_hooks(params: dict[str, Any], start: int) -> int:
+    """Zero every gradient row from ``start`` on, for all parameters.
+
+    The hooks live on the Parameter objects, so they survive a warm start
+    (which replaces ``.data`` on the same objects) and cost one in-place
+    slice-fill per backward. Rows before ``start`` are untouched, and a
+    parameter shorter than ``start`` passes through whole.
+    """
+    registered = 0
+    for parameter in params.values():
+        if not hasattr(parameter, "register_hook"):
+            continue
+
+        def _zero_tail(gradient, boundary=start):
+            if len(gradient) > boundary:
+                gradient[boundary:] = 0
+            return gradient
+
+        parameter.register_hook(_zero_tail)
+        registered += 1
+    return registered
+
+
 def _warm_start_from_checkpoint(
     path: Path,
     *,
@@ -3367,6 +3412,13 @@ def train(
                 optimizers,
                 min_opacity=config.warm_start_min_opacity,
             )
+    if config.frozen_tail_start is not None:
+        frozen_hooks = _register_frozen_tail_hooks(params, config.frozen_tail_start)
+        print(
+            f"frozen tail active: rows >= {config.frozen_tail_start:,} render "
+            f"but never optimize ({frozen_hooks} parameter hooks)",
+            flush=True,
+        )
     if config.resume_checkpoint is not None:
         allowed_source_trainer_config_sha256 = None
         allowed_lineage_difference_keys: tuple[str, ...] = ()
