@@ -303,6 +303,12 @@ class TrainerConfig:
     # redirects that same gradient onto the foreground, which must become
     # opaque enough to occlude the backdrop - the desired direction.
     frozen_tail_start: int | None = None
+    # Per-view prerendered backdrop compositing (see view_backgrounds.py).
+    # When set, every sampled view composites onto its own stored image
+    # instead of the constant background_color, and the far-field layer
+    # stays out of the trainable set entirely.
+    background_image_manifest: Path | None = None
+    background_image_root: Path | None = None
     # What loss the densification criterion differentiates. "rgb_only" scores
     # births from L1+SSIM alone, the way Kerbl et al. trained; under "total_loss"
     # the LiDAR range and normal terms leak into means2d.grad through the shared
@@ -375,6 +381,8 @@ class TrainerConfig:
                 "mesh_geometry_root",
                 "mipmap_pipeline_gate",
                 "sky_shell_checkpoint",
+                "background_image_manifest",
+                "background_image_root",
             )
         }
         crop_value = value.get("crop")
@@ -650,6 +658,22 @@ class TrainerConfig:
             ):
                 raise ValueError(
                     "fresh exposure_log_gains requires exposure compensation"
+                )
+        if (self.background_image_manifest is None) != (
+            self.background_image_root is None
+        ):
+            raise ValueError(
+                "background_image_manifest and background_image_root are a pair"
+            )
+        if self.background_image_manifest is not None:
+            if not Path(self.background_image_manifest).is_file():
+                raise ValueError(
+                    "background image manifest is missing: "
+                    f"{self.background_image_manifest}"
+                )
+            if not Path(self.background_image_root).is_dir():
+                raise ValueError(
+                    f"background image root is missing: {self.background_image_root}"
                 )
         if self.frozen_tail_start is not None:
             if (
@@ -2414,6 +2438,31 @@ def _rendered_range_normals_camera(
     return normals, valid
 
 
+_VIEW_BACKGROUND_LIBRARIES: dict[tuple, Any] = {}
+
+
+def _view_background_library(config: "TrainerConfig") -> Any | None:
+    """Lazy per-(manifest, device) library shared by every loss call."""
+    if config.background_image_manifest is None:
+        return None
+    key = (
+        str(config.background_image_manifest),
+        str(config.background_image_root),
+        config.device,
+    )
+    library = _VIEW_BACKGROUND_LIBRARIES.get(key)
+    if library is None:
+        from cloudstudio_3dgs.training.view_backgrounds import ViewBackgroundLibrary
+
+        library = ViewBackgroundLibrary(
+            config.background_image_manifest,
+            config.background_image_root,
+            device=config.device,
+        )
+        _VIEW_BACKGROUND_LIBRARIES[key] = library
+    return library
+
+
 def _render_supervision_loss(
     *,
     backend: GsplatBackend,
@@ -2430,6 +2479,7 @@ def _render_supervision_loss(
     mesh_depth_weight_override: float | None = None,
     mesh_normal_weight_override: float | None = None,
     mesh_late_occlusion_scene_scale_m: float | None = None,
+    background_library: Any | None = None,
 ) -> tuple[Any, Any, Any, Any, dict[str, Any]]:
     has_range = "range_m" in tensors and (
         config.lidar_range_weight > 0.0 or config.lidar_linear_aux_weight > 0.0
@@ -2452,13 +2502,25 @@ def _render_supervision_loss(
     has_da2 = "da2_range_m" in tensors and da2_weight > 0.0
     has_mesh_depth = "mesh_range_m" in tensors and mesh_depth_weight > 0.0
     has_mesh_normal = "mesh_normal_camera" in tensors and mesh_normal_weight > 0.0
+    if background_library is None:
+        background_library = _view_background_library(config)
+    if background_library is not None:
+        target_shape = tensors["rgb"].shape
+        composite_background = background_library.background_for(
+            sample.image_id,
+            height=int(target_shape[0]),
+            width=int(target_shape[1]),
+            torch=backend.torch,
+        )
+    else:
+        composite_background = config.background_color
     rendered, rendered_range, rendered_alpha, info = backend.render(
         params,
         sample,
         with_range=has_range or has_da2 or has_mesh_depth or has_mesh_normal,
         c2w_override=c2w_override,
         active_sh_degree=active_sh_degree,
-        background_rgb=config.background_color,
+        background_rgb=composite_background,
     )
     raw_rendered = rendered
     if ppisp is not None:
