@@ -4314,6 +4314,12 @@ def train(
                     "lifecycle_grad_only_candidates": growth.get(
                         "gradient_only_candidate_count"
                     ),
+                    "lifecycle_grad_sum_p99": growth.get(
+                        "gradient_convention_audit", {}
+                    ).get("window_sum_p99"),
+                    "lifecycle_observations_p50": growth.get(
+                        "gradient_convention_audit", {}
+                    ).get("observations_p50"),
                     "lifecycle_cull_opacity": cull.get("selected_opacity_count"),
                     "lifecycle_cull_world_scale": cull.get("world_scale_count"),
                     "lifecycle_cull_screen_scale": cull.get("screen_scale_count"),

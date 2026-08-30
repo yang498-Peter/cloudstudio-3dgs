@@ -636,6 +636,20 @@ class DefaultStrategyAdapter:
                 ).tolist(),
             )
         }
+        # Convention audit: the threshold's unit depends on whether the
+        # accumulator is a per-observation mean (ours, classic) or the raw
+        # per-window sum. Publishing both quantile families plus the
+        # observation counts lets a probe settle that question from one run.
+        window_sums = state["grad2d"][observed & torch.isfinite(gradients)].float()
+        observation_counts = state["count"][observed].float()
+        convention_audit = {}
+        if window_sums.numel():
+            convention_audit = {
+                "window_sum_p90": float(torch.quantile(window_sums, 0.9)),
+                "window_sum_p99": float(torch.quantile(window_sums, 0.99)),
+                "observations_p50": float(torch.quantile(observation_counts, 0.5)),
+                "observations_p90": float(torch.quantile(observation_counts, 0.9)),
+            }
         self._last_growth_event = {
             "gradient_threshold": float(self.inner.grow_grad2d),
             "opacity_floor": float(self.growth_min_opacity),
@@ -643,6 +657,7 @@ class DefaultStrategyAdapter:
             "gradient_quantiles": gradient_quantiles,
             "threshold_sweep_counts": threshold_sweep,
             "opacity_quantiles": opacity_quantiles,
+            "gradient_convention_audit": convention_audit,
             "fraction_opacity_below_0p10": float((opacity < 0.10).float().mean()),
             "fraction_opacity_above_0p15": float((opacity > 0.15).float().mean()),
             "gradient_only_candidate_count": int(
