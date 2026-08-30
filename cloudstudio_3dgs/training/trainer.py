@@ -3149,7 +3149,10 @@ def train(
         normal_anchors = LidarNormalAnchors(
             normal_field, config.lidar_normal_alignment
         )
-    if len(xyz) >= config.cap_max:
+    if len(xyz) >= config.cap_max and config.warm_start_checkpoint is None:
+        # A warm start replaces the initialization population wholesale, so
+        # the capacity budget binds the warm-started row count (validated
+        # below once the checkpoint is applied), not the signed PLY's.
         raise ValueError(
             f"initialization has {len(xyz)} Gaussians but cap_max is {config.cap_max}"
         )
@@ -3473,6 +3476,12 @@ def train(
                 params,
                 optimizers,
                 min_opacity=config.warm_start_min_opacity,
+            )
+        warm_started_rows = int(len(next(iter(params.values()))))
+        if warm_started_rows >= config.cap_max:
+            raise ValueError(
+                f"warm start holds {warm_started_rows} Gaussians but cap_max "
+                f"is {config.cap_max}"
             )
     if config.frozen_tail_start is not None:
         frozen_hooks = _register_frozen_tail_hooks(params, config.frozen_tail_start)
