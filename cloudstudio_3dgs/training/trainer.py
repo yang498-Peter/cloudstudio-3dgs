@@ -309,6 +309,10 @@ class TrainerConfig:
     # stays out of the trainable set entirely.
     background_image_manifest: Path | None = None
     background_image_root: Path | None = None
+    # Declares this run an enhanced-surface profile rather than a parity arm,
+    # which permits the LiDAR alpha floor under the vendor lifecycle. Parity
+    # arms must leave it False so their departures stay countable.
+    surface_alpha_floor_profile: bool = False
     # What loss the densification criterion differentiates. "rgb_only" scores
     # births from L1+SSIM alone, the way Kerbl et al. trained; under "total_loss"
     # the LiDAR range and normal terms leak into means2d.grad through the shared
@@ -520,6 +524,7 @@ class TrainerConfig:
                 "warm_start_min_opacity",
                 "warm_start_scale_multiplier",
                 "frozen_tail_start",
+                "surface_alpha_floor_profile",
                 "final_evaluation_artifacts",
                 "mipmap_tile_id",
                 "implementation_smoke_only",
@@ -1162,6 +1167,19 @@ class TrainerConfig:
                         "pre-optimizer vendor lifecycle forbids CloudStudio birth guards"
                     )
                 approved_vendor_alpha = {(0.0, 0.95), (0.02, 0.95)}
+                if self.surface_alpha_floor_profile:
+                    # Declared enhanced-surface profile rather than a parity
+                    # arm: the LiDAR alpha floor is CloudStudio's counterweight
+                    # against surfaces going transparent, standing in for the
+                    # near-full-pixel monocular and mesh depth the vendor
+                    # supervises with and we do not. Measured 2026-08-31: with
+                    # the floor at zero for ten consecutive arms, foreground
+                    # alpha sat at 0.687 against the reference delivery's 0.872
+                    # on the identical battery, and renders showed the scene
+                    # dissolving into the background.
+                    approved_vendor_alpha.add(
+                        (float(self.lidar_alpha_weight), 0.95)
+                    )
                 if opacity_only_surface_alpha_probe or surface_shape_probe:
                     approved_vendor_alpha.update({(0.1, 0.95), (1.0, 0.95)})
                 if (
