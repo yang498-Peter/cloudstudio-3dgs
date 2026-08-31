@@ -74,6 +74,9 @@ def _parse_tile_checkpoint(value: str) -> tuple[int, Path]:
     return tile_id, Path(path)
 
 
+_SH_C0 = 0.28209479177387814
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--tile-inputs", required=True, type=Path)
@@ -96,6 +99,14 @@ def main() -> int:
         ),
     )
     parser.add_argument("--tolerance-m", type=float, default=1e-5)
+    parser.add_argument(
+        "--harmonize-exposure",
+        action="store_true",
+        help=(
+            "bake each tile's own learned exposure into its colours before "
+            "concatenating, so every tile lands in one photometric frame"
+        ),
+    )
     args = parser.parse_args()
 
     manifest = json.loads(args.tile_inputs.read_text(encoding="utf-8"))
@@ -129,6 +140,30 @@ def main() -> int:
         params = payload.get("params") or payload.get("splats")
         if not isinstance(params, dict) or "means" not in params:
             raise ValueError(f"Tile_{tile_id} checkpoint has no params")
+        tile_gain = None
+        if args.harmonize_exposure:
+            # Every tile learns its OWN gain for the same shared boundary
+            # photo, and a tile's colours are only correct once its own gain
+            # is applied. Concatenating without them leaves each tile in a
+            # different photometric frame, which reads as rectangular
+            # brightness patches with hard axis-aligned edges - the most
+            # visible seam artifact available. Folding a tile's own gain into
+            # its DC colour returns every tile to the photograph's frame.
+            log_gains = (payload.get("auxiliary_params") or {}).get(
+                "exposure_log_gains"
+            )
+            if log_gains is None:
+                raise ValueError(
+                    f"Tile_{tile_id} carries no exposure gains to harmonize"
+                )
+            tile_gain = float(torch.exp(log_gains.detach().float()).median())
+            # rgb = sh0 * C0 + 0.5, and the target is rgb * gain, so the DC
+            # band carries the scale and the shifted grey point together.
+            params = dict(params)
+            sh0 = params["sh0"].detach().float()
+            params["sh0"] = (
+                sh0 * tile_gain + (tile_gain - 1.0) * 0.5 / _SH_C0
+            ).to(params["sh0"].dtype)
         keys = tuple(sorted(params))
         if parameter_keys is None:
             parameter_keys = keys
@@ -171,6 +206,7 @@ def main() -> int:
                 "checkpoint": checkpoint_path.resolve().as_posix(),
                 "checkpoint_sha256": _sha256(checkpoint_path),
                 "completed_steps": int(payload.get("step", -1)),
+                "exposure_gain_applied": tile_gain,
                 "input_gaussian_count": int(len(means)),
                 "core_gaussian_count": int(np.count_nonzero(core_keep)),
                 "retained_gaussian_count": int(np.count_nonzero(keep)),
@@ -198,6 +234,7 @@ def main() -> int:
         "source_gaussian_count": source_total,
         "merged_gaussian_count": total,
         "discarded_by_merge_policy_count": source_total - total,
+        "exposure_harmonized": bool(args.harmonize_exposure),
         "shared_boundary_rule": (
             "minimum_tile_id"
             if args.merge_policy == "core_owner_only"

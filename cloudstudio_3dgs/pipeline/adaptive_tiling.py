@@ -203,7 +203,16 @@ class GaussianResidencyModel:
 
     base_gib: float = 0.570
     gib_per_million: float = 0.5033
-    lifecycle_multiplier: float = 3.0
+    # Measured 2026-08-31 on the full-density adaptive run: 18,757,869
+    # gaussians peaked at 12.71 GiB, i.e. 0.647 GiB per million including the
+    # lifecycle transient, against the 1.51 this multiplier used to predict.
+    # The 3.0 was set when split was expected to hold old and new tensors
+    # together for a large fraction of the population; under the recovered
+    # 0.2 m split boundary essentially nothing splits on metric-scale
+    # gaussians, so the transient is a clone-sized fraction, not a doubling.
+    # 1.4 leaves ~9% over the measurement. Raise it again for any arm that
+    # restores a split boundary small enough to fire.
+    lifecycle_multiplier: float = 1.4
     growth_ratio: float = 3.2
 
     def validate(self) -> None:

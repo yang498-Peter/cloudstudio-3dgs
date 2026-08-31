@@ -309,8 +309,10 @@ class DefaultStrategyAdapter:
         if not 0.0 < self.detail_split_screen_radius < 1.0:
             raise ValueError("detail_split_screen_radius must be within (0, 1)")
         if self.exact_mipmap_lifecycle:
-            if growth_min_opacity is None or not 0.0 < growth_min_opacity < 1.0:
-                raise ValueError("exact MipMap lifecycle requires growth_min_opacity")
+            if growth_min_opacity is not None and not (
+                0.0 < growth_min_opacity < 1.0
+            ):
+                raise ValueError("growth_min_opacity must lie within (0, 1)")
             if prune_opa_late is None or not 0.0 <= prune_opa_late < 1.0:
                 raise ValueError("exact MipMap lifecycle requires prune_opa_late")
             if prune_switch_step is None or prune_switch_step <= 0:
@@ -632,7 +634,10 @@ class DefaultStrategyAdapter:
             for opacity_floor in opacity_floors
         }
         eligible = gradients > float(self.inner.grow_grad2d)
-        eligible &= opacity > float(self.growth_min_opacity)
+        if self.growth_min_opacity is not None:
+            # Optional, and off in the recovered contract: the reference
+            # computes this comparison and then never reads it.
+            eligible &= opacity > float(self.growth_min_opacity)
         growth_candidate_count = int(eligible.sum().item())
         guarded_births = bool(
             self.surface_birth_proposal is not None
@@ -741,7 +746,11 @@ class DefaultStrategyAdapter:
             }
         self._last_growth_event = {
             "gradient_threshold": float(self.inner.grow_grad2d),
-            "opacity_floor": float(self.growth_min_opacity),
+            "opacity_floor": (
+                None
+                if self.growth_min_opacity is None
+                else float(self.growth_min_opacity)
+            ),
             "observed_gaussian_count": int(observed.sum().item()),
             "gradient_quantiles": gradient_quantiles,
             "threshold_sweep_counts": threshold_sweep,
@@ -1185,14 +1194,22 @@ class DefaultStrategyAdapter:
         width = float(info["width"])
         height = float(info["height"])
         screen_scale = 0.5 * max(1600.0, width, height)
+        # The recovered footprint is the L2 norm of the radius components, and
+        # visibility is that norm being positive - not the per-axis maximum and
+        # not every component being positive. For an isotropic splat the two
+        # differ only by a constant that the weighted mean divides out, but for
+        # anisotropic ones they reorder which views dominate a gaussian's score:
+        # radii (10,1) and (7,7) rank 10 vs 7 under the maximum and 10.05 vs
+        # 9.90 under the norm. That changes which gaussians clear the threshold.
+        radii_all = torch.linalg.vector_norm(info["radii"].float(), dim=-1)
         if packed:
             gs_ids = info["gaussian_ids"]
-            radii = info["radii"].max(dim=-1).values.float()
+            radii = radii_all
             grad_norm = raw.norm(dim=-1)
         else:
-            visible = (info["radii"] > 0.0).all(dim=-1)
+            visible = radii_all > 0.0
             gs_ids = torch.where(visible)[1]
-            radii = info["radii"][visible].max(dim=-1).values.float()
+            radii = radii_all[visible]
             grad_norm = raw[visible].norm(dim=-1)
         contribution = radii * screen_scale * grad_norm
         state["_footprint_grad_sum"].index_add_(0, gs_ids, contribution)
@@ -1222,15 +1239,21 @@ class DefaultStrategyAdapter:
             return
         self._ensure_cull_tracking(params, state)
         before = len(params["means"])
-        clone_count, split_count = self._grow_mipmap(
-            params, optimizers, state
-        )
+        # The recovered control flow decides whether this cycle may densify
+        # from the count it ENTERS with, then carries that decision into the
+        # cull. Re-reading the count after growth relaxes culling a cycle
+        # early: a population that arrives under the cap and grows into it
+        # spent a legitimate densification cycle, and should still cull at
+        # full strength. Getting this wrong leaves a cycle's worth of
+        # low-opacity mass behind exactly at the ceiling.
         at_capacity = (
-            self.capacity_cap is not None
-            and len(params["means"]) >= self.capacity_cap
+            self.capacity_cap is not None and before >= self.capacity_cap
         )
         densify_allowed = step < self.refine_stop_iter and not (
             at_capacity and self.relaxed_cull_at_capacity
+        )
+        clone_count, split_count = self._grow_mipmap(
+            params, optimizers, state
         )
         cull_count = self._prune_mipmap(
             params,

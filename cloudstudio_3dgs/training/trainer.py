@@ -1025,11 +1025,17 @@ class TrainerConfig:
                         "pre-optimizer vendor opacity reset profile is invalid"
                     )
             expected_lifecycle = {
-                "growth_min_opacity": 0.15,
-                # Corrected reverse (2026-08-30): the split/clone size boundary
-                # is 0.15 m; the world-size CULL limit stays 0.2 m. The two had
-                # been conflated at 0.2 in earlier recoveries.
-                "split_scale_m": 0.15,
+                # These are the values this preset actually runs, which are not
+                # the same as the generic defaults the profile starts from: the
+                # profile initialises 0.01 / 2e-4 / 0.1 and then overrides them
+                # to 0.2 / 1.5e-4 / 0.15. Calibrating against the initial value
+                # and stopping there is what produced a wrong table here once
+                # already, so the override is the reference, not the default.
+                #
+                # growth_min_opacity is deliberately absent. A birth gate on
+                # opacity > 0.15 is computed but never consumed, so enforcing it
+                # barred 21% of our population from ever being born.
+                "split_scale_m": 0.2,
                 "prune_scale_m": 0.2,
                 "prune_opa": expected_prune_opa,
                 "prune_opa_late": expected_prune_opa_late,
@@ -1053,6 +1059,9 @@ class TrainerConfig:
                 self.default_strategy.get("grow_grad2d"),
             )
             allowed_gradient_pairs = {
+                # The profile's initial value, before it is overridden to
+                # 1.5e-4. Kept selectable for calibration arms.
+                (False, 0.0002),
                 # Historical V26/V33/V34 compatibility only. This pair is no
                 # longer emitted by the builder because gsplat documents that
                 # AbsGrad requires a materially higher threshold.
@@ -1135,9 +1144,11 @@ class TrainerConfig:
                     ),
                 }
                 vendor_grow_grad2d = self.default_strategy.get("grow_grad2d")
-                if vendor_grow_grad2d not in {0.000075, 0.0001, 0.00015}:
+                # The type-2 preset runs 1.5e-4; 2e-4 is the library default
+                # the preset overrides, kept selectable for calibration arms.
+                if vendor_grow_grad2d not in {0.000075, 0.0001, 0.00015, 0.0002}:
                     vendor_mismatches["grow_grad2d"] = (
-                        "one of 7.5e-5, 1e-4, 1.5e-4",
+                        "one of 7.5e-5, 1e-4, 1.5e-4, 2e-4",
                         vendor_grow_grad2d,
                     )
                 for key, expected in vendor_expected.items():
@@ -3477,6 +3488,8 @@ def train(
     initial_loss: float | None = None
     best_loss = float("inf")
     last_seen_lifecycle_event: dict[str, Any] | None = None
+    view_last_seen_step = [-1] * len(trainset)
+    view_revisit_gaps: list[int] = []
     mcmc_telemetry: dict[str, Any] | None = None
     golden_history: list[dict[str, Any]] = []
     best_golden: dict[str, Any] | None = None
@@ -3753,6 +3766,14 @@ def train(
             index = int(
                 torch.randint(len(trainset), (1,), generator=sampler).item()
             )
+        # How long a view waits between visits decides how much counter-gradient
+        # a gaussian gets against any always-on downward pressure. Sampling with
+        # replacement leaves a heavy tail of long gaps where a surface receives
+        # the opacity drain and nothing else; an epoch permutation bounds it.
+        # This records the distribution so the two can be compared on evidence.
+        if view_last_seen_step[index] >= 0:
+            view_revisit_gaps.append(step - view_last_seen_step[index])
+        view_last_seen_step[index] = step
         sample = trainset[index]
         tensors = _tensor_sample(sample, torch, config.device)
         c2w_override = (
@@ -4395,6 +4416,17 @@ def train(
                     ),
                 }
             )
+        if len(view_revisit_gaps) >= 256:
+            gaps = np.asarray(view_revisit_gaps, dtype=np.float64)
+            last_metrics.update(
+                {
+                    "view_revisit_gap_p50": float(np.percentile(gaps, 50)),
+                    "view_revisit_gap_p95": float(np.percentile(gaps, 95)),
+                    "view_revisit_gap_p99": float(np.percentile(gaps, 99)),
+                    "view_revisit_gap_max": float(gaps.max()),
+                }
+            )
+            view_revisit_gaps.clear()
         if initial_loss is None:
             initial_loss = last_metrics["loss"]
         best_loss = min(best_loss, last_metrics["loss"])
