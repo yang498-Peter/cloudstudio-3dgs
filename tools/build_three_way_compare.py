@@ -107,12 +107,32 @@ def main() -> int:
     raw = json.loads(args.config.read_text(encoding="utf-8"))
     backend, torch_mod = _load_backend(raw)
 
+    # A Tile owns only the pixels its crop covers. Rendering the full face puts
+    # background where a neighbouring Tile's content belongs, so the strip
+    # scores the model on ground it was never given and the void reads as a
+    # reconstruction failure that is not one. Training already crops; the
+    # comparison has to crop identically to mean anything.
+    tile_views = None
+    if raw.get("tile_inputs_manifest"):
+        tile_inputs = json.loads(
+            Path(raw["tile_inputs_manifest"]).read_text(encoding="utf-8")
+        )
+        selected = [
+            tile
+            for tile in tile_inputs["tiles"]
+            if int(tile["tile_id"]) == int(raw.get("mipmap_tile_id", 0))
+        ]
+        if len(selected) != 1:
+            raise ValueError("Tile inputs do not contain a unique selected Tile")
+        tile_views = selected[0]["views"]
+
     dataset = FaceCacheDataset(
         Path(raw["face_cache_manifest"]),
         Path(raw["face_cache_root"]),
         verify_artifacts=False,
         dataset_manifest_path=Path(raw["dataset_manifest"]),
         renderer_mask_manifest_path=Path(raw["renderer_mask_manifest"]),
+        tile_views=tile_views,
     )
 
     device = raw.get("device", "cuda:0")
