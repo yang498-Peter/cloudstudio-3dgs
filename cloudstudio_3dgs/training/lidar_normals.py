@@ -23,6 +23,7 @@ the loss degrades to zero and flags itself stale until the next refresh.
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -210,6 +211,12 @@ class NormalAlignmentConfig:
     flatten_target_m: float = 0.02
     flatten_ratio_target: float = 0.15
     point_to_plane_huber_delta_m: float = 0.02
+    # The needle guard hinges here: only max/mid ABOVE this ratio is penalized.
+    # A round disk has max/mid = 1, but a good surface blade is elongated, and
+    # the reference delivery's own max/mid runs to 3 at the median and ~57 at
+    # p99. Penalising toward 1 would force us rounder than the reference; the
+    # hinge lets the blade shapes through and catches only pathological needles.
+    tangent_isotropy_max_ratio: float = 1.0
 
     def validate(self) -> None:
         if (
@@ -231,6 +238,8 @@ class NormalAlignmentConfig:
             raise ValueError("flatten_target_m must be positive")
         if not 0.0 < self.flatten_ratio_target < 1.0:
             raise ValueError("flatten_ratio_target must be within (0, 1)")
+        if self.tangent_isotropy_max_ratio < 1.0:
+            raise ValueError("tangent_isotropy_max_ratio must be at least 1")
         if self.point_to_plane_huber_delta_m <= 0.0:
             raise ValueError("point_to_plane_huber_delta_m must be positive")
 
@@ -248,6 +257,7 @@ class NormalAlignmentConfig:
             "flatten_mode": self.flatten_mode,
             "flatten_target_m": self.flatten_target_m,
             "flatten_ratio_target": self.flatten_ratio_target,
+            "tangent_isotropy_max_ratio": self.tangent_isotropy_max_ratio,
             "point_to_plane_huber_delta_m": self.point_to_plane_huber_delta_m,
         }
 
@@ -447,14 +457,25 @@ class LidarNormalAnchors:
 
         # Thinning alone does not decide what the remaining two axes do. A
         # needle and a disk are both thin, and only the disk actually covers a
-        # surface, so the ratio of the two tangential axes is penalized away
+        # surface, so the ratio of the two TANGENTIAL axes is penalized away
         # from one. Sorting makes this the larger over the middle axis, which
-        # is >= 1 by construction.
+        # is >= 1 by construction. This deliberately does NOT touch the shortest
+        # axis: a thin disk [10, 10, 0.2] is a good surface primitive and must
+        # be free to get thinner, so the guard is on max/mid, never max/min.
+        #
+        # The penalty is on the LOG ratio, not the raw ratio: log keeps it
+        # bounded (a ratio of 1000 costs ~48, not ~10^6, so it cannot dominate
+        # the loss the way the raw square did), while still rising without limit
+        # in the ratio itself. It is also hinged at tangent_isotropy_max_ratio,
+        # so blade shapes up to the reference's own tail pay nothing and only
+        # the pathological needles beyond it are pushed back.
         sorted_tangent = torch.sort(scales_m, dim=1).values
         tangent_ratio = sorted_tangent[:, 2] / sorted_tangent[:, 1].clamp_min(_EPS)
-        tangent_isotropy_raw = (
-            weight * (tangent_ratio - 1.0).square()
-        ).sum() / weight_sum
+        log_excess = torch.relu(
+            torch.log(tangent_ratio.clamp_min(_EPS))
+            - math.log(float(self.config.tangent_isotropy_max_ratio))
+        )
+        tangent_isotropy_raw = (weight * log_excess.square()).sum() / weight_sum
 
         # A soft surface tether: only displacement along the LiDAR normal is
         # penalized.  Tangential motion remains free, which is the essential
