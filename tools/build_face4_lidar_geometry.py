@@ -324,7 +324,13 @@ def build_face4_lidar_geometry(
             "full_las_to_face4_direct_nearest_range_zbuffer"
             if direct_projection
             else "kb4_forward_splat_nearest_range_zbuffer"
+        )
+        + (
+            "_visibility_filtered"
+            if int(projection_config.visibility_cell_px) > 0
+            else ""
         ),
+        "projection_config": projection_config.to_dict(),
         "intermediate_fisheye_raster": not direct_projection,
         "destination_pixel_quantizations": 1 if direct_projection else 2,
         "provenance_mode": (

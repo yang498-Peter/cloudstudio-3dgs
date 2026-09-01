@@ -74,6 +74,47 @@ class LidarProjectionTests(unittest.TestCase):
         self.assertEqual(int(result.source_index[0]), 1)
         self.assertEqual(int(result.support_count[0]), 3)
 
+    def test_hidden_point_filter_drops_points_behind_a_neighbouring_surface(self) -> None:
+        """A point that lands on its own pixel but lies far behind the front
+        surface seen by the neighbouring pixels is a leak-through target; the
+        exact-pixel z-buffer keeps it, the visibility filter must not."""
+        camera = camera_fixture()
+        front_pixels = np.array([[31.0, 32.0], [33.0, 32.0], [32.0, 31.0], [32.0, 33.0]])
+        leak_pixel = np.array([[32.0, 32.0]])
+        front = rays_for_pixels(front_pixels, camera) * 3.0
+        leak = rays_for_pixels(leak_pixel, camera) * 7.0
+        points = np.vstack([front, leak])
+
+        plain = project_lidar_depth(points, np.eye(4), camera)
+        self.assertEqual(len(plain.range_m), 5)
+
+        filtered = project_lidar_depth(
+            points,
+            np.eye(4),
+            camera,
+            config=DepthProjectionConfig(visibility_cell_px=4),
+        )
+        self.assertEqual(len(filtered.range_m), 4)
+        self.assertTrue(np.all(np.abs(filtered.range_m - 3.0) < 1e-3))
+        self.assertNotIn(4, set(int(i) for i in filtered.source_index))
+
+        # A point only slightly behind the front surface survives the tolerance.
+        near = rays_for_pixels(leak_pixel, camera) * 3.5
+        kept = project_lidar_depth(
+            np.vstack([front, near]),
+            np.eye(4),
+            camera,
+            config=DepthProjectionConfig(visibility_cell_px=4),
+        )
+        self.assertEqual(len(kept.range_m), 5)
+
+    def test_visibility_filter_is_absent_from_manifests_unless_enabled(self) -> None:
+        self.assertNotIn("visibility_cell_px", DepthProjectionConfig().to_dict())
+        enabled = DepthProjectionConfig(visibility_cell_px=6).to_dict()
+        self.assertEqual(enabled["visibility_cell_px"], 6)
+        with self.assertRaises(ValueError):
+            DepthProjectionConfig(visibility_cell_px=-1).validate()
+
     def test_dynamic_mask_and_crop_remove_supervision_before_cache(self) -> None:
         camera = camera_fixture()
         pixels = np.array([[10.0, 10.0], [20.0, 20.0]])
