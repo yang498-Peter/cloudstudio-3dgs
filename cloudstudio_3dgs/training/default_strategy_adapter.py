@@ -759,6 +759,15 @@ class DefaultStrategyAdapter:
             "footprint_weighted_audit": footprint_audit,
             "fraction_opacity_below_0p10": float((opacity < 0.10).float().mean()),
             "fraction_opacity_above_0p15": float((opacity > 0.15).float().mean()),
+            # Four graded buckets instead of one catch-all: the distribution is
+            # bimodal, and lumping everything under 0.1 into "dead" hides
+            # whether the mass sits at 0.003 (never coming back) or 0.08
+            # (one good view from recovering). The active count is the number
+            # that actually renders; raw population is not a health metric.
+            "fraction_opacity_below_0p005": float((opacity < 0.005).float().mean()),
+            "fraction_opacity_below_0p01": float((opacity < 0.01).float().mean()),
+            "fraction_opacity_below_0p05": float((opacity < 0.05).float().mean()),
+            "active_count_ge_0p10": int((opacity >= 0.10).sum().item()),
             "gradient_only_candidate_count": int(
                 (gradients > float(self.inner.grow_grad2d)).sum().item()
             ),

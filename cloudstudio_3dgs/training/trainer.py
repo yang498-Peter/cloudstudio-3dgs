@@ -4387,6 +4387,18 @@ def train(
                     "lifecycle_frac_op_above_015": growth.get(
                         "fraction_opacity_above_0p15"
                     ),
+                    "lifecycle_frac_op_below_0005": growth.get(
+                        "fraction_opacity_below_0p005"
+                    ),
+                    "lifecycle_frac_op_below_001": growth.get(
+                        "fraction_opacity_below_0p01"
+                    ),
+                    "lifecycle_frac_op_below_005": growth.get(
+                        "fraction_opacity_below_0p05"
+                    ),
+                    "lifecycle_active_count": growth.get(
+                        "active_count_ge_0p10"
+                    ),
                     "lifecycle_grad_only_candidates": growth.get(
                         "gradient_only_candidate_count"
                     ),
