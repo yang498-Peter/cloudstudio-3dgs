@@ -11,7 +11,10 @@ set PY=C:\Peter\cloudstudio-3dgs\.venv-train\Scripts\python.exe
 set STAGER=C:\Users\Remot\AppData\Local\Temp\claude\C--Peter-CLOUDSUTDIO-WINDOWS\06ee1c7b-43bb-45f7-be7d-ce6fa8511c66\scratchpad\stage_full_run.py
 set STATUS=%RUN%\tile_driver_status.txt
 
-echo [start] driver begun > "%STATUS%"
+rem Arm base is a parameter, not a constant: hardcoding it silently overwrote
+rem the staged configs with a different lifecycle once already.
+if "%ARM%"=="" set ARM=armVC
+echo [start] driver begun, arm=%ARM% > "%STATUS%"
 
 call :run_tile 0
 if errorlevel 1 exit /b 1
@@ -26,7 +29,7 @@ exit /b 0
 :run_tile
 set T=%1
 echo [stage] tile %T% >> "%STATUS%"
-%PY% "%STAGER%" armE %T% >> "%STATUS%" 2>&1
+%PY% "%STAGER%" %ARM% %T% >> "%STATUS%" 2>&1
 if errorlevel 1 (
   echo [FAIL] staging tile %T% >> "%STATUS%"
   exit /b 1

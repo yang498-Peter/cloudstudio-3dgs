@@ -124,6 +124,13 @@ class DefaultStrategyAdapter:
         opacity_cull_local_voxel_m: float = 0.02,
         opacity_cull_local_protection: str = "opacity",
         opacity_cull_local_min_accumulated_alpha: float = 0.0,
+        # Fraction of this window's median visible alpha (among seen gaussians)
+        # below which a low-opacity row counts as non-contributing and may die.
+        contribution_cull_relative_floor: float = 0.05,
+        # Kept fraction of accumulated visible alpha across a lifecycle event.
+        # Must be <1 so a corpse decays out, and >0 so a contributor survives
+        # the post-reset flush that a zeroed window cannot protect it through.
+        contribution_history_decay: float = 0.5,
         detail_split_policy: str = "vendor_0_2m",
         detail_split_scale_m: float = 0.02,
         detail_split_screen_radius: float = 0.0035,
@@ -171,6 +178,10 @@ class DefaultStrategyAdapter:
         self.opacity_cull_local_min_accumulated_alpha = float(
             opacity_cull_local_min_accumulated_alpha
         )
+        self.contribution_cull_relative_floor = float(
+            contribution_cull_relative_floor
+        )
+        self.contribution_history_decay = float(contribution_history_decay)
         self.detail_split_policy = str(detail_split_policy)
         self.detail_split_scale_m = float(detail_split_scale_m)
         self.detail_split_screen_radius = float(detail_split_screen_radius)
@@ -217,10 +228,19 @@ class DefaultStrategyAdapter:
             "immediate",
             "observation_aware",
             "local_coverage_competition",
+            "contribution_aware",
         }:
             raise ValueError(
                 "opacity_cull_policy must be immediate, observation_aware, "
-                "or local_coverage_competition"
+                "local_coverage_competition, or contribution_aware"
+            )
+        if not 0.0 < self.contribution_history_decay < 1.0:
+            raise ValueError(
+                'contribution_history_decay must be within (0, 1)'
+            )
+        if not 0.0 <= self.contribution_cull_relative_floor <= 1.0:
+            raise ValueError(
+                "contribution_cull_relative_floor must be within [0, 1]"
             )
         if self.opacity_cull_min_observations < 0:
             raise ValueError("opacity_cull_min_observations must be non-negative")
@@ -939,7 +959,43 @@ class DefaultStrategyAdapter:
         grace_active = False
         local_competition_protected_count = 0
         local_competition_cell_count = 0
-        if self.opacity_cull_policy != "immediate":
+        contribution_spared_count = 0
+        if self.opacity_cull_policy == "contribution_aware":
+            # Cull on evidence of invisibility, not on a momentary opacity read.
+            # The clean-vendor probe showed immediate cull bleeds ~18% of the
+            # ACTIVE population per reset cycle: the reset clamps everyone to
+            # 0.2, and live front surfaces that are not re-observed inside the
+            # window get taken before they climb back. The protections that were
+            # meant to stop that instead hoarded corpses (dead mass rising
+            # monotonically to 75%). Accumulated visible alpha separates the two
+            # cases directly - a suppressed but contributing Gaussian has put
+            # alpha on screen this window, a corpse has not - so low opacity is
+            # necessary but no longer sufficient to die.
+            visible_alpha = state.get("_visible_alpha_sum")
+            if visible_alpha is None or len(visible_alpha) != len(opacity):
+                raise RuntimeError(
+                    "contribution_aware cull needs the visible-alpha "
+                    "accumulator, filled every step alongside the footprint "
+                    "gradient; enable growth_metric='footprint_weighted'"
+                )
+            # Scale-free threshold: a fraction of this window's median among
+            # gaussians that were seen at all, so it tracks exposure and view
+            # count instead of hard-coding a screen-space constant.
+            seen = visible_alpha > 0.0
+            if bool(seen.any()):
+                reference = torch.quantile(
+                    visible_alpha[seen].float(), 0.5
+                ).clamp_min(1e-12)
+                contributes = visible_alpha >= (
+                    reference * float(self.contribution_cull_relative_floor)
+                )
+            else:
+                contributes = torch.zeros_like(raw_opacity_mask)
+            opacity_mask = raw_opacity_mask & ~contributes
+            contribution_spared_count = int(
+                (raw_opacity_mask & contributes).sum().item()
+            )
+        elif self.opacity_cull_policy != "immediate":
             self._ensure_cull_tracking(params, state)
             streak = state["_cloudstudio_cull_low_streak"]
             observations = state["_cloudstudio_cull_observations"]
@@ -1199,6 +1255,13 @@ class DefaultStrategyAdapter:
             state["_footprint_weight_sum"] = torch.zeros(
                 n_gaussian, device=raw.device
             )
+        if (
+            state.get("_visible_alpha_sum") is None
+            or len(state["_visible_alpha_sum"]) != n_gaussian
+        ):
+            state["_visible_alpha_sum"] = torch.zeros(
+                n_gaussian, device=raw.device
+            )
 
         width = float(info["width"])
         height = float(info["height"])
@@ -1223,6 +1286,17 @@ class DefaultStrategyAdapter:
         contribution = radii * screen_scale * grad_norm
         state["_footprint_grad_sum"].index_add_(0, gs_ids, contribution)
         state["_footprint_weight_sum"].index_add_(0, gs_ids, radii)
+
+        # Visible alpha, accumulated over the same window. Opacity alone cannot
+        # tell a corpse from a living Gaussian the periodic reset just clamped:
+        # both read low right after a reset. This asks a different question -
+        # has this Gaussian actually been putting alpha on screen? - so the cull
+        # can spare a suppressed-but-contributing surface while still taking the
+        # rows that are invisible no matter how often they are seen.
+        opacity_now = torch.sigmoid(params["opacities"].detach().flatten())
+        state["_visible_alpha_sum"].index_add_(
+            0, gs_ids, opacity_now[gs_ids] * radii
+        )
 
     def _step_post_backward_mipmap(
         self,
@@ -1289,6 +1363,19 @@ class DefaultStrategyAdapter:
         state["count"].zero_()
         if state.get("radii") is not None:
             state["radii"].zero_()
+        if state.get("_visible_alpha_sum") is not None:
+            # Decay, do NOT zero. The measured failure of the zeroing version:
+            # population was stable inside each cycle and lost ~20% in the one
+            # flush right after each opacity reset. At that moment every row has
+            # an empty fresh window, so a contribution rule that only sees the
+            # current window is blind exactly when it has to protect a live
+            # surface the reset just clamped. Carrying a decayed history means a
+            # Gaussian that was contributing before the reset still reads as a
+            # contributor during the flush, while a genuine corpse - never
+            # contributing in any window - decays to nothing and still dies.
+            state["_visible_alpha_sum"].mul_(
+                float(self.contribution_history_decay)
+            )
         if state.get("_footprint_grad_sum") is not None:
             state["_footprint_grad_sum"].zero_()
             state["_footprint_weight_sum"].zero_()

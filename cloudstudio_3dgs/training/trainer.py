@@ -1104,8 +1104,21 @@ class TrainerConfig:
                 "immediate",
                 "observation_aware",
                 "local_coverage_competition",
+                "contribution_aware",
             }:
                 raise ValueError("exact MipMap opacity cull policy is invalid")
+            if cull_policy == "contribution_aware":
+                # Needs the per-step accumulator that the footprint-weighted
+                # growth metric fills; without it the cull has no contribution
+                # signal and would silently fall back to opacity alone.
+                if (
+                    self.default_strategy.get("growth_metric")
+                    != "footprint_weighted"
+                ):
+                    raise ValueError(
+                        "contribution_aware cull requires "
+                        "growth_metric='footprint_weighted'"
+                    )
             if cull_policy == "local_coverage_competition":
                 if self.default_strategy.get("opacity_cull_local_voxel_m") != 0.02:
                     raise ValueError("local coverage cull voxel must be 0.02 m")

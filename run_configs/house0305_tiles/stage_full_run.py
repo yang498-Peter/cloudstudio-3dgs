@@ -21,7 +21,12 @@ TILE_STEPS = {0: 49560, 1: 26940, 2: 41860}
 # plateau) and windowed PSNR peaks at 16.32 around step 5-10k then declines, so
 # more training accumulates near-invisible Gaussians that composite into haze.
 # Running the full 20 epochs would land near 85-90% dead mass.
-TILE_STOP = {0: 12000, 1: 8000, 2: 10000}
+# Stop on a RECOVERY point, never just after a flush. Opacity resets every 300
+# steps and the big cull lands at reset+101, so a stop a few steps later keeps
+# the post-flush trough: tile0 at 2000 ended with 1.79M active and 28.5% dead,
+# where 1850 would have kept 2.18M active and 8.1% dead. Flushes are at
+# 701/1001/1301/1601/1901...; these stops sit before the next one.
+TILE_STOP = {0: 1850, 1: 1550, 2: 1750}
 TILE_INIT = {0: 10_445_142, 1: 3_309_574, 2: 5_651_827}
 
 arm = sys.argv[1] if len(sys.argv) > 1 else "armD"
