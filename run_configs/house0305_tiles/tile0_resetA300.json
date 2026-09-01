@@ -1,6 +1,6 @@
 {
- "run_id": "house0305-t0-vendorclean",
- "output_dir": "C:\\Peter\\3dgs-runs\\house0305_sop\\tile0_vendorclean",
+ "run_id": "house0305-t0-resetA300",
+ "output_dir": "C:\\Peter\\3dgs-runs\\house0305_sop\\tile0_resetA300",
  "device": "cuda:0",
  "seed": 42,
  "trainer_preset": "custom",
@@ -122,7 +122,7 @@
   "prune_opa_late": 0.05,
   "prune_switch_step": 24780,
   "prune_scale2d": 0.15,
-  "reset_every": 3000,
+  "reset_every": 300,
   "reset_opacity_cap": 0.2,
   "refine_scale2d_stop_iter": 38656,
   "refine_start_iter": 500,
@@ -135,12 +135,12 @@
   "relaxed_cull_at_capacity": false,
   "opacity_cull_policy": "immediate",
   "vendor_cull_warmup_profile": "exact_0p10_to_0p05",
-  "vendor_opacity_reset_profile": "deferred_every3000_compatibility"
+  "vendor_opacity_reset_profile": "exact_every300"
  },
  "surface_alpha_floor_profile": true,
  "lidar_alpha_dilation_radius_px": 6,
  "mono_depth_manifest": "C:\\Peter\\3dgs-datasets\\house0305_sop_v8\\da2_train\\mono_depth_manifest.json",
  "mono_depth_root": "C:\\Peter\\3dgs-datasets\\house0305_sop_v8\\da2_train",
- "controlled_stop_after_steps": 1500,
+ "controlled_stop_after_steps": 3500,
  "checkpoint_keep_every": 0
 }

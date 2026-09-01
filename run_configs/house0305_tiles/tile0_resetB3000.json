@@ -1,6 +1,6 @@
 {
- "run_id": "house0305-t0-vendorclean",
- "output_dir": "C:\\Peter\\3dgs-runs\\house0305_sop\\tile0_vendorclean",
+ "run_id": "house0305-t0-resetB3000",
+ "output_dir": "C:\\Peter\\3dgs-runs\\house0305_sop\\tile0_resetB3000",
  "device": "cuda:0",
  "seed": 42,
  "trainer_preset": "custom",
@@ -141,6 +141,6 @@
  "lidar_alpha_dilation_radius_px": 6,
  "mono_depth_manifest": "C:\\Peter\\3dgs-datasets\\house0305_sop_v8\\da2_train\\mono_depth_manifest.json",
  "mono_depth_root": "C:\\Peter\\3dgs-datasets\\house0305_sop_v8\\da2_train",
- "controlled_stop_after_steps": 1500,
+ "controlled_stop_after_steps": 3500,
  "checkpoint_keep_every": 0
 }
