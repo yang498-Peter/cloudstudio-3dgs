@@ -121,6 +121,89 @@ def _sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 
+def _dilate_bool(mask: np.ndarray, radius: int) -> np.ndarray:
+    """Separable square max-filter; radius 0 returns the mask itself."""
+    if radius <= 0:
+        return mask
+    out = mask.copy()
+    for axis in (0, 1):
+        acc = out.copy()
+        for shift in range(1, radius + 1):
+            acc |= np.roll(out, shift, axis=axis)
+            acc |= np.roll(out, -shift, axis=axis)
+        # np.roll wraps around; kill the wrapped band on both ends.
+        if axis == 0:
+            acc[:radius] = out[:radius] | _dilate_edge(out, radius, 0, True)
+            acc[-radius:] = out[-radius:] | _dilate_edge(out, radius, 0, False)
+        else:
+            acc[:, :radius] = out[:, :radius] | _dilate_edge(out, radius, 1, True)
+            acc[:, -radius:] = out[:, -radius:] | _dilate_edge(out, radius, 1, False)
+        out = acc
+    return out
+
+
+def _dilate_edge(mask: np.ndarray, radius: int, axis: int, leading: bool) -> np.ndarray:
+    """Max over a window that stops at the array edge (no wrap-around)."""
+    n = mask.shape[axis]
+    if leading:
+        block = np.take(mask, range(0, min(n, 2 * radius)), axis=axis)
+    else:
+        block = np.take(mask, range(max(0, n - 2 * radius), n), axis=axis)
+    result = np.zeros(np.take(mask, range(0, radius), axis=axis).shape, dtype=bool)
+    if axis == 0:
+        for i in range(radius):
+            src = i if leading else block.shape[0] - radius + i
+            lo, hi = max(0, src - radius), min(block.shape[0], src + radius + 1)
+            result[i] = block[lo:hi].any(axis=0)
+    else:
+        for i in range(radius):
+            src = i if leading else block.shape[1] - radius + i
+            lo, hi = max(0, src - radius), min(block.shape[1], src + radius + 1)
+            result[:, i] = block[:, lo:hi].any(axis=1)
+    return result
+
+
+def tile_ownership_masks(
+    depth_range: np.ndarray,
+    depth_mask: np.ndarray,
+    K: np.ndarray,
+    c2w: np.ndarray,
+    box: np.ndarray,
+    margin_m: float,
+    dilation_px: int,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Return (owned_support, foreign_region) for one cropped face.
+
+    ``depth_range`` holds Euclidean ray ranges at pixel centres (u+0.5, v+0.5)
+    under ``K``; ``c2w`` is the face camera-to-world pose. A LiDAR return is
+    owned when its world point lies inside ``box`` grown by ``margin_m``.
+    ``foreign_region`` is the dilated neighbourhood of foreign returns that is
+    not also the dilated neighbourhood of owned returns.
+    """
+    height, width = depth_mask.shape
+    jj, ii = np.meshgrid(
+        np.arange(width, dtype=np.float64) + 0.5,
+        np.arange(height, dtype=np.float64) + 0.5,
+    )
+    fx, fy = float(K[0, 0]), float(K[1, 1])
+    cx, cy = float(K[0, 2]), float(K[1, 2])
+    x = (jj - cx) / fx
+    y = (ii - cy) / fy
+    norm = np.sqrt(1.0 + x * x + y * y)
+    rng = np.asarray(depth_range, dtype=np.float64) / norm
+    cam = np.stack([x * rng, y * rng, rng], axis=-1)
+    rotation = np.asarray(c2w[:3, :3], dtype=np.float64)
+    translation = np.asarray(c2w[:3, 3], dtype=np.float64)
+    world = cam @ rotation.T + translation
+    lo = np.asarray(box[0], dtype=np.float64) - float(margin_m)
+    hi = np.asarray(box[1], dtype=np.float64) + float(margin_m)
+    inside = np.all((world >= lo) & (world <= hi), axis=-1)
+    owned = depth_mask & inside
+    foreign = depth_mask & ~inside
+    foreign_region = _dilate_bool(foreign, dilation_px) & ~_dilate_bool(owned, dilation_px)
+    return owned, foreign_region
+
+
 class FaceCacheDataset:
     """Iterate a fisheye face-split cache as pinhole ``TrainingSample`` items.
 
@@ -147,7 +230,27 @@ class FaceCacheDataset:
         mesh_geometry_manifest_path: Path | None = None,
         mesh_geometry_root: Path | None = None,
         mono_depth_max_range_m: float | None = None,
+        tile_ownership_box: Any | None = None,
+        tile_ownership_margin_m: float = 0.5,
+        tile_ownership_dilation_px: int = 15,
     ) -> None:
+        # Tile crops are pixel rectangles around in-Tile LiDAR returns, so a
+        # crop also contains pixels whose true surface lies in a neighbouring
+        # Tile where this Tile has no gaussians. Those targets cannot be met
+        # and the only way to lower them is to grow opaque in-Tile gaussians
+        # along the ray. With a box, LiDAR returns are unprojected and pixels
+        # around foreign returns (and not around owned ones) are removed from
+        # every supervision mask; foreign returns leave the depth masks.
+        self.tile_ownership_box = None
+        if tile_ownership_box is not None:
+            box = np.asarray(tile_ownership_box, dtype=np.float64)
+            if box.shape != (2, 3) or not np.all(np.isfinite(box)) or np.any(box[0] > box[1]):
+                raise ValueError("tile_ownership_box must be a finite [[min xyz], [max xyz]]")
+            if float(tile_ownership_margin_m) < 0.0 or int(tile_ownership_dilation_px) < 0:
+                raise ValueError("tile ownership margin and dilation must be non-negative")
+            self.tile_ownership_box = box
+        self.tile_ownership_margin_m = float(tile_ownership_margin_m)
+        self.tile_ownership_dilation_px = int(tile_ownership_dilation_px)
         if mono_depth_max_range_m is not None and not (
             float(mono_depth_max_range_m) > 0.0
         ):
@@ -836,6 +939,25 @@ class FaceCacheDataset:
             sensor_coords = None if sensor_coords is None else np.ascontiguousarray(sensor_coords[y:bottom, x:right])
             K[0, 2] -= float(x)
             K[1, 2] -= float(y)
+        if (
+            self.tile_ownership_box is not None
+            and depth_range is not None
+            and depth_mask is not None
+            and bool(depth_mask.any())
+        ):
+            owned, foreign_region = tile_ownership_masks(
+                depth_range,
+                depth_mask,
+                K,
+                c2w,
+                self.tile_ownership_box,
+                self.tile_ownership_margin_m,
+                self.tile_ownership_dilation_px,
+            )
+            rgb_mask = rgb_mask & ~foreign_region
+            depth_mask = owned
+            if mono_depth_mask is not None:
+                mono_depth_mask = mono_depth_mask & ~foreign_region
         mesh_depth_mask = None
         if mesh_depth_range is not None:
             assert mesh_depth_valid is not None and mesh_confidence is not None

@@ -101,5 +101,36 @@ class Da2DepthContractTests(unittest.TestCase):
             _base(mono_depth_max_range_m=0.0).validate()
 
 
+@unittest.skipUnless(HAS_TORCH, "torch is an optional training dependency")
+class TileOwnershipContractTests(unittest.TestCase):
+    def test_off_by_default_and_absent_from_the_contract(self) -> None:
+        config = _base()
+        config.validate()
+        self.assertFalse(config.tile_ownership_masking)
+        self.assertNotIn("tile_ownership_masking", config.contract_dict()["loss_weights"])
+
+    def test_requires_tile_inputs_and_face_cache(self) -> None:
+        with self.assertRaisesRegex(ValueError, "tile_ownership_masking"):
+            _base(tile_ownership_masking=True).validate()
+
+    def test_knob_values_are_validated(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            tiles = root / "tiles.json"
+            tiles.write_text("{}", encoding="utf-8")
+            faces = root / "faces.json"
+            faces.write_text("{}", encoding="utf-8")
+            for bad in (dict(tile_ownership_margin_m=-1.0), dict(tile_ownership_dilation_px=-3)):
+                with self.assertRaisesRegex(ValueError, "tile_ownership"):
+                    _base(
+                        tile_ownership_masking=True,
+                        tile_inputs_manifest=tiles,
+                        tile_inputs_root=root,
+                        face_cache_manifest=faces,
+                        face_cache_root=root,
+                        **bad,
+                    ).validate()
+
+
 if __name__ == "__main__":
     unittest.main()

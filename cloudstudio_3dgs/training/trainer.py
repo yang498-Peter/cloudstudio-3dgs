@@ -255,6 +255,13 @@ class TrainerConfig:
     # bounded distance space the mesh term already uses, so a far residual
     # cannot dominate the gradient.
     da2_depth_space: str = "linear"
+    # Tile ownership masking: drop supervision on pixels whose LiDAR return
+    # lies outside the selected Tile's training box (plus margin), and the
+    # dilated neighbourhood of such returns, so a Tile is not asked to
+    # rebuild its neighbours with geometry the merge later discards.
+    tile_ownership_masking: bool = False
+    tile_ownership_margin_m: float = 0.5
+    tile_ownership_dilation_px: int = 15
     mesh_depth_weight: float = 0.0
     mesh_normal_weight: float = 0.0
     competitor_loss_schedule_enabled: bool = False
@@ -497,6 +504,9 @@ class TrainerConfig:
                 "da2_depth_weight",
                 "mono_depth_max_range_m",
                 "da2_depth_space",
+                "tile_ownership_masking",
+                "tile_ownership_margin_m",
+                "tile_ownership_dilation_px",
                 "mesh_depth_weight",
                 "mesh_normal_weight",
                 "competitor_loss_schedule_enabled",
@@ -778,6 +788,18 @@ class TrainerConfig:
             raise ValueError("lidar_range_loss_mode must be linear_l1 or robust_log_huber")
         if self.da2_depth_space not in {"linear", "compressed"}:
             raise ValueError("da2_depth_space must be linear or compressed")
+        if self.tile_ownership_masking:
+            if self.tile_inputs_manifest is None or self.face_cache_manifest is None:
+                raise ValueError(
+                    "tile_ownership_masking requires Tile inputs and a face cache"
+                )
+            if float(self.tile_ownership_margin_m) < 0.0:
+                raise ValueError("tile_ownership_margin_m must be non-negative")
+            if (
+                isinstance(self.tile_ownership_dilation_px, bool)
+                or int(self.tile_ownership_dilation_px) < 0
+            ):
+                raise ValueError("tile_ownership_dilation_px must be a non-negative integer")
         if self.mono_depth_max_range_m is not None and not (
             float(self.mono_depth_max_range_m) > 0.0
         ):
@@ -1734,6 +1756,11 @@ class TrainerConfig:
             loss_weights["da2_depth_contract"] = {
                 "max_range_m": self.mono_depth_max_range_m,
                 "space": self.da2_depth_space,
+            }
+        if self.tile_ownership_masking:
+            loss_weights["tile_ownership_masking"] = {
+                "margin_m": float(self.tile_ownership_margin_m),
+                "dilation_px": int(self.tile_ownership_dilation_px),
             }
         lidar_range_contract = {
             "mode": self.lidar_range_loss_mode,
@@ -3133,6 +3160,7 @@ def train(
     output_dir.mkdir(parents=True, exist_ok=True)
 
     tile_views = None
+    tile_ownership_box = None
     if config.tile_inputs_manifest is not None:
         tile_inputs = json.loads(
             config.tile_inputs_manifest.read_text(encoding="utf-8")
@@ -3145,6 +3173,9 @@ def train(
         if len(selected_tiles) != 1:
             raise ValueError("Tile inputs do not contain a unique selected Tile")
         tile_views = selected_tiles[0]["views"]
+        if config.tile_ownership_masking:
+            tile_ownership_box = selected_tiles[0]["training_and_export_box"]
+    tile_ownership_box = tile_ownership_box if config.tile_ownership_masking else None
 
     if config.face_cache_manifest is not None:
         # Fisheye face-split training: supervision comes from pre-warped
@@ -3164,6 +3195,9 @@ def train(
             mono_depth_manifest_path=config.mono_depth_manifest,
             mono_depth_root=config.mono_depth_root,
             mono_depth_max_range_m=config.mono_depth_max_range_m,
+            tile_ownership_box=tile_ownership_box,
+            tile_ownership_margin_m=config.tile_ownership_margin_m,
+            tile_ownership_dilation_px=config.tile_ownership_dilation_px,
             face_lidar_geometry_manifest_path=(
                 config.face_lidar_geometry_manifest
             ),

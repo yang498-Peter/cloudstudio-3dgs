@@ -34,6 +34,8 @@ from cloudstudio_3dgs.training.face_dataset import (
     FACE_MANIFEST_NAME,
     FaceCacheDataset,
     sign_face_manifest,
+    _dilate_bool,
+    tile_ownership_masks,
 )
 from cloudstudio_3dgs.data.depth_cache import load_sparse_depth
 from cloudstudio_3dgs.data.mono_depth import sign_mono_depth_manifest
@@ -713,3 +715,49 @@ class FaceCacheRoundTripTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TileOwnershipMaskTests(unittest.TestCase):
+    def test_dilate_bool_matches_brute_force_without_wraparound(self) -> None:
+        rng = np.random.default_rng(3)
+        mask = rng.random((13, 17)) < 0.08
+        radius = 2
+        expected = np.zeros_like(mask)
+        for i in range(mask.shape[0]):
+            for j in range(mask.shape[1]):
+                lo_i, hi_i = max(0, i - radius), min(mask.shape[0], i + radius + 1)
+                lo_j, hi_j = max(0, j - radius), min(mask.shape[1], j + radius + 1)
+                expected[i, j] = mask[lo_i:hi_i, lo_j:hi_j].any()
+        np.testing.assert_array_equal(_dilate_bool(mask, radius), expected)
+        self.assertIs(_dilate_bool(mask, 0), mask)
+
+    def test_foreign_returns_are_removed_and_owned_neighbourhoods_protected(self) -> None:
+        # Identity pose, unit-focal camera looking down +z; the box owns z < 5.
+        height, width = 9, 9
+        K = np.array([[4.0, 0.0, 4.5], [0.0, 4.0, 4.5], [0.0, 0.0, 1.0]], np.float32)
+        c2w = np.eye(4, dtype=np.float32)
+        depth_range = np.zeros((height, width), np.float32)
+        depth_mask = np.zeros((height, width), bool)
+        # Owned return at the centre (z-depth 2 m), foreign return in the corner (z 9 m).
+        for (v, u, z) in ((4, 4, 2.0), (0, 8, 9.0)):
+            x = (u + 0.5 - 4.5) / 4.0
+            y = (v + 0.5 - 4.5) / 4.0
+            depth_range[v, u] = z * np.sqrt(1.0 + x * x + y * y)
+            depth_mask[v, u] = True
+        box = np.array([[-10.0, -10.0, 0.0], [10.0, 10.0, 5.0]])
+        owned, foreign_region = tile_ownership_masks(
+            depth_range, depth_mask, K, c2w, box, margin_m=0.0, dilation_px=1
+        )
+        self.assertTrue(owned[4, 4])
+        self.assertFalse(owned[0, 8])
+        self.assertEqual(int(owned.sum()), 1)
+        # Foreign neighbourhood is the 2x2 corner block; the owned block is untouched.
+        self.assertTrue(foreign_region[0, 8] and foreign_region[1, 7])
+        self.assertFalse(foreign_region[4, 4] and foreign_region[3, 3])
+        self.assertEqual(int(foreign_region.sum()), 4)
+        # A margin that swallows the foreign return makes everything owned.
+        owned_all, region_none = tile_ownership_masks(
+            depth_range, depth_mask, K, c2w, box, margin_m=5.0, dilation_px=1
+        )
+        self.assertEqual(int(owned_all.sum()), 2)
+        self.assertFalse(region_none.any())
