@@ -26,9 +26,14 @@ class SurfaceInitializationConfig:
     maximum_scale_m: float | None = None
 
     def validate(self) -> None:
-        if self.mode not in {"planar_surfel", "mipmap_k7_k30"}:
+        if self.mode not in {
+            "planar_surfel",
+            "mipmap_k7_k30",
+            "signed_precomputed_surfel",
+        }:
             raise ValueError(
-                "surface initialization mode must be 'planar_surfel' or 'mipmap_k7_k30'"
+                "surface initialization mode must be 'planar_surfel', "
+                "'mipmap_k7_k30' or 'signed_precomputed_surfel'"
             )
         if not 0.0 <= self.planarity_gate <= 1.0:
             raise ValueError("surface initialization planarity_gate must be within [0, 1]")
@@ -158,6 +163,50 @@ def load_mipmap_k7_k30_geometry(
         raise ValueError("MipMap initialization tangent scales must be equal")
     if not np.allclose(scales[:, 2], 0.5 * scales[:, 0], rtol=1e-5, atol=1e-8):
         raise ValueError("MipMap initialization short scale must equal 0.5*d")
+    return tuple(
+        np.ascontiguousarray(array)
+        for array in (normals, eigenvalues, scales, quaternions)
+    )
+
+
+def load_precomputed_surfel_geometry(
+    path: Path,
+    *,
+    expected_count: int,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """Load signed arbitrary thin-surfel scales without weakening MipMap K7/K30."""
+
+    with np.load(Path(path), allow_pickle=False) as payload:
+        required = {"normals", "eigenvalues", "scales_m", "quaternions_wxyz"}
+        missing = required - set(payload.files)
+        if missing:
+            raise ValueError(
+                "precomputed surfel geometry is missing arrays: "
+                + ", ".join(sorted(missing))
+            )
+        normals = np.asarray(payload["normals"], dtype=np.float32)
+        eigenvalues = np.asarray(payload["eigenvalues"], dtype=np.float32)
+        scales = np.asarray(payload["scales_m"], dtype=np.float32)
+        quaternions = np.asarray(payload["quaternions_wxyz"], dtype=np.float32)
+    expected_xyz = (int(expected_count), 3)
+    if (
+        normals.shape != expected_xyz
+        or eigenvalues.shape != expected_xyz
+        or scales.shape != expected_xyz
+        or quaternions.shape != (int(expected_count), 4)
+    ):
+        raise ValueError("precomputed surfel geometry rows do not match the PLY")
+    if not all(
+        np.isfinite(array).all()
+        for array in (normals, eigenvalues, scales, quaternions)
+    ):
+        raise ValueError("precomputed surfel geometry must be finite")
+    if np.any(scales <= 0.0):
+        raise ValueError("precomputed surfel scales must be positive")
+    if np.any(np.linalg.norm(normals, axis=1) <= 1e-8) or not np.allclose(
+        np.linalg.norm(quaternions, axis=1), 1.0, rtol=1e-5, atol=1e-5
+    ):
+        raise ValueError("precomputed surfel normals/quaternions are invalid")
     return tuple(
         np.ascontiguousarray(array)
         for array in (normals, eigenvalues, scales, quaternions)

@@ -277,6 +277,32 @@ class LidarNormalAnchorsTest(unittest.TestCase):
         anchors.refresh(disk["means"])
         self.assertEqual(float(anchors.loss(disk)["flatten_raw"]), 0.0)
 
+    def test_shortest_only_ratio_does_not_expand_tangent_axes(self) -> None:
+        config = NormalAlignmentConfig(
+            enabled=True,
+            weight_align=0.0,
+            weight_flatten=1.0,
+            flatten_mode="tangent_ratio_shortest_only",
+            flatten_ratio_target=0.15,
+        )
+        anchors = self._anchors(config)
+        scales = torch.tensor(
+            [[math.log(0.01), math.log(0.008), math.log(0.005)]],
+            requires_grad=True,
+        )
+        params = {
+            "means": torch.tensor([[0.0, 0.0, 0.01]]),
+            "scales": scales,
+            "quats": torch.tensor([[1.0, 0.0, 0.0, 0.0]]),
+        }
+        anchors.refresh(params["means"])
+        result = anchors.loss(params)
+        self.assertGreater(float(result["flatten_raw"].detach()), 0.0)
+        result["total"].backward()
+        self.assertGreater(float(scales.grad[0, 2]), 0.0)
+        self.assertEqual(float(scales.grad[0, 0]), 0.0)
+        self.assertEqual(float(scales.grad[0, 1]), 0.0)
+
     def test_point_to_plane_tether_allows_tangent_motion_but_pushes_normal_motion(self) -> None:
         config = NormalAlignmentConfig(
             enabled=True,

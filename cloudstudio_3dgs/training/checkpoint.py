@@ -199,6 +199,7 @@ def save_checkpoint(
     training_state: dict[str, Any],
     auxiliary_params: dict[str, Any] | None = None,
     auxiliary_optimizers: dict[str, Any] | None = None,
+    model_layers: dict[str, Any] | None = None,
 ) -> None:
     import torch
 
@@ -226,6 +227,11 @@ def save_checkpoint(
         "torch_rng_state": torch.get_rng_state(),
         "cuda_rng_state": torch.cuda.get_rng_state_all() if torch.cuda.is_available() else None,
     }
+    if model_layers is not None:
+        payload["model_layers"] = validate_model_layers(
+            model_layers,
+            gaussian_count=int(len(params["means"])),
+        )
     descriptor, name = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=path.parent)
     os.close(descriptor)
     temporary = Path(name)
@@ -237,6 +243,97 @@ def save_checkpoint(
     except BaseException:
         temporary.unlink(missing_ok=True)
         raise
+
+
+def _signed_model_layers(value: dict[str, Any]) -> dict[str, Any]:
+    signed = dict(value)
+    signed.pop("model_layers_sha256", None)
+    signed["model_layers_sha256"] = hashlib.sha256(
+        canonical_json_bytes(signed)
+    ).hexdigest()
+    return signed
+
+
+def model_layers_from_sky_layer(
+    sky_layer: dict[str, Any], *, gaussian_count: int
+) -> dict[str, Any]:
+    """Upgrade the original sky-only boundary into a signed layer contract."""
+    if not isinstance(sky_layer, dict) or sky_layer.get("schema_version") != 1:
+        raise ValueError("checkpoint sky_layer is invalid")
+    surface_count = int(sky_layer.get("source_gaussian_count", -1))
+    sky_start = int(sky_layer.get("sky_gaussian_start", -1))
+    sky_count = int(sky_layer.get("sky_gaussian_count", -1))
+    total_count = int(sky_layer.get("total_gaussian_count", -1))
+    if (
+        surface_count < 0
+        or sky_count <= 0
+        or sky_start != surface_count
+        or total_count != surface_count + sky_count
+        or total_count != int(gaussian_count)
+    ):
+        raise ValueError("checkpoint sky_layer boundary does not match Gaussian rows")
+    return _signed_model_layers(
+        {
+            "schema_version": 1,
+            "ordering": "surface_then_sky_contiguous_rows",
+            "surface": {"start": 0, "count": surface_count},
+            "sky": {
+                "start": sky_start,
+                "count": sky_count,
+                "kind": str(sky_layer.get("kind", "unspecified")),
+            },
+            "total_gaussian_count": total_count,
+        }
+    )
+
+
+def validate_model_layers(
+    model_layers: dict[str, Any], *, gaussian_count: int
+) -> dict[str, Any]:
+    """Validate a signed, contiguous surface/sky row partition."""
+    if not isinstance(model_layers, dict) or model_layers.get("schema_version") != 1:
+        raise ValueError("checkpoint model_layers is invalid")
+    expected_hash = model_layers.get("model_layers_sha256")
+    if not isinstance(expected_hash, str):
+        raise ValueError("checkpoint model_layers has no signature")
+    unsigned = dict(model_layers)
+    unsigned.pop("model_layers_sha256", None)
+    actual_hash = hashlib.sha256(canonical_json_bytes(unsigned)).hexdigest()
+    if actual_hash != expected_hash:
+        raise ValueError("checkpoint model_layers signature mismatch")
+    surface = model_layers.get("surface")
+    sky = model_layers.get("sky")
+    if not isinstance(surface, dict) or not isinstance(sky, dict):
+        raise ValueError("checkpoint model_layers partitions are invalid")
+    surface_start = int(surface.get("start", -1))
+    surface_count = int(surface.get("count", -1))
+    sky_start = int(sky.get("start", -1))
+    sky_count = int(sky.get("count", -1))
+    total_count = int(model_layers.get("total_gaussian_count", -1))
+    if (
+        model_layers.get("ordering") != "surface_then_sky_contiguous_rows"
+        or surface_start != 0
+        or surface_count < 0
+        or sky_count <= 0
+        or sky_start != surface_count
+        or total_count != surface_count + sky_count
+        or total_count != int(gaussian_count)
+    ):
+        raise ValueError("checkpoint model_layers boundary does not match Gaussian rows")
+    return dict(model_layers)
+
+
+def checkpoint_model_layers(
+    payload: dict[str, Any], *, gaussian_count: int
+) -> dict[str, Any] | None:
+    """Read current layer metadata, upgrading legacy sky_layer in memory."""
+    model_layers = payload.get("model_layers")
+    if model_layers is not None:
+        return validate_model_layers(model_layers, gaussian_count=gaussian_count)
+    sky_layer = payload.get("sky_layer")
+    if sky_layer is None:
+        return None
+    return model_layers_from_sky_layer(sky_layer, gaussian_count=gaussian_count)
 
 
 def retain_checkpoint(source: Path, destination: Path) -> None:

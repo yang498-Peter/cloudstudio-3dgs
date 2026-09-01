@@ -398,6 +398,7 @@ class MipMapPipelineGateTests(unittest.TestCase):
         vendor_pre_optimizer_config["default_strategy"].update(
             {
                 "lifecycle_execution_order": "pre_optimizer_vendor",
+                "growth_min_opacity": None,
                 "absgrad": False,
                 "revised_opacity": False,
                 "detail_split_policy": "vendor_0_2m",
@@ -448,6 +449,162 @@ class MipMapPipelineGateTests(unittest.TestCase):
             vendor_pre_optimizer_gate["adaptive_growth"]["profile"],
             "v39_vendor_pre_optimizer_classic_ppisp_compat",
         )
+
+        cap_aware_vendor_config = copy.deepcopy(vendor_pre_optimizer_config)
+        cap_aware_vendor_config["run_id"] = "v65-vendor-cap-aware-cull"
+        cap_aware_vendor_config["default_strategy"][
+            "vendor_capacity_cull_profile"
+        ] = "exact_relaxed_at_cap"
+        cap_aware_vendor_config.pop("config_manifest_sha256")
+        cap_aware_vendor_config["config_manifest_sha256"] = hashlib.sha256(
+            canonical_json_bytes(cap_aware_vendor_config)
+        ).hexdigest()
+        cap_aware_vendor_gate = advance_adaptive_growth_gate(
+            _upstream_data_gate(),
+            cap_aware_vendor_config,
+            stage="boundary",
+        )
+        self.assertEqual(
+            cap_aware_vendor_gate["vendor_capacity_cull_profile"],
+            "exact_relaxed_at_cap",
+        )
+
+        observation_cull_config = copy.deepcopy(cap_aware_vendor_config)
+        observation_cull_config["run_id"] = "v74-observation-cull-v1"
+        observation_cull_config["default_strategy"].update(
+            {
+                "cloudstudio_lifecycle_extension_profile": (
+                    "observation_cull_v1"
+                ),
+                "opacity_cull_policy": "observation_aware",
+                "opacity_cull_min_observations": 64,
+                "opacity_cull_consecutive_events": 2,
+                "opacity_cull_grace_after_reset_steps": 200,
+                "opacity_cull_max_fraction": 0.05,
+                "opacity_cull_priority": "lowest_opacity",
+                "opacity_cull_local_min_accumulated_alpha": 0.0,
+            }
+        )
+        observation_cull_config.pop("config_manifest_sha256")
+        observation_cull_config["config_manifest_sha256"] = hashlib.sha256(
+            canonical_json_bytes(observation_cull_config)
+        ).hexdigest()
+        observation_cull_gate = advance_adaptive_growth_gate(
+            _upstream_data_gate(), observation_cull_config, stage="boundary"
+        )
+        self.assertEqual(
+            observation_cull_gate["cloudstudio_cull_enhancement"][
+                "lifecycle_extension_profile"
+            ],
+            "observation_cull_v1",
+        )
+
+        cap_probe_config = copy.deepcopy(cap_aware_vendor_config)
+        cap_probe_config["run_id"] = "v65b-cap-probe-985k"
+        cap_probe_config["cap_max"] = 985_000
+        cap_probe_config.pop("config_manifest_sha256")
+        cap_probe_config["config_manifest_sha256"] = hashlib.sha256(
+            canonical_json_bytes(cap_probe_config)
+        ).hexdigest()
+        cap_probe_gate = advance_adaptive_growth_gate(
+            _upstream_data_gate(), cap_probe_config, stage="boundary"
+        )
+        self.assertEqual(
+            cap_probe_gate["vendor_capacity_cull_profile"],
+            "exact_relaxed_at_cap",
+        )
+
+        near_cap_config = copy.deepcopy(cap_probe_config)
+        near_cap_config["run_id"] = "v65d-near-cap-probe"
+        near_cap_config["default_strategy"][
+            "vendor_capacity_cull_profile"
+        ] = "cloudstudio_relaxed_near_cap_0p99"
+        near_cap_config.pop("config_manifest_sha256")
+        near_cap_config["config_manifest_sha256"] = hashlib.sha256(
+            canonical_json_bytes(near_cap_config)
+        ).hexdigest()
+        near_cap_gate = advance_adaptive_growth_gate(
+            _upstream_data_gate(), near_cap_config, stage="boundary"
+        )
+        self.assertEqual(
+            near_cap_gate["vendor_capacity_cull_profile"],
+            "cloudstudio_relaxed_near_cap_0p99",
+        )
+
+        scale_guard_config = copy.deepcopy(cap_probe_config)
+        scale_guard_config["run_id"] = "v65c-cap-probe-scale-guard"
+        scale_guard_config["geometry_regularization"][
+            "max_world_size_m"
+        ] = 0.2
+        scale_guard_config.pop("config_manifest_sha256")
+        scale_guard_config["config_manifest_sha256"] = hashlib.sha256(
+            canonical_json_bytes(scale_guard_config)
+        ).hexdigest()
+        scale_guard_gate = advance_adaptive_growth_gate(
+            _upstream_data_gate(), scale_guard_config, stage="boundary"
+        )
+        self.assertEqual(
+            scale_guard_gate["world_scale_fuse_profile"],
+            "cloudstudio_capaware_clamp_0p2m",
+        )
+        surface_guard_config = copy.deepcopy(scale_guard_config)
+        surface_guard_config["run_id"] = "v65i-surface-birth-guard"
+        surface_guard_config["default_strategy"].update(
+            {
+                "vendor_capacity_cull_profile": "exact_relaxed_at_cap",
+                "detail_split_policy": "lidar_surface_screen_detail",
+                "detail_split_scale_m": 0.02,
+                "detail_split_screen_radius": 0.0035,
+                "revised_opacity": False,
+            }
+        )
+        surface_guard_config["tangent_proposal"] = copy.deepcopy(
+            config["tangent_proposal"]
+        )
+        surface_guard_config.pop("config_manifest_sha256")
+        surface_guard_config["config_manifest_sha256"] = hashlib.sha256(
+            canonical_json_bytes(surface_guard_config)
+        ).hexdigest()
+        surface_guard_gate = advance_adaptive_growth_gate(
+            _upstream_data_gate(), surface_guard_config, stage="boundary"
+        )
+        self.assertEqual(
+            surface_guard_gate["surface_birth_profile"],
+            "cloudstudio_lidar_tangent_newborn_guard",
+        )
+        cap_probe_review = copy.deepcopy(scale_guard_config)
+        cap_probe_review["controlled_stop_after_steps"] = 602
+        cap_probe_review.pop("config_manifest_sha256")
+        cap_probe_review["config_manifest_sha256"] = hashlib.sha256(
+            canonical_json_bytes(cap_probe_review)
+        ).hexdigest()
+        cap_probe_report = {
+            "status": "ADAPTIVE_GROWTH_BOUNDARY_PASS",
+            "checkpoint_sha256": "a" * 64,
+            "source_trainer_config_sha256": "b" * 64,
+        }
+        cap_probe_report["boundary_report_sha256"] = hashlib.sha256(
+            canonical_json_bytes(cap_probe_report)
+        ).hexdigest()
+        cap_probe_review_gate = advance_adaptive_growth_gate(
+            _upstream_data_gate(),
+            cap_probe_review,
+            stage="review",
+            boundary_report=cap_probe_report,
+        )
+        self.assertTrue(cap_probe_review_gate["training_allowed"])
+        invalid_scale_guard_config = copy.deepcopy(scale_guard_config)
+        invalid_scale_guard_config["geometry_regularization"][
+            "max_world_size_m"
+        ] = 0.21
+        invalid_scale_guard_config.pop("config_manifest_sha256")
+        invalid_scale_guard_config["config_manifest_sha256"] = hashlib.sha256(
+            canonical_json_bytes(invalid_scale_guard_config)
+        ).hexdigest()
+        with self.assertRaisesRegex(ValueError, "world-scale fuse"):
+            advance_adaptive_growth_gate(
+                _upstream_data_gate(), invalid_scale_guard_config, stage="boundary"
+            )
 
         warmup_safe_vendor_config = copy.deepcopy(vendor_pre_optimizer_config)
         warmup_safe_vendor_config["run_id"] = "v39b-vendor-cull-warmup-0p05"
@@ -519,6 +676,28 @@ class MipMapPipelineGateTests(unittest.TestCase):
         self.assertEqual(
             deferred_reset_gate["adaptive_growth"]["profile"],
             "v41_vendor_pre_optimizer_deferred_reset_ppisp_compat",
+        )
+
+        reset_ab_config = copy.deepcopy(visible_opacity_config)
+        reset_ab_config["run_id"] = "v81-reset-ab-control"
+        reset_ab_config["default_strategy"].update(
+            {
+                "vendor_opacity_reset_profile": (
+                    "deferred_every6000_ab_control"
+                ),
+                "reset_every": 6000,
+            }
+        )
+        reset_ab_config.pop("config_manifest_sha256")
+        reset_ab_config["config_manifest_sha256"] = hashlib.sha256(
+            canonical_json_bytes(reset_ab_config)
+        ).hexdigest()
+        reset_ab_gate = advance_adaptive_growth_gate(
+            _upstream_data_gate(), reset_ab_config, stage="boundary"
+        )
+        self.assertEqual(
+            reset_ab_gate["vendor_opacity_reset_profile"],
+            "deferred_every6000_ab_control",
         )
 
         calibrated_gradient_config = copy.deepcopy(deferred_reset_config)
@@ -614,7 +793,7 @@ class MipMapPipelineGateTests(unittest.TestCase):
                 "detail_split_policy": "lidar_surface_screen_detail",
                 "detail_split_scale_m": 0.02,
                 "detail_split_screen_radius": 0.0035,
-                "revised_opacity": True,
+                "revised_opacity": False,
             }
         )
         screen_detail_config.pop("config_manifest_sha256")
@@ -771,6 +950,26 @@ class MipMapPipelineGateTests(unittest.TestCase):
             "thin_surface_ratio_0p15_strong",
         )
 
+        shortest_only_probe = copy.deepcopy(strong_shape_probe)
+        shortest_only_probe["run_id"] = "v69-shortest-only-shape-probe"
+        shortest_only_probe["lidar_normal_alignment"]["flatten_mode"] = (
+            "tangent_ratio_shortest_only"
+        )
+        shortest_only_probe.pop("config_manifest_sha256")
+        shortest_only_probe["config_manifest_sha256"] = hashlib.sha256(
+            canonical_json_bytes(shortest_only_probe)
+        ).hexdigest()
+        shortest_only_gate = advance_adaptive_growth_gate(
+            _upstream_data_gate(),
+            shortest_only_probe,
+            stage="review",
+            boundary_report=probe_report,
+        )
+        self.assertEqual(
+            shortest_only_gate["flatten_profile"],
+            "thin_surface_ratio_0p15_shortest_only_strong",
+        )
+
         invalid_vendor_config = copy.deepcopy(vendor_pre_optimizer_config)
         invalid_vendor_config["default_strategy"][
             "opacity_cull_max_fraction"
@@ -857,6 +1056,27 @@ class MipMapPipelineGateTests(unittest.TestCase):
         )
         self.assertEqual(gate["status"], FIXED_TOPOLOGY_EVALUATION_READY_STATUS)
         self.assertTrue(gate["training_allowed"])
+        bounded_config = copy.deepcopy(arm_config)
+        bounded_config["geometry_regularization"] = {
+            "enabled": True,
+            "max_world_size_m": 0.2,
+        }
+        bounded_readiness = copy.deepcopy(readiness)
+        bounded_readiness.pop("readiness_sha256")
+        bounded_readiness["evidence"]["phase_a_geometry_frozen"] = False
+        bounded_readiness["evidence"]["topology_fixed_geometry_bounded"] = True
+        bounded_readiness["readiness_sha256"] = hashlib.sha256(
+            canonical_json_bytes(bounded_readiness)
+        ).hexdigest()
+        bounded_gate = advance_fixed_topology_evaluation_gate(
+            upstream, bounded_readiness, plan, {"A0": bounded_config}
+        )
+        self.assertTrue(bounded_gate["training_allowed"])
+        bounded_config["geometry_regularization"]["max_world_size_m"] = 0.21
+        with self.assertRaisesRegex(ValueError, "bounded geometry fuse"):
+            advance_fixed_topology_evaluation_gate(
+                upstream, bounded_readiness, plan, {"A0": bounded_config}
+            )
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "gate.json"
             path.write_text(json.dumps(gate), encoding="utf-8")

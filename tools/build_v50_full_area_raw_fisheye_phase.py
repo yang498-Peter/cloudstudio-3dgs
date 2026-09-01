@@ -72,6 +72,13 @@ def main() -> int:
     parser.add_argument("--run-id", required=True)
     parser.add_argument("--steps", type=int, default=50)
     parser.add_argument(
+        "--factor",
+        type=int,
+        choices=(1, 2, 4),
+        default=4,
+        help="raw-fisheye image downsample factor; factor=1 is full resolution",
+    )
+    parser.add_argument(
         "--view-sampling-mode",
         choices=(
             "with_replacement",
@@ -100,6 +107,14 @@ def main() -> int:
     parser.add_argument("--lidar-alpha-target", type=float, default=0.95)
     parser.add_argument("--lidar-alpha-dilation-radius-px", type=int, default=3)
     parser.add_argument("--inherit-warm-start-auxiliary", action="store_true")
+    parser.add_argument(
+        "--defer-final-evaluation",
+        action="store_true",
+        help=(
+            "do not render every validation frame at train shutdown; use the "
+            "separate deterministic sampled evaluator before full promotion"
+        ),
+    )
     args = parser.parse_args()
     if not 10 <= args.steps <= 1_000:
         raise ValueError("steps must be between 10 and 1000")
@@ -145,13 +160,14 @@ def main() -> int:
             "warm_start_min_opacity": 0.0,
             "warm_start_scale_multiplier": 1.0,
             "implementation_smoke_only": False,
-            "final_evaluation_artifacts": True,
+            "final_evaluation_artifacts": not args.defer_final_evaluation,
+            "deferred_final_evaluation": args.defer_final_evaluation,
             "max_steps": args.steps,
             "controlled_stop_after_steps": None,
             "view_sampling_mode": args.view_sampling_mode,
             "checkpoint_every": args.steps,
             "checkpoint_keep_every": 0,
-            "factor": 4,
+            "factor": args.factor,
             "cap_max": max(int(base.get("cap_max", 0)), 7_600_000),
             "topology_policy": {"mode": "strict_fixed"},
             "fixed_topology_schedule": {"enabled": False},
@@ -211,7 +227,11 @@ def main() -> int:
         )
         exposure["learning_rate"] = 0.0
     else:
-        config["warm_start_fresh_auxiliary"] = []
+        config["warm_start_fresh_auxiliary"] = (
+            []
+            if args.inherit_warm_start_auxiliary
+            else ["exposure_log_gains"]
+        )
         config["learning_rates"] = {
             "means": 0.0,
             "scales": 0.0,
@@ -289,6 +309,7 @@ def main() -> int:
             {
                 "phase": args.phase,
                 "steps": args.steps,
+                "factor": args.factor,
                 "source_checkpoint_sha256": source_checkpoint_sha,
                 "config": config_path.as_posix(),
                 "config_manifest_sha256": config["config_manifest_sha256"],

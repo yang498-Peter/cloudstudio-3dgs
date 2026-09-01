@@ -61,6 +61,15 @@ def main() -> int:
     parser.add_argument("--samples-per-raw-view", type=int, default=5_000)
     parser.add_argument("--scene-padding-fraction", type=float, default=0.2)
     parser.add_argument("--budget-gib", type=float)
+    parser.add_argument(
+        "--force-depth",
+        type=int,
+        help=(
+            "explicit compatibility mode: split every supported node to this "
+            "depth instead of allowing the measured memory budget to create "
+            "additional leaves; depth 2 reproduces the four-leaf X/Y/Y shape"
+        ),
+    )
     parser.add_argument("--force", action="store_true")
     args = parser.parse_args()
     args.output.mkdir(parents=True, exist_ok=True)
@@ -87,12 +96,21 @@ def main() -> int:
     maximum = np.asarray(header.maxs, dtype=np.float64)
     padding = (maximum - minimum) * args.scene_padding_fraction
     measured = _measured_budget()
-    budget_gib = min(float(measured["budget_gib"]), args.budget_gib) if args.budget_gib else float(measured["budget_gib"])
+    if args.force_depth is not None and args.budget_gib is not None:
+        parser.error("--force-depth and --budget-gib are mutually exclusive")
+    budget_gib = None
+    if args.force_depth is None:
+        budget_gib = (
+            min(float(measured["budget_gib"]), args.budget_gib)
+            if args.budget_gib
+            else float(measured["budget_gib"])
+        )
     plan = build_adaptive_tile_plan(
         all_table,
         cost_table=train_table,
         root_box=AxisAlignedBox(minimum - padding, maximum + padding),
         budget_gib=budget_gib,
+        force_depth=args.force_depth,
         source_bindings={
             "training_dataset_manifest_sha256": bindings["training_dataset_manifest_sha256"],
             "face4_train_manifest_sha256": bindings["face4_train_manifest_sha256"],
@@ -109,6 +127,7 @@ def main() -> int:
             view["sample_id"] = observation["train_view_ids"][int(view["image_index"])]
     plan["startup_memory_budget"] = measured
     plan["effective_conservative_budget_gib"] = budget_gib
+    plan["explicit_compatibility_force_depth"] = args.force_depth
     plan["spatial_anchor_source"] = "accepted_full_lidar_depth_visibility"
     plan.pop("tile_plan_manifest_sha256", None)
     plan["tile_plan_manifest_sha256"] = hashlib.sha256(
@@ -127,7 +146,8 @@ def main() -> int:
     )
     print(
         f"LiDAR adaptive Tile plan: leaves={plan['leaf_count']}, "
-        f"retained={plan['retained_tile_count']}, budget={budget_gib:.3f} GiB, "
+        f"retained={plan['retained_tile_count']}, "
+        f"budget={budget_gib if budget_gib is not None else 'force-depth'}, "
         f"sha256={plan['tile_plan_manifest_sha256']} -> {destination}"
     )
     return 0

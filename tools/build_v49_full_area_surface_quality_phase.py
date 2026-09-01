@@ -64,14 +64,25 @@ def _sign(value: dict[str, Any], key: str) -> dict[str, Any]:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--tile-id", type=int, choices=range(5), required=True)
-    parser.add_argument("--phase", choices=("coverage", "shape"), required=True)
+    parser.add_argument(
+        "--phase",
+        choices=("coverage", "shape", "shortest_shape", "appearance"),
+        required=True,
+    )
     parser.add_argument("--source-config", type=Path, required=True)
     parser.add_argument("--source-checkpoint", type=Path, required=True)
     parser.add_argument("--upstream-gate", type=Path, required=True)
     parser.add_argument("--protocol-root", type=Path, required=True)
     parser.add_argument("--run-output", type=Path, required=True)
     parser.add_argument("--run-id", required=True)
-    parser.add_argument("--steps", type=int, choices=(25, 50, 100), default=50)
+    parser.add_argument(
+        "--steps", type=int, choices=(25, 50, 100, 150, 250, 500), default=50
+    )
+    parser.add_argument(
+        "--merge-contract",
+        choices=("core_owner_only", "retain_full_halo"),
+        default="core_owner_only",
+    )
     args = parser.parse_args()
 
     for label, path in (
@@ -122,6 +133,9 @@ def main() -> int:
             "lidar_alpha_target": 0.95,
             "lidar_alpha_dilation_radius_px": 3,
             "da2_depth_weight": 0.0,
+            "mesh_depth_weight": 0.0,
+            "mesh_normal_weight": 0.0,
+            "rendered_depth_normal_consistency_weight": 0.0,
             "golden_evaluation": {"enabled": False},
             "error_weighted_sampling": {"enabled": False},
             "lidar_admission": {"enabled": False},
@@ -131,16 +145,23 @@ def main() -> int:
         }
     )
     exposure = copy.deepcopy(config.get("exposure_compensation", {}))
-    exposure.update({"enabled": True, "learning_rate": 0.0})
+    exposure.update(
+        {"enabled": True, "learning_rate": 0.0, "bias_learning_rate": 0.0}
+    )
     config["exposure_compensation"] = exposure
+    bilateral_grid = copy.deepcopy(config.get("bilateral_grid", {}))
+    if bilateral_grid:
+        bilateral_grid["learning_rate"] = 0.0
+        config["bilateral_grid"] = bilateral_grid
 
     regularization = copy.deepcopy(config.get("geometry_regularization", {}))
     regularization.update(
         {
-            "enabled": False,
+            "enabled": True,
             "opacity_sparsity_weight": 0.0,
             "scale_upper_weight": 0.0,
             "anisotropy_weight": 0.0,
+            "max_world_size_m": 0.2,
             "max_scale_ratio_to_reference": 8.0,
             "max_anisotropy": 256.0,
         }
@@ -164,6 +185,22 @@ def main() -> int:
                 "weight_point_to_plane": 0.0,
             }
         )
+    elif args.phase == "appearance":
+        config["learning_rates"] = {
+            "means": 0.0,
+            "scales": 0.0,
+            "quats": 0.0,
+            "opacities": 0.01,
+            "colors": 0.001,
+        }
+        normal.update(
+            {
+                "enabled": False,
+                "weight_align": 0.0,
+                "weight_flatten": 0.0,
+                "weight_point_to_plane": 0.0,
+            }
+        )
     else:
         config["learning_rates"] = {
             "means": 0.0,
@@ -178,7 +215,11 @@ def main() -> int:
                 "weight_align": 0.1,
                 "weight_flatten": 0.1,
                 "weight_point_to_plane": 0.0,
-                "flatten_mode": "tangent_ratio",
+                "flatten_mode": (
+                    "tangent_ratio_shortest_only"
+                    if args.phase == "shortest_shape"
+                    else "tangent_ratio"
+                ),
                 "flatten_ratio_target": 0.15,
             }
         )
@@ -220,8 +261,12 @@ def main() -> int:
             "evaluation_plan_sha256": plan["evaluation_plan_sha256"],
             "evidence": {
                 "directional_pass": True,
-                "phase_a_geometry_frozen": True,
-                "core_only_merge_contract": True,
+                "topology_fixed_geometry_bounded": True,
+                "actual_merge_contract": args.merge_contract,
+                "core_only_merge_contract": args.merge_contract
+                == "core_owner_only",
+                "halo_overlap_retained": args.merge_contract
+                == "retain_full_halo",
                 "source_checkpoint_sha256": source_checkpoint_sha,
                 "no_opacity_export_filter": True,
             },

@@ -44,6 +44,49 @@ def _quantiles(values: np.ndarray) -> dict[str, float]:
     return {"p50": float(q[0]), "p95": float(q[1]), "p99": float(q[2])}
 
 
+def _distance_summary(values: np.ndarray) -> dict[str, float | int | None]:
+    finite = np.asarray(values, dtype=np.float64)
+    finite = finite[np.isfinite(finite)]
+    return {
+        "count": int(len(finite)),
+        "quantiles_m": _quantiles(finite),
+        "gt_0p05_fraction": float(np.mean(finite > 0.05)) if len(finite) else None,
+        "gt_0p10_fraction": float(np.mean(finite > 0.10)) if len(finite) else None,
+    }
+
+
+def _surface_proxy_masks(
+    rgb_u8: np.ndarray,
+    normals: np.ndarray,
+    eigenvalues: np.ndarray,
+) -> dict[str, np.ndarray]:
+    """Return auditable RGB/geometry proxies, not semantic ground truth."""
+
+    rgb = np.asarray(rgb_u8, dtype=np.float32) / 255.0
+    normal_z = np.abs(np.asarray(normals, dtype=np.float32)[:, 2])
+    eigenvalues = np.maximum(np.asarray(eigenvalues, dtype=np.float32), 0.0)
+    curvature = eigenvalues[:, 0] / np.maximum(eigenvalues.sum(axis=1), 1e-12)
+    planarity = (eigenvalues[:, 1] - eigenvalues[:, 0]) / np.maximum(
+        eigenvalues[:, 2], 1e-12
+    )
+    luminance = rgb @ np.asarray([0.2126, 0.7152, 0.0722], dtype=np.float32)
+    chroma = rgb.max(axis=1) - rgb.min(axis=1)
+
+    depth_boundary = (curvature >= 0.08) | (planarity < 0.35)
+    vegetation = depth_boundary & (chroma >= 0.08)
+    wall = (~depth_boundary) & (normal_z <= 0.45)
+    horizontal = (~depth_boundary) & (normal_z >= 0.75)
+    snow = horizontal & (luminance >= 0.55) & (chroma <= 0.28)
+    ground = horizontal & ~snow
+    return {
+        "snow_proxy": snow,
+        "wall_proxy": wall,
+        "ground_proxy": ground,
+        "vegetation_proxy": vegetation,
+        "depth_boundary_proxy": depth_boundary,
+    }
+
+
 def _mesh_from_bpa(
     xyz: np.ndarray,
     normals: np.ndarray,
@@ -118,9 +161,10 @@ def main() -> int:
     import open3d as o3d
 
     started = time.perf_counter()
-    xyz, _rgb = load_initialization_ply(args.initialization_ply)
+    xyz, rgb = load_initialization_ply(args.initialization_ply)
     with np.load(args.geometry_npz, allow_pickle=False) as geometry:
         normals = np.asarray(geometry["normals"], dtype=np.float32)
+        eigenvalues = np.asarray(geometry["eigenvalues"], dtype=np.float32)
     if normals.shape != xyz.shape:
         raise ValueError("geometry normals do not match initialization point count")
     holdout = None
@@ -159,6 +203,13 @@ def main() -> int:
         else _heldout_distance(mesh, xyz[holdout.holdout_mask])
     )
     finite = heldout_distance[np.isfinite(heldout_distance)]
+    category_stats = {}
+    if holdout is not None:
+        proxy_masks = _surface_proxy_masks(rgb, normals, eigenvalues)
+        for name, full_mask in proxy_masks.items():
+            category_stats[name] = _distance_summary(
+                heldout_distance[full_mask[holdout.holdout_mask]]
+            )
     report = {
         "schema_version": 1,
         "kind": "lidar_surface_candidate_block_holdout_audit",
@@ -197,6 +248,17 @@ def main() -> int:
             "quantiles": _quantiles(finite),
             "gt_0p05_fraction": float(np.mean(finite > 0.05)) if len(finite) else None,
             "gt_0p10_fraction": float(np.mean(finite > 0.10)) if len(finite) else None,
+        },
+        "heldout_category_audit": {
+            "status": "RGB_GEOMETRY_PROXY_NOT_SEMANTIC_GROUND_TRUTH",
+            "classification": {
+                "snow_proxy": "horizontal, luminance>=0.55, chroma<=0.28",
+                "wall_proxy": "non-boundary and abs(normal_z)<=0.45",
+                "ground_proxy": "horizontal and not snow_proxy",
+                "vegetation_proxy": "boundary-like and chroma>=0.08",
+                "depth_boundary_proxy": "curvature>=0.08 or planarity<0.35",
+            },
+            "categories": category_stats,
         },
         "elapsed_seconds": time.perf_counter() - started,
         "next_gate": "per_view_mesh_depth_normal_raster_and_boundary_audit",

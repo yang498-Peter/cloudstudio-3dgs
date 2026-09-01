@@ -17,6 +17,37 @@ from cloudstudio_3dgs.training.runtime_evidence import (
 )
 
 
+def gaussian_shortest_axis_normals(torch_module: Any, log_scales: Any, quats: Any) -> Any:
+    """Return each Gaussian's differentiable world-space shortest-axis normal.
+
+    gsplat stores quaternions as ``wxyz``. The selected rotation-matrix column
+    follows the current shortest metric scale, rather than assuming local +Z
+    remains shortest after optimization.
+    """
+
+    torch = torch_module
+    q = quats / torch.linalg.vector_norm(quats, dim=-1, keepdim=True).clamp_min(1e-8)
+    w, x, y, z = q.unbind(dim=-1)
+    rotation = torch.stack(
+        (
+            1 - 2 * (y * y + z * z),
+            2 * (x * y - w * z),
+            2 * (x * z + w * y),
+            2 * (x * y + w * z),
+            1 - 2 * (x * x + z * z),
+            2 * (y * z - w * x),
+            2 * (x * z - w * y),
+            2 * (y * z + w * x),
+            1 - 2 * (x * x + y * y),
+        ),
+        dim=-1,
+    ).reshape(-1, 3, 3)
+    shortest = torch.argmin(log_scales, dim=-1)
+    gather = shortest[:, None, None].expand(-1, 3, 1)
+    normal = torch.gather(rotation, dim=2, index=gather)[..., 0]
+    return normal / torch.linalg.vector_norm(normal, dim=-1, keepdim=True).clamp_min(1e-8)
+
+
 def rendered_range_to_euclidean(
     torch_module: Any,
     rendered_range: Any,
@@ -491,6 +522,76 @@ class GsplatBackend:
             rgb = rgb + (1.0 - alpha[0]) * background
         range_m = render[0, ..., 3] if with_range else None
         return rgb, range_m, alpha[0, ..., 0], info
+
+    def render_gaussian_normals(
+        self,
+        params: Any,
+        sample: Any,
+        *,
+        c2w_override: Any | None = None,
+    ) -> tuple[Any, Any]:
+        """Rasterize shortest-axis Gaussian normals in camera coordinates.
+
+        This compatibility pass keeps gradients to quaternion, scale, opacity,
+        and projected footprint. The vendor emits the channel in its main
+        rasterizer; gsplat's public RGB path needs this separate pass.
+        """
+
+        torch = self.torch
+        c2w = torch.as_tensor(
+            sample.c2w if c2w_override is None else c2w_override,
+            dtype=torch.float32,
+            device=self.device,
+        )[None]
+        viewmat = torch.linalg.inv(c2w)
+        K = torch.as_tensor(sample.K, device=self.device)[None]
+        camera_model = getattr(sample, "camera_model", "fisheye")
+        pinhole_with_ut = camera_model == "pinhole" and bool(
+            getattr(self, "pinhole_with_ut", False)
+        )
+        radial = (
+            None
+            if camera_model == "pinhole"
+            else torch.as_tensor(sample.radial_coeffs, device=self.device)[None]
+        )
+        normal_world = gaussian_shortest_axis_normals(
+            torch, params["scales"], params["quats"]
+        )
+        to_camera = c2w[0, :3, 3] - params["means"]
+        flip = torch.sum(normal_world * to_camera, dim=-1, keepdim=True) < 0.0
+        normal_world = torch.where(flip, -normal_world, normal_world)
+        normal_camera = normal_world @ viewmat[0, :3, :3].T
+        render, alpha, _normal_info = self.rasterization(
+            means=params["means"],
+            quats=params["quats"],
+            scales=torch.exp(params["scales"]),
+            opacities=torch.sigmoid(params["opacities"]),
+            colors=normal_camera,
+            viewmats=viewmat,
+            Ks=K,
+            width=sample.width,
+            height=sample.height,
+            packed=False,
+            render_mode="RGB",
+            camera_model=camera_model,
+            **({} if radial is None else {"radial_coeffs": radial}),
+            with_ut=camera_model == "fisheye" or pinhole_with_ut,
+            with_eval3d=camera_model == "fisheye" or pinhole_with_ut,
+            global_z_order=camera_model != "fisheye",
+            rasterize_mode=(
+                "classic"
+                if camera_model == "fisheye"
+                else getattr(self, "pinhole_rasterize_mode", "classic")
+            ),
+        )
+        alpha_map = alpha[0, ..., 0]
+        averaged = render[0, ..., :3] / alpha_map[..., None].clamp_min(1e-8)
+        length = torch.linalg.vector_norm(averaged, dim=-1, keepdim=True)
+        valid = (alpha_map > 1e-6) & torch.isfinite(averaged).all(dim=-1)
+        valid &= length[..., 0] > 1e-8
+        normal_map = averaged / length.clamp_min(1e-8)
+        normal_map = torch.where(valid[..., None], normal_map, torch.zeros_like(normal_map))
+        return normal_map, valid
 
     def strategy_pre_step(
         self,

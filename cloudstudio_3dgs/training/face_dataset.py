@@ -35,6 +35,7 @@ from typing import Any
 
 import numpy as np
 from PIL import Image
+from scipy.ndimage import binary_dilation
 
 from cloudstudio_3dgs.data.depth_cache import load_sparse_depth
 from cloudstudio_3dgs.data.manifest import canonical_json_bytes
@@ -140,6 +141,9 @@ class FaceCacheDataset:
         dataset_manifest_path: Path | None = None,
         tile_views: list[dict[str, Any]] | None = None,
         renderer_mask_manifest_path: Path | None = None,
+        surface_sky_exclusion_manifest_path: Path | None = None,
+        surface_sky_exclusion_root: Path | None = None,
+        surface_sky_exclusion_dilation_px: int = 0,
         mono_depth_manifest_path: Path | None = None,
         mono_depth_root: Path | None = None,
         face_lidar_geometry_manifest_path: Path | None = None,
@@ -161,6 +165,14 @@ class FaceCacheDataset:
             raise ValueError(
                 "mesh_geometry_manifest_path and mesh_geometry_root must be provided together"
             )
+        if (surface_sky_exclusion_manifest_path is None) != (
+            surface_sky_exclusion_root is None
+        ):
+            raise ValueError(
+                "surface sky exclusion manifest and root must be provided together"
+            )
+        if not 0 <= int(surface_sky_exclusion_dilation_px) <= 32:
+            raise ValueError("surface sky exclusion dilation must be within [0, 32]")
         face_manifest_path = Path(face_manifest_path)
         self.manifest = json.loads(face_manifest_path.read_text(encoding="utf-8"))
         self.face_manifest_sha256 = verify_face_manifest(self.manifest)
@@ -228,6 +240,51 @@ class FaceCacheDataset:
                 self.renderer_mask_manifest.get("masks", [])
             ):
                 raise ValueError("renderer mask manifest contains duplicate samples")
+        self.surface_sky_exclusion_manifest = None
+        self.surface_sky_exclusion_manifest_sha256 = None
+        self.surface_sky_exclusion_root = (
+            None
+            if surface_sky_exclusion_root is None
+            else Path(surface_sky_exclusion_root)
+        )
+        self.surface_sky_exclusion_dilation_px = int(
+            surface_sky_exclusion_dilation_px
+        )
+        self._surface_sky_by_sample: dict[str, dict[str, Any]] = {}
+        if surface_sky_exclusion_manifest_path is not None:
+            # Local import avoids the module cycle: sky_background verifies
+            # the Face4 lineage through this module.
+            from cloudstudio_3dgs.data.sky_background import (
+                verify_sky_evidence_manifest,
+            )
+
+            self.surface_sky_exclusion_manifest = json.loads(
+                Path(surface_sky_exclusion_manifest_path).read_text(encoding="utf-8")
+            )
+            self.surface_sky_exclusion_manifest_sha256 = verify_sky_evidence_manifest(
+                self.surface_sky_exclusion_manifest,
+                root=self.surface_sky_exclusion_root,
+                verify_artifacts=verify_artifacts,
+            )
+            if (
+                self.surface_sky_exclusion_manifest.get(
+                    "source_face_manifest_sha256"
+                )
+                != self.face_manifest_sha256
+            ):
+                raise ValueError("surface sky exclusion is bound to a different Face4 cache")
+            if self.surface_sky_exclusion_manifest.get("split") != self.manifest.get(
+                "split"
+            ):
+                raise ValueError("surface sky exclusion and Face4 use different splits")
+            self._surface_sky_by_sample = {
+                str(record["sample_id"]): record
+                for record in self.surface_sky_exclusion_manifest.get("records", [])
+            }
+            if len(self._surface_sky_by_sample) != len(
+                self.surface_sky_exclusion_manifest.get("records", [])
+            ):
+                raise ValueError("surface sky exclusion contains duplicate samples")
         self.mono_depth_manifest = None
         self.mono_depth_manifest_sha256 = None
         self.mono_depth_root = (
@@ -303,6 +360,7 @@ class FaceCacheDataset:
                     f"{missing_geometry[:4]}"
                 )
         self.mesh_geometry_manifest_sha256 = None
+        self._mesh_admission_source_types: tuple[int, ...] | None = None
         self.mesh_geometry_root = (
             None if mesh_geometry_root is None else Path(mesh_geometry_root)
         )
@@ -318,6 +376,14 @@ class FaceCacheDataset:
             self.mesh_geometry_manifest_sha256 = verify_mesh_geometry_manifest(
                 mesh_geometry
             )
+            admission = mesh_geometry.get("admission_policy")
+            if admission is not None:
+                if admission.get("status") != "STRICT_SOURCE_TYPE_AND_VIEW_P95_APPLIED":
+                    raise ValueError("mesh geometry has an unknown admission policy")
+                allowed = tuple(int(value) for value in admission.get("allowed_source_types", []))
+                if allowed != (2, 3) or admission.get("rejected_source_types") != [4]:
+                    raise ValueError("strict mesh admission must allow only source types 2 and 3")
+                self._mesh_admission_source_types = allowed
             if (
                 mesh_geometry.get("source_face_manifest_sha256")
                 != self.face_manifest_sha256
@@ -691,6 +757,39 @@ class FaceCacheDataset:
             raise ValueError(
                 f"face {base_image_id}/{face_id} has an empty supervision mask"
             )
+        sky_record = self._surface_sky_by_sample.get(
+            f"{base_image_id}__{face_id}"
+        )
+        if sky_record is not None and bool(sky_record.get("accepted")):
+            assert self.surface_sky_exclusion_root is not None
+            sky_path = _safe_artifact(
+                self.surface_sky_exclusion_root, str(sky_record["path"])
+            )
+            self._verify(
+                sky_path,
+                str(sky_record["sha256"]),
+                "surface sky exclusion",
+            )
+            with np.load(sky_path, allow_pickle=False) as payload:
+                sky_mask = np.asarray(payload["sky_mask"], dtype=np.uint8) > 0
+            if sky_mask.shape != expected_shape:
+                sky_mask = np.asarray(
+                    Image.fromarray(sky_mask.astype(np.uint8) * 255).resize(
+                        (expected_shape[1], expected_shape[0]),
+                        resample=Image.Resampling.NEAREST,
+                    ),
+                    dtype=np.uint8,
+                ) > 0
+            if self.surface_sky_exclusion_dilation_px:
+                sky_mask = binary_dilation(
+                    sky_mask,
+                    iterations=self.surface_sky_exclusion_dilation_px,
+                )
+            rgb_mask &= ~sky_mask
+            if not np.any(rgb_mask):
+                raise ValueError(
+                    f"surface sky exclusion emptied {base_image_id}/{face_id}"
+                )
 
         depth_range = None
         depth_confidence = None
@@ -769,6 +868,7 @@ class FaceCacheDataset:
         mesh_normal_camera = None
         mesh_confidence = None
         mesh_depth_valid = None
+        mesh_source_type = None
         mesh_geometry_cache_path = None
         mesh_record = self._mesh_geometry_by_sample.get(
             f"{base_image_id}{SAMPLE_ID_SEPARATOR}{face_id}"
@@ -792,12 +892,16 @@ class FaceCacheDataset:
                 required = {
                     "depth_range_m", "normal_camera", "confidence", "valid", "shape"
                 }
+                if self._mesh_admission_source_types is not None:
+                    required.add("source_type")
                 if not required.issubset(payload.files):
                     raise ValueError("mesh geometry cache is missing required arrays")
                 mesh_depth_range = np.asarray(payload["depth_range_m"], np.float32)
                 mesh_normal_camera = np.asarray(payload["normal_camera"], np.float32)
                 mesh_confidence = np.asarray(payload["confidence"], np.float32)
                 mesh_depth_valid = np.asarray(payload["valid"], bool)
+                if "source_type" in payload:
+                    mesh_source_type = np.asarray(payload["source_type"], np.uint8)
             mesh_shape = (int(crop["height"]), int(crop["width"]))
             if mesh_depth_range.shape != mesh_shape:
                 raise ValueError("mesh geometry depth shape differs from Tile crop")
@@ -805,6 +909,8 @@ class FaceCacheDataset:
                 raise ValueError("mesh geometry normal shape differs from Tile crop")
             if mesh_confidence.shape != mesh_shape or mesh_depth_valid.shape != mesh_shape:
                 raise ValueError("mesh geometry mask/confidence shape differs from Tile crop")
+            if mesh_source_type is not None and mesh_source_type.shape != mesh_shape:
+                raise ValueError("mesh geometry source_type shape differs from Tile crop")
 
         c2w_base = np.asarray(image_record["c2w"], dtype=np.float64)
         face_to_base = np.eye(4, dtype=np.float64)
@@ -841,6 +947,12 @@ class FaceCacheDataset:
                 & np.isfinite(mesh_confidence)
                 & (mesh_confidence > 0.0)
             )
+            if self._mesh_admission_source_types is not None:
+                if mesh_source_type is None:
+                    raise ValueError("strict mesh geometry has no source_type array")
+                mesh_depth_mask &= np.isin(
+                    mesh_source_type, self._mesh_admission_source_types
+                )
         if not np.any(rgb_mask):
             raise ValueError(f"cropped face {base_image_id}/{face_id} has an empty mask")
 

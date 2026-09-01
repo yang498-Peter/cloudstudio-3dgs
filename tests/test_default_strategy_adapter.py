@@ -282,7 +282,7 @@ class DefaultStrategyAdapterTests(unittest.TestCase):
             prune_scale2d=0.15,
             refine_scale2d_stop_iter=2000,
             exact_mipmap_lifecycle=True,
-            growth_min_opacity=0.15,
+            growth_min_opacity=None,
             prune_opa_late=0.05,
             prune_switch_step=1000,
             reset_opacity_cap=0.2,
@@ -370,7 +370,7 @@ class DefaultStrategyAdapterTests(unittest.TestCase):
             lifecycle_execution_order="pre_optimizer_vendor",
             reset_every=3000,
             vendor_opacity_reset_profile="deferred_every3000_compatibility",
-            growth_min_opacity=0.15,
+            growth_min_opacity=None,
             prune_opa=0.1,
             prune_opa_late=0.05,
             prune_switch_step=1000,
@@ -384,6 +384,26 @@ class DefaultStrategyAdapterTests(unittest.TestCase):
             "deferred_every3000_compatibility",
         )
 
+    def test_pre_optimizer_vendor_accepts_reset_ab_control_profile(self):
+        adapter = DefaultStrategyAdapter(
+            exact_mipmap_lifecycle=True,
+            lifecycle_execution_order="pre_optimizer_vendor",
+            reset_every=6000,
+            vendor_opacity_reset_profile="deferred_every6000_ab_control",
+            growth_min_opacity=None,
+            prune_opa=0.1,
+            prune_opa_late=0.05,
+            prune_switch_step=1000,
+            split_scale_m=0.2,
+            prune_scale_m=0.2,
+            reset_opacity_cap=0.2,
+        )
+        self.assertEqual(adapter.inner.reset_every, 6000)
+        self.assertEqual(
+            adapter.state_dict()["vendor_opacity_reset_profile"],
+            "deferred_every6000_ab_control",
+        )
+
     def test_pre_optimizer_vendor_rejects_reset_profile_interval_mismatch(self):
         with self.assertRaisesRegex(ValueError, "reset profile does not match"):
             DefaultStrategyAdapter(
@@ -393,7 +413,7 @@ class DefaultStrategyAdapterTests(unittest.TestCase):
                 vendor_opacity_reset_profile=(
                     "deferred_every3000_compatibility"
                 ),
-                growth_min_opacity=0.15,
+                growth_min_opacity=None,
                 prune_opa=0.1,
                 prune_opa_late=0.05,
                 prune_switch_step=1000,
@@ -448,6 +468,164 @@ class DefaultStrategyAdapterTests(unittest.TestCase):
         )
         self.assertEqual((clone_count, split_count), (2, 0))
         self.assertEqual(len(params["means"]), 5)
+
+    def test_capacity_limited_cull_uses_recovered_relaxed_thresholds(self):
+        import torch
+
+        adapter = DefaultStrategyAdapter(
+            scene_scale=10.0,
+            refine_start_iter=500,
+            refine_stop_iter=2000,
+            refine_every=100,
+            reset_every=300,
+            grow_grad2d=0.00015,
+            prune_opa=0.1,
+            split_scale_m=0.2,
+            prune_scale_m=0.2,
+            prune_scale2d=0.15,
+            exact_mipmap_lifecycle=True,
+            growth_min_opacity=0.15,
+            prune_opa_late=0.05,
+            prune_switch_step=1000,
+            reset_opacity_cap=0.2,
+            capacity_cap=5,
+            vendor_capacity_cull_profile="exact_relaxed_at_cap",
+        )
+        params = torch.nn.ParameterDict(
+            {
+                "means": torch.nn.Parameter(torch.zeros(2, 3)),
+                "scales": torch.nn.Parameter(
+                    torch.tensor([[0.5, 0.5, 0.5], [0.3, 0.3, 0.3]]).log()
+                ),
+                "quats": torch.nn.Parameter(
+                    torch.tensor([[1.0, 0.0, 0.0, 0.0]] * 2)
+                ),
+                "opacities": torch.nn.Parameter(
+                    torch.tensor([0.01, 0.02]).logit()
+                ),
+                "colors": torch.nn.Parameter(torch.zeros(2, 3)),
+            }
+        )
+        optimizers = {
+            name: torch.optim.Adam([parameter], lr=1e-3)
+            for name, parameter in params.items()
+        }
+        state = {
+            "grad2d": torch.zeros(2),
+            "count": torch.ones(2),
+            "radii": torch.tensor([0.5, 0.2]),
+            "scene_scale": 10.0,
+        }
+
+        cull_count = adapter._prune_mipmap(
+            params,
+            optimizers,
+            state,
+            step=500,
+            capacity_limited=True,
+        )
+
+        self.assertEqual(cull_count, 1)
+        self.assertEqual(len(params["means"]), 1)
+        event = adapter._last_cull_event
+        self.assertTrue(event["relaxed_capacity_cull"])
+        self.assertAlmostEqual(event["opacity_threshold"], 0.0125)
+        self.assertAlmostEqual(event["world_scale_threshold_m"], 1.0)
+        self.assertAlmostEqual(event["screen_scale_threshold"], 0.75)
+
+    def test_capacity_cull_mode_is_frozen_before_growth(self):
+        import torch
+
+        adapter = DefaultStrategyAdapter(
+            scene_scale=10.0,
+            refine_start_iter=500,
+            refine_stop_iter=2000,
+            refine_every=100,
+            reset_every=300,
+            grow_grad2d=0.00015,
+            prune_opa=0.1,
+            split_scale_m=0.2,
+            prune_scale_m=0.2,
+            exact_mipmap_lifecycle=True,
+            growth_min_opacity=0.15,
+            prune_opa_late=0.05,
+            prune_switch_step=1000,
+            reset_opacity_cap=0.2,
+            capacity_cap=5,
+            vendor_capacity_cull_profile="exact_relaxed_at_cap",
+        )
+        params = {
+            "means": torch.zeros(3, 3),
+            "opacities": torch.zeros(3),
+        }
+        state = {
+            "grad2d": torch.zeros(3),
+            "count": torch.ones(3),
+            "radii": torch.zeros(3),
+        }
+        capacity_modes = []
+
+        adapter.inner._update_state = lambda *_args, **_kwargs: None
+        adapter._mipmap_gradient_diagnostics = lambda *_args: {}
+        adapter._ensure_cull_tracking = lambda *_args: None
+
+        def grow_to_cap(current, *_args):
+            current["means"] = torch.zeros(5, 3)
+            current["opacities"] = torch.zeros(5)
+            return 2, 0
+
+        def record_cull(*_args, capacity_limited=False, **_kwargs):
+            capacity_modes.append(capacity_limited)
+            return 0
+
+        adapter._grow_mipmap = grow_to_cap
+        adapter._prune_mipmap = record_cull
+        adapter._step_post_backward_mipmap(
+            params=params,
+            optimizers={},
+            state=state,
+            step=500,
+            info={},
+        )
+
+        self.assertEqual(capacity_modes, [False])
+        self.assertFalse(
+            adapter.last_lifecycle_event["capacity_limited_pre_growth"]
+        )
+        self.assertEqual(adapter.last_lifecycle_event["before_count"], 3)
+        self.assertEqual(adapter.last_lifecycle_event["after_count"], 5)
+
+    def test_relaxed_capacity_cull_requires_an_absolute_cap(self):
+        with self.assertRaisesRegex(ValueError, "absolute capacity cap"):
+            DefaultStrategyAdapter(
+                exact_mipmap_lifecycle=True,
+                growth_min_opacity=0.15,
+                prune_opa=0.1,
+                prune_opa_late=0.05,
+                prune_switch_step=1000,
+                split_scale_m=0.2,
+                prune_scale_m=0.2,
+                reset_opacity_cap=0.2,
+                vendor_capacity_cull_profile="exact_relaxed_at_cap",
+            )
+
+    def test_near_cap_capacity_profile_is_accepted_with_absolute_cap(self):
+        adapter = DefaultStrategyAdapter(
+            exact_mipmap_lifecycle=True,
+            growth_min_opacity=0.15,
+            prune_opa=0.1,
+            prune_opa_late=0.05,
+            prune_switch_step=1000,
+            split_scale_m=0.2,
+            prune_scale_m=0.2,
+            reset_opacity_cap=0.2,
+            capacity_cap=985_000,
+            vendor_capacity_cull_profile="cloudstudio_relaxed_near_cap_0p99",
+        )
+        self.assertEqual(
+            adapter.vendor_capacity_cull_profile,
+            "cloudstudio_relaxed_near_cap_0p99",
+        )
 
     def test_lidar_birth_guard_blocks_unsupported_parent_and_projects_newborns(self):
         import numpy as np
@@ -591,6 +769,182 @@ class DefaultStrategyAdapterTests(unittest.TestCase):
         )
         self.assertEqual(adapter._last_cull_event["selected_opacity_count"], 2)
         self.assertEqual(adapter._last_cull_event["world_scale_count"], 0)
+
+    def test_observation_cull_v1_requires_the_signed_product_profile(self):
+        adapter = DefaultStrategyAdapter(
+            scene_scale=10.0,
+            refine_start_iter=500,
+            refine_stop_iter=2000,
+            refine_every=100,
+            reset_every=300,
+            grow_grad2d=0.00015,
+            prune_opa=0.1,
+            split_scale_m=0.2,
+            prune_scale_m=0.2,
+            exact_mipmap_lifecycle=True,
+            growth_min_opacity=None,
+            prune_opa_late=0.05,
+            prune_switch_step=1000,
+            reset_opacity_cap=0.2,
+            capacity_cap=1000,
+            lifecycle_execution_order="pre_optimizer_vendor",
+            cloudstudio_lifecycle_extension_profile="observation_cull_v1",
+            opacity_cull_policy="observation_aware",
+            opacity_cull_min_observations=64,
+            opacity_cull_consecutive_events=2,
+            opacity_cull_grace_after_reset_steps=200,
+            opacity_cull_max_fraction=0.05,
+            vendor_capacity_cull_profile="exact_relaxed_at_cap",
+        )
+        self.assertEqual(
+            adapter.cloudstudio_lifecycle_extension_profile,
+            "observation_cull_v1",
+        )
+        with self.assertRaisesRegex(ValueError, "observation_cull_v1 parameters"):
+            DefaultStrategyAdapter(
+                scene_scale=10.0,
+                refine_start_iter=500,
+                refine_stop_iter=2000,
+                refine_every=100,
+                reset_every=300,
+                grow_grad2d=0.00015,
+                prune_opa=0.1,
+                split_scale_m=0.2,
+                prune_scale_m=0.2,
+                exact_mipmap_lifecycle=True,
+                growth_min_opacity=None,
+                prune_opa_late=0.05,
+                prune_switch_step=1000,
+                reset_opacity_cap=0.2,
+                capacity_cap=1000,
+                lifecycle_execution_order="pre_optimizer_vendor",
+                cloudstudio_lifecycle_extension_profile="observation_cull_v1",
+                opacity_cull_policy="observation_aware",
+                opacity_cull_min_observations=4,
+                opacity_cull_consecutive_events=2,
+                opacity_cull_grace_after_reset_steps=200,
+                opacity_cull_max_fraction=0.05,
+                vendor_capacity_cull_profile="exact_relaxed_at_cap",
+            )
+
+    def test_observation_cull_v2_accepts_two_percent_cap(self):
+        adapter = DefaultStrategyAdapter(
+            scene_scale=10.0,
+            refine_start_iter=500,
+            refine_stop_iter=2000,
+            refine_every=100,
+            reset_every=3000,
+            grow_grad2d=0.0001,
+            prune_opa=0.1,
+            split_scale_m=0.2,
+            prune_scale_m=0.2,
+            exact_mipmap_lifecycle=True,
+            growth_min_opacity=None,
+            prune_opa_late=0.05,
+            prune_switch_step=1000,
+            reset_opacity_cap=0.2,
+            capacity_cap=1000,
+            lifecycle_execution_order="pre_optimizer_vendor",
+            cloudstudio_lifecycle_extension_profile=(
+                "observation_cull_v2_conservative"
+            ),
+            opacity_cull_policy="observation_aware",
+            opacity_cull_min_observations=64,
+            opacity_cull_consecutive_events=2,
+            opacity_cull_grace_after_reset_steps=200,
+            opacity_cull_max_fraction=0.02,
+            vendor_capacity_cull_profile="exact_relaxed_at_cap",
+            vendor_opacity_reset_profile="deferred_every3000_compatibility",
+        )
+        self.assertEqual(adapter.opacity_cull_max_fraction, 0.02)
+
+    def test_mipmap_gradient_probe_applies_screen_radius_and_tile_weighting(self):
+        import torch
+
+        adapter = DefaultStrategyAdapter(
+            scene_scale=10.0,
+            gradient_statistics_profile="mipmap_radius_weighted_probe_v1",
+            gradient_tile_core_box=[[0.0, 0.0, 0.0], [1.0, 1.0, 1.0]],
+            gradient_tile_outside_attenuation=0.1,
+        )
+        state = adapter.initialize_state()
+        projected = torch.zeros((1, 2, 2), requires_grad=True)
+        projected.grad = torch.tensor([[[1.0e-7, 0.0], [2.0e-7, 0.0]]])
+        params = {
+            "means": torch.tensor([[0.5, 0.5, 0.5], [2.0, 0.5, 0.5]])
+        }
+        info = {
+            "means2d": projected,
+            "radii": torch.tensor([[[10.0, 0.0], [2.0, 0.0]]]),
+            "width": 2912,
+            "height": 1456,
+        }
+        adapter._update_mipmap_equivalent_state(params, state, info)
+        score = state["_cloudstudio_mipmap_grad_sum"] / state[
+            "_cloudstudio_mipmap_weight_sum"
+        ]
+        self.assertTrue(
+            torch.allclose(score, torch.tensor([1.456e-4, 2.912e-5]))
+        )
+        self.assertTrue(
+            torch.allclose(
+                state["_cloudstudio_mipmap_max_screen"],
+                torch.tensor([10.0 / 2912.0, 2.0 / 2912.0]),
+            )
+        )
+
+    def test_mipmap_gradient_production_controls_growth_selection(self):
+        import torch
+
+        adapter = DefaultStrategyAdapter(
+            scene_scale=10.0,
+            grow_grad2d=0.00015,
+            exact_mipmap_lifecycle=True,
+            growth_min_opacity=0.15,
+            prune_opa_late=0.05,
+            prune_switch_step=1000,
+            reset_opacity_cap=0.2,
+            split_scale_m=0.2,
+            prune_scale_m=0.2,
+            gradient_statistics_profile="mipmap_radius_weighted_v1",
+            gradient_tile_core_box=[[0.0, 0.0, 0.0], [1.0, 1.0, 1.0]],
+        )
+        params = torch.nn.ParameterDict(
+            {
+                "means": torch.nn.Parameter(torch.zeros(2, 3)),
+                "scales": torch.nn.Parameter(torch.full((2, 3), 0.05).log()),
+                "quats": torch.nn.Parameter(
+                    torch.tensor([[1.0, 0.0, 0.0, 0.0]] * 2)
+                ),
+                "opacities": torch.nn.Parameter(torch.tensor([0.3, 0.3]).logit()),
+                "colors": torch.nn.Parameter(torch.zeros(2, 3)),
+            }
+        )
+        optimizers = {
+            name: torch.optim.Adam([parameter], lr=1e-3)
+            for name, parameter in params.items()
+        }
+        state = adapter.initialize_state()
+        state.update(
+            {
+                "grad2d": torch.tensor([1.0e-6, 1.0e-6]),
+                "count": torch.ones(2),
+                "radii": torch.zeros(2),
+                "scene_scale": 10.0,
+                "_cloudstudio_mipmap_grad_sum": torch.tensor([0.002, 0.0001]),
+                "_cloudstudio_mipmap_weight_sum": torch.tensor([10.0, 10.0]),
+                "_cloudstudio_mipmap_max_screen": torch.tensor([0.01, 0.01]),
+            }
+        )
+        clone_count, split_count = adapter._grow_mipmap(
+            params, optimizers, state
+        )
+        self.assertEqual((clone_count, split_count), (1, 0))
+        self.assertEqual(len(params["means"]), 3)
+        self.assertEqual(
+            adapter._last_growth_event["gradient_statistics_profile"],
+            "mipmap_radius_weighted_v1",
+        )
 
     def test_observation_aware_cull_honours_post_reset_grace(self):
         import torch
@@ -1029,6 +1383,223 @@ class DefaultStrategyAdapterTests(unittest.TestCase):
         )
         self.assertEqual(clone_count, 2)
         self.assertEqual(split_count, 1)
+
+    def test_pre_optimizer_surface_proposal_matches_split_then_clone_tail(self):
+        import torch
+
+        class RecordingProposal:
+            class Config:
+                reject_unsupported_births = True
+
+            config = Config()
+
+            def __init__(self):
+                self.recorded_parent_means = None
+                self.last_stats = {}
+
+            def eligible_parent_mask(self, means):
+                return torch.ones(len(means), dtype=torch.bool, device=means.device)
+
+            def propose(self, parent_means, parent_quats, parent_log_scales):
+                self.recorded_parent_means = parent_means.detach().clone()
+                self.last_stats = {"applied": len(parent_means)}
+                return {
+                    "means": parent_means + torch.tensor(
+                        [0.0, 0.0, 1.0],
+                        dtype=parent_means.dtype,
+                        device=parent_means.device,
+                    ),
+                    "quats": parent_quats.detach().clone(),
+                    "scales": parent_log_scales.detach().clone(),
+                    "applied": torch.ones(
+                        len(parent_means),
+                        dtype=torch.bool,
+                        device=parent_means.device,
+                    ),
+                }
+
+        proposal = RecordingProposal()
+        adapter = DefaultStrategyAdapter(
+            scene_scale=10.0,
+            refine_start_iter=500,
+            refine_stop_iter=2000,
+            refine_every=100,
+            reset_every=300,
+            grow_grad2d=0.00015,
+            prune_opa=0.1,
+            split_scale_m=0.2,
+            prune_scale_m=0.2,
+            exact_mipmap_lifecycle=True,
+            growth_min_opacity=None,
+            prune_opa_late=0.05,
+            prune_switch_step=1000,
+            reset_opacity_cap=0.2,
+            capacity_cap=100,
+            surface_birth_proposal=proposal,
+            detail_split_policy="lidar_surface_screen_detail",
+            detail_split_scale_m=0.02,
+            detail_split_screen_radius=0.0035,
+            lifecycle_execution_order="pre_optimizer_vendor",
+            vendor_capacity_cull_profile="exact_relaxed_at_cap",
+        )
+        params = torch.nn.ParameterDict(
+            {
+                "means": torch.nn.Parameter(
+                    torch.tensor(
+                        [[10.0, 0.0, 0.0], [20.0, 0.0, 0.0], [30.0, 0.0, 0.0]]
+                    )
+                ),
+                "scales": torch.nn.Parameter(
+                    torch.tensor([[0.01] * 3, [0.05] * 3, [0.01] * 3]).log()
+                ),
+                "quats": torch.nn.Parameter(
+                    torch.tensor([[1.0, 0.0, 0.0, 0.0]] * 3)
+                ),
+                "opacities": torch.nn.Parameter(torch.full((3,), 0.3).logit()),
+                "colors": torch.nn.Parameter(torch.zeros(3, 3)),
+            }
+        )
+        optimizers = {
+            name: torch.optim.Adam([parameter], lr=1e-3)
+            for name, parameter in params.items()
+        }
+        state = {
+            "grad2d": torch.tensor([0.001, 0.001, 0.0]),
+            "count": torch.ones(3),
+            "radii": torch.tensor([0.01, 0.01, 0.0]),
+            "scene_scale": 10.0,
+        }
+
+        clone_count, split_count = adapter._grow_mipmap(
+            params, optimizers, state
+        )
+
+        self.assertEqual((clone_count, split_count), (1, 1))
+        self.assertTrue(
+            torch.equal(
+                proposal.recorded_parent_means[:, 0],
+                torch.tensor([20.0, 20.0, 10.0]),
+            )
+        )
+        self.assertTrue(
+            torch.equal(
+                params["means"][-3:, 0].detach(),
+                torch.tensor([20.0, 20.0, 10.0]),
+            )
+        )
+
+    def test_aggressive_detail_profile_splits_one_centimetre_screen_detail(self):
+        import torch
+
+        adapter = DefaultStrategyAdapter(
+            scene_scale=10.0,
+            refine_start_iter=500,
+            refine_stop_iter=2000,
+            refine_every=100,
+            reset_every=300,
+            grow_grad2d=0.0001,
+            prune_opa=0.1,
+            split_scale_m=0.2,
+            prune_scale_m=0.2,
+            exact_mipmap_lifecycle=True,
+            growth_min_opacity=0.15,
+            prune_opa_late=0.05,
+            prune_switch_step=1000,
+            reset_opacity_cap=0.2,
+            detail_split_policy="lidar_surface_screen_detail_aggressive",
+            detail_split_scale_m=0.01,
+            detail_split_screen_radius=0.0025,
+            revised_opacity=True,
+        )
+        params = torch.nn.ParameterDict(
+            {
+                "means": torch.nn.Parameter(torch.zeros(1, 3)),
+                "scales": torch.nn.Parameter(
+                    torch.tensor([[0.015, 0.015, 0.005]]).log()
+                ),
+                "quats": torch.nn.Parameter(
+                    torch.tensor([[1.0, 0.0, 0.0, 0.0]])
+                ),
+                "opacities": torch.nn.Parameter(torch.tensor([0.3]).logit()),
+                "colors": torch.nn.Parameter(torch.zeros(1, 3)),
+            }
+        )
+        optimizers = {
+            name: torch.optim.Adam([parameter], lr=1e-3)
+            for name, parameter in params.items()
+        }
+        state = {
+            "grad2d": torch.tensor([0.001]),
+            "count": torch.ones(1),
+            "radii": torch.tensor([0.003]),
+            "scene_scale": 10.0,
+        }
+
+        clone_count, split_count = adapter._grow_mipmap(
+            params, optimizers, state
+        )
+
+        self.assertEqual((clone_count, split_count), (0, 1))
+        self.assertEqual(len(params["means"]), 2)
+
+    def test_ultrasharp_detail_profile_splits_eight_millimetre_screen_detail(self):
+        import torch
+
+        adapter = DefaultStrategyAdapter(
+            scene_scale=10.0,
+            refine_start_iter=500,
+            refine_stop_iter=2000,
+            refine_every=100,
+            reset_every=3000,
+            grow_grad2d=0.00015,
+            prune_opa=0.05,
+            split_scale_m=0.2,
+            prune_scale_m=0.2,
+            exact_mipmap_lifecycle=True,
+            growth_min_opacity=None,
+            prune_opa_late=0.05,
+            prune_switch_step=1000,
+            reset_opacity_cap=0.2,
+            detail_split_policy="lidar_surface_screen_detail_ultrasharp",
+            detail_split_scale_m=0.008,
+            detail_split_screen_radius=0.0025,
+            revised_opacity=False,
+            lifecycle_execution_order="pre_optimizer_vendor",
+            vendor_cull_warmup_profile="compatibility_uniform_0p05",
+            vendor_capacity_cull_profile="exact_relaxed_at_cap",
+            vendor_opacity_reset_profile="deferred_every3000_compatibility",
+            capacity_cap=100,
+        )
+        params = torch.nn.ParameterDict(
+            {
+                "means": torch.nn.Parameter(torch.zeros(1, 3)),
+                "scales": torch.nn.Parameter(
+                    torch.tensor([[0.009, 0.009, 0.002]]).log()
+                ),
+                "quats": torch.nn.Parameter(
+                    torch.tensor([[1.0, 0.0, 0.0, 0.0]])
+                ),
+                "opacities": torch.nn.Parameter(torch.tensor([0.3]).logit()),
+                "colors": torch.nn.Parameter(torch.zeros(1, 3)),
+            }
+        )
+        optimizers = {
+            name: torch.optim.Adam([parameter], lr=1e-3)
+            for name, parameter in params.items()
+        }
+        state = {
+            "grad2d": torch.tensor([0.001]),
+            "count": torch.ones(1),
+            "radii": torch.tensor([0.003]),
+            "scene_scale": 10.0,
+        }
+
+        clone_count, split_count = adapter._grow_mipmap(
+            params, optimizers, state
+        )
+
+        self.assertEqual((clone_count, split_count), (0, 1))
+        self.assertEqual(len(params["means"]), 2)
 
 
 class BackendWiringTests(unittest.TestCase):

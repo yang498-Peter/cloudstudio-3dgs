@@ -13,6 +13,7 @@ from typing import Any
 import numpy as np
 
 from cloudstudio_3dgs.data.manifest import canonical_json_bytes
+from cloudstudio_3dgs.training.checkpoint import model_layers_from_sky_layer
 from cloudstudio_3dgs.data.mask_manifest import verify_dataset_manifest
 
 
@@ -105,6 +106,44 @@ def build_sky_layer(
     }
 
 
+def load_prebaked_sky_layer(path: Path) -> dict[str, np.ndarray]:
+    """Load a photo-baked dome stored in checkpoint parameter convention."""
+    import torch
+
+    payload = torch.load(Path(path), map_location="cpu", weights_only=False)
+    params = (
+        payload.get("params")
+        if isinstance(payload, dict) and "params" in payload
+        else payload
+    )
+    required = ("means", "scales", "quats", "opacities", "sh0")
+    if not isinstance(params, dict) or not set(required) <= set(params):
+        raise ValueError(f"prebaked sky layer is missing parameters: {path}")
+    arrays = {
+        name: np.asarray(params[name].detach().cpu().numpy(), dtype=np.float32)
+        for name in required
+    }
+    count = len(arrays["means"])
+    if count < 100:
+        raise ValueError("prebaked sky layer must hold at least 100 gaussians")
+    expected_shapes = {
+        "means": (count, 3),
+        "scales": (count, 3),
+        "quats": (count, 4),
+        "opacities": (count,),
+        "sh0": (count, 1, 3),
+    }
+    for name, shape in expected_shapes.items():
+        if arrays[name].shape != shape:
+            raise ValueError(
+                f"prebaked sky layer parameter {name} has shape "
+                f"{arrays[name].shape}, expected {shape}"
+            )
+        if not np.all(np.isfinite(arrays[name])):
+            raise ValueError(f"prebaked sky layer parameter {name} is not finite")
+    return arrays
+
+
 def augment_checkpoint_with_sky(
     source_checkpoint: Path,
     dataset_manifest_path: Path,
@@ -112,6 +151,7 @@ def augment_checkpoint_with_sky(
     report_path: Path,
     config: SkyLayerConfig,
     *,
+    prebaked_dome: Path | None = None,
     force: bool = False,
 ) -> dict[str, Any]:
     """Append a far-field cap and emit a model-only warm-start checkpoint."""
@@ -135,7 +175,13 @@ def augment_checkpoint_with_sky(
     manifest = json.loads(dataset_manifest_path.read_text(encoding="utf-8"))
     dataset_sha256 = verify_dataset_manifest(manifest)
     centre = camera_centre_from_manifest(manifest)
-    sky = build_sky_layer(centre, config)
+    if prebaked_dome is not None:
+        prebaked_dome = Path(prebaked_dome).resolve()
+        sky = load_prebaked_sky_layer(prebaked_dome)
+        sky_count = int(len(sky["means"]))
+    else:
+        sky = build_sky_layer(centre, config)
+        sky_count = int(config.count)
 
     source = torch.load(source_checkpoint, map_location="cpu", weights_only=False)
     if source.get("schema_version") != 1 or not isinstance(source.get("identity"), dict):
@@ -164,7 +210,7 @@ def augment_checkpoint_with_sky(
     for name, value in params.items():
         if name == "shN":
             addition = torch.zeros(
-                (config.count, value.shape[1], value.shape[2]), dtype=value.dtype
+                (sky_count, value.shape[1], value.shape[2]), dtype=value.dtype
             )
         else:
             addition = torch.from_numpy(sky[name]).to(dtype=value.dtype)
@@ -172,18 +218,35 @@ def augment_checkpoint_with_sky(
 
     layer = {
         "schema_version": 1,
-        "kind": "world_up_fibonacci_spherical_cap",
         "source_gaussian_count": source_count,
         "sky_gaussian_start": source_count,
-        "sky_gaussian_count": config.count,
-        "total_gaussian_count": source_count + config.count,
+        "sky_gaussian_count": sky_count,
+        "total_gaussian_count": source_count + sky_count,
         "centre_m": centre.tolist(),
-        "radius_m": float(config.radius_m),
-        "scale_m": float(config.scale_m),
-        "opacity": float(config.opacity),
-        "rgb": [float(value) for value in config.rgb],
-        "min_world_z_direction": float(config.min_world_z_direction),
     }
+    if prebaked_dome is not None:
+        radii = np.linalg.norm(
+            sky["means"].astype(np.float64) - centre[None, :], axis=1
+        )
+        layer.update(
+            {
+                "kind": "prebaked_photo_dome",
+                "prebaked_dome": str(prebaked_dome),
+                "prebaked_dome_sha256": _sha256_file(prebaked_dome),
+                "radius_p50_m": float(np.percentile(radii, 50)),
+            }
+        )
+    else:
+        layer.update(
+            {
+                "kind": "world_up_fibonacci_spherical_cap",
+                "radius_m": float(config.radius_m),
+                "scale_m": float(config.scale_m),
+                "opacity": float(config.opacity),
+                "rgb": [float(value) for value in config.rgb],
+                "min_world_z_direction": float(config.min_world_z_direction),
+            }
+        )
     payload = {
         "schema_version": 1,
         "step": int(source.get("step", 0)),
@@ -196,6 +259,9 @@ def augment_checkpoint_with_sky(
         "derived_warm_start_only": True,
         "source_checkpoint_sha256": _sha256_file(source_checkpoint),
         "sky_layer": layer,
+        "model_layers": model_layers_from_sky_layer(
+            layer, gaussian_count=source_count + sky_count
+        ),
     }
 
     output_checkpoint.parent.mkdir(parents=True, exist_ok=True)

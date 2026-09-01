@@ -92,6 +92,40 @@ def main() -> int:
         ),
     )
     parser.add_argument(
+        "--vendor-cap-aware-cull",
+        action="store_true",
+        help=(
+            "when the signed absolute Gaussian cap blocks births, use the "
+            "recovered relaxed cull thresholds (opacity x0.25, world/screen x5)"
+        ),
+    )
+    parser.add_argument(
+        "--snow-tile1-cap-probe-985k",
+        action="store_true",
+        help=(
+            "diagnostic only: cap Snow Tile_1 at 985,000 rows so the first "
+            "birth event reaches the absolute budget and exercises relaxed cull"
+        ),
+    )
+    parser.add_argument(
+        "--cap-aware-scale-guard-0p2m",
+        action="store_true",
+        help=(
+            "CloudStudio safety enhancement: retain the vendor cap-aware "
+            "opacity cull but clamp every Gaussian maximum world axis to "
+            "0.2 m instead of allowing the relaxed 1.0 m cull threshold"
+        ),
+    )
+    parser.add_argument(
+        "--cap-aware-near-cap-0p99",
+        action="store_true",
+        help=(
+            "CloudStudio stability enhancement: keep relaxed capacity "
+            "maintenance active while the post-growth population remains "
+            "at or above 99 percent of the signed absolute cap"
+        ),
+    )
+    parser.add_argument(
         "--vendor-geometry-cull-only",
         action="store_true",
         help=(
@@ -269,6 +303,23 @@ def main() -> int:
             "--vendor-cull-warmup-0p05 requires "
             "--vendor-pre-optimizer-lifecycle"
         )
+    if args.vendor_cap_aware_cull and not args.vendor_pre_optimizer_lifecycle:
+        parser.error(
+            "--vendor-cap-aware-cull requires "
+            "--vendor-pre-optimizer-lifecycle"
+        )
+    if args.snow_tile1_cap_probe_985k and not args.vendor_cap_aware_cull:
+        parser.error(
+            "--snow-tile1-cap-probe-985k requires --vendor-cap-aware-cull"
+        )
+    if args.cap_aware_scale_guard_0p2m and not args.vendor_cap_aware_cull:
+        parser.error(
+            "--cap-aware-scale-guard-0p2m requires --vendor-cap-aware-cull"
+        )
+    if args.cap_aware_near_cap_0p99 and not args.vendor_cap_aware_cull:
+        parser.error(
+            "--cap-aware-near-cap-0p99 requires --vendor-cap-aware-cull"
+        )
     if args.visible_opacity_sparsity and not args.vendor_pre_optimizer_lifecycle:
         parser.error(
             "--visible-opacity-sparsity requires "
@@ -316,7 +367,9 @@ def main() -> int:
             # required here because DefaultStrategy/AbsGS consumes the
             # projected means2d gradient; eval3d/UT does not expose it.
             "pinhole_with_ut": False,
-            "cap_max": 2_200_000,
+            "cap_max": (
+                985_000 if args.snow_tile1_cap_probe_985k else 2_200_000
+            ),
             "densification_strategy": "default_3dgs",
             "densification_gradient_source": "rgb_only",
             "mcmc_refine_start_iter": 500,
@@ -596,6 +649,13 @@ def main() -> int:
                         else "exact_0p10_to_0p05"
                     )
                 ),
+                "vendor_capacity_cull_profile": (
+                    "cloudstudio_relaxed_near_cap_0p99"
+                    if args.cap_aware_near_cap_0p99
+                    else "exact_relaxed_at_cap"
+                    if args.vendor_cap_aware_cull
+                    else "disabled"
+                ),
                 "vendor_opacity_reset_profile": (
                     args.vendor_opacity_reset_profile
                 ),
@@ -633,7 +693,9 @@ def main() -> int:
                 "anisotropy_weight": 0.0,
                 "max_anisotropy": 256.0,
                 "screen_clip_enabled": False,
-                "max_world_size_m": None,
+                "max_world_size_m": (
+                    0.2 if args.cap_aware_scale_guard_0p2m else None
+                ),
             }
         )
         if args.visible_opacity_sparsity:

@@ -152,11 +152,15 @@ class MonitorState:
                     )
                 )
                 max_steps = int(config.get("max_steps", 0))
-                status = (
-                    "COMPLETE"
-                    if manifest
-                    else ("RUNNING_OR_PAUSED" if step else "NOT_STARTED")
-                )
+                latest_timestamp = float(latest.get("timestamp_unix", 0.0) or 0.0)
+                if manifest:
+                    status = "COMPLETE"
+                elif step <= 0:
+                    status = "NOT_STARTED"
+                elif time.time() - latest_timestamp <= 30.0:
+                    status = "RUNNING"
+                else:
+                    status = "PAUSED"
                 runs.append(
                     {
                         "run_id": run_id,

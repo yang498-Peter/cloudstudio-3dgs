@@ -55,7 +55,7 @@ class DefaultStrategyAdapter:
         refine_start_iter: int = 500,
         refine_stop_iter: int = 15000,
         refine_every: int = 100,
-        reset_every: int = 3000,
+        reset_every: int = 300,
         pause_refine_after_reset: int = 0,
         grow_grad2d: float = 0.0002,
         prune_opa: float = 0.005,
@@ -100,8 +100,14 @@ class DefaultStrategyAdapter:
         detail_split_screen_radius: float = 0.0035,
         capacity_conserving_clone_opacity: bool = False,
         lifecycle_execution_order: str = "post_optimizer_gsplat",
+        cloudstudio_lifecycle_extension_profile: str = "disabled",
         vendor_cull_warmup_profile: str = "exact_0p10_to_0p05",
+        vendor_capacity_cull_profile: str = "disabled",
         vendor_opacity_reset_profile: str = "exact_every300",
+        gradient_statistics_profile: str = "legacy_gsplat",
+        gradient_tile_core_box: list[list[float]] | None = None,
+        gradient_tile_outside_attenuation: float = 0.1,
+        discard_accumulated_gradient_steps: list[int] | None = None,
     ) -> None:
         from gsplat.strategy import DefaultStrategy
 
@@ -145,8 +151,22 @@ class DefaultStrategyAdapter:
             capacity_conserving_clone_opacity
         )
         self.lifecycle_execution_order = str(lifecycle_execution_order)
+        self.cloudstudio_lifecycle_extension_profile = str(
+            cloudstudio_lifecycle_extension_profile
+        )
         self.vendor_cull_warmup_profile = str(vendor_cull_warmup_profile)
+        self.vendor_capacity_cull_profile = str(vendor_capacity_cull_profile)
         self.vendor_opacity_reset_profile = str(vendor_opacity_reset_profile)
+        self.gradient_statistics_profile = str(gradient_statistics_profile)
+        self.gradient_tile_core_box = gradient_tile_core_box
+        self.gradient_tile_outside_attenuation = float(
+            gradient_tile_outside_attenuation
+        )
+        self.discard_accumulated_gradient_steps = frozenset(
+            int(value) for value in (discard_accumulated_gradient_steps or [])
+        )
+        if any(value < 0 for value in self.discard_accumulated_gradient_steps):
+            raise ValueError("discarded accumulated-gradient steps must be non-negative")
         self.last_lifecycle_event: dict[str, Any] | None = None
         self._last_surface_birth_event: dict[str, Any] | None = None
         self._last_growth_event: dict[str, Any] | None = None
@@ -189,6 +209,8 @@ class DefaultStrategyAdapter:
         if self.detail_split_policy not in {
             "vendor_0_2m",
             "lidar_surface_screen_detail",
+            "lidar_surface_screen_detail_aggressive",
+            "lidar_surface_screen_detail_ultrasharp",
         }:
             raise ValueError("detail_split_policy is invalid")
         if self.lifecycle_execution_order not in {
@@ -196,6 +218,79 @@ class DefaultStrategyAdapter:
             "pre_optimizer_vendor",
         }:
             raise ValueError("lifecycle_execution_order is invalid")
+        if self.cloudstudio_lifecycle_extension_profile not in {
+            "disabled",
+            "observation_cull_v1",
+            "observation_cull_v2_conservative",
+        }:
+            raise ValueError(
+                "cloudstudio_lifecycle_extension_profile is invalid"
+            )
+        if self.gradient_statistics_profile not in {
+            "legacy_gsplat",
+            "mipmap_radius_weighted_probe_v1",
+            "mipmap_radius_weighted_v1",
+        }:
+            raise ValueError("gradient_statistics_profile is invalid")
+        if not 0.0 < self.gradient_tile_outside_attenuation <= 1.0:
+            raise ValueError(
+                "gradient_tile_outside_attenuation must be within (0, 1]"
+            )
+        if self.gradient_statistics_profile != "legacy_gsplat":
+            if (
+                not isinstance(self.gradient_tile_core_box, list)
+                or len(self.gradient_tile_core_box) != 2
+                or any(len(corner) != 3 for corner in self.gradient_tile_core_box)
+            ):
+                raise ValueError(
+                    "MipMap gradient statistics require a 2x3 Tile core box"
+                )
+        if self.cloudstudio_lifecycle_extension_profile in {
+            "observation_cull_v1",
+            "observation_cull_v2_conservative",
+        }:
+            expected_cull_fraction = (
+                0.02
+                if self.cloudstudio_lifecycle_extension_profile
+                == "observation_cull_v2_conservative"
+                else 0.05
+            )
+            required_observation_cull = {
+                "lifecycle_execution_order": "pre_optimizer_vendor",
+                "opacity_cull_policy": "observation_aware",
+                "opacity_cull_min_observations": 64,
+                "opacity_cull_consecutive_events": 2,
+                "opacity_cull_grace_after_reset_steps": 200,
+                "opacity_cull_max_fraction": expected_cull_fraction,
+                "opacity_cull_priority": "lowest_opacity",
+                "opacity_cull_local_min_accumulated_alpha": 0.0,
+                "vendor_capacity_cull_profile": "exact_relaxed_at_cap",
+            }
+            actual_observation_cull = {
+                "lifecycle_execution_order": self.lifecycle_execution_order,
+                "opacity_cull_policy": self.opacity_cull_policy,
+                "opacity_cull_min_observations": self.opacity_cull_min_observations,
+                "opacity_cull_consecutive_events": self.opacity_cull_consecutive_events,
+                "opacity_cull_grace_after_reset_steps": (
+                    self.opacity_cull_grace_after_reset_steps
+                ),
+                "opacity_cull_max_fraction": self.opacity_cull_max_fraction,
+                "opacity_cull_priority": self.opacity_cull_priority,
+                "opacity_cull_local_min_accumulated_alpha": (
+                    self.opacity_cull_local_min_accumulated_alpha
+                ),
+                "vendor_capacity_cull_profile": self.vendor_capacity_cull_profile,
+            }
+            mismatched_observation_cull = {
+                key: (expected, actual_observation_cull[key])
+                for key, expected in required_observation_cull.items()
+                if actual_observation_cull[key] != expected
+            }
+            if mismatched_observation_cull:
+                raise ValueError(
+                    f"{self.cloudstudio_lifecycle_extension_profile} parameters differ: "
+                    f"{mismatched_observation_cull}"
+                )
         if (
             self.lifecycle_execution_order == "pre_optimizer_vendor"
             and not self.exact_mipmap_lifecycle
@@ -210,9 +305,25 @@ class DefaultStrategyAdapter:
             "calibrated_geometry_only_0p00",
         }:
             raise ValueError("vendor_cull_warmup_profile is invalid")
+        if self.vendor_capacity_cull_profile not in {
+            "disabled",
+            "exact_relaxed_at_cap",
+            "cloudstudio_relaxed_near_cap_0p99",
+        }:
+            raise ValueError("vendor_capacity_cull_profile is invalid")
+        if (
+            self.vendor_capacity_cull_profile
+            in {"exact_relaxed_at_cap", "cloudstudio_relaxed_near_cap_0p99"}
+            and (not self.exact_mipmap_lifecycle or self.capacity_cap is None)
+        ):
+            raise ValueError(
+                "exact relaxed capacity cull requires the exact MipMap "
+                "lifecycle and an absolute capacity cap"
+            )
         vendor_reset_intervals = {
             "exact_every300": 300,
             "deferred_every3000_compatibility": 3000,
+            "deferred_every6000_ab_control": 6000,
         }
         expected_reset_every = vendor_reset_intervals.get(
             self.vendor_opacity_reset_profile
@@ -247,8 +358,15 @@ class DefaultStrategyAdapter:
         if not 0.0 < self.detail_split_screen_radius < 1.0:
             raise ValueError("detail_split_screen_radius must be within (0, 1)")
         if self.exact_mipmap_lifecycle:
-            if growth_min_opacity is None or not 0.0 < growth_min_opacity < 1.0:
-                raise ValueError("exact MipMap lifecycle requires growth_min_opacity")
+            if self.lifecycle_execution_order == "pre_optimizer_vendor":
+                if growth_min_opacity is not None:
+                    raise ValueError(
+                        "pre_optimizer_vendor uses the recovered dead opacity "
+                        "candidate expression and therefore requires no active "
+                        "growth_min_opacity gate"
+                    )
+            elif growth_min_opacity is None or not 0.0 < growth_min_opacity < 1.0:
+                raise ValueError("exact MipMap compatibility lifecycle requires growth_min_opacity")
             if prune_opa_late is None or not 0.0 <= prune_opa_late < 1.0:
                 raise ValueError("exact MipMap lifecycle requires prune_opa_late")
             if prune_switch_step is None or prune_switch_step <= 0:
@@ -308,13 +426,23 @@ class DefaultStrategyAdapter:
 
     @property
     def cap_max(self) -> int | None:
-        """Classic densification is threshold-driven and has no count cap."""
-        return None
+        """Return the signed absolute cap used to admit classic births."""
+        return self.capacity_cap
 
     # -- lifecycle -----------------------------------------------------------
 
     def initialize_state(self) -> dict[str, Any]:
         state = self.inner.initialize_state(scene_scale=self.scene_scale)
+        if self.gradient_statistics_profile != "legacy_gsplat":
+            for key in (
+                "_cloudstudio_raw_grad_sum",
+                "_cloudstudio_raw_grad_count",
+                "_cloudstudio_screen_grad_sum",
+                "_cloudstudio_mipmap_grad_sum",
+                "_cloudstudio_mipmap_weight_sum",
+                "_cloudstudio_mipmap_max_screen",
+            ):
+                state[key] = None
         if self.opacity_cull_policy != "immediate":
             # These are per-Gaussian tensors on purpose. gsplat's duplicate,
             # split and remove operations apply the same topology transform to
@@ -324,6 +452,168 @@ class DefaultStrategyAdapter:
             state["_cloudstudio_cull_observations"] = None
             state["_cloudstudio_last_opacity_reset_step"] = None
         return state
+
+    def _update_mipmap_equivalent_state(
+        self,
+        params: Any,
+        state: dict[str, Any],
+        info: dict[str, Any],
+    ) -> None:
+        """Accumulate the recovered footprint-weighted MipMap gradient."""
+
+        if self.gradient_statistics_profile == "legacy_gsplat":
+            return
+        import torch
+
+        projected = info[self.inner.key_for_gradient]
+        gradients = projected.grad
+        if gradients is None:
+            raise RuntimeError("MipMap gradient probe requires means2d.grad")
+        raw_norm = torch.linalg.vector_norm(gradients.detach(), dim=-1)
+        radii = info["radii"].detach().float()
+        footprint = (
+            radii
+            if radii.ndim == 1
+            else torch.linalg.vector_norm(radii, dim=-1)
+        )
+        if raw_norm.ndim == 1:
+            raw_norm = raw_norm.unsqueeze(0)
+        if footprint.ndim == 1:
+            footprint = footprint.unsqueeze(0)
+        if raw_norm.shape != footprint.shape:
+            raise RuntimeError(
+                "MipMap gradient and footprint shapes differ: "
+                f"{tuple(raw_norm.shape)} vs {tuple(footprint.shape)}"
+            )
+        count = len(params["means"])
+        if raw_norm.shape[-1] != count:
+            raise RuntimeError("MipMap gradient probe Gaussian count mismatch")
+        device = params["means"].device
+        for key in (
+            "_cloudstudio_raw_grad_sum",
+            "_cloudstudio_raw_grad_count",
+            "_cloudstudio_screen_grad_sum",
+            "_cloudstudio_mipmap_grad_sum",
+            "_cloudstudio_mipmap_weight_sum",
+            "_cloudstudio_mipmap_max_screen",
+        ):
+            value = state.get(key)
+            if not isinstance(value, torch.Tensor) or len(value) != count:
+                state[key] = torch.zeros(count, dtype=torch.float32, device=device)
+
+        visible = footprint > 0
+        visible_f = visible.float()
+        image_scale = 0.5 * max(
+            1600, int(info["width"]), int(info["height"])
+        )
+        raw_norm = raw_norm.float()
+        screen_scaled = raw_norm * float(image_scale)
+        core_box = torch.as_tensor(
+            self.gradient_tile_core_box,
+            dtype=params["means"].dtype,
+            device=device,
+        )
+        outside = (
+            (params["means"].detach() < core_box[0])
+            | (params["means"].detach() > core_box[1])
+        ).any(dim=-1)
+        attenuation = torch.where(
+            outside,
+            torch.full(
+                (count,),
+                self.gradient_tile_outside_attenuation,
+                dtype=screen_scaled.dtype,
+                device=device,
+            ),
+            torch.ones(count, dtype=screen_scaled.dtype, device=device),
+        )
+        weighted_gradient = screen_scaled * attenuation.unsqueeze(0)
+        weights = footprint.float()
+        state["_cloudstudio_raw_grad_sum"].add_(
+            (raw_norm * visible_f).sum(dim=0)
+        )
+        state["_cloudstudio_raw_grad_count"].add_(visible_f.sum(dim=0))
+        state["_cloudstudio_screen_grad_sum"].add_(
+            (screen_scaled * visible_f).sum(dim=0)
+        )
+        state["_cloudstudio_mipmap_grad_sum"].add_(
+            (weighted_gradient * weights * visible_f).sum(dim=0)
+        )
+        state["_cloudstudio_mipmap_weight_sum"].add_(
+            (weights * visible_f).sum(dim=0)
+        )
+        normalized_footprint = weights / float(
+            max(int(info["width"]), int(info["height"]))
+        )
+        per_gaussian_max = torch.where(
+            visible,
+            normalized_footprint,
+            torch.zeros_like(normalized_footprint),
+        ).amax(dim=0)
+        state["_cloudstudio_mipmap_max_screen"].copy_(
+            torch.maximum(
+                state["_cloudstudio_mipmap_max_screen"], per_gaussian_max
+            )
+        )
+
+    def _mipmap_gradient_diagnostics(
+        self, state: dict[str, Any], opacity_logits: Any
+    ) -> dict[str, Any]:
+        if self.gradient_statistics_profile == "legacy_gsplat":
+            return {}
+        import torch
+
+        raw_count = state["_cloudstudio_raw_grad_count"]
+        weight_sum = state["_cloudstudio_mipmap_weight_sum"]
+        observed = weight_sum > 0
+        raw = state["_cloudstudio_raw_grad_sum"] / raw_count.clamp_min(1.0)
+        screen = state["_cloudstudio_screen_grad_sum"] / raw_count.clamp_min(1.0)
+        final = state["_cloudstudio_mipmap_grad_sum"] / weight_sum.clamp_min(1e-8)
+
+        def summarize(values: Any) -> dict[str, float]:
+            finite = values[observed & torch.isfinite(values)].float()
+            if not finite.numel():
+                return {}
+            levels = torch.tensor(
+                [0.5, 0.9, 0.95, 0.99, 0.999],
+                dtype=finite.dtype,
+                device=finite.device,
+            )
+            quantiles = torch.quantile(finite, levels).tolist()
+            result = {
+                key: float(value)
+                for key, value in zip(
+                    ("p50", "p90", "p95", "p99", "p999"), quantiles
+                )
+            }
+            result["max"] = float(finite.max().item())
+            return result
+
+        opacity = torch.sigmoid(opacity_logits.detach().flatten())
+        return {
+            "profile": self.gradient_statistics_profile,
+            "image_scale_formula": "0.5*max(1600,width,height)",
+            "footprint_weight": "l2_raster_radius_px",
+            "tile_outside_attenuation": self.gradient_tile_outside_attenuation,
+            "raw_grad_quantiles": summarize(raw),
+            "screen_scaled_grad_quantiles": summarize(screen),
+            "mipmap_equivalent_grad_quantiles": summarize(final),
+            "mipmap_equivalent_candidate_counts": {
+                f"grad_gt_{threshold:.7f}_opacity_gt_{floor:.2f}": int(
+                    ((final > threshold) & (opacity > floor)).sum().item()
+                )
+                for threshold in (
+                    float(self.inner.grow_grad2d),
+                    0.00015,
+                    0.0002,
+                )
+                for floor in (0.05, 0.1, 0.15)
+            },
+            "observed_gaussian_count": int(observed.sum().item()),
+            "max_screen_footprint_quantiles": summarize(
+                state["_cloudstudio_mipmap_max_screen"]
+            ),
+        }
 
     def _ensure_cull_tracking(
         self, params: Any, state: dict[str, Any]
@@ -474,7 +764,7 @@ class DefaultStrategyAdapter:
         *,
         scene: Any | None = None,
     ) -> tuple[int, int]:
-        """Classic split/clone with the recovered opacity eligibility gate."""
+        """Classic split/clone with the recovered projected-gradient gate."""
 
         import torch
         from gsplat.strategy.ops import duplicate, split
@@ -513,9 +803,18 @@ class DefaultStrategyAdapter:
                     params["opacities"].index_copy_(0, selected, reshaped)
                     params["opacities"][-selected.numel() :].copy_(reshaped)
 
-        gradients = state["grad2d"] / state["count"].clamp_min(1)
+        if self.gradient_statistics_profile == "mipmap_radius_weighted_v1":
+            gradients = (
+                state["_cloudstudio_mipmap_grad_sum"]
+                / state["_cloudstudio_mipmap_weight_sum"].clamp_min(1e-8)
+            )
+            observed = state["_cloudstudio_mipmap_weight_sum"] > 0
+            screen_radii = state["_cloudstudio_mipmap_max_screen"]
+        else:
+            gradients = state["grad2d"] / state["count"].clamp_min(1)
+            observed = state["count"] > 0
+            screen_radii = state.get("radii")
         opacity = torch.sigmoid(params["opacities"].flatten())
-        observed = state["count"] > 0
         finite_observed_gradients = gradients[
             observed & torch.isfinite(gradients)
         ].float()
@@ -560,7 +859,8 @@ class DefaultStrategyAdapter:
             for opacity_floor in opacity_floors
         }
         eligible = gradients > float(self.inner.grow_grad2d)
-        eligible &= opacity > float(self.growth_min_opacity)
+        if self.growth_min_opacity is not None:
+            eligible &= opacity > float(self.growth_min_opacity)
         growth_candidate_count = int(eligible.sum().item())
         guarded_births = bool(
             self.surface_birth_proposal is not None
@@ -569,9 +869,23 @@ class DefaultStrategyAdapter:
         if (
             guarded_births
             and self.lifecycle_execution_order == "pre_optimizer_vendor"
+            and not (
+                self.vendor_capacity_cull_profile
+                in {
+                    "exact_relaxed_at_cap",
+                    "cloudstudio_relaxed_near_cap_0p99",
+                }
+                and self.detail_split_policy
+                in {
+                    "lidar_surface_screen_detail",
+                    "lidar_surface_screen_detail_aggressive",
+                    "lidar_surface_screen_detail_ultrasharp",
+                }
+            )
         ):
             raise RuntimeError(
-                "pre_optimizer_vendor forbids the CloudStudio surface birth guard"
+                "pre_optimizer_vendor permits the CloudStudio surface birth "
+                "guard only for a signed cap-aware screen-detail profile"
             )
         if guarded_births:
             eligible &= self.surface_birth_proposal.eligible_parent_mask(
@@ -597,9 +911,14 @@ class DefaultStrategyAdapter:
         maximum_scale = torch.exp(params["scales"]).max(dim=-1).values
         small = maximum_scale <= float(self.split_scale_m)
         detail_split_mask = torch.zeros_like(eligible)
-        radii = state.get("radii")
+        radii = screen_radii
         if (
-            self.detail_split_policy == "lidar_surface_screen_detail"
+            self.detail_split_policy
+            in {
+                "lidar_surface_screen_detail",
+                "lidar_surface_screen_detail_aggressive",
+                "lidar_surface_screen_detail_ultrasharp",
+            }
             and radii is not None
         ):
             # Preserve the recovered 0.2 m world-space split rule. The
@@ -616,8 +935,13 @@ class DefaultStrategyAdapter:
         duplicate_count = int(duplicate_mask.sum().item())
         split_count = int(split_mask.sum().item())
         self._last_growth_event = {
+            "gradient_statistics_profile": self.gradient_statistics_profile,
             "gradient_threshold": float(self.inner.grow_grad2d),
-            "opacity_floor": float(self.growth_min_opacity),
+            "opacity_floor": (
+                None
+                if self.growth_min_opacity is None
+                else float(self.growth_min_opacity)
+            ),
             "observed_gaussian_count": int(observed.sum().item()),
             "gradient_quantiles": gradient_quantiles,
             "threshold_sweep_counts": threshold_sweep,
@@ -632,13 +956,23 @@ class DefaultStrategyAdapter:
         if guarded_births and (duplicate_count or split_count):
             clone_indices = torch.where(duplicate_mask)[0]
             split_indices = torch.where(split_mask)[0]
-            parent_means = torch.cat(
-                [
-                    params["means"][clone_indices].detach().clone(),
-                    params["means"][split_indices].detach().clone().repeat(2, 1),
-                ],
-                dim=0,
+            clone_parent_means = params["means"][clone_indices].detach().clone()
+            split_parent_means = (
+                params["means"][split_indices].detach().clone().repeat(2, 1)
             )
+            if self.lifecycle_execution_order == "pre_optimizer_vendor":
+                # Native order is Split -> Clone. ``split`` appends its two
+                # children first, then ``duplicate`` appends clone children.
+                # The proposal rows must follow that exact newborn-tail order;
+                # pairing Clone parents first relocates Split children onto an
+                # unrelated LiDAR patch and can create large apparent floaters.
+                parent_means = torch.cat(
+                    [split_parent_means, clone_parent_means], dim=0
+                )
+            else:
+                parent_means = torch.cat(
+                    [clone_parent_means, split_parent_means], dim=0
+                )
         if self.lifecycle_execution_order == "pre_optimizer_vendor":
             # The recovered native order is Split -> Clone -> Cull.  The masks
             # are disjoint and were computed on the original rows. After Split,
@@ -690,9 +1024,9 @@ class DefaultStrategyAdapter:
                 )
         if parent_means is not None:
             # ``split`` removes its parents, keeps all non-split rows, then
-            # appends two children per parent.  Duplicates therefore precede
-            # split children in one contiguous newborn tail beginning at
-            # ``old_count - split_count``.
+            # appends two children per parent. The newborn tail begins at
+            # ``old_count - split_count``; its internal order depends on the
+            # selected lifecycle execution order and is mirrored above.
             newborn_count = duplicate_count + 2 * split_count
             newborn_start = len(params["means"]) - newborn_count
             proposed = self.surface_birth_proposal.propose(
@@ -733,6 +1067,7 @@ class DefaultStrategyAdapter:
         state: dict[str, Any],
         *,
         step: int,
+        capacity_limited: bool = False,
         scene: Any | None = None,
     ) -> int:
         """Apply recovered early/late opacity, world, and screen cull gates."""
@@ -740,11 +1075,29 @@ class DefaultStrategyAdapter:
         import torch
         from gsplat.strategy.ops import remove
 
-        opacity_threshold = (
-            float(self.prune_opa_late)
-            if step >= int(self.prune_switch_step)
-            else float(self.inner.prune_opa)
+        relaxed_capacity_cull = bool(
+            capacity_limited
+            and self.vendor_capacity_cull_profile
+            in {"exact_relaxed_at_cap", "cloudstudio_relaxed_near_cap_0p99"}
         )
+        if relaxed_capacity_cull:
+            # Recovered vendor behavior for a lifecycle event where the
+            # absolute population cap forbids further densification.  This is
+            # intentionally not the normal early/late opacity schedule: the
+            # native code relaxes opacity by 0.25x and both geometric limits by
+            # 5x, allowing a cap-only maintenance pass without deleting the
+            # continuous surface that the cap is meant to preserve.
+            opacity_threshold = 0.25 * float(self.prune_opa_late)
+            world_scale_threshold = 5.0 * float(self.prune_scale_m)
+            screen_scale_threshold = 5.0 * float(self.inner.prune_scale2d)
+        else:
+            opacity_threshold = (
+                float(self.prune_opa_late)
+                if step >= int(self.prune_switch_step)
+                else float(self.inner.prune_opa)
+            )
+            world_scale_threshold = float(self.prune_scale_m)
+            screen_scale_threshold = float(self.inner.prune_scale2d)
         opacity = torch.sigmoid(params["opacities"].flatten())
         raw_opacity_mask = opacity < opacity_threshold
         opacity_threshold_sweep_counts = {
@@ -754,11 +1107,11 @@ class DefaultStrategyAdapter:
             for threshold in (0.01, 0.02, 0.03, 0.04, 0.05, 0.075, 0.1)
         }
         maximum_scale = torch.exp(params["scales"]).max(dim=-1).values
-        world_scale_mask = maximum_scale > float(self.prune_scale_m)
+        world_scale_mask = maximum_scale > world_scale_threshold
         radii = state.get("radii")
         screen_scale_mask = torch.zeros_like(raw_opacity_mask)
         if radii is not None:
-            screen_scale_mask = radii > float(self.inner.prune_scale2d)
+            screen_scale_mask = radii > screen_scale_threshold
 
         opacity_mask = raw_opacity_mask.clone()
         grace_active = False
@@ -939,7 +1292,12 @@ class DefaultStrategyAdapter:
                 )
         self._last_cull_event = {
             "policy": self.opacity_cull_policy,
+            "capacity_limited": bool(capacity_limited),
+            "capacity_profile": self.vendor_capacity_cull_profile,
+            "relaxed_capacity_cull": relaxed_capacity_cull,
             "opacity_threshold": float(opacity_threshold),
+            "world_scale_threshold_m": float(world_scale_threshold),
+            "screen_scale_threshold": float(screen_scale_threshold),
             "raw_opacity_candidate_count": int(raw_opacity_mask.sum().item()),
             "opacity_threshold_sweep_counts": opacity_threshold_sweep_counts,
             "raw_candidate_observed_count": raw_candidate_observed_count,
@@ -1003,15 +1361,59 @@ class DefaultStrategyAdapter:
         if step >= self.refine_stop_iter:
             return
         self.inner._update_state(params, state, info, packed=False)
+        self._update_mipmap_equivalent_state(params, state, info)
+        if step in self.discard_accumulated_gradient_steps:
+            state["grad2d"].zero_()
+            state["count"].zero_()
+            if state.get("radii") is not None:
+                state["radii"].zero_()
+            for key in (
+                "_cloudstudio_raw_grad_sum",
+                "_cloudstudio_raw_grad_count",
+                "_cloudstudio_screen_grad_sum",
+                "_cloudstudio_mipmap_grad_sum",
+                "_cloudstudio_mipmap_weight_sum",
+                "_cloudstudio_mipmap_max_screen",
+            ):
+                if state.get(key) is not None:
+                    state[key].zero_()
+            self.last_lifecycle_event = {
+                "discarded_accumulated_gradient_step": int(step),
+                "reason": "signed_supervision_mask_transition",
+            }
+            return
         if not self.is_refine_step(step):
             return
+        mipmap_gradient_diagnostics = self._mipmap_gradient_diagnostics(
+            state, params["opacities"]
+        )
         self._ensure_cull_tracking(params, state)
         before = len(params["means"])
+        # Vendor parity: capacity mode is frozen from the population entering
+        # this lifecycle.  A cycle that starts below the cap is allowed to
+        # grow and still uses the normal Cull thresholds even when those
+        # births reach the cap; only the following cycle enters the relaxed
+        # at-cap branch.  Recomputing this after growth retains one extra wave
+        # of low-opacity mass and was visible as fog in capacity-bound runs.
+        capacity_trigger = self.capacity_cap
+        if (
+            capacity_trigger is not None
+            and self.vendor_capacity_cull_profile
+            == "cloudstudio_relaxed_near_cap_0p99"
+        ):
+            capacity_trigger = max(1, int(0.99 * capacity_trigger))
+        capacity_limited = bool(
+            capacity_trigger is not None and before >= capacity_trigger
+        )
         clone_count, split_count = self._grow_mipmap(
             params, optimizers, state
         )
         cull_count = self._prune_mipmap(
-            params, optimizers, state, step=step
+            params,
+            optimizers,
+            state,
+            step=step,
+            capacity_limited=capacity_limited,
         )
         reset = step % int(self.inner.reset_every) == 0
         if reset:
@@ -1029,6 +1431,16 @@ class DefaultStrategyAdapter:
         state["count"].zero_()
         if state.get("radii") is not None:
             state["radii"].zero_()
+        for key in (
+            "_cloudstudio_raw_grad_sum",
+            "_cloudstudio_raw_grad_count",
+            "_cloudstudio_screen_grad_sum",
+            "_cloudstudio_mipmap_grad_sum",
+            "_cloudstudio_mipmap_weight_sum",
+            "_cloudstudio_mipmap_max_screen",
+        ):
+            if state.get(key) is not None:
+                state[key].zero_()
         self.last_lifecycle_event = {
             "before_count": int(before),
             "clone_count": clone_count,
@@ -1037,10 +1449,14 @@ class DefaultStrategyAdapter:
             "cull_count": cull_count,
             "opacity_reset": reset,
             "after_count": int(len(params["means"])),
+            "capacity_limited_pre_growth": capacity_limited,
+            "capacity_trigger": (
+                int(capacity_trigger) if capacity_trigger is not None else None
+            ),
             "cull_opacity_threshold": (
-                float(self.prune_opa_late)
-                if step >= int(self.prune_switch_step)
-                else float(self.inner.prune_opa)
+                float(self._last_cull_event["opacity_threshold"])
+                if self._last_cull_event is not None
+                else None
             ),
         }
         if self._last_surface_birth_event is not None:
@@ -1050,6 +1466,9 @@ class DefaultStrategyAdapter:
         if self._last_growth_event is not None:
             self.last_lifecycle_event["growth_diagnostics"] = dict(
                 self._last_growth_event
+            )
+            self.last_lifecycle_event["growth_diagnostics"].update(
+                mipmap_gradient_diagnostics
             )
         if self._last_cull_event is not None:
             self.last_lifecycle_event["cull_reasons"] = dict(
@@ -1085,7 +1504,13 @@ class DefaultStrategyAdapter:
             "refine_every": int(self.inner.refine_every),
             "exact_mipmap_lifecycle": self.exact_mipmap_lifecycle,
             "lifecycle_execution_order": self.lifecycle_execution_order,
+            "cloudstudio_lifecycle_extension_profile": (
+                self.cloudstudio_lifecycle_extension_profile
+            ),
             "vendor_cull_warmup_profile": self.vendor_cull_warmup_profile,
+            "vendor_capacity_cull_profile": (
+                self.vendor_capacity_cull_profile
+            ),
             "vendor_opacity_reset_profile": self.vendor_opacity_reset_profile,
             "growth_min_opacity": self.growth_min_opacity,
             "prune_opa_late": self.prune_opa_late,
@@ -1117,6 +1542,14 @@ class DefaultStrategyAdapter:
             "detail_split_screen_radius": self.detail_split_screen_radius,
             "capacity_conserving_clone_opacity": (
                 self.capacity_conserving_clone_opacity
+            ),
+            "gradient_statistics_profile": self.gradient_statistics_profile,
+            "gradient_tile_core_box": self.gradient_tile_core_box,
+            "gradient_tile_outside_attenuation": (
+                self.gradient_tile_outside_attenuation
+            ),
+            "discard_accumulated_gradient_steps": sorted(
+                self.discard_accumulated_gradient_steps
             ),
             # The resolved metric meaning of the two normalised scale gates.
             "effective_split_scale_m": float(

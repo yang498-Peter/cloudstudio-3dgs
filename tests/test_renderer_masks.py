@@ -83,5 +83,6 @@ class RendererMaskManifestTests(unittest.TestCase):
                 build_renderer_mask_manifest(face, Path(directory))
 
 
+
 if __name__ == "__main__":
     unittest.main()

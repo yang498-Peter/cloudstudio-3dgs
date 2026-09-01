@@ -24,13 +24,18 @@ from cloudstudio_3dgs.data.face_lidar_geometry import (
     verify_face_lidar_geometry_manifest,
 )
 from cloudstudio_3dgs.data.renderer_masks import verify_renderer_mask_manifest
+from cloudstudio_3dgs.data.sky_background import verify_sky_evidence_manifest
 from cloudstudio_3dgs.geometry.lidar_projection import SparseDepthMap
+from cloudstudio_3dgs.geometry.mesh_completion import (
+    verify_mesh_completion_initialization_manifest,
+)
 from cloudstudio_3dgs.evaluation.quality_report import sign_run_manifest
 from cloudstudio_3dgs.training.backend import (
     GsplatBackend,
     rendered_range_to_euclidean,
 )
 from cloudstudio_3dgs.training.checkpoint import (
+    checkpoint_model_layers,
     load_checkpoint,
     retain_checkpoint,
     save_checkpoint,
@@ -44,6 +49,7 @@ from cloudstudio_3dgs.training.losses import (
     global_masked_rgb_ssim_loss,
     masked_rgb_gradient_l1,
     masked_rgb_l1,
+    masked_rgb_psnr_db,
     masked_rgb_ssim_loss,
 )
 from cloudstudio_3dgs.training.mipmap_loss_schedule import (
@@ -78,6 +84,7 @@ from cloudstudio_3dgs.training.surface_initialization import (
     cap_surface_initialization_scales,
     build_surface_aligned_initialization,
     load_initialization_geometry,
+    load_precomputed_surfel_geometry,
 )
 from cloudstudio_3dgs.training.mipmap_tile_geometry import (
     load_mipmap_tile_geometry,
@@ -97,6 +104,10 @@ from cloudstudio_3dgs.training.contribution_attribution import (
     compute_contribution_scores,
 )
 from cloudstudio_3dgs.training.ppisp import PpispConfig, PpispCorrector
+from cloudstudio_3dgs.training.bilateral_grid import (
+    BilateralGridConfig,
+    BilateralGridCorrector,
+)
 from cloudstudio_3dgs.training.lidar_normals import (
     LidarNormalAnchors,
     NormalAlignmentConfig,
@@ -200,6 +211,9 @@ class TrainerConfig:
     face_cache_root: Path | None = None
     raw_fisheye_post_refine_face_manifest: Path | None = None
     renderer_mask_manifest: Path | None = None
+    surface_sky_exclusion_manifest: Path | None = None
+    surface_sky_exclusion_root: Path | None = None
+    surface_sky_exclusion_dilation_px: int = 0
     tile_inputs_manifest: Path | None = None
     tile_inputs_root: Path | None = None
     mono_depth_manifest: Path | None = None
@@ -217,6 +231,7 @@ class TrainerConfig:
         default_factory=FixedTopologyScheduleConfig
     )
     final_evaluation_artifacts: bool = True
+    deferred_final_evaluation: bool = False
     require_person_masks: bool = True
     trainer_preset: str = "custom"
     device: str = "cuda:0"
@@ -249,6 +264,9 @@ class TrainerConfig:
     da2_depth_weight: float = 0.0
     mesh_depth_weight: float = 0.0
     mesh_normal_weight: float = 0.0
+    mesh_alpha_weight: float = 0.0
+    mesh_alpha_target: float = 0.95
+    rendered_depth_normal_consistency_weight: float = 0.0
     competitor_loss_schedule_enabled: bool = False
     ssim_window_size: int = 11
     ssim_sigma: float = 1.5
@@ -300,6 +318,7 @@ class TrainerConfig:
     )
     error_weighted_sampling: ErrorScoreConfig = field(default_factory=ErrorScoreConfig)
     ppisp: PpispConfig = field(default_factory=PpispConfig)
+    bilateral_grid: BilateralGridConfig = field(default_factory=BilateralGridConfig)
     contribution: ContributionConfig = field(default_factory=ContributionConfig)
     contribution_every: int = 5
     lidar_normal_alignment: NormalAlignmentConfig = field(
@@ -343,6 +362,8 @@ class TrainerConfig:
                 "face_cache_root",
                 "raw_fisheye_post_refine_face_manifest",
                 "renderer_mask_manifest",
+                "surface_sky_exclusion_manifest",
+                "surface_sky_exclusion_root",
                 "tile_inputs_manifest",
                 "tile_inputs_root",
                 "mono_depth_manifest",
@@ -380,6 +401,10 @@ class TrainerConfig:
         if not isinstance(ppisp_value, dict):
             raise ValueError("ppisp must be an object")
         ppisp = PpispConfig(**ppisp_value)
+        bilateral_grid_value = value.get("bilateral_grid", {})
+        if not isinstance(bilateral_grid_value, dict):
+            raise ValueError("bilateral_grid must be an object")
+        bilateral_grid = BilateralGridConfig(**bilateral_grid_value)
         contribution_value = value.get("contribution", {})
         if not isinstance(contribution_value, dict):
             raise ValueError("contribution must be an object")
@@ -454,6 +479,9 @@ class TrainerConfig:
                 "da2_depth_weight",
                 "mesh_depth_weight",
                 "mesh_normal_weight",
+                "mesh_alpha_weight",
+                "mesh_alpha_target",
+                "rendered_depth_normal_consistency_weight",
                 "competitor_loss_schedule_enabled",
                 "ssim_window_size",
                 "ssim_sigma",
@@ -488,10 +516,12 @@ class TrainerConfig:
                 "warm_start_min_opacity",
                 "warm_start_scale_multiplier",
                 "final_evaluation_artifacts",
+                "deferred_final_evaluation",
                 "mipmap_tile_id",
                 "implementation_smoke_only",
                 "config_manifest_sha256",
                 "controlled_stop_after_steps",
+                "surface_sky_exclusion_dilation_px",
             )
             if key in value
         }
@@ -510,6 +540,7 @@ class TrainerConfig:
             golden_evaluation=golden_evaluation,
             error_weighted_sampling=error_weighted_sampling,
             ppisp=ppisp,
+            bilateral_grid=bilateral_grid,
             contribution=contribution_config,
             lidar_normal_alignment=lidar_normal_alignment,
             lidar_admission=lidar_admission,
@@ -601,6 +632,8 @@ class TrainerConfig:
         unsupported_fresh_auxiliary = set(self.warm_start_fresh_auxiliary) - {
             "rig_pose_deltas",
             "exposure_log_gains",
+            "exposure_biases",
+            "bilateral_grid",
         }
         if unsupported_fresh_auxiliary:
             raise ValueError(
@@ -625,6 +658,23 @@ class TrainerConfig:
             ):
                 raise ValueError(
                     "fresh exposure_log_gains requires exposure compensation"
+                )
+            if (
+                "exposure_biases" in self.warm_start_fresh_auxiliary
+                and not (
+                    self.exposure_compensation.enabled
+                    and self.exposure_compensation.bias_enabled
+                )
+            ):
+                raise ValueError(
+                    "fresh exposure_biases requires enabled exposure bias"
+                )
+            if (
+                "bilateral_grid" in self.warm_start_fresh_auxiliary
+                and not self.bilateral_grid.enabled
+            ):
+                raise ValueError(
+                    "fresh bilateral_grid requires bilateral_grid.enabled"
                 )
         if not 0.0 <= float(self.warm_start_min_opacity) < 1.0:
             raise ValueError("warm_start_min_opacity must be within [0, 1)")
@@ -730,6 +780,7 @@ class TrainerConfig:
         if self.pinhole_with_ut and self.pinhole_rasterize_mode != "classic":
             raise ValueError("pinhole_with_ut requires classic rasterization")
         self.ppisp.validate()
+        self.bilateral_grid.validate()
         self.contribution.validate()
         if self.contribution_every <= 0:
             raise ValueError("contribution_every must be positive")
@@ -767,6 +818,8 @@ class TrainerConfig:
             raise ValueError(
                 "ppisp replaces scalar exposure compensation; enable only one"
             )
+        if self.ppisp.enabled and self.bilateral_grid.enabled:
+            raise ValueError("ppisp and bilateral_grid are alternative spatial ISP models")
         if self.ppisp.enabled and self.decoupled_ssim:
             raise ValueError(
                 "decoupled_ssim currently supports only the scalar exposure gain"
@@ -818,7 +871,8 @@ class TrainerConfig:
             and frozen_photometric_nuisance
             and self.lidar_normal_alignment.enabled
             and self.lidar_normal_alignment.weight_point_to_plane == 0.0
-            and self.lidar_normal_alignment.flatten_mode == "tangent_ratio"
+            and self.lidar_normal_alignment.flatten_mode
+            in {"tangent_ratio", "tangent_ratio_shortest_only"}
             and self.lidar_normal_alignment.flatten_ratio_target == 0.15
             and (
                 self.topology_policy.mode == "strict_fixed"
@@ -899,6 +953,8 @@ class TrainerConfig:
             if detail_split_policy not in {
                 "vendor_0_2m",
                 "lidar_surface_screen_detail",
+                "lidar_surface_screen_detail_aggressive",
+                "lidar_surface_screen_detail_ultrasharp",
             }:
                 raise ValueError("exact MipMap detail split policy is invalid")
             execution_order = self.default_strategy.get(
@@ -941,6 +997,7 @@ class TrainerConfig:
                 vendor_reset_intervals = {
                     "exact_every300": 300,
                     "deferred_every3000_compatibility": 3000,
+                    "deferred_every6000_ab_control": 6000,
                 }
                 expected_reset_every = vendor_reset_intervals.get(
                     vendor_opacity_reset_profile
@@ -950,7 +1007,9 @@ class TrainerConfig:
                         "pre-optimizer vendor opacity reset profile is invalid"
                     )
             expected_lifecycle = {
-                "growth_min_opacity": 0.15,
+                "growth_min_opacity": (
+                    None if execution_order == "pre_optimizer_vendor" else 0.15
+                ),
                 "split_scale_m": 0.2,
                 "prune_scale_m": 0.2,
                 "prune_opa": expected_prune_opa,
@@ -1010,6 +1069,20 @@ class TrainerConfig:
                     raise ValueError(
                         "detail split screen radius must be 0.0035"
                     )
+            if detail_split_policy == "lidar_surface_screen_detail_aggressive":
+                if self.default_strategy.get("detail_split_scale_m") != 0.01:
+                    raise ValueError("aggressive detail split scale must be 0.01 m")
+                if self.default_strategy.get("detail_split_screen_radius") != 0.0025:
+                    raise ValueError(
+                        "aggressive detail split screen radius must be 0.0025"
+                    )
+            if detail_split_policy == "lidar_surface_screen_detail_ultrasharp":
+                if self.default_strategy.get("detail_split_scale_m") != 0.008:
+                    raise ValueError("ultrasharp detail split scale must be 0.008 m")
+                if self.default_strategy.get("detail_split_screen_radius") != 0.0025:
+                    raise ValueError(
+                        "ultrasharp detail split screen radius must be 0.0025"
+                    )
             cull_policy = self.default_strategy.get(
                 "opacity_cull_policy", "immediate"
             )
@@ -1041,15 +1114,34 @@ class TrainerConfig:
                     "and stop no later than max_steps"
                 )
             if execution_order == "pre_optimizer_vendor":
+                lifecycle_extension = self.default_strategy.get(
+                    "cloudstudio_lifecycle_extension_profile", "disabled"
+                )
+                if lifecycle_extension not in {
+                    "disabled",
+                    "observation_cull_v1",
+                    "observation_cull_v2_conservative",
+                }:
+                    raise ValueError(
+                        "pre-optimizer lifecycle extension profile is invalid"
+                    )
                 vendor_mismatches: dict[str, tuple[Any, Any]] = {}
                 vendor_expected = {
                     "absgrad": False,
-                    "revised_opacity": (
-                        detail_split_policy
-                        == "lidar_surface_screen_detail"
-                    ),
+                    # SplitGS repeats the parent opacity verbatim. The
+                    # candidate opacity>0.15 tensor is constructed but never
+                    # consumed by the vendor AfterTrain path.
+                    "revised_opacity": False,
                     "detail_split_policy": detail_split_policy,
-                    "opacity_cull_policy": "immediate",
+                    "opacity_cull_policy": (
+                        "observation_aware"
+                        if lifecycle_extension
+                        in {
+                            "observation_cull_v1",
+                            "observation_cull_v2_conservative",
+                        }
+                        else "immediate"
+                    ),
                     "prune_opa": expected_cull_thresholds[0],
                     "prune_opa_late": expected_cull_thresholds[1],
                     "vendor_opacity_reset_profile": (
@@ -1084,9 +1176,33 @@ class TrainerConfig:
                         "pre-optimizer vendor lifecycle requires the accumulated "
                         "full-loss projected gradient"
                     )
-                if self.tangent_proposal.enabled or self.lidar_admission.enabled:
+                vendor_surface_birth_guard = bool(
+                    self.tangent_proposal.enabled
+                    and not self.lidar_admission.enabled
+                    and self.tangent_proposal.reject_unsupported_births
+                    and self.default_strategy.get(
+                        "vendor_capacity_cull_profile"
+                    )
+                    in {
+                        "exact_relaxed_at_cap",
+                        "cloudstudio_relaxed_near_cap_0p99",
+                    }
+                    and detail_split_policy
+                    in {
+                        "lidar_surface_screen_detail",
+                        "lidar_surface_screen_detail_aggressive",
+                        "lidar_surface_screen_detail_ultrasharp",
+                    }
+                    and self.geometry_regularization.max_world_size_m == 0.2
+                )
+                if (
+                    self.tangent_proposal.enabled
+                    or self.lidar_admission.enabled
+                ) and not vendor_surface_birth_guard:
                     raise ValueError(
-                        "pre-optimizer vendor lifecycle forbids CloudStudio birth guards"
+                        "pre-optimizer vendor lifecycle permits a CloudStudio "
+                        "birth guard only for a signed cap-aware screen-detail "
+                        "profile"
                     )
                 approved_vendor_alpha = {(0.0, 0.95), (0.02, 0.95)}
                 if opacity_only_surface_alpha_probe or surface_shape_probe:
@@ -1109,10 +1225,43 @@ class TrainerConfig:
                         "surface-alpha dilation profile"
                     )
                 cull_defaults = {
-                    "opacity_cull_min_observations": 0,
-                    "opacity_cull_consecutive_events": 1,
-                    "opacity_cull_grace_after_reset_steps": 0,
-                    "opacity_cull_max_fraction": 1.0,
+                    "opacity_cull_min_observations": (
+                        64
+                        if lifecycle_extension
+                        in {
+                            "observation_cull_v1",
+                            "observation_cull_v2_conservative",
+                        }
+                        else 0
+                    ),
+                    "opacity_cull_consecutive_events": (
+                        2
+                        if lifecycle_extension
+                        in {
+                            "observation_cull_v1",
+                            "observation_cull_v2_conservative",
+                        }
+                        else 1
+                    ),
+                    "opacity_cull_grace_after_reset_steps": (
+                        200
+                        if lifecycle_extension
+                        in {
+                            "observation_cull_v1",
+                            "observation_cull_v2_conservative",
+                        }
+                        else 0
+                    ),
+                    "opacity_cull_max_fraction": (
+                        0.02
+                        if lifecycle_extension
+                        == "observation_cull_v2_conservative"
+                        else (
+                            0.05
+                            if lifecycle_extension == "observation_cull_v1"
+                            else 1.0
+                        )
+                    ),
                     "opacity_cull_priority": "lowest_opacity",
                     "opacity_cull_local_min_accumulated_alpha": 0.0,
                 }
@@ -1125,6 +1274,18 @@ class TrainerConfig:
                     raise ValueError(
                         "pre-optimizer vendor lifecycle contains CloudStudio cull "
                         f"protections: {cull_mismatches}"
+                    )
+                if (
+                    lifecycle_extension
+                    in {
+                        "observation_cull_v1",
+                        "observation_cull_v2_conservative",
+                    }
+                    and self.default_strategy.get("vendor_capacity_cull_profile")
+                    != "exact_relaxed_at_cap"
+                ):
+                    raise ValueError(
+                        "observation Cull extensions require exact relaxed-at-cap Cull"
                     )
         self.rig_pose_refinement.validate()
         self.exposure_compensation.validate()
@@ -1208,6 +1369,34 @@ class TrainerConfig:
                 raise ValueError(
                     "renderer mask manifest is bound to different Face4 inputs"
                 )
+        if (self.surface_sky_exclusion_manifest is None) != (
+            self.surface_sky_exclusion_root is None
+        ):
+            raise ValueError(
+                "surface sky exclusion manifest and root must be provided together"
+            )
+        if not 0 <= int(self.surface_sky_exclusion_dilation_px) <= 32:
+            raise ValueError("surface sky exclusion dilation must be within [0, 32]")
+        if self.surface_sky_exclusion_manifest is not None:
+            if self.face_cache_manifest is None:
+                raise ValueError("surface sky exclusion requires face-cache training")
+            sky_manifest = json.loads(
+                self.surface_sky_exclusion_manifest.read_text(encoding="utf-8")
+            )
+            verify_sky_evidence_manifest(
+                sky_manifest,
+                root=self.surface_sky_exclusion_root,
+                verify_artifacts=False,
+            )
+            face_cache = json.loads(
+                self.face_cache_manifest.read_text(encoding="utf-8")
+            )
+            if sky_manifest.get("source_face_manifest_sha256") != face_cache.get(
+                "face_manifest_sha256"
+            ):
+                raise ValueError(
+                    "surface sky exclusion is bound to different Face4 inputs"
+                )
         if (self.tile_inputs_manifest is None) != (self.tile_inputs_root is None):
             raise ValueError(
                 "tile_inputs_manifest and tile_inputs_root must be provided together"
@@ -1249,9 +1438,20 @@ class TrainerConfig:
             raise ValueError("DA2 depth weight must be non-negative")
         if self.da2_depth_weight > 0.0 and self.mono_depth_manifest is None:
             raise ValueError("positive DA2 depth weight requires a DA2 manifest and root")
-        if self.mesh_depth_weight < 0.0 or self.mesh_normal_weight < 0.0:
-            raise ValueError("mesh depth and normal weights must be non-negative")
-        if (self.mesh_depth_weight > 0.0 or self.mesh_normal_weight > 0.0) and (
+        if (
+            self.mesh_depth_weight < 0.0
+            or self.mesh_normal_weight < 0.0
+            or self.mesh_alpha_weight < 0.0
+            or self.rendered_depth_normal_consistency_weight < 0.0
+        ):
+            raise ValueError("mesh depth, normal and alpha weights must be non-negative")
+        if not 0.0 < self.mesh_alpha_target <= 1.0:
+            raise ValueError("mesh_alpha_target must be within (0, 1]")
+        if (
+            self.mesh_depth_weight > 0.0
+            or self.mesh_normal_weight > 0.0
+            or self.mesh_alpha_weight > 0.0
+        ) and (
             self.mesh_geometry_manifest is None
         ):
             raise ValueError("positive mesh loss weight requires signed mesh geometry")
@@ -1272,16 +1472,24 @@ class TrainerConfig:
             if self.face_cache_manifest is None and not (
                 self.implementation_smoke_only
                 and self.raw_fisheye_post_refine_face_manifest is not None
+            ) and not (
+                self.deferred_final_evaluation
+                and self.raw_fisheye_post_refine_face_manifest is not None
             ):
                 raise ValueError(
                     "final_evaluation_artifacts may be disabled only for "
-                    "face-cache training or a bounded raw-fisheye post-refine smoke"
+                    "face-cache training, an explicit deferred raw-fisheye "
+                    "evaluation, or a bounded raw-fisheye post-refine smoke"
                 )
             if self.golden_evaluation.enabled:
                 raise ValueError(
                     "golden_evaluation must be disabled when "
                     "final_evaluation_artifacts is false"
                 )
+        elif self.deferred_final_evaluation:
+            raise ValueError(
+                "deferred_final_evaluation requires final_evaluation_artifacts=false"
+            )
         if (self.person_mask_manifest is None) != (self.person_mask_root is None):
             raise ValueError(
                 "person_mask_manifest and person_mask_root must be provided together"
@@ -1381,9 +1589,41 @@ class TrainerConfig:
                     raise ValueError(
                         "initialization PLY path differs from the signed Tile input"
                     )
+            elif self.surface_initialization.mode == "signed_precomputed_surfel":
+                if self.metric_scale_calibration.mode != "precomputed":
+                    raise ValueError(
+                        "signed precomputed surfel initialization requires "
+                        "precomputed metric scales"
+                    )
+                if self.initialization_geometry_manifest is None:
+                    raise ValueError(
+                        "signed precomputed surfel initialization requires a manifest"
+                    )
+                manifest_path = self.initialization_geometry_manifest
+                if not manifest_path.is_file():
+                    raise FileNotFoundError(
+                        f"mesh completion initialization manifest is missing: {manifest_path}"
+                    )
+                manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+                verify_mesh_completion_initialization_manifest(
+                    manifest, root=manifest_path.parent, verify_artifacts=True
+                )
+                artifacts = manifest["artifacts"]
+                expected_ply = (manifest_path.parent / artifacts["combined_ply"]).resolve()
+                expected_geometry = (
+                    manifest_path.parent / artifacts["geometry"]
+                ).resolve()
+                if self.initialization_ply.resolve() != expected_ply:
+                    raise ValueError(
+                        "initialization PLY differs from the signed mesh completion artifact"
+                    )
+                if self.initialization_geometry.resolve() != expected_geometry:
+                    raise ValueError(
+                        "initialization geometry differs from the signed mesh completion artifact"
+                    )
         elif self.metric_scale_calibration.mode == "precomputed":
             raise ValueError(
-                "precomputed metric scales require enabled mipmap_k7_k30 initialization"
+                "precomputed metric scales require enabled signed precomputed initialization"
             )
         if (
             self.lidar_range_weight > 0.0
@@ -1518,6 +1758,19 @@ class TrainerConfig:
                         raise ValueError(
                             "renderer mask manifest is bound to a different pipeline gate"
                         )
+                if self.surface_sky_exclusion_manifest is not None:
+                    sky_manifest = json.loads(
+                        self.surface_sky_exclusion_manifest.read_text(
+                            encoding="utf-8"
+                        )
+                    )
+                    sky_sha = verify_sky_evidence_manifest(sky_manifest)
+                    if sky_sha != gate.get("bindings", {}).get(
+                        "surface_sky_exclusion_manifest_sha256"
+                    ):
+                        raise ValueError(
+                            "surface sky exclusion is bound to a different pipeline gate"
+                        )
                 if self.tile_inputs_manifest is not None:
                     tile_inputs = json.loads(
                         self.tile_inputs_manifest.read_text(encoding="utf-8")
@@ -1563,6 +1816,7 @@ class TrainerConfig:
         uses_lidar_linear_aux = self.lidar_linear_aux_weight > 0.0
         uses_lidar_rgb_boost = self.lidar_rgb_l1_weight > 0.0
         uses_lidar_alpha = self.lidar_alpha_weight > 0.0
+        uses_mesh_alpha = self.mesh_alpha_weight > 0.0
         uses_rgb_gradient = self.rgb_gradient_weight > 0.0
         loss_weights = {
             "rgb_l1": self.rgb_l1_weight,
@@ -1571,6 +1825,10 @@ class TrainerConfig:
             "da2_depth": self.da2_depth_weight,
             "mesh_depth": self.mesh_depth_weight,
             "mesh_normal": self.mesh_normal_weight,
+            "mesh_alpha_coverage": self.mesh_alpha_weight,
+            "rendered_depth_normal_consistency": (
+                self.rendered_depth_normal_consistency_weight
+            ),
         }
         view_sampling_contract = {
             "mode": self.view_sampling_mode,
@@ -1800,6 +2058,7 @@ class TrainerConfig:
             "rig_pose_refinement": self.rig_pose_refinement.to_dict(),
             "exposure_compensation": self.exposure_compensation.to_dict(),
             "ppisp": self.ppisp.to_dict(),
+            "bilateral_grid": self.bilateral_grid.to_dict(),
             "contribution": {
                 **self.contribution.to_dict(),
                 "every": self.contribution_every,
@@ -1826,7 +2085,9 @@ class TrainerConfig:
             }
         if not self.final_evaluation_artifacts:
             contract["face_split"]["final_raw_evaluation_artifacts"] = (
-                "deferred_to_separate_3dgut_stage"
+                "deferred_to_separate_sampled_then_full_promotion_stage"
+                if self.deferred_final_evaluation
+                else "deferred_to_separate_3dgut_stage"
             )
         if self.checkpoint_keep_every > 0:
             contract["checkpoint_retention"] = {
@@ -1871,6 +2132,24 @@ class TrainerConfig:
                         "mipmap_tile_id": int(self.mipmap_tile_id),
                     }
                 )
+            elif self.surface_initialization.mode == "signed_precomputed_surfel":
+                completion_manifest = json.loads(
+                    self.initialization_geometry_manifest.read_text(encoding="utf-8")
+                )
+                contract["initialization"]["surface_alignment"].update(
+                    {
+                        "geometry_manifest_sha256": (
+                            verify_mesh_completion_initialization_manifest(
+                                completion_manifest,
+                                root=self.initialization_geometry_manifest.parent,
+                                verify_artifacts=False,
+                            )
+                        ),
+                        "completion_surfel_count": int(
+                            completion_manifest["counts"]["completion_surfels"]
+                        ),
+                    }
+                )
         if self.tile_inputs_manifest is not None:
             tile_inputs = json.loads(
                 self.tile_inputs_manifest.read_text(encoding="utf-8")
@@ -1896,11 +2175,14 @@ class TrainerConfig:
                 "manifest_sha256": verify_mesh_geometry_manifest(mesh_geometry),
                 "depth_weight": self.mesh_depth_weight,
                 "normal_weight": self.mesh_normal_weight,
+                "alpha_weight": self.mesh_alpha_weight,
+                "alpha_target": self.mesh_alpha_target,
+                "rendered_depth_normal_consistency_weight": (
+                    self.rendered_depth_normal_consistency_weight
+                ),
                 "depth_transform": "0.5*d_if_d_lt_1_else_1_minus_0.5_over_d",
                 "source_separation": "not_fused_with_sparse_lidar_or_da2",
-                "normal_consumer": (
-                    "rendered_range_to_camera_normal_hemisphere_aligned_l1_proxy"
-                ),
+                "normal_consumer": "rasterized_gaussian_shortest_axis_normal",
                 "competitor_loss_schedule_enabled": (
                     self.competitor_loss_schedule_enabled
                 ),
@@ -1933,6 +2215,19 @@ class TrainerConfig:
                 "manifest_consumed_by_dataset": True,
                 "source_face_manifest_bound": True,
                 "policy": renderer_mask.get("policy"),
+            }
+        if self.surface_sky_exclusion_manifest is not None:
+            sky_manifest = json.loads(
+                self.surface_sky_exclusion_manifest.read_text(encoding="utf-8")
+            )
+            contract["surface_sky_exclusion"] = {
+                "manifest_sha256": verify_sky_evidence_manifest(sky_manifest),
+                "manifest_consumed_by_dataset": True,
+                "source_face_manifest_bound": True,
+                "dilation_px": int(self.surface_sky_exclusion_dilation_px),
+                "evidence_boundary": (
+                    "DA2-aligned far/world-up proxy; not recovered SegFormer semantics"
+                ),
             }
         return contract
 
@@ -2094,6 +2389,9 @@ def _warm_start_from_checkpoint(
     topology_changed = False
     target_gaussian_count = len(next(iter(params.values())))
     source_gaussian_count = len(next(iter(checkpoint_params.values())))
+    model_layers = checkpoint_model_layers(
+        payload, gaussian_count=source_gaussian_count
+    )
     for name, parameter in params.items():
         value = checkpoint_params[name]
         if parameter.shape != value.shape:
@@ -2122,16 +2420,24 @@ def _warm_start_from_checkpoint(
     if not fresh_names <= target_names:
         raise ValueError("warm-start fresh auxiliary names are missing from target parameters")
     expected_source_names = target_names - fresh_names
-    if (
-        not isinstance(checkpoint_auxiliary, dict)
-        or set(checkpoint_auxiliary) != expected_source_names
-    ):
+    if not isinstance(checkpoint_auxiliary, dict):
+        raise ValueError("warm-start checkpoint auxiliary parameter names do not match")
+    source_names = set(checkpoint_auxiliary)
+    # A parameter explicitly declared fresh may already exist in the source
+    # checkpoint (for example, restarting exposure from identity).  It is
+    # intentionally ignored.  Every non-fresh target must still be present and
+    # source-only/unknown auxiliary state remains forbidden.
+    if not expected_source_names <= source_names or not source_names <= target_names:
         raise ValueError("warm-start checkpoint auxiliary parameter names do not match")
     for name, parameter in auxiliary_params.items():
         if name in fresh_names:
-            if not bool(torch.isfinite(parameter).all()) or bool(
-                torch.count_nonzero(parameter).item()
-            ):
+            if not bool(torch.isfinite(parameter).all()):
+                raise ValueError(
+                    f"warm-start fresh auxiliary parameter {name} must be finite"
+                )
+            # BilateralGrid uses an affine identity tensor (unit diagonal),
+            # whereas scalar exposure/bias and pose deltas use zero identity.
+            if name != "bilateral_grid" and bool(torch.count_nonzero(parameter).item()):
                 raise ValueError(
                     f"warm-start fresh auxiliary parameter {name} must be zero-initialized"
                 )
@@ -2142,7 +2448,7 @@ def _warm_start_from_checkpoint(
         with torch.no_grad():
             parameter.copy_(value.to(map_location))
 
-    return {
+    report = {
         "mode": "parameters_and_auxiliary_fresh_optimizers",
         "checkpoint_sha256": _sha256_file(path),
         "source_step": int(payload.get("step", 0)),
@@ -2153,6 +2459,9 @@ def _warm_start_from_checkpoint(
         "source_gaussian_count": source_gaussian_count,
         "scale_multiplier": float(scale_multiplier),
     }
+    if model_layers is not None:
+        report["model_layers"] = model_layers
+    return report
 
 
 def _retained_checkpoint_records(
@@ -2354,12 +2663,15 @@ def _render_supervision_loss(
     config: TrainerConfig,
     c2w_override: Any | None = None,
     rgb_gain: Any | None = None,
+    rgb_bias: Any | None = None,
     ppisp: Any | None = None,
+    bilateral_grid: Any | None = None,
     active_sh_degree: int | None = None,
     range_weight_scale: float = 1.0,
     da2_depth_weight_override: float | None = None,
     mesh_depth_weight_override: float | None = None,
     mesh_normal_weight_override: float | None = None,
+    rendered_depth_normal_consistency_weight_override: float | None = None,
     mesh_late_occlusion_scene_scale_m: float | None = None,
 ) -> tuple[Any, Any, Any, Any, dict[str, Any]]:
     has_range = "range_m" in tensors and (
@@ -2380,13 +2692,25 @@ def _render_supervision_loss(
         if mesh_normal_weight_override is None
         else float(mesh_normal_weight_override)
     )
+    rendered_depth_normal_consistency_weight = (
+        config.rendered_depth_normal_consistency_weight
+        if rendered_depth_normal_consistency_weight_override is None
+        else float(rendered_depth_normal_consistency_weight_override)
+    )
     has_da2 = "da2_range_m" in tensors and da2_weight > 0.0
     has_mesh_depth = "mesh_range_m" in tensors and mesh_depth_weight > 0.0
     has_mesh_normal = "mesh_normal_camera" in tensors and mesh_normal_weight > 0.0
+    has_mesh_alpha = "mesh_mask" in tensors and config.mesh_alpha_weight > 0.0
     rendered, rendered_range, rendered_alpha, info = backend.render(
         params,
         sample,
-        with_range=has_range or has_da2 or has_mesh_depth or has_mesh_normal,
+        with_range=(
+            has_range
+            or has_da2
+            or has_mesh_depth
+            or has_mesh_normal
+            or rendered_depth_normal_consistency_weight > 0.0
+        ),
         c2w_override=c2w_override,
         active_sh_degree=active_sh_degree,
         background_rgb=config.background_color,
@@ -2406,12 +2730,36 @@ def _render_supervision_loss(
             pixel_coords=pixel_coords,
             resolution=getattr(sample, "sensor_resolution", None),
         )
-    if rgb_gain is not None:
-        # Per-frame auto-exposure compensation: scale the render toward the
-        # frame's brightness for the photometric losses only. Geometry (range)
-        # and validation renders stay at gain 1.0.
-        rendered = rendered * rgb_gain
+    if rgb_gain is not None or rgb_bias is not None:
+        # Apply the affine model to foreground radiance, not to the already
+        # composited frame. An unmasked bias can paint the target colour into a
+        # fully transparent pixel and creates exactly the opacity-collapse
+        # shortcut this nuisance model is meant to remove.
+        background = rendered.new_zeros(3)
+        if config.background_color is not None:
+            background = rendered.new_tensor(config.background_color)
+        alpha_channel = rendered_alpha[..., None]
+        foreground_premultiplied = rendered - (1.0 - alpha_channel) * background
+        if rgb_gain is not None:
+            foreground_premultiplied = foreground_premultiplied * rgb_gain
+        if rgb_bias is not None:
+            foreground_premultiplied = (
+                foreground_premultiplied + alpha_channel * rgb_bias
+            )
+        rendered = foreground_premultiplied + (1.0 - alpha_channel) * background
+    if bilateral_grid is not None:
+        # The recovered competitor photometric path applies a spatial/range
+        # dependent affine correction after the coarse per-camera gain+bias.
+        rendered = bilateral_grid.apply(
+            rendered,
+            sample.image_id.split("::")[0],
+            alpha=rendered_alpha,
+            background_rgb=config.background_color,
+        )
     l1 = masked_rgb_l1(rendered, tensors["rgb"], tensors["rgb_mask"])
+    rgb_psnr_db = masked_rgb_psnr_db(
+        rendered.detach(), tensors["rgb"], tensors["rgb_mask"]
+    )
     rgb_gradient_l1 = None
     if config.rgb_gradient_weight > 0.0:
         rgb_gradient_l1 = masked_rgb_gradient_l1(
@@ -2597,12 +2945,47 @@ def _render_supervision_loss(
             ).sum() / confidence.sum().clamp_min(1e-8)
             loss = loss + mesh_depth_weight * mesh_depth_loss
     info["cloudstudio_mesh_depth_loss"] = mesh_depth_loss
+    mesh_alpha_loss = None
+    mesh_alpha_support_fraction = None
+    if has_mesh_alpha:
+        if rendered_alpha is None:
+            raise RuntimeError("rasterizer did not return alpha coverage")
+        mesh_alpha_valid = (
+            tensors["rgb_mask"]
+            & tensors["mesh_mask"]
+            & backend.torch.isfinite(tensors["mesh_range_m"])
+            & (tensors["mesh_range_m"] > 0.0)
+            & backend.torch.isfinite(tensors["mesh_confidence"])
+            & (tensors["mesh_confidence"] > 0.0)
+        )
+        mesh_alpha_support_fraction = mesh_alpha_valid.to(
+            dtype=rendered.dtype
+        ).mean()
+        if bool(mesh_alpha_valid.any()):
+            confidence = tensors["mesh_confidence"][mesh_alpha_valid]
+            deficit = backend.torch.relu(
+                float(config.mesh_alpha_target)
+                - rendered_alpha[mesh_alpha_valid]
+            )
+            mesh_alpha_loss = (
+                confidence * deficit.square()
+            ).sum() / confidence.sum().clamp_min(1e-8)
+        else:
+            mesh_alpha_loss = rendered.new_zeros(())
+        loss = loss + config.mesh_alpha_weight * mesh_alpha_loss
+    info["cloudstudio_mesh_alpha_loss"] = mesh_alpha_loss
+    info["cloudstudio_mesh_alpha_support_fraction"] = (
+        mesh_alpha_support_fraction
+    )
+    gaussian_normal = None
+    gaussian_normal_valid = None
+    if has_mesh_normal or rendered_depth_normal_consistency_weight > 0.0:
+        gaussian_normal, gaussian_normal_valid = backend.render_gaussian_normals(
+            params, sample, c2w_override=c2w_override
+        )
     mesh_normal_loss = None
     if has_mesh_normal:
-        assert rendered_range is not None
-        rendered_normal, rendered_normal_valid = _rendered_range_normals_camera(
-            backend.torch, rendered_range, sample
-        )
+        assert gaussian_normal is not None and gaussian_normal_valid is not None
         target_normal = tensors["mesh_normal_camera"]
         target_norm = backend.torch.linalg.vector_norm(
             target_normal, dim=-1, keepdim=True
@@ -2610,12 +2993,12 @@ def _render_supervision_loss(
         target_normal = target_normal / target_norm.clamp_min(1e-8)
         normal_valid = (
             tensors["mesh_mask"]
-            & rendered_normal_valid
+            & gaussian_normal_valid
             & backend.torch.isfinite(target_normal).all(dim=-1)
             & (target_norm[..., 0] > 1e-8)
         )
         if bool(normal_valid.any()):
-            predicted = rendered_normal[normal_valid]
+            predicted = gaussian_normal[normal_valid]
             target = target_normal[normal_valid]
             direct = backend.torch.abs(predicted - target).mean(dim=-1)
             flipped = backend.torch.abs(predicted + target).mean(dim=-1)
@@ -2626,6 +3009,31 @@ def _render_supervision_loss(
             ).sum() / confidence.sum().clamp_min(1e-8)
             loss = loss + mesh_normal_weight * mesh_normal_loss
     info["cloudstudio_mesh_normal_loss"] = mesh_normal_loss
+    rendered_depth_normal_consistency_loss = None
+    if rendered_depth_normal_consistency_weight > 0.0:
+        assert rendered_range is not None
+        assert gaussian_normal is not None and gaussian_normal_valid is not None
+        depth_normal, depth_normal_valid = _rendered_range_normals_camera(
+            backend.torch, rendered_range, sample
+        )
+        consistency_valid = (
+            tensors["rgb_mask"] & gaussian_normal_valid & depth_normal_valid
+        )
+        if bool(consistency_valid.any()):
+            predicted = gaussian_normal[consistency_valid]
+            target = depth_normal[consistency_valid]
+            direct = backend.torch.abs(predicted - target).mean(dim=-1)
+            flipped = backend.torch.abs(predicted + target).mean(dim=-1)
+            rendered_depth_normal_consistency_loss = backend.torch.minimum(
+                direct, flipped
+            ).mean()
+            loss = loss + (
+                rendered_depth_normal_consistency_weight
+                * rendered_depth_normal_consistency_loss
+            )
+    info["cloudstudio_rendered_depth_normal_consistency_loss"] = (
+        rendered_depth_normal_consistency_loss
+    )
     info["cloudstudio_linear_range_aux_loss"] = (
         None if linear_range_aux_loss is None else linear_range_aux_loss.detach()
     )
@@ -2633,6 +3041,7 @@ def _render_supervision_loss(
         lidar_rgb_l1
     )
     info["cloudstudio_rgb_gradient_l1"] = rgb_gradient_l1
+    info["cloudstudio_rgb_psnr_db"] = rgb_psnr_db
     info["cloudstudio_lidar_rgb_support_fraction"] = (
         None
         if lidar_rgb_l1 is None
@@ -2911,6 +3320,13 @@ def train(
             dataset_manifest_path=config.dataset_manifest,
             tile_views=tile_views,
             renderer_mask_manifest_path=config.renderer_mask_manifest,
+            surface_sky_exclusion_manifest_path=(
+                config.surface_sky_exclusion_manifest
+            ),
+            surface_sky_exclusion_root=config.surface_sky_exclusion_root,
+            surface_sky_exclusion_dilation_px=(
+                config.surface_sky_exclusion_dilation_px
+            ),
             mono_depth_manifest_path=config.mono_depth_manifest,
             mono_depth_root=config.mono_depth_root,
             face_lidar_geometry_manifest_path=(
@@ -3023,19 +3439,44 @@ def train(
             f"initialization has {len(xyz)} Gaussians but cap_max is {config.cap_max}"
         )
     exact_geometry: tuple[np.ndarray, np.ndarray, dict[str, Any]] | None = None
-    if (
-        config.surface_initialization.enabled
-        and config.surface_initialization.mode == "mipmap_k7_k30"
-    ):
+    if config.surface_initialization.enabled and config.surface_initialization.mode in {
+        "mipmap_k7_k30",
+        "signed_precomputed_surfel",
+    }:
         if config.initialization_geometry is None:
-            raise ValueError("MipMap initialization geometry is unavailable")
-        exact_geometry = load_mipmap_tile_geometry(
-            config.initialization_geometry_manifest,
-            config.initialization_geometry_manifest.parent,
-            tile_id=int(config.mipmap_tile_id),
-            expected_initialization_ply_sha256=initialization_sha256,
-            expected_count=len(xyz),
-        )
+            raise ValueError("precomputed initialization geometry is unavailable")
+        if config.surface_initialization.mode == "mipmap_k7_k30":
+            exact_geometry = load_mipmap_tile_geometry(
+                config.initialization_geometry_manifest,
+                config.initialization_geometry_manifest.parent,
+                tile_id=int(config.mipmap_tile_id),
+                expected_initialization_ply_sha256=initialization_sha256,
+                expected_count=len(xyz),
+            )
+        else:
+            _normals, _eigenvalues, exact_scales, exact_quats = (
+                load_precomputed_surfel_geometry(
+                    config.initialization_geometry, expected_count=len(xyz)
+                )
+            )
+            exact_geometry = (
+                exact_scales,
+                exact_quats,
+                {
+                    "algorithm": "signed_mixed_lidar_mesh_precomputed_surfel_v1",
+                    "geometry_manifest_sha256": (
+                        verify_mesh_completion_initialization_manifest(
+                            json.loads(
+                                config.initialization_geometry_manifest.read_text(
+                                    encoding="utf-8"
+                                )
+                            ),
+                            root=config.initialization_geometry_manifest.parent,
+                            verify_artifacts=False,
+                        )
+                    ),
+                },
+            )
     initial_scales_m, scale_calibration = build_metric_scale_calibration(
         xyz,
         policy=config.metric_scale_calibration,
@@ -3229,6 +3670,9 @@ def train(
         exposure_optimizer = exposure.make_optimizer()
         auxiliary_params["exposure_log_gains"] = exposure.log_gains
         auxiliary_optimizers["exposure_log_gains"] = exposure_optimizer
+        if exposure.biases is not None:
+            auxiliary_params["exposure_biases"] = exposure.biases
+            auxiliary_optimizers["exposure_biases"] = exposure_optimizer
     ppisp = None
     ppisp_optimizer = None
     if config.ppisp.enabled:
@@ -3247,6 +3691,18 @@ def train(
         if ppisp.crf_params is not None:
             auxiliary_params["ppisp_crf"] = ppisp.crf_params
         auxiliary_optimizers["ppisp"] = ppisp_optimizer
+    bilateral_grid = None
+    bilateral_grid_optimizer = None
+    if config.bilateral_grid.enabled:
+        bilateral_grid = BilateralGridCorrector(
+            getattr(trainset, "exposure_image_ids", trainset.image_ids),
+            camera_by_image=trainset.camera_id_by_image,
+            config=config.bilateral_grid,
+            device=config.device,
+        )
+        bilateral_grid_optimizer = bilateral_grid.make_optimizer()
+        auxiliary_params["bilateral_grid"] = bilateral_grid.grid
+        auxiliary_optimizers["bilateral_grid"] = bilateral_grid_optimizer
     completed_steps = 0
     screen_clip_total = 0
     world_clamp_total = 0
@@ -3282,6 +3738,7 @@ def train(
     best_golden: dict[str, Any] | None = None
     full_evaluation_history: list[dict[str, Any]] = []
     warm_start: dict[str, Any] | None = None
+    model_layers: dict[str, Any] | None = None
     if config.warm_start_checkpoint is not None:
         if "source_identity" in checkpoint_identity:
             warm_start_lineage = {
@@ -3335,6 +3792,20 @@ def train(
             scale_multiplier=config.warm_start_scale_multiplier,
             map_location=config.device,
         )
+        model_layers = warm_start.get("model_layers")
+        if model_layers is not None:
+            if config.topology_policy.mode != "strict_fixed":
+                raise ValueError(
+                    "layered surface/sky warm starts require strict_fixed topology"
+                )
+            if config.warm_start_min_opacity > 0.0:
+                raise ValueError(
+                    "layered surface/sky warm starts forbid row-pruning"
+                )
+            if config.warm_start_scale_multiplier != 1.0:
+                raise ValueError(
+                    "layered surface/sky warm starts forbid global scale changes"
+                )
         if config.warm_start_min_opacity > 0.0:
             warm_start["opacity_pruning"] = backend.prune_below_opacity(
                 params,
@@ -3576,6 +4047,15 @@ def train(
             )
             for group in ppisp_optimizer.param_groups:
                 group["lr"] = ppisp_effective_lr
+        bilateral_grid_effective_lr = None
+        if bilateral_grid_optimizer is not None:
+            bilateral_grid_effective_lr = (
+                config.bilateral_grid.learning_rate_for_step(
+                    step=step, total_steps=config.max_steps
+                )
+            )
+            for group in bilateral_grid_optimizer.param_groups:
+                group["lr"] = bilateral_grid_effective_lr
         active_sh_degree = active_sh_degree_for_step(config, step)
         competitor_weights = (
             competitor_high_type2_loss_weights(step, len(trainset))
@@ -3604,6 +4084,15 @@ def train(
             else competitor_weights.mesh_normal
             * (float(config.mesh_normal_weight) / 0.05)
         )
+        scheduled_rendered_depth_normal_consistency_weight = (
+            None
+            if competitor_weights is None
+            else competitor_weights.rendered_depth_normal_consistency
+            * (
+                float(config.rendered_depth_normal_consistency_weight)
+                / 0.01
+            )
+        )
         loss, l1, ssim, range_loss, info = _render_supervision_loss(
             backend=backend,
             params=params,
@@ -3614,7 +4103,11 @@ def train(
             rgb_gain=None
             if exposure is None
             else exposure.gain(sample.image_id.split("::")[0]),
+            rgb_bias=None
+            if exposure is None
+            else exposure.bias(sample.image_id.split("::")[0]),
             ppisp=ppisp,
+            bilateral_grid=bilateral_grid,
             active_sh_degree=active_sh_degree,
             range_weight_scale=float(phase["range_weight_scale"]),
             da2_depth_weight_override=(
@@ -3625,6 +4118,9 @@ def train(
             ),
             mesh_normal_weight_override=(
                 scheduled_mesh_normal_weight
+            ),
+            rendered_depth_normal_consistency_weight_override=(
+                scheduled_rendered_depth_normal_consistency_weight
             ),
             mesh_late_occlusion_scene_scale_m=(
                 scene_extent_m
@@ -3651,6 +4147,8 @@ def train(
             loss = loss + exposure.prior_loss()
         if ppisp is not None:
             loss = loss + ppisp.regularization_loss()
+        if bilateral_grid is not None:
+            loss = loss + bilateral_grid.tv_loss()
         if config.sh_regularization_weight > 0.0 and "shN" in params:
             # Weak pull on the view-dependent SH bands: the 30k diagnosis
             # measured shN energy doubling over long training while validation
@@ -3861,6 +4359,9 @@ def train(
         if ppisp_optimizer is not None:
             ppisp_optimizer.step()
             ppisp_optimizer.zero_grad(set_to_none=True)
+        if bilateral_grid_optimizer is not None:
+            bilateral_grid_optimizer.step()
+            bilateral_grid_optimizer.zero_grad(set_to_none=True)
         if getattr(backend, "error_score_state", None) is not None:
             # Feed the per-pixel residual of this step's view into the
             # relocation/densification sampling scores while the projected
@@ -4020,7 +4521,9 @@ def train(
                 if competitor_weights is None
                 else scheduled_mesh_normal_weight
             ),
+            "effective_mesh_alpha_weight": float(config.mesh_alpha_weight),
             "ppisp_effective_lr": ppisp_effective_lr,
+            "bilateral_grid_effective_lr": bilateral_grid_effective_lr,
             "rgb_mask_true_pixels": int(tensors["rgb_mask"].sum().detach().cpu()),
             "rgb_mask_total_pixels": int(tensors["rgb_mask"].numel()),
             "rgb_mask_valid_fraction": float(
@@ -4041,6 +4544,7 @@ def train(
                 tensors["mesh_mask"].float().mean().detach().cpu()
             ),
             "rgb_l1": float(l1.detach().cpu()),
+            "rgb_psnr_db": float(info["cloudstudio_rgb_psnr_db"].cpu()),
             "rgb_gradient_l1": None
             if info["cloudstudio_rgb_gradient_l1"] is None
             else float(info["cloudstudio_rgb_gradient_l1"].detach().cpu()),
@@ -4085,6 +4589,14 @@ def train(
             "mesh_normal_loss": None
             if info["cloudstudio_mesh_normal_loss"] is None
             else float(info["cloudstudio_mesh_normal_loss"].detach().cpu()),
+            "mesh_alpha_loss": None
+            if info["cloudstudio_mesh_alpha_loss"] is None
+            else float(info["cloudstudio_mesh_alpha_loss"].detach().cpu()),
+            "mesh_alpha_support_fraction": None
+            if info["cloudstudio_mesh_alpha_support_fraction"] is None
+            else float(
+                info["cloudstudio_mesh_alpha_support_fraction"].detach().cpu()
+            ),
             "rig_pose_prior": None
             if pose_prior is None
             else float(pose_prior.detach().cpu()),
@@ -4238,6 +4750,7 @@ def train(
                 training_state=checkpoint_training_state(),
                 auxiliary_params=auxiliary_params,
                 auxiliary_optimizers=auxiliary_optimizers,
+                model_layers=model_layers,
             )
             if (
                 config.checkpoint_keep_every > 0
@@ -4259,6 +4772,7 @@ def train(
                     training_state=checkpoint_training_state(),
                     auxiliary_params=auxiliary_params,
                     auxiliary_optimizers=auxiliary_optimizers,
+                    model_layers=model_layers,
                 )
         if completed == controlled_stop_after_steps:
             torch.cuda.synchronize(config.device)
@@ -4315,6 +4829,7 @@ def train(
             training_state=final_training_state,
             auxiliary_params=auxiliary_params,
             auxiliary_optimizers=auxiliary_optimizers,
+            model_layers=model_layers,
         )
     golden_history_artifact = _write_golden_history(
         golden_history_path,
@@ -4383,6 +4898,9 @@ def train(
             "rig_pose_refinement": pose_report,
             "exposure_compensation": None if exposure is None else exposure.report(),
             "ppisp": None if ppisp is None else ppisp.report(),
+            "bilateral_grid": (
+                None if bilateral_grid is None else bilateral_grid.report()
+            ),
             "golden_evaluation": {
                 "configuration": config.golden_evaluation.to_dict(),
                 "history_path": golden_history_path.relative_to(output_dir).as_posix(),

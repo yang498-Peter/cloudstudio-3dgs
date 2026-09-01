@@ -800,12 +800,14 @@ def advance_fixed_topology_evaluation_gate(
     if readiness.get("evaluation_plan_sha256") != plan_sha:
         raise ValueError("fixed-topology readiness is bound to another evaluation plan")
     evidence = readiness.get("evidence", {})
-    required_true = (
-        "directional_pass",
-        "phase_a_geometry_frozen",
-    )
-    if any(evidence.get(key) is not True for key in required_true):
+    if evidence.get("directional_pass") is not True:
         raise ValueError("fixed-topology readiness is missing required PASS evidence")
+    geometry_frozen = evidence.get("phase_a_geometry_frozen") is True
+    geometry_bounded = evidence.get("topology_fixed_geometry_bounded") is True
+    if geometry_frozen == geometry_bounded:
+        raise ValueError(
+            "fixed-topology readiness must select exactly one geometry contract"
+        )
     merge_contract = evidence.get("actual_merge_contract")
     if merge_contract is None:
         if evidence.get("core_only_merge_contract") is not True:
@@ -835,6 +837,17 @@ def advance_fixed_topology_evaluation_gate(
         mode = str(config.get("topology_policy", {}).get("mode", ""))
         if mode not in permitted_modes:
             raise ValueError(f"fixed-topology arm {arm_name!r} enables {mode!r}")
+        if geometry_bounded:
+            regularization = config.get("geometry_regularization", {})
+            maximum_scale = regularization.get("max_world_size_m")
+            if (
+                regularization.get("enabled") is not True
+                or maximum_scale is None
+                or not 0.0 < float(maximum_scale) <= 0.2
+            ):
+                raise ValueError(
+                    f"fixed-topology arm {arm_name!r} lacks a bounded geometry fuse"
+                )
         if config.get("mipmap_tile_id") != evaluation_plan.get("tile_id"):
             raise ValueError(f"fixed-topology arm {arm_name!r} targets another Tile")
         if config.get("max_steps") != evaluation_plan.get("steps", {}).get("total"):
@@ -968,6 +981,8 @@ def advance_adaptive_growth_gate(
     if detail_split_policy not in {
         "vendor_0_2m",
         "lidar_surface_screen_detail",
+        "lidar_surface_screen_detail_aggressive",
+        "lidar_surface_screen_detail_ultrasharp",
     }:
         raise ValueError("adaptive growth detail split policy is invalid")
     capacity_conserving_clone_opacity = strategy.get(
@@ -980,6 +995,23 @@ def advance_adaptive_growth_gate(
     vendor_cull_warmup_profile = strategy.get(
         "vendor_cull_warmup_profile", "exact_0p10_to_0p05"
     )
+    vendor_capacity_cull_profile = strategy.get(
+        "vendor_capacity_cull_profile", "disabled"
+    )
+    if vendor_capacity_cull_profile not in {
+        "disabled",
+        "exact_relaxed_at_cap",
+        "cloudstudio_relaxed_near_cap_0p99",
+    }:
+        raise ValueError("adaptive growth vendor capacity cull profile is invalid")
+    if (
+        vendor_capacity_cull_profile
+        in {"exact_relaxed_at_cap", "cloudstudio_relaxed_near_cap_0p99"}
+        and not vendor_pre_optimizer
+    ):
+        raise ValueError(
+            "relaxed vendor capacity cull requires pre-optimizer lifecycle"
+        )
     vendor_cull_thresholds = {
         "exact_0p10_to_0p05": (0.1, 0.05),
         "compatibility_uniform_0p05": (0.05, 0.05),
@@ -998,6 +1030,7 @@ def advance_adaptive_growth_gate(
     vendor_reset_intervals = {
         "exact_every300": 300,
         "deferred_every3000_compatibility": 3000,
+        "deferred_every6000_ab_control": 6000,
     }
     expected_reset_every = vendor_reset_intervals.get(
         vendor_opacity_reset_profile
@@ -1006,7 +1039,7 @@ def advance_adaptive_growth_gate(
         raise ValueError("adaptive growth vendor opacity reset profile is invalid")
     required_strategy = {
         "exact_mipmap_lifecycle": True,
-        "growth_min_opacity": 0.15,
+        "growth_min_opacity": None if vendor_pre_optimizer else 0.15,
         "split_scale_m": 0.2,
         "prune_scale_m": 0.2,
         "prune_opa": cull_thresholds[0],
@@ -1015,11 +1048,7 @@ def advance_adaptive_growth_gate(
         "prune_scale2d": 0.15,
         "reset_every": expected_reset_every,
         "reset_opacity_cap": 0.2,
-        "revised_opacity": (
-            detail_split_policy == "lidar_surface_screen_detail"
-            if vendor_pre_optimizer
-            else True
-        ),
+        "revised_opacity": False if vendor_pre_optimizer else True,
     }
     mismatched_strategy = {
         key: (expected, strategy.get(key))
@@ -1056,21 +1085,63 @@ def advance_adaptive_growth_gate(
             raise ValueError(
                 "adaptive detail split screen radius must be 0.0035"
             )
+    if detail_split_policy == "lidar_surface_screen_detail_aggressive":
+        if strategy.get("detail_split_scale_m") != 0.01:
+            raise ValueError("aggressive adaptive detail split scale must be 0.01 m")
+        if strategy.get("detail_split_screen_radius") != 0.0025:
+            raise ValueError(
+                "aggressive adaptive detail split screen radius must be 0.0025"
+            )
+    if detail_split_policy == "lidar_surface_screen_detail_ultrasharp":
+        if strategy.get("detail_split_scale_m") != 0.008:
+            raise ValueError("ultrasharp adaptive detail split scale must be 0.008 m")
+        if strategy.get("detail_split_screen_radius") != 0.0025:
+            raise ValueError(
+                "ultrasharp adaptive detail split screen radius must be 0.0025"
+            )
     cull_policy = strategy.get("opacity_cull_policy", "immediate")
+    lifecycle_extension = strategy.get(
+        "cloudstudio_lifecycle_extension_profile", "disabled"
+    )
+    if lifecycle_extension not in {
+        "disabled",
+        "observation_cull_v1",
+        "observation_cull_v2_conservative",
+    }:
+        raise ValueError("adaptive growth lifecycle extension profile is invalid")
     if cull_policy not in {
         "immediate",
         "observation_aware",
         "local_coverage_competition",
     }:
         raise ValueError("adaptive growth opacity cull policy is invalid")
-    if vendor_pre_optimizer and cull_policy != "immediate":
+    if (
+        vendor_pre_optimizer
+        and cull_policy != "immediate"
+        and not (
+            lifecycle_extension
+            in {
+                "observation_cull_v1",
+                "observation_cull_v2_conservative",
+            }
+            and cull_policy == "observation_aware"
+        )
+    ):
         raise ValueError("pre-optimizer vendor lifecycle requires immediate cull")
     if cull_policy in {
         "observation_aware",
         "local_coverage_competition",
     }:
         required_cull_protection = {
-            "opacity_cull_min_observations": 4,
+            "opacity_cull_min_observations": (
+                64
+                if lifecycle_extension
+                in {
+                    "observation_cull_v1",
+                    "observation_cull_v2_conservative",
+                }
+                else 4
+            ),
             "opacity_cull_consecutive_events": 2,
             "opacity_cull_grace_after_reset_steps": (
                 100 if cull_policy == "local_coverage_competition" else 200
@@ -1106,10 +1177,40 @@ def advance_adaptive_growth_gate(
         raise ValueError("local coverage alpha budget must be 0 or 0.5")
     if vendor_pre_optimizer:
         vendor_cull_defaults = {
-            "opacity_cull_min_observations": 0,
-            "opacity_cull_consecutive_events": 1,
-            "opacity_cull_grace_after_reset_steps": 0,
-            "opacity_cull_max_fraction": 1.0,
+            "opacity_cull_min_observations": (
+                64
+                if lifecycle_extension
+                in {
+                    "observation_cull_v1",
+                    "observation_cull_v2_conservative",
+                }
+                else 0
+            ),
+            "opacity_cull_consecutive_events": (
+                2
+                if lifecycle_extension
+                in {
+                    "observation_cull_v1",
+                    "observation_cull_v2_conservative",
+                }
+                else 1
+            ),
+            "opacity_cull_grace_after_reset_steps": (
+                200
+                if lifecycle_extension
+                in {
+                    "observation_cull_v1",
+                    "observation_cull_v2_conservative",
+                }
+                else 0
+            ),
+            "opacity_cull_max_fraction": (
+                0.02
+                if lifecycle_extension == "observation_cull_v2_conservative"
+                else (
+                    0.05 if lifecycle_extension == "observation_cull_v1" else 1.0
+                )
+            ),
             "opacity_cull_priority": "lowest_opacity",
             "opacity_cull_local_min_accumulated_alpha": 0.0,
         }
@@ -1119,6 +1220,17 @@ def advance_adaptive_growth_gate(
         ):
             raise ValueError(
                 "pre-optimizer vendor lifecycle forbids CloudStudio cull protections"
+            )
+        if (
+            lifecycle_extension
+            in {
+                "observation_cull_v1",
+                "observation_cull_v2_conservative",
+            }
+            and vendor_capacity_cull_profile != "exact_relaxed_at_cap"
+        ):
+            raise ValueError(
+                "observation Cull extensions require exact relaxed-at-cap Cull"
             )
     required_regularization = (
         {
@@ -1139,6 +1251,26 @@ def advance_adaptive_growth_gate(
         for key, expected in required_regularization.items()
     ):
         raise ValueError("adaptive growth geometry regularization differs")
+    maximum_world_size_m = regularization.get("max_world_size_m")
+    if vendor_pre_optimizer and maximum_world_size_m not in {None, 0.2}:
+        raise ValueError(
+            "vendor-order adaptive growth world-scale fuse must be disabled "
+            "or exactly 0.2 m"
+        )
+    if maximum_world_size_m == 0.2 and (
+        not vendor_pre_optimizer
+        or vendor_capacity_cull_profile
+        not in {"exact_relaxed_at_cap", "cloudstudio_relaxed_near_cap_0p99"}
+    ):
+        raise ValueError(
+            "the 0.2 m world-scale fuse is approved only for the signed "
+            "vendor cap-aware cull diagnostic"
+        )
+    world_scale_fuse_profile = (
+        "cloudstudio_capaware_clamp_0p2m"
+        if maximum_world_size_m == 0.2
+        else "disabled"
+    )
     opacity_sparsity_weight = regularization.get("opacity_sparsity_weight")
     approved_opacity_sparsity_weights = (
         {0.0, 0.01, 0.001} if vendor_pre_optimizer else {1e-4}
@@ -1223,7 +1355,7 @@ def advance_adaptive_growth_gate(
         (
             normal_alignment.get("flatten_ratio_target", 0.15)
             if normal_alignment.get("flatten_mode", "absolute_m")
-            == "tangent_ratio"
+            in {"tangent_ratio", "tangent_ratio_shortest_only"}
             else normal_alignment.get("flatten_target_m", 0.02)
         ),
     )
@@ -1232,6 +1364,11 @@ def advance_adaptive_growth_gate(
         ("absolute_m", 0.1, 0.001): "thin_surface_1mm",
         ("tangent_ratio", 0.01, 0.15): "thin_surface_ratio_0p15",
         ("tangent_ratio", 0.1, 0.15): "thin_surface_ratio_0p15_strong",
+        (
+            "tangent_ratio_shortest_only",
+            0.1,
+            0.15,
+        ): "thin_surface_ratio_0p15_shortest_only_strong",
         ("absolute_m", 0.0, 0.02): "disabled",
     }
     flatten_profile = flatten_profiles.get(flatten_profile_key)
@@ -1252,6 +1389,13 @@ def advance_adaptive_growth_gate(
         in {
             (0.001, 0.0002, 0.01, 0.01, "thin_surface_ratio_0p15"),
             (0.003, 0.0005, 0.1, 0.1, "thin_surface_ratio_0p15_strong"),
+            (
+                0.003,
+                0.0005,
+                0.1,
+                0.1,
+                "thin_surface_ratio_0p15_shortest_only_strong",
+            ),
         }
         and signed_config.get("ppisp", {}).get("learning_rate") == 0.0
         and signed_config.get("lidar_range_weight") == 0.0
@@ -1324,7 +1468,33 @@ def advance_adaptive_growth_gate(
     }:
         raise ValueError("surface shape probe permits only 25 or 50 additional steps")
     expected_gradient_source = "total_loss" if vendor_pre_optimizer else "rgb_only"
-    expected_proposal_enabled = not vendor_pre_optimizer
+    vendor_surface_birth_guard = bool(
+        vendor_pre_optimizer and proposal.get("enabled") is True
+    )
+    if vendor_surface_birth_guard and not (
+        vendor_capacity_cull_profile
+        in {"exact_relaxed_at_cap", "cloudstudio_relaxed_near_cap_0p99"}
+        and detail_split_policy
+        in {
+            "lidar_surface_screen_detail",
+            "lidar_surface_screen_detail_aggressive",
+            "lidar_surface_screen_detail_ultrasharp",
+        }
+        and maximum_world_size_m == 0.2
+    ):
+        raise ValueError(
+            "vendor-order surface birth guard requires a signed cap-aware "
+            "screen-detail profile and 0.2 m scale fuse"
+        )
+    expected_proposal_enabled = not vendor_pre_optimizer or vendor_surface_birth_guard
+    capacity_cap = signed_config.get("cap_max")
+    approved_capacity_cap = capacity_cap == 2_200_000 or bool(
+        vendor_pre_optimizer
+        and vendor_capacity_cull_profile
+        in {"exact_relaxed_at_cap", "cloudstudio_relaxed_near_cap_0p99"}
+        and capacity_cap == 985_000
+        and stage in {"boundary", "review"}
+    )
     if (
         topology.get("mode") != "adaptive_growth"
         or signed_config.get("densification_strategy") != "default_3dgs"
@@ -1336,7 +1506,7 @@ def advance_adaptive_growth_gate(
         != (602 if surface_alpha_probe or surface_shape_probe else 5610)
         or signed_config.get("max_steps") != 7480
         or signed_config.get("factor") != 1
-        or signed_config.get("cap_max") != 2_200_000
+        or not approved_capacity_cap
         or signed_config.get("sh_degree") != 0
         or signed_config.get("da2_depth_weight") != 0.0
         or signed_config.get("mcmc_noise_lr") != 0.0
@@ -1410,6 +1580,7 @@ def advance_adaptive_growth_gate(
             "bindings": bindings,
             "cloudstudio_cull_enhancement": {
                 "policy": cull_policy,
+                "lifecycle_extension_profile": lifecycle_extension,
                 "source": "cloudstudio_observation_coverage_safety",
                 "max_fraction_per_event": strategy.get(
                     "opacity_cull_max_fraction"
@@ -1438,12 +1609,29 @@ def advance_adaptive_growth_gate(
             "vendor_cull_warmup_profile": (
                 vendor_cull_warmup_profile if vendor_pre_optimizer else None
             ),
+            "vendor_capacity_cull_profile": (
+                vendor_capacity_cull_profile
+                if vendor_pre_optimizer
+                else None
+            ),
+            "world_scale_fuse_profile": world_scale_fuse_profile,
             "vendor_opacity_reset_profile": (
                 vendor_opacity_reset_profile if vendor_pre_optimizer else None
             ),
             "opacity_sparsity_profile": opacity_sparsity_profile,
             "shape_regularization_profile": shape_profile,
             "surface_motion_profile": surface_motion_profile,
+            "surface_birth_profile": (
+                (
+                    "cloudstudio_lidar_tangent_newborn_guard"
+                    if proposal.get("init_shortest_axis", True) is True
+                    else "cloudstudio_lidar_tangent_position_guard"
+                )
+                if vendor_surface_birth_guard
+                else "disabled"
+                if vendor_pre_optimizer
+                else "lidar_tangent_newborn_guard"
+            ),
             "flatten_profile": flatten_profile,
             "lidar_alpha_profile": lidar_alpha_profile,
             "adaptive_growth": {
@@ -1469,7 +1657,11 @@ def advance_adaptive_growth_gate(
                             }
                             else "v46_vendor_pre_optimizer_screen_detail_ppisp_compat"
                             if detail_split_policy
-                            == "lidar_surface_screen_detail"
+                            in {
+                                "lidar_surface_screen_detail",
+                                "lidar_surface_screen_detail_aggressive",
+                                "lidar_surface_screen_detail_ultrasharp",
+                            }
                             else "v45_vendor_pre_optimizer_geometry_cull_only_ppisp_compat"
                             if vendor_cull_warmup_profile
                             == "calibrated_geometry_only_0p00"

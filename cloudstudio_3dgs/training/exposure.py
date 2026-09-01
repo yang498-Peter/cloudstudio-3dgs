@@ -19,20 +19,33 @@ from typing import Any, Iterable
 @dataclass(frozen=True)
 class ExposureCompensationConfig:
     enabled: bool = False
+    mode: str = "per_image"
     learning_rate: float = 5e-3
     regularization_weight: float = 1e-2
     max_abs_log_gain: float = 0.6931471805599453  # ln(2): gain clamped to [0.5, 2]
+    bias_enabled: bool = False
+    bias_learning_rate: float = 5e-3
+    bias_regularization_weight: float = 1e-2
+    max_abs_bias: float = 0.25
     zero_mean_projection: bool = False
     mean_anchor_weight: float = 0.0
     mean_anchor_beta: float = 0.1
 
     def validate(self) -> None:
+        if self.mode not in {"per_image", "per_camera"}:
+            raise ValueError("exposure mode must be 'per_image' or 'per_camera'")
         if self.learning_rate < 0.0:
             raise ValueError("exposure learning_rate must be non-negative")
         if self.regularization_weight < 0.0:
             raise ValueError("exposure regularization_weight must be non-negative")
         if self.max_abs_log_gain <= 0.0:
             raise ValueError("exposure max_abs_log_gain must be positive")
+        if self.bias_learning_rate < 0.0:
+            raise ValueError("exposure bias_learning_rate must be non-negative")
+        if self.bias_regularization_weight < 0.0:
+            raise ValueError("exposure bias_regularization_weight must be non-negative")
+        if self.max_abs_bias <= 0.0:
+            raise ValueError("exposure max_abs_bias must be positive")
         if self.mean_anchor_weight < 0.0:
             raise ValueError("exposure mean_anchor_weight must be non-negative")
         if self.mean_anchor_beta <= 0.0:
@@ -41,9 +54,14 @@ class ExposureCompensationConfig:
     def to_dict(self) -> dict[str, Any]:
         return {
             "enabled": self.enabled,
+            "mode": self.mode,
             "learning_rate": self.learning_rate,
             "regularization_weight": self.regularization_weight,
             "max_abs_log_gain": self.max_abs_log_gain,
+            "bias_enabled": self.bias_enabled,
+            "bias_learning_rate": self.bias_learning_rate,
+            "bias_regularization_weight": self.bias_regularization_weight,
+            "max_abs_bias": self.max_abs_bias,
             "zero_mean_projection": self.zero_mean_projection,
             "mean_anchor_weight": self.mean_anchor_weight,
             "mean_anchor_beta": self.mean_anchor_beta,
@@ -73,9 +91,33 @@ class ExposureCompensator:
             raise ValueError("exposure compensation requires at least one training image")
         self.config = config
         self.device = device
-        self.index = {image_id: position for position, image_id in enumerate(ordered)}
+        if config.mode == "per_camera":
+            if group_by_image is None:
+                raise ValueError("per-camera exposure requires camera groups")
+            missing = [image_id for image_id in ordered if image_id not in group_by_image]
+            if missing:
+                raise ValueError(
+                    f"exposure groups missing for {len(missing)} images, e.g. {missing[0]!r}"
+                )
+            cameras = sorted({str(group_by_image[image_id]) for image_id in ordered})
+            camera_index = {camera: position for position, camera in enumerate(cameras)}
+            self.index = {
+                image_id: camera_index[str(group_by_image[image_id])]
+                for image_id in ordered
+            }
+            parameter_count = len(cameras)
+        else:
+            self.index = {image_id: position for position, image_id in enumerate(ordered)}
+            parameter_count = len(ordered)
         self.log_gains = torch.nn.Parameter(
-            torch.zeros(len(ordered), dtype=torch.float32, device=device)
+            torch.zeros(parameter_count, dtype=torch.float32, device=device)
+        )
+        self.biases = (
+            torch.nn.Parameter(
+                torch.zeros(parameter_count, 3, dtype=torch.float32, device=device)
+            )
+            if config.bias_enabled
+            else None
         )
         # Anchor groups: with independent auto-exposure per physical camera, a
         # single global anchor lets the two cameras drift in opposite
@@ -90,17 +132,32 @@ class ExposureCompensator:
                 )
             for image_id in ordered:
                 key = str(group_by_image[image_id])
-                self.group_members.setdefault(key, []).append(self.index[image_id])
+                position = self.index[image_id]
+                members = self.group_members.setdefault(key, [])
+                if position not in members:
+                    members.append(position)
         else:
             self.group_members["all"] = list(range(len(ordered)))
 
     def make_optimizer(self) -> Any:
         import torch
 
-        return torch.optim.Adam(
-            [{"params": [self.log_gains], "lr": self.config.learning_rate, "name": "exposure"}],
-            eps=1e-15,
-        )
+        groups = [
+            {
+                "params": [self.log_gains],
+                "lr": self.config.learning_rate,
+                "name": "exposure_gain",
+            }
+        ]
+        if self.biases is not None:
+            groups.append(
+                {
+                    "params": [self.biases],
+                    "lr": self.config.bias_learning_rate,
+                    "name": "exposure_bias",
+                }
+            )
+        return torch.optim.Adam(groups, eps=1e-15)
 
     def gain(self, image_id: str) -> Any:
         import torch
@@ -111,10 +168,25 @@ class ExposureCompensator:
         bound = self.config.max_abs_log_gain
         return torch.exp(torch.clamp(self.log_gains[position], -bound, bound))
 
+    def bias(self, image_id: str) -> Any | None:
+        import torch
+
+        position = self.index.get(str(image_id))
+        if position is None:
+            raise KeyError(f"exposure compensation has no bias for image {image_id!r}")
+        if self.biases is None:
+            return None
+        bound = self.config.max_abs_bias
+        return torch.clamp(self.biases[position], -bound, bound)
+
     def prior_loss(self) -> Any:
         import torch
 
         loss = self.config.regularization_weight * (self.log_gains**2).mean()
+        if self.biases is not None:
+            loss = loss + self.config.bias_regularization_weight * (
+                self.biases**2
+            ).mean()
         if self.config.mean_anchor_weight > 0.0:
             # Soft per-camera mean anchor (LichtFeld semantics): pull each
             # group's MEAN log gain to zero with SmoothL1 while individual
@@ -166,6 +238,7 @@ class ExposureCompensator:
                 absolute, torch.tensor([0.5, 0.95], device=absolute.device)
             )
         return {
+            "mode": self.config.mode,
             "image_count": int(self.log_gains.shape[0]),
             "mean_log_gain": float(self.log_gains.detach().mean()),
             "mean_log_gain_by_group": {
@@ -179,5 +252,11 @@ class ExposureCompensator:
             "gain_max": float(gains.max()),
             "saturated_fraction": float(
                 (absolute >= bound - 1e-6).float().mean()
+            ),
+            "bias_enabled": self.biases is not None,
+            "bias_abs_max": (
+                None
+                if self.biases is None
+                else float(torch.abs(self.biases.detach()).max())
             ),
         }

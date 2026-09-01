@@ -25,7 +25,12 @@ from cloudstudio_3dgs.training.backend import (
     rendered_range_to_euclidean,
     verify_gsplat_runtime,
 )
-from cloudstudio_3dgs.training.checkpoint import load_checkpoint, save_checkpoint
+from cloudstudio_3dgs.training.checkpoint import (
+    checkpoint_model_layers,
+    load_checkpoint,
+    model_layers_from_sky_layer,
+    save_checkpoint,
+)
 from cloudstudio_3dgs.training.contracts import (
     build_coordinate_transform_manifest,
     verify_coordinate_transform_manifest,
@@ -41,6 +46,7 @@ from cloudstudio_3dgs.training.losses import (
     global_masked_rgb_ssim_loss,
     masked_rgb_gradient_l1,
     masked_rgb_l1,
+    masked_rgb_psnr_db,
     masked_rgb_ssim_loss,
 )
 from cloudstudio_3dgs.training.scale_calibration import (
@@ -1186,6 +1192,66 @@ class TorchTrainingContractTests(unittest.TestCase):
         self.assertLess(float(alpha.grad[0, 0]), 0.0)
         self.assertEqual(float(alpha.grad[1, 0]), 0.0)
 
+    def test_mesh_alpha_coverage_uses_only_signed_mesh_pixels(self) -> None:
+        import torch
+        from types import SimpleNamespace
+
+        rendered = torch.zeros((2, 2, 3), dtype=torch.float32)
+        alpha = torch.tensor(
+            [[0.5, 0.95], [0.0, 0.0]], dtype=torch.float32, requires_grad=True
+        )
+
+        class Backend:
+            @staticmethod
+            def render(*args, **kwargs):
+                return rendered, None, alpha, {}
+
+        Backend.torch = torch
+        config = TrainerConfig.from_dict(
+            {
+                "run_id": "mesh-alpha-formula",
+                "trainer_preset": "custom",
+                "dataset_manifest": "dataset.json",
+                "recording_root": "recording",
+                "mask_manifest": "masks.json",
+                "mask_root": "masks",
+                "split_manifest": "split.json",
+                "initialization_ply": "sparse_pc.ply",
+                "output_dir": "run",
+                "gsplat_lock": "upstream/gsplat.lock.json",
+                "require_person_masks": False,
+                "rgb_l1_weight": 1.0,
+                "rgb_ssim_weight": 0.0,
+                "lidar_range_weight": 0.0,
+                "mesh_alpha_weight": 2.0,
+                "mesh_alpha_target": 0.9,
+            }
+        )
+        tensors = {
+            "rgb": torch.zeros((2, 2, 3)),
+            "rgb_mask": torch.ones((2, 2), dtype=torch.bool),
+            "mesh_mask": torch.tensor([[True, True], [False, False]]),
+            "mesh_range_m": torch.ones((2, 2)),
+            "mesh_confidence": torch.tensor([[1.0, 0.5], [1.0, 1.0]]),
+        }
+        loss, _, _, _, info = _render_supervision_loss(
+            backend=Backend(),
+            params={},
+            sample=SimpleNamespace(camera_model="fisheye"),
+            tensors=tensors,
+            config=config,
+        )
+        expected_raw = (0.4**2) / 1.5
+        self.assertAlmostEqual(
+            float(info["cloudstudio_mesh_alpha_loss"].detach()),
+            expected_raw,
+            places=6,
+        )
+        self.assertAlmostEqual(float(loss.detach()), 2.0 * expected_raw, places=6)
+        loss.backward()
+        self.assertLess(float(alpha.grad[0, 0]), 0.0)
+        self.assertEqual(float(alpha.grad[1, 0]), 0.0)
+
     def test_eval3d_euclidean_range_is_not_scaled_twice(self) -> None:
         import torch
         from types import SimpleNamespace
@@ -1287,6 +1353,27 @@ class TorchTrainingContractTests(unittest.TestCase):
             float(confidence_weighted_range_l1(predicted_range, target_range, confidence, depth_mask)),
             1.0 / 3.0,
             places=6,
+        )
+
+    def test_masked_rgb_psnr_uses_only_valid_pixels_and_clips_prediction(self) -> None:
+        import torch
+
+        target = torch.zeros((2, 2, 3), dtype=torch.float32)
+        prediction = torch.zeros_like(target)
+        prediction[0, 0] = 0.5
+        prediction[0, 1] = 100.0
+        mask = torch.tensor([[True, False], [False, False]])
+        self.assertAlmostEqual(
+            float(masked_rgb_psnr_db(prediction, target, mask)),
+            10.0 * math.log10(1.0 / 0.25),
+            places=5,
+        )
+
+        clipped_mask = torch.tensor([[False, True], [False, False]])
+        self.assertAlmostEqual(
+            float(masked_rgb_psnr_db(prediction, target, clipped_mask)),
+            0.0,
+            places=5,
         )
 
     def test_masked_rgb_gradient_l1_penalizes_blurred_edges(self) -> None:
@@ -1515,6 +1602,46 @@ class TorchTrainingContractTests(unittest.TestCase):
             )
             self.assertEqual(fresh_report["fresh_auxiliary_names"], ["rig_pose_deltas"])
 
+            target_with_fresh_existing_gain = {
+                "gain": torch.nn.Parameter(torch.tensor([0.0])),
+                "rig_pose_deltas": torch.nn.Parameter(torch.zeros((2, 6))),
+            }
+            fresh_existing_report = _warm_start_from_checkpoint(
+                path,
+                expected_lineage=lineage,
+                params=target_params,
+                auxiliary_params=target_with_fresh_existing_gain,
+                fresh_auxiliary_names=("gain", "rig_pose_deltas"),
+                map_location="cpu",
+            )
+            torch.testing.assert_close(
+                target_with_fresh_existing_gain["gain"], torch.tensor([0.0])
+            )
+            self.assertEqual(
+                fresh_existing_report["fresh_auxiliary_names"],
+                ["gain", "rig_pose_deltas"],
+            )
+
+            target_with_identity_grid = {
+                "gain": torch.nn.Parameter(torch.tensor([0.0])),
+                "bilateral_grid": torch.nn.Parameter(torch.eye(3)),
+            }
+            identity_grid_report = _warm_start_from_checkpoint(
+                path,
+                expected_lineage=lineage,
+                params=target_params,
+                auxiliary_params=target_with_identity_grid,
+                fresh_auxiliary_names=("gain", "bilateral_grid"),
+                map_location="cpu",
+            )
+            torch.testing.assert_close(
+                target_with_identity_grid["bilateral_grid"], torch.eye(3)
+            )
+            self.assertEqual(
+                identity_grid_report["fresh_auxiliary_names"],
+                ["bilateral_grid", "gain"],
+            )
+
             target_with_nonzero_pose = {
                 "gain": torch.nn.Parameter(torch.tensor([0.0])),
                 "rig_pose_deltas": torch.nn.Parameter(torch.ones((2, 6))),
@@ -1528,6 +1655,62 @@ class TorchTrainingContractTests(unittest.TestCase):
                     fresh_auxiliary_names=("rig_pose_deltas",),
                     map_location="cpu",
                 )
+
+    def test_layered_warm_start_propagates_signed_surface_sky_boundary(self) -> None:
+        import torch
+
+        params = torch.nn.ParameterDict(
+            {
+                "means": torch.nn.Parameter(torch.zeros((3, 3))),
+                "scales": torch.nn.Parameter(torch.zeros((3, 3))),
+            }
+        )
+        optimizer = {
+            name: torch.optim.Adam([parameter], lr=0.1)
+            for name, parameter in params.items()
+        }
+        layers = model_layers_from_sky_layer(
+            {
+                "schema_version": 1,
+                "source_gaussian_count": 2,
+                "sky_gaussian_start": 2,
+                "sky_gaussian_count": 1,
+                "total_gaussian_count": 3,
+                "kind": "prebaked_photo_dome",
+            },
+            gaussian_count=3,
+        )
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "layered.pt"
+            save_checkpoint(
+                path,
+                step=1,
+                identity={"source_identity": {"dataset": "snow"}},
+                params=params,
+                optimizers=optimizer,
+                strategy_state={},
+                sampler_state=torch.Generator().get_state(),
+                training_state={},
+                model_layers=layers,
+            )
+            payload = torch.load(path, map_location="cpu", weights_only=False)
+            self.assertEqual(
+                checkpoint_model_layers(payload, gaussian_count=3), layers
+            )
+            target = torch.nn.ParameterDict(
+                {
+                    "means": torch.nn.Parameter(torch.zeros((1, 3))),
+                    "scales": torch.nn.Parameter(torch.zeros((1, 3))),
+                }
+            )
+            report = _warm_start_from_checkpoint(
+                path,
+                expected_lineage={"dataset": "snow"},
+                params=target,
+                auxiliary_params={},
+                map_location="cpu",
+            )
+            self.assertEqual(report["model_layers"], layers)
 
     @unittest.skipUnless(HAS_TORCH, "torch is required")
     def test_backend_prunes_warm_start_rows_and_resets_error_state(self) -> None:
@@ -2102,16 +2285,17 @@ class RenderScaleContractTests(unittest.TestCase):
         )
         self.assertEqual(report["clipped_count"], 1)
         shrink = math.log(1.5)
-        # Screen clip shrinks by log(hardness), then the 1 m world fuse
-        # (ln 1 = 0) clamps whatever still exceeds it, on any splat.
+        # Screen clip shrinks by log(hardness), then the 1 m world fuse applies
+        # the recovered whole-ellipsoid x0.8 shrink once to every offender.
         torch.testing.assert_close(
-            params["scales"][1], torch.tensor([0.0, 0.0, -shrink])
+            params["scales"][1],
+            torch.tensor([1.0 - shrink, 0.5 - shrink, -shrink]) + math.log(0.8),
         )
         torch.testing.assert_close(params["scales"][0], torch.tensor([-3.0, -3.0, -3.0]))
         self.assertAlmostEqual(float(params["opacities"][1]), -2.0 + 3.0 * shrink, places=5)
         # World fuse fires for splats 1 (post-shrink axes above 0) and 2 (e^9 m).
         self.assertEqual(report["world_clamped_count"], 2)
-        self.assertAlmostEqual(float(params["scales"][2].max()), 0.0)
+        self.assertAlmostEqual(float(params["scales"][2].max()), 9.0 + math.log(0.8))
         # Disabled config is a no-op.
         noop = clip_oversized_gaussians(
             params,
@@ -2151,6 +2335,36 @@ class RenderScaleContractTests(unittest.TestCase):
             config.validate()
         solo = TrainerConfig(**base, ppisp=PpispConfig(enabled=True))
         self.assertTrue(solo.contract_dict()["ppisp"]["enabled"])
+
+    def test_per_camera_exposure_affine_shares_gain_and_rgb_bias(self) -> None:
+        import torch
+
+        config = ExposureCompensationConfig(
+            enabled=True,
+            mode="per_camera",
+            bias_enabled=True,
+            max_abs_bias=0.25,
+        )
+        exposure = ExposureCompensator(
+            ["left_0", "left_1", "right_0"],
+            config=config,
+            device="cpu",
+            group_by_image={
+                "left_0": "left",
+                "left_1": "left",
+                "right_0": "right",
+            },
+        )
+        self.assertEqual(exposure.log_gains.shape, (2,))
+        self.assertEqual(exposure.biases.shape, (2, 3))
+        with torch.no_grad():
+            exposure.log_gains[exposure.index["left_0"]] = 0.2
+            exposure.biases[exposure.index["left_0"]] = torch.tensor(
+                [0.1, -0.05, 0.02]
+            )
+        torch.testing.assert_close(exposure.gain("left_0"), exposure.gain("left_1"))
+        torch.testing.assert_close(exposure.bias("left_0"), exposure.bias("left_1"))
+        self.assertGreater(float(exposure.prior_loss().detach()), 0.0)
 
     def test_metric_geometry_regularization_only_hits_bad_geometry(self) -> None:
         import torch

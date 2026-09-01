@@ -8,6 +8,7 @@ from cloudstudio_3dgs.training.surface_initialization import (
     SurfaceInitializationConfig,
     build_surface_aligned_initialization,
     cap_surface_initialization_scales,
+    load_precomputed_surfel_geometry,
 )
 
 
@@ -34,6 +35,30 @@ def _rotation_columns(quaternions: np.ndarray) -> np.ndarray:
 
 
 class SurfaceInitializationTests(unittest.TestCase):
+    def test_signed_precomputed_mode_accepts_arbitrary_thin_scales(self) -> None:
+        with self.subTest("configuration"):
+            SurfaceInitializationConfig(
+                enabled=True, mode="signed_precomputed_surfel"
+            ).validate()
+
+    def test_precomputed_surfel_loader_does_not_require_half_scale(self) -> None:
+        import tempfile
+        from pathlib import Path
+
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "geometry.npz"
+            np.savez_compressed(
+                path,
+                normals=np.array([[0.0, 0.0, 1.0]], dtype=np.float32),
+                eigenvalues=np.array([[0.0, 1.0, 1.0]], dtype=np.float32),
+                scales_m=np.array([[0.01, 0.01, 0.0015]], dtype=np.float32),
+                quaternions_wxyz=np.array(
+                    [[1.0, 0.0, 0.0, 0.0]], dtype=np.float32
+                ),
+            )
+            loaded = load_precomputed_surfel_geometry(path, expected_count=1)
+            np.testing.assert_allclose(loaded[2], [[0.01, 0.01, 0.0015]])
+
     def test_sparse_scale_tail_is_clamped_without_changing_small_axes(self) -> None:
         scales = np.array(
             [[0.01, 0.02, 0.005], [1.4, 0.04, 0.02]], dtype=np.float32

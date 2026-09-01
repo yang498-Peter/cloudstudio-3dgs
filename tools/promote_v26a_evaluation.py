@@ -150,7 +150,42 @@ def main() -> int:
             "pixels; this does not constrain sky or pixels without LiDAR"
         ),
     )
+    parser.add_argument(
+        "--mesh-depth-schedule-profile",
+        choices=("vendor_after_5v", "cloudstudio_always_0p5"),
+        default=None,
+        help=(
+            "override only mesh-depth timing; the CloudStudio profile uses "
+            "the signed cross-view-filtered mesh at weight 0.5 from step 1 "
+            "when DA2 is disabled"
+        ),
+    )
+    parser.add_argument(
+        "--vendor-surface-birth-guard",
+        action="store_true",
+        help=(
+            "CloudStudio hybrid: retain vendor-order projected-gradient "
+            "selection but reject unsupported parents and place newborns on "
+            "the signed LiDAR local tangent surface"
+        ),
+    )
+    parser.add_argument(
+        "--vendor-surface-birth-guard-positions-only",
+        action="store_true",
+        help=(
+            "project supported newborn positions to the LiDAR tangent surface "
+            "without replacing their learned scale or rotation"
+        ),
+    )
     args = parser.parse_args()
+    if (
+        args.vendor_surface_birth_guard
+        and args.vendor_surface_birth_guard_positions_only
+    ):
+        parser.error(
+            "the full-pose and positions-only surface birth guards are "
+            "mutually exclusive"
+        )
 
     boundary_config = _read(args.boundary_config)
     checkpoint = torch.load(
@@ -213,6 +248,21 @@ def main() -> int:
             "calibrated_uniform_0p04": 0.04,
             "calibrated_geometry_only_0p00": 0.0,
         }.get(configured_cull_profile)
+        capacity_profile = boundary_config.get("default_strategy", {}).get(
+            "vendor_capacity_cull_profile", "disabled"
+        )
+        relaxed_capacity_event = bool(
+            capacity_profile
+            in {"exact_relaxed_at_cap", "cloudstudio_relaxed_near_cap_0p99"}
+            and cull_reasons.get("capacity_limited") is True
+            and cull_reasons.get("relaxed_capacity_cull") is True
+        )
+        if relaxed_capacity_event:
+            expected_boundary_cull = 0.25 * float(
+                boundary_config.get("default_strategy", {}).get(
+                    "prune_opa_late", 0.05
+                )
+            )
         checks.update(
             {
                 "vendor_gradient_remap_preserved": lifecycle.get(
@@ -222,9 +272,13 @@ def main() -> int:
                 "vendor_cull_profile_matches_boundary": (
                     expected_boundary_cull is not None
                     and float(
-                    lifecycle.get("cull_opacity_threshold", -1.0)
+                        lifecycle.get("cull_opacity_threshold", -1.0)
                     )
                     == expected_boundary_cull
+                ),
+                "vendor_capacity_branch_matches_config": (
+                    capacity_profile == "disabled"
+                    or relaxed_capacity_event
                 ),
                 "retains_at_least_80pct_for_bounded_review": (
                     final_count >= int(0.8 * initial_count)
@@ -482,6 +536,61 @@ def main() -> int:
                 "lidar_alpha_target": lidar_alpha_target,
             }
         )
+    if args.mesh_depth_schedule_profile is not None:
+        if args.mesh_depth_schedule_profile == "vendor_after_5v":
+            evaluation_config["competitor_loss_schedule_enabled"] = True
+        else:
+            if float(evaluation_config.get("da2_depth_weight", 0.0)) != 0.0:
+                raise ValueError(
+                    "always-on mesh depth is approved only for the DA2-off arm"
+                )
+            if not evaluation_config.get("mesh_geometry_manifest"):
+                raise ValueError(
+                    "always-on mesh depth requires a signed mesh sidecar"
+                )
+            evaluation_config.update(
+                {
+                    "competitor_loss_schedule_enabled": False,
+                    "mesh_depth_weight": 0.5,
+                    "mesh_normal_weight": 0.05,
+                }
+            )
+    if (
+        args.vendor_surface_birth_guard
+        or args.vendor_surface_birth_guard_positions_only
+    ):
+        if not vendor_pre_optimizer:
+            raise ValueError(
+                "vendor surface birth guard requires a vendor-order boundary"
+            )
+        if evaluation_config.get("default_strategy", {}).get(
+            "vendor_capacity_cull_profile"
+        ) != "cloudstudio_relaxed_near_cap_0p99":
+            raise ValueError(
+                "vendor surface birth guard requires near-cap maintenance"
+            )
+        if evaluation_config.get("default_strategy", {}).get(
+            "detail_split_policy"
+        ) != "lidar_surface_screen_detail":
+            raise ValueError(
+                "vendor surface birth guard requires screen-detail Split"
+            )
+        evaluation_config["tangent_proposal"] = {
+            "enabled": True,
+            "mode": "tangent",
+            "planarity_gate": 0.6,
+            "support_gate": 0.1,
+            "support_tangent_factor": 3.0,
+            "sigma_perp_factor": 1.0,
+            "tangent_sigma_factor": 0.5,
+            "normal_offset_factor": 0.1,
+            "init_shortest_axis": not (
+                args.vendor_surface_birth_guard_positions_only
+            ),
+            "thickness_factor": 0.5,
+            "min_thickness_m": 0.001,
+            "reject_unsupported_births": True,
+        }
     if args.controlled_review_stop is None:
         evaluation_config.pop("controlled_stop_after_steps", None)
         continuation_stage = "evaluation"

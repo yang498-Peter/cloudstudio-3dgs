@@ -19,6 +19,27 @@ def masked_rgb_l1(prediction: Any, target: Any, mask: Any) -> Any:
     return (prediction - target).abs()[mask].mean()
 
 
+def masked_rgb_psnr_db(
+    prediction: Any,
+    target: Any,
+    mask: Any,
+    *,
+    data_range: float = 1.0,
+) -> Any:
+    """Return mask-aware RGB PSNR in dB using evaluation-compatible clipping."""
+
+    _validate_masked_pair(prediction, target, mask, "RGB PSNR")
+    if data_range <= 0.0:
+        raise ValueError("RGB PSNR data_range must be positive")
+    import torch
+
+    clipped = prediction.clamp(0.0, data_range)
+    mse = (clipped - target).square()[mask].mean()
+    mse = mse.clamp_min(torch.finfo(mse.dtype).tiny)
+    scale = mse.new_tensor(float(data_range * data_range))
+    return 10.0 * torch.log10(scale / mse)
+
+
 def masked_rgb_gradient_l1(prediction: Any, target: Any, mask: Any) -> Any:
     """Match horizontal and vertical RGB finite differences inside the mask."""
 

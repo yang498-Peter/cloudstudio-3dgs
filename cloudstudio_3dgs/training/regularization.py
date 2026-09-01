@@ -203,7 +203,11 @@ def clip_oversized_gaussians(
     """
     config.validate()
     torch = __import__("torch")
-    report = {"clipped_count": 0, "world_clamped_count": 0}
+    report = {
+        "clipped_count": 0,
+        "world_clamped_count": 0,
+        "world_shrink_multiplier": 0.8,
+    }
     if not config.enabled:
         return report
     with torch.no_grad():
@@ -232,7 +236,12 @@ def clip_oversized_gaussians(
             report["clipped_count"] = count
         if config.max_world_size_m is not None:
             bound = math.log(config.max_world_size_m)
-            over = params["scales"] > bound
-            report["world_clamped_count"] = int(over.any(dim=1).sum())
-            params["scales"].clamp_(max=bound)
+            over = params["scales"].max(dim=1).values > bound
+            report["world_clamped_count"] = int(over.sum())
+            if bool(over.any()):
+                # Recovered MipMap ShrinkBigScaleGS semantics: shrink all three
+                # axes together by 0.8 once per optimizer step. A hard per-axis
+                # clamp created an artificial pile-up exactly at 0.2 m and
+                # changed anisotropy; progressive shrink preserves the ellipsoid.
+                params["scales"][over] += math.log(0.8)
     return report
