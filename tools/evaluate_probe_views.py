@@ -37,6 +37,15 @@ def main() -> int:
         help="JSON carrying the rigid transform that brings the PLY into our frame",
     )
     parser.add_argument("--views", type=int, default=48)
+    parser.add_argument(
+        "--tile-views",
+        action="store_true",
+        help="score on the selected Tile's own cropped training views instead "
+        "of the held-out faces; a single-Tile checkpoint rendered on the full "
+        "scene shows background wherever a neighbouring Tile owns the pixels, "
+        "so the held-out battery cannot compare Tile-level arms to each other "
+        "or to a whole-scene delivery",
+    )
     parser.add_argument("--output", type=Path)
     args = parser.parse_args()
     if (args.checkpoint is None) == (args.reference_ply is None):
@@ -53,28 +62,64 @@ def main() -> int:
     backend, torch_mod = _load_backend(raw)
     device = raw.get("device", "cuda:0")
 
-    dataset = FaceCacheDataset(
-        Path(raw["face_cache_manifest"].replace("face4", "face4_val")),
-        Path(raw["face_cache_root"].replace("face4", "face4_val")),
-        verify_artifacts=False,
-        dataset_manifest_path=Path(raw["dataset_manifest"]),
-        renderer_mask_manifest_path=Path(
-            raw["renderer_mask_manifest"].replace("_train", "_val")
-        ),
-        face_lidar_geometry_manifest_path=Path(
-            raw["face_lidar_geometry_manifest"].replace("_train", "_val")
-        ),
-        face_lidar_geometry_root=Path(
-            raw["face_lidar_geometry_root"].replace("_train", "_val")
-        ),
-    )
-    backgrounds = None
-    if raw.get("background_image_manifest"):
-        backgrounds = ViewBackgroundLibrary(
-            Path(raw["background_image_manifest"].replace("_train", "_val")),
-            Path(raw["background_image_root"].replace("_train", "_val")),
-            device=device,
+    if args.tile_views:
+        if not raw.get("tile_inputs_manifest"):
+            parser.error("--tile-views needs a config bound to a Tile inputs manifest")
+        tile_inputs = json.loads(
+            Path(raw["tile_inputs_manifest"]).read_text(encoding="utf-8")
         )
+        selected = [
+            tile
+            for tile in tile_inputs["tiles"]
+            if int(tile["tile_id"]) == int(raw.get("mipmap_tile_id", 0))
+        ]
+        if len(selected) != 1:
+            parser.error("Tile inputs do not contain a unique selected Tile")
+        # Training faces, cropped exactly as the trainer crops them; the
+        # held-out split has no Tile crops, so a Tile-level score is by
+        # construction a training-view score and must be read as such.
+        dataset = FaceCacheDataset(
+            Path(raw["face_cache_manifest"]),
+            Path(raw["face_cache_root"]),
+            verify_artifacts=False,
+            dataset_manifest_path=Path(raw["dataset_manifest"]),
+            tile_views=selected[0]["views"],
+            renderer_mask_manifest_path=Path(raw["renderer_mask_manifest"]),
+            face_lidar_geometry_manifest_path=Path(
+                raw["face_lidar_geometry_manifest"]
+            ),
+            face_lidar_geometry_root=Path(raw["face_lidar_geometry_root"]),
+        )
+        backgrounds = None
+        if raw.get("background_image_manifest"):
+            backgrounds = ViewBackgroundLibrary(
+                Path(raw["background_image_manifest"]),
+                Path(raw["background_image_root"]),
+                device=device,
+            )
+    else:
+        dataset = FaceCacheDataset(
+            Path(raw["face_cache_manifest"].replace("face4", "face4_val")),
+            Path(raw["face_cache_root"].replace("face4", "face4_val")),
+            verify_artifacts=False,
+            dataset_manifest_path=Path(raw["dataset_manifest"]),
+            renderer_mask_manifest_path=Path(
+                raw["renderer_mask_manifest"].replace("_train", "_val")
+            ),
+            face_lidar_geometry_manifest_path=Path(
+                raw["face_lidar_geometry_manifest"].replace("_train", "_val")
+            ),
+            face_lidar_geometry_root=Path(
+                raw["face_lidar_geometry_root"].replace("_train", "_val")
+            ),
+        )
+        backgrounds = None
+        if raw.get("background_image_manifest"):
+            backgrounds = ViewBackgroundLibrary(
+                Path(raw["background_image_manifest"].replace("_train", "_val")),
+                Path(raw["background_image_root"].replace("_train", "_val")),
+                device=device,
+            )
 
     if args.reference_ply is not None:
         import numpy as _np
@@ -157,6 +202,7 @@ def main() -> int:
         "step": step,
         "gaussian_count": int(len(params["means"])),
         "views": len(picks),
+        "view_set": "tile_training_crops" if args.tile_views else "held_out_faces",
         "psnr_mean": float(np.mean(psnrs)),
         "psnr_p10": float(np.percentile(psnrs, 10)),
         "alpha_mean": float(np.mean(alpha_means)),
