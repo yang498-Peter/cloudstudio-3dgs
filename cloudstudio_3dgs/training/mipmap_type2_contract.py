@@ -241,7 +241,14 @@ def build_high_type2_parameter_spec(
                 "start_step": 500,
                 "interval_steps": 100,
                 "gradient_threshold": 0.00015,
-                "growth_min_opacity": 0.15,
+                # growth_min_opacity, parent_surface_gate, newborn_position and
+                # unsupported_birth_policy are REMOVED. A later pass over the
+                # same evidence found the opacity>0.15 birth gate is computed
+                # and never consumed, and the parent/newborn gates were never
+                # active for this preset; enforcing them barred 21% of the
+                # population from being born. A signed contract that still
+                # asserts a retracted reading launders it back into evidence,
+                # which is worse than having no contract at all.
                 "clone_max_linear_scale_m": 0.2,
                 "split_min_linear_scale_m": 0.2,
                 "split_children": 2,
@@ -250,11 +257,15 @@ def build_high_type2_parameter_spec(
                 "cull_opacity_second_half": 0.05,
                 "cull_max_linear_scale_m": 0.2,
                 "cull_max_screen_radius": 0.15,
-                "opacity_reset_step_period": 300,
+                # NOT closed from the source evidence. What is recorded is a
+                # reset parameter of 30 against a 100-step refine interval,
+                # which reads as ~3000 steps rather than 300, and the
+                # lowest-level audit leaves the interval explicitly unresolved.
+                # Every measured population collapse lands at reset+100, so
+                # this cadence is a prime suspect and must not carry an "exact"
+                # label until the 300-vs-3000 comparison settles it.
+                "opacity_reset_step_period": "UNRESOLVED_300_OR_3000",
                 "opacity_reset_probability_cap": 0.2,
-                "parent_surface_gate": "planarity_and_support_required",
-                "newborn_position": "lidar_local_tangent_surface",
-                "unsupported_birth_policy": "reject_before_growth",
             },
             "deferred_optional_experiments": {
                 "da2_low_weight_ab": "ONLY_IF_LIDAR_BASELINE_QUALITY_IS_INSUFFICIENT",

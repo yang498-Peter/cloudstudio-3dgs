@@ -1273,7 +1273,10 @@ def advance_adaptive_growth_gate(
         raise ValueError("adaptive growth vendor opacity reset profile is invalid")
     required_strategy = {
         "exact_mipmap_lifecycle": True,
-        "growth_min_opacity": 0.15,
+        # growth_min_opacity is deliberately NOT required here. The opacity>0.15
+        # birth gate is computed and never consumed, so demanding it does not
+        # enforce parity - it mandates a defect that barred 21% of the
+        # population from being born, and puts a signature on it.
         "split_scale_m": 0.2,
         "prune_scale_m": 0.2,
         "prune_opa": cull_thresholds[0],
