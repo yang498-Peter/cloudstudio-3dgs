@@ -152,7 +152,13 @@ def main() -> int:
     stride = max(1, len(dataset) // args.views)
     picks = list(range(0, len(dataset), stride))[: args.views]
 
+    # Full-mask numbers include sky and, on downward faces, a plain backdrop;
+    # the foreground numbers restrict to a 15 px neighbourhood of LiDAR
+    # returns so the two models are compared on surfaces both can represent.
+    fg_radius = 15
     psnrs, alpha_means, alpha_p05s, range_maes = [], [], [], []
+    fg_psnrs, fg_alpha_all = [], []
+    per_face: dict[str, list[float]] = {}
     for index in picks:
         sample = dataset[index]
         target = (
@@ -177,11 +183,33 @@ def main() -> int:
                 with_range=sample.depth_range_m is not None,
                 background_rgb=background,
             )
-            mse = ((rendered - target) ** 2).mean(dim=-1)[mask].mean()
-            psnrs.append(float(-10.0 * torch.log10(mse.clamp_min(1e-10))))
-            foreground_alpha = alpha[0][mask] if alpha.ndim == 3 else alpha[mask]
+            sq = ((rendered - target) ** 2).mean(dim=-1)
+            mse = sq[mask].mean()
+            psnr = float(-10.0 * torch.log10(mse.clamp_min(1e-10)))
+            psnrs.append(psnr)
+            alpha_map = alpha[0] if alpha.ndim == 3 else alpha
+            foreground_alpha = alpha_map[mask]
             alpha_means.append(float(foreground_alpha.mean()))
             alpha_p05s.append(float(torch.quantile(foreground_alpha.float(), 0.05)))
+            face_kind = sample.image_id.split("::")[-1].rsplit("_", 1)[0]
+            per_face.setdefault(face_kind, []).append(psnr)
+            if sample.depth_mask is not None:
+                support = torch.as_tensor(
+                    np.array(sample.depth_mask), device=device
+                )
+                fg = torch.nn.functional.max_pool2d(
+                    support[None, None].float(),
+                    kernel_size=2 * fg_radius + 1,
+                    stride=1,
+                    padding=fg_radius,
+                )[0, 0] > 0.0
+                fg &= mask
+                if bool(fg.any()):
+                    fg_mse = sq[fg].mean()
+                    fg_psnrs.append(
+                        float(-10.0 * torch.log10(fg_mse.clamp_min(1e-10)))
+                    )
+                    fg_alpha_all.append(alpha_map[fg].float().flatten().cpu())
             if sample.depth_range_m is not None and rendered_range is not None:
                 depth_mask = torch.as_tensor(
                     np.array(sample.depth_mask), device=device
@@ -209,6 +237,23 @@ def main() -> int:
         "alpha_p05": float(np.mean(alpha_p05s)),
         "lidar_range_mae_m": float(np.mean(range_maes)) if range_maes else None,
         "lidar_views": len(range_maes),
+        "foreground_radius_px": fg_radius,
+        "foreground_views": len(fg_psnrs),
+        "psnr_fg_mean": float(np.mean(fg_psnrs)) if fg_psnrs else None,
+        "psnr_fg_p10": float(np.percentile(fg_psnrs, 10)) if fg_psnrs else None,
+        "alpha_fg_p05_pooled": (
+            float(torch.quantile(torch.cat(fg_alpha_all), 0.05))
+            if fg_alpha_all
+            else None
+        ),
+        "psnr_by_face": {
+            kind: {
+                "views": len(values),
+                "mean": float(np.mean(values)),
+                "min": float(np.min(values)),
+            }
+            for kind, values in sorted(per_face.items())
+        },
     }
     print(json.dumps(report, indent=1))
     if args.output:

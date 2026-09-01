@@ -247,6 +247,14 @@ class TrainerConfig:
     lidar_alpha_target: float = 0.95
     lidar_alpha_dilation_radius_px: int = 0
     da2_depth_weight: float = 0.0
+    # Monocular depth supervision: pixels whose aligned target is at or beyond
+    # this range are excluded (sky and far background saturate the relative
+    # depth and align to kilometres). None keeps every finite positive target.
+    mono_depth_max_range_m: float | None = None
+    # "linear" compares ray ranges in metres; "compressed" compares them in the
+    # bounded distance space the mesh term already uses, so a far residual
+    # cannot dominate the gradient.
+    da2_depth_space: str = "linear"
     mesh_depth_weight: float = 0.0
     mesh_normal_weight: float = 0.0
     competitor_loss_schedule_enabled: bool = False
@@ -487,6 +495,8 @@ class TrainerConfig:
                 "lidar_alpha_target",
                 "lidar_alpha_dilation_radius_px",
                 "da2_depth_weight",
+                "mono_depth_max_range_m",
+                "da2_depth_space",
                 "mesh_depth_weight",
                 "mesh_normal_weight",
                 "competitor_loss_schedule_enabled",
@@ -766,6 +776,12 @@ class TrainerConfig:
             raise ValueError("SSIM sigma/valid fraction are outside the supported range")
         if self.lidar_range_loss_mode not in {"linear_l1", "robust_log_huber"}:
             raise ValueError("lidar_range_loss_mode must be linear_l1 or robust_log_huber")
+        if self.da2_depth_space not in {"linear", "compressed"}:
+            raise ValueError("da2_depth_space must be linear or compressed")
+        if self.mono_depth_max_range_m is not None and not (
+            float(self.mono_depth_max_range_m) > 0.0
+        ):
+            raise ValueError("mono_depth_max_range_m must be positive when set")
         if self.lidar_log_range_huber_delta <= 0.0:
             raise ValueError("lidar_log_range_huber_delta must be positive")
         if not 0.0 < self.lidar_alpha_target <= 1.0:
@@ -1711,6 +1727,14 @@ class TrainerConfig:
             loss_weights["rgb_gradient_l1"] = self.rgb_gradient_weight
         if uses_lidar_alpha:
             loss_weights["lidar_alpha_coverage"] = self.lidar_alpha_weight
+        if self.da2_depth_weight > 0.0 and (
+            self.mono_depth_max_range_m is not None
+            or self.da2_depth_space != "linear"
+        ):
+            loss_weights["da2_depth_contract"] = {
+                "max_range_m": self.mono_depth_max_range_m,
+                "space": self.da2_depth_space,
+            }
         lidar_range_contract = {
             "mode": self.lidar_range_loss_mode,
             "semantics": "euclidean_ray_range_m",
@@ -2780,9 +2804,17 @@ def _render_supervision_loss(
             & (tensors["da2_range_m"] > 0.0)
         )
         if bool(da2_valid.any()):
+            if config.da2_depth_space == "compressed":
+                da2_prediction = _mipmap_compress_depth(backend.torch, rendered_range)
+                da2_target = _mipmap_compress_depth(
+                    backend.torch, tensors["da2_range_m"]
+                )
+            else:
+                da2_prediction = rendered_range
+                da2_target = tensors["da2_range_m"]
             da2_depth_loss = confidence_weighted_range_l1(
-                rendered_range,
-                tensors["da2_range_m"],
+                da2_prediction,
+                da2_target,
                 backend.torch.ones_like(tensors["da2_range_m"]),
                 da2_valid,
             )
@@ -3131,6 +3163,7 @@ def train(
             renderer_mask_manifest_path=config.renderer_mask_manifest,
             mono_depth_manifest_path=config.mono_depth_manifest,
             mono_depth_root=config.mono_depth_root,
+            mono_depth_max_range_m=config.mono_depth_max_range_m,
             face_lidar_geometry_manifest_path=(
                 config.face_lidar_geometry_manifest
             ),

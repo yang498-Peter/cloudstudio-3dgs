@@ -146,7 +146,15 @@ class FaceCacheDataset:
         face_lidar_geometry_root: Path | None = None,
         mesh_geometry_manifest_path: Path | None = None,
         mesh_geometry_root: Path | None = None,
+        mono_depth_max_range_m: float | None = None,
     ) -> None:
+        if mono_depth_max_range_m is not None and not (
+            float(mono_depth_max_range_m) > 0.0
+        ):
+            raise ValueError("mono_depth_max_range_m must be positive when set")
+        self.mono_depth_max_range_m = (
+            None if mono_depth_max_range_m is None else float(mono_depth_max_range_m)
+        )
         if (mono_depth_manifest_path is None) != (mono_depth_root is None):
             raise ValueError(
                 "mono_depth_manifest_path and mono_depth_root must be provided together"
@@ -756,6 +764,12 @@ class FaceCacheDataset:
                 & np.isfinite(mono_depth_range)
                 & (mono_depth_range > 0.0)
             )
+            if self.mono_depth_max_range_m is not None:
+                # Aligned monocular depth has no notion of sky: relative depth
+                # saturates there and the metric alignment maps it to
+                # kilometres. Without a far cutoff those pixels supervise the
+                # depth term in linear metres and dominate it.
+                mono_depth_mask &= mono_depth_range < self.mono_depth_max_range_m
 
         mesh_depth_range = None
         mesh_normal_camera = None

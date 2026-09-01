@@ -592,6 +592,78 @@ class FaceCacheRoundTripTest(unittest.TestCase):
             self.assertTrue(np.all(sample.mono_depth_mask <= sample.rgb_mask))
             self.assertEqual(sample.depth_to_range_scale.shape, (3, 4))
 
+    def test_mono_depth_far_cutoff_masks_saturated_targets(self) -> None:
+        """Aligned monocular depth saturates in the sky and aligns to
+        kilometres; a far cutoff must drop those pixels from supervision and
+        must not touch anything when it is left unset."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            manifest_path = self.copy_cache(root)
+            face_manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            da2_path = root / "da2_front.npz"
+            relative = np.full((4, 4), 10.0, np.float16)
+            relative[0, :] = 5000.0
+            with da2_path.open("wb") as stream:
+                np.savez(stream, relative_depth=relative)
+            da2_sha = hashlib.sha256(da2_path.read_bytes()).hexdigest()
+            mono = sign_mono_depth_manifest(
+                {
+                    "schema_version": 1,
+                    "kind": "face4_da2_relative_depth_cache",
+                    "split": "train",
+                    "source_face_manifest_sha256": face_manifest[
+                        "face_manifest_sha256"
+                    ],
+                    "dataset_manifest_sha256": "synthetic",
+                    "lidar_depth_manifest_sha256": "d" * 64,
+                    "complete_face_cache": True,
+                    "expected_face_count": 2,
+                    "records": [
+                        {
+                            "sample_id": f"{BASE_IMAGE_ID}__front",
+                            "path": da2_path.name,
+                            "sha256": da2_sha,
+                            "alignment": {
+                                "valid": True,
+                                "scale": 2.0,
+                                "shift": 1.0,
+                            },
+                        },
+                        {
+                            "sample_id": f"{BASE_IMAGE_ID}__tilt",
+                            "path": da2_path.name,
+                            "sha256": da2_sha,
+                            "alignment": {"valid": False},
+                        },
+                    ],
+                }
+            )
+            mono_path = root / "mono_depth_manifest.json"
+            mono_path.write_text(json.dumps(mono), encoding="utf-8")
+
+            def build(max_range):
+                return FaceCacheDataset(
+                    manifest_path,
+                    root,
+                    mono_depth_manifest_path=mono_path,
+                    mono_depth_root=root,
+                    mono_depth_max_range_m=max_range,
+                )
+
+            unset = build(None)[0]
+            cut = build(30.0)[0]
+            # Row 0 of the relative map aligns to 10,001 m, the rest to 21 m;
+            # the resize to the face grid smears the saturated row, so gate on
+            # the aligned range the dataset actually produced.
+            expected_far = unset.mono_depth_mask & (unset.mono_depth_range_m < 30.0)
+            np.testing.assert_array_equal(cut.mono_depth_mask, expected_far)
+            self.assertLess(int(cut.mono_depth_mask.sum()), int(unset.mono_depth_mask.sum()))
+            self.assertGreater(int(cut.mono_depth_mask.sum()), 0)
+            self.assertTrue(np.array_equal(unset.mono_depth_range_m, cut.mono_depth_range_m))
+            self.assertTrue(np.all(build(20.0)[0].mono_depth_mask == False))  # noqa: E712
+            with self.assertRaises(ValueError):
+                build(0.0)
+
     def test_rig_frame_surface_for_pose_refinement(self) -> None:
         """Pose refinement needs the same three members S1TrainingDataset has;
         their absence killed the first pose-refined face-cache run at step 0."""
