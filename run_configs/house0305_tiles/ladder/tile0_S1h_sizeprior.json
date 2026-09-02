@@ -150,5 +150,6 @@
  "da2_depth_space": "compressed",
  "holdout_spatial_cell_m": 2.0,
  "holdout_fraction": 0.1,
- "holdout_seed": 0
+ "holdout_seed": 0,
+ "holdout_guard_m": 1.5
 }

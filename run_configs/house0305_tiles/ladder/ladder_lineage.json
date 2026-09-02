@@ -110,25 +110,37 @@
  "R5h": {
   "base": "R5_cull05",
   "description": "R5 with the same 10% spatial hold-out",
-  "config_sha256": "845110c2f81fcfdd6a6e763e0a5523f8b7a68bf073361ea0ab4afd2f12faf37f",
+  "config_sha256": "fb17e40b93e1e7bc86d1a02e8444cd137468a719449a6ecedec0808d22a0e145",
   "repo": "C:\\Peter\\cloudstudio-3dgs-work"
  },
  "C2h": {
   "base": "C2_da2",
   "description": "C2 with a 10% spatial hold-out (2 m cells, seed 0)",
-  "config_sha256": "677028985695de59908d2333486553b4b102485100f9ae6bad2ff1e144ff9da0",
+  "config_sha256": "9b785b18d4f94cfafcad529ae7ee0d1b149871d7ff56accc1a1e92afa430a27d",
   "repo": "C:\\Peter\\cloudstudio-3dgs-work"
  },
  "T2h_split05": {
   "base": "C2h",
   "description": "C2h + detail split gate 0.005 m",
-  "config_sha256": "561f395563f50a2917d07898be9ea1bc201f65d8634939b839a1e766d1250d8f",
+  "config_sha256": "834b20148ebb68c32224ea01c20818af5db31470bd6b543fc94c39e8f042c590",
   "repo": "C:\\Peter\\cloudstudio-3dgs-work"
  },
  "S1h_sizeprior": {
   "base": "C2h",
   "description": "C2h + size hinge at 2x the median initial size",
-  "config_sha256": "182f938c6b6ede0deca642feb2e7524bf8576ff4fb82ea098d9594eca700d125",
+  "config_sha256": "f43f83228335126ea0f6da739db5420c2c1639ccf64affd5d30dfd3762065fd7",
+  "repo": "C:\\Peter\\cloudstudio-3dgs-work"
+ },
+ "C5_norange": {
+  "base": "C2_da2",
+  "description": "C2 without the sparse LiDAR range term (moving objects such as doors are pulled to scan-time depth)",
+  "config_sha256": "4ab6e17b6255543956f389a4fb68215a79e46db9456122880fa21409e0b4ae00",
+  "repo": "C:\\Peter\\cloudstudio-3dgs-work"
+ },
+ "C5h_norange": {
+  "base": "C2h",
+  "description": "C2h without the sparse LiDAR range term",
+  "config_sha256": "2afa02c027ed585a750505fe1c2e288efdc1a4546f2e0e5acb5c91e6ed30ff11",
   "repo": "C:\\Peter\\cloudstudio-3dgs-work"
  }
 }

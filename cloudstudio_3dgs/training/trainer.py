@@ -267,6 +267,7 @@ class TrainerConfig:
     holdout_spatial_cell_m: float | None = None
     holdout_fraction: float = 0.1
     holdout_seed: int = 0
+    holdout_guard_m: float = 0.0
     tile_ownership_masking: bool = False
     tile_ownership_margin_m: float = 0.5
     tile_ownership_dilation_px: int = 15
@@ -515,6 +516,7 @@ class TrainerConfig:
                 "holdout_spatial_cell_m",
                 "holdout_fraction",
                 "holdout_seed",
+                "holdout_guard_m",
                 "tile_ownership_masking",
                 "tile_ownership_margin_m",
                 "tile_ownership_dilation_px",
@@ -806,6 +808,8 @@ class TrainerConfig:
                 raise ValueError("holdout_spatial_cell_m must be positive")
             if not 0.0 < float(self.holdout_fraction) < 1.0:
                 raise ValueError("holdout_fraction must be within (0, 1)")
+            if float(self.holdout_guard_m) < 0.0:
+                raise ValueError("holdout_guard_m must be non-negative")
         if self.tile_ownership_masking:
             if self.tile_inputs_manifest is None or self.face_cache_manifest is None:
                 raise ValueError(
@@ -1786,6 +1790,7 @@ class TrainerConfig:
                 "cell_m": float(self.holdout_spatial_cell_m),
                 "fraction": float(self.holdout_fraction),
                 "seed": int(self.holdout_seed),
+                "guard_m": float(self.holdout_guard_m),
             }
         if self.tile_ownership_masking:
             loss_weights["tile_ownership_masking"] = {
@@ -3224,14 +3229,30 @@ def train(
                 cell_m=float(config.holdout_spatial_cell_m),
                 fraction=float(config.holdout_fraction),
                 seed=int(config.holdout_seed),
+                guard_m=float(config.holdout_guard_m),
             )
-            held = set(holdout["held_out_sample_ids"])
+            held = set(holdout["held_out_sample_ids"]) | set(holdout["guard_sample_ids"])
             holdout_view_count = len(held)
             tile_views = [view for view in tile_views if str(view["sample_id"]) not in held]
+            # Exposure accounting: the signed step budget keeps the full Tile
+            # view count as its epoch basis, so each remaining training view
+            # is seen more often than in the un-held-out run.
+            holdout["exposure"] = {
+                "original_tile_view_count": holdout["total_view_count"],
+                "held_out_view_count": len(holdout["held_out_sample_ids"]),
+                "guard_view_count": len(holdout["guard_sample_ids"]),
+                "actual_train_view_count": len(tile_views),
+                "configured_steps": int(config.max_steps),
+                "original_view_equivalent_epochs": config.max_steps / max(1, holdout["total_view_count"]),
+                "effective_training_view_epochs": config.max_steps / max(1, len(tile_views)),
+            }
             _atomic_json(output_dir / "holdout_views.json", holdout)
+            near = holdout.get("nearest_training_camera_m") or {}
             print(
-                f"spatial hold-out: {holdout_view_count} of {holdout['total_view_count']} "
-                f"Tile views in {holdout['held_out_cell_count']} cells withheld",
+                f"spatial hold-out: {len(holdout['held_out_sample_ids'])} views withheld, "
+                f"{len(holdout['guard_sample_ids'])} guard views, "
+                f"{len(tile_views)} training views; nearest training camera "
+                f"p05 {near.get('p05')} p50 {near.get('p50')} m",
                 flush=True,
             )
         if config.tile_ownership_masking:
