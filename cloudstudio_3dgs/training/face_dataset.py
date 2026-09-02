@@ -954,10 +954,15 @@ class FaceCacheDataset:
                 self.tile_ownership_margin_m,
                 self.tile_ownership_dilation_px,
             )
-            rgb_mask = rgb_mask & ~foreign_region
+            masked_rgb = rgb_mask & ~foreign_region
+            if bool(masked_rgb.any()):
+                rgb_mask = masked_rgb
+                if mono_depth_mask is not None:
+                    mono_depth_mask = mono_depth_mask & ~foreign_region
+            # A crop whose every pixel sits near a foreign return keeps its
+            # photometric mask (an empty mask is a hard error downstream);
+            # the foreign returns still leave the range supervision.
             depth_mask = owned
-            if mono_depth_mask is not None:
-                mono_depth_mask = mono_depth_mask & ~foreign_region
         mesh_depth_mask = None
         if mesh_depth_range is not None:
             assert mesh_depth_valid is not None and mesh_confidence is not None

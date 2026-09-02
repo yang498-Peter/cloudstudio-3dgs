@@ -755,6 +755,13 @@ class TileOwnershipMaskTests(unittest.TestCase):
         self.assertTrue(foreign_region[0, 8] and foreign_region[1, 7])
         self.assertFalse(foreign_region[4, 4] and foreign_region[3, 3])
         self.assertEqual(int(foreign_region.sum()), 4)
+        # A crop made entirely of foreign returns must not lose its RGB mask.
+        all_foreign_box = np.array([[-10.0, -10.0, 20.0], [10.0, 10.0, 30.0]])
+        owned_none, region_all = tile_ownership_masks(
+            depth_range, depth_mask, K, c2w, all_foreign_box, margin_m=0.0, dilation_px=20
+        )
+        self.assertEqual(int(owned_none.sum()), 0)
+        self.assertTrue(region_all.all())
         # A margin that swallows the foreign return makes everything owned.
         owned_all, region_none = tile_ownership_masks(
             depth_range, depth_mask, K, c2w, box, margin_m=5.0, dilation_px=1
