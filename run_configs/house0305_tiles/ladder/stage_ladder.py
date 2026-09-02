@@ -143,6 +143,25 @@ ARMS = {
                        _set("initialization_subsample_stride", 4), WORK),
     "P1_init2_r300": ("P0_exact300", "parity profile, initialization thinned to 1/2, reset 300",
                       _set("initialization_subsample_stride", 2), WORK),
+    # Surface-anchoring hypothesis for the reset-300 collapse: does an explicit
+    # surface anchor (our alpha floor, or the sparse range prior) let the
+    # population survive the vendor cadence?
+    "P2_floor_r300": ("P0_exact300", "parity profile + LiDAR alpha floor (0.5, 0.95, 6 px), reset 300",
+                      _many(_set("lidar_alpha_weight", 0.5), _set("lidar_alpha_dilation_radius_px", 6),
+                            _set("surface_alpha_floor_profile", True)), WORK),
+    "P2_range_r300": ("P0_exact300", "parity profile + sparse LiDAR range 0.05 robust, reset 300",
+                      _set("lidar_range_weight", 0.05), WORK),
+    # Parity target alignment: mesh depth/normal terms from the LiDAR surface
+    # mesh (per-Tile half-resolution raster) and DA2 aligned to that mesh.
+    "P3_mesh_r300": ("P0_exact300", "parity profile + mesh depth 0.25 / normal 0.05 + mesh-aligned DA2 0.5, reset 300",
+                     _many(_set("mesh_geometry_manifest", "C:/Peter/3dgs-datasets/house0305_sop_v8/mesh_geometry_tile0_r2/mesh_geometry_manifest.json"),
+                           _set("mesh_geometry_root", "C:/Peter/3dgs-datasets/house0305_sop_v8/mesh_geometry_tile0_r2"),
+                           _set("mesh_depth_weight", 0.25), _set("mesh_normal_weight", 0.05),
+                           _set("mono_depth_manifest", "C:/Peter/3dgs-datasets/house0305_sop_v8/da2_tile0_meshaligned/mono_depth_manifest.json"),
+                           _set("mono_depth_root", "C:/Peter/3dgs-datasets/house0305_sop_v8/da2_tile0_meshaligned")), WORK),
+    "P3_mesh_r3000": ("P3_mesh_r300", "same with the deferred 3000-step reset",
+                      _many(_set("default_strategy.vendor_opacity_reset_profile", "deferred_every3000_compatibility"),
+                            _set("default_strategy.reset_every", 3000)), WORK),
     "C4_all": ("C3_vis", "C3 + Tile ownership masking + monocular far cutoff (supervision-correctness bundle)",
                _many(_set("tile_ownership_masking", True), _set("tile_ownership_margin_m", 0.5),
                      _set("tile_ownership_dilation_px", 15),
