@@ -90,9 +90,15 @@ ARMS = {
     # Spatial hold-out arms: 10% of the Tile's views (whole 2 m camera cells)
     # withheld from training; scored on those views with --holdout-from.
     "C2h": ("C2_da2", "C2 with a 10% spatial hold-out (2 m cells, seed 0)",
-            _many(_set("holdout_spatial_cell_m", 2.0), _set("holdout_fraction", 0.1), _set("holdout_seed", 0)), WORK),
+            _many(_set("holdout_spatial_cell_m", 2.0), _set("holdout_fraction", 0.1), _set("holdout_seed", 0),
+                  _set("holdout_guard_m", 1.5)), WORK),
     "R5h": ("R5_cull05", "R5 with the same 10% spatial hold-out",
-            _many(_set("holdout_spatial_cell_m", 2.0), _set("holdout_fraction", 0.1), _set("holdout_seed", 0)), WORK),
+            _many(_set("holdout_spatial_cell_m", 2.0), _set("holdout_fraction", 0.1), _set("holdout_seed", 0),
+                  _set("holdout_guard_m", 1.5)), WORK),
+    "C5_norange": ("C2_da2", "C2 without the sparse LiDAR range term (moving objects such as doors are pulled to scan-time depth)",
+                   _set("lidar_range_weight", 0.0), WORK),
+    "C5h_norange": ("C2h", "C2h without the sparse LiDAR range term",
+                    _set("lidar_range_weight", 0.0), WORK),
     "T2h_split05": ("C2h", "C2h + detail split gate 0.005 m",
                     _set("default_strategy.detail_split_scale_m", 0.005), WORK),
     "S1h_sizeprior": ("C2h", "C2h + size hinge at 2x the median initial size",

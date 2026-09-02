@@ -1,6 +1,6 @@
 {
- "run_id": "house0305-t0-T2h_split05",
- "output_dir": "C:\\Peter\\3dgs-runs\\house0305_sop\\tile0_T2h_split05",
+ "run_id": "house0305-t0-C5_norange",
+ "output_dir": "C:\\Peter\\3dgs-runs\\house0305_sop\\tile0_C5_norange",
  "device": "cuda:0",
  "seed": 42,
  "trainer_preset": "custom",
@@ -56,7 +56,7 @@
  "rgb_l1_weight": 0.6,
  "rgb_ssim_weight": 0.4,
  "rgb_ssim_mode": "local_gaussian",
- "lidar_range_weight": 0.05,
+ "lidar_range_weight": 0.0,
  "lidar_range_loss_mode": "robust_log_huber",
  "lidar_log_range_huber_delta": 0.05,
  "da2_depth_weight": 0.15,
@@ -136,7 +136,7 @@
   "opacity_cull_policy": "immediate",
   "vendor_cull_warmup_profile": "compatibility_uniform_0p05",
   "vendor_opacity_reset_profile": "deferred_every3000_compatibility",
-  "detail_split_scale_m": 0.005,
+  "detail_split_scale_m": 0.02,
   "detail_split_screen_radius": 0.0035
  },
  "surface_alpha_floor_profile": true,
@@ -146,9 +146,5 @@
  "controlled_stop_after_steps": 3500,
  "checkpoint_keep_every": 3500,
  "mono_depth_max_range_m": 30.0,
- "da2_depth_space": "compressed",
- "holdout_spatial_cell_m": 2.0,
- "holdout_fraction": 0.1,
- "holdout_seed": 0,
- "holdout_guard_m": 1.5
+ "da2_depth_space": "compressed"
 }
