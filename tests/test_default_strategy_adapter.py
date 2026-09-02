@@ -1031,6 +1031,68 @@ class DefaultStrategyAdapterTests(unittest.TestCase):
         self.assertEqual(split_count, 1)
 
 
+    def test_revised_split_opacity_stays_finite_for_a_saturated_parent(self):
+        """A parent whose sigmoid is exactly 1.0 in float32 used to give the
+        children logit(1.0) = +inf through the library's revised-opacity
+        formula; the next optimizer step then spread NaN through every
+        opacity and the run failed closed at step 2900."""
+        import torch
+
+        adapter = DefaultStrategyAdapter(
+            scene_scale=10.0,
+            refine_start_iter=500,
+            refine_stop_iter=2000,
+            refine_every=100,
+            reset_every=300,
+            grow_grad2d=0.00015,
+            prune_opa=0.1,
+            split_scale_m=0.2,
+            prune_scale_m=0.2,
+            exact_mipmap_lifecycle=True,
+            prune_opa_late=0.05,
+            prune_switch_step=1000,
+            reset_opacity_cap=0.2,
+            revised_opacity=True,
+            detail_split_policy="lidar_surface_screen_detail",
+            detail_split_scale_m=0.02,
+            detail_split_screen_radius=0.0035,
+        )
+        saturated = torch.tensor(40.0)
+        self.assertEqual(float(torch.sigmoid(saturated)), 1.0)
+        params = torch.nn.ParameterDict(
+            {
+                "means": torch.nn.Parameter(torch.zeros(3, 3)),
+                "scales": torch.nn.Parameter(
+                    torch.tensor([[0.05] * 3, [0.05] * 3, [0.01] * 3]).log()
+                ),
+                "quats": torch.nn.Parameter(
+                    torch.tensor([[1.0, 0.0, 0.0, 0.0]] * 3)
+                ),
+                "opacities": torch.nn.Parameter(
+                    torch.stack([saturated, torch.tensor(0.3).logit(), torch.tensor(0.3).logit()])
+                ),
+                "colors": torch.nn.Parameter(torch.zeros(3, 3)),
+            }
+        )
+        optimizers = {
+            name: torch.optim.Adam([parameter], lr=1e-3)
+            for name, parameter in params.items()
+        }
+        state = {
+            "grad2d": torch.full((3,), 0.001),
+            "count": torch.ones(3),
+            "radii": torch.tensor([0.01, 0.002, 0.01]),
+            "scene_scale": 10.0,
+        }
+        clone_count, split_count = adapter._grow_mipmap(params, optimizers, state)
+        self.assertEqual(split_count, 1)
+        opacities = params["opacities"].detach()
+        self.assertTrue(bool(torch.isfinite(opacities).all()))
+        children = torch.sigmoid(opacities[-2:])
+        self.assertTrue(bool((children < 1.0).all()))
+        self.assertTrue(bool((children > 0.999).all()))
+
+
 class BackendWiringTests(unittest.TestCase):
     def test_backend_flags_whether_the_pre_backward_hook_is_required(self):
         from cloudstudio_3dgs.training.backend import GsplatBackend
