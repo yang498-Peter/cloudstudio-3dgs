@@ -18,10 +18,23 @@ class DepthProjectionConfig:
     max_theta_deg: float = 95.0
     confidence_support_points: int = 3
     confidence_subpixel_sigma_px: float = 0.75
+    # Hidden-point rejection. A nearest-range z-buffer per exact pixel keeps
+    # whatever point happens to land on that pixel, and on a sparse front
+    # surface most pixels are reached first by a point from behind it (a
+    # wall, a trunk, foliage). With a cell size > 0, every point is compared
+    # against the nearest range in its 3x3 cell neighbourhood and dropped when
+    # it lies farther than (1 + tolerance) x that range + margin. 0 disables.
+    visibility_cell_px: int = 0
+    visibility_tolerance: float = 0.2
+    visibility_margin_m: float = 0.1
 
     def validate(self) -> None:
         if self.min_range_m < 0.0 or self.max_range_m <= self.min_range_m:
             raise ValueError("depth range bounds are invalid")
+        if int(self.visibility_cell_px) < 0:
+            raise ValueError("visibility_cell_px must be non-negative")
+        if self.visibility_tolerance < 0.0 or self.visibility_margin_m < 0.0:
+            raise ValueError("visibility tolerance and margin must be non-negative")
         if not 0.0 < self.max_theta_deg <= 180.0:
             raise ValueError("max_theta_deg must be in (0, 180]")
         if self.confidence_support_points <= 0:
@@ -30,13 +43,18 @@ class DepthProjectionConfig:
             raise ValueError("confidence_subpixel_sigma_px must be positive")
 
     def to_dict(self) -> dict[str, float | int]:
-        return {
+        payload: dict[str, float | int] = {
             "min_range_m": self.min_range_m,
             "max_range_m": self.max_range_m,
             "max_theta_deg": self.max_theta_deg,
             "confidence_support_points": self.confidence_support_points,
             "confidence_subpixel_sigma_px": self.confidence_subpixel_sigma_px,
         }
+        if int(self.visibility_cell_px) > 0:
+            payload["visibility_cell_px"] = int(self.visibility_cell_px)
+            payload["visibility_tolerance"] = self.visibility_tolerance
+            payload["visibility_margin_m"] = self.visibility_margin_m
+        return payload
 
 
 @dataclass(frozen=True)
@@ -83,6 +101,42 @@ class SparseDepthMap:
         confidence.flat[self.pixel_index] = self.confidence
         valid.flat[self.pixel_index] = True
         return depth, confidence, valid
+
+
+def visible_point_mask(
+    pixel_xy: np.ndarray,
+    ranges: np.ndarray,
+    width: int,
+    height: int,
+    config: DepthProjectionConfig,
+) -> np.ndarray:
+    """Boolean keep-mask for the hidden-point test; all True when disabled."""
+    cell = int(config.visibility_cell_px)
+    keep = np.ones(len(ranges), dtype=bool)
+    if cell <= 0 or not len(ranges):
+        return keep
+    cells_w = (int(width) + cell - 1) // cell
+    cells_h = (int(height) + cell - 1) // cell
+    cx = np.asarray(pixel_xy[:, 0], dtype=np.int64) // cell
+    cy = np.asarray(pixel_xy[:, 1], dtype=np.int64) // cell
+    nearest = np.full((cells_h, cells_w), np.inf, dtype=np.float64)
+    np.minimum.at(nearest, (cy, cx), np.asarray(ranges, dtype=np.float64))
+    # 3x3 min filter so a point near a cell border is judged against the
+    # front surface on either side of it, not only its own cell.
+    padded = np.pad(nearest, 1, mode="constant", constant_values=np.inf)
+    neighbourhood = nearest.copy()
+    for dy in (0, 1, 2):
+        for dx in (0, 1, 2):
+            np.minimum(
+                neighbourhood,
+                padded[dy : dy + cells_h, dx : dx + cells_w],
+                out=neighbourhood,
+            )
+    limit = (1.0 + float(config.visibility_tolerance)) * neighbourhood[cy, cx] + float(
+        config.visibility_margin_m
+    )
+    keep &= np.asarray(ranges, dtype=np.float64) <= limit
+    return keep
 
 
 def project_camera_points_to_face(
@@ -159,6 +213,17 @@ def project_camera_points_to_face(
             np.empty(0, dtype=np.int32),
         )
 
+    visible = visible_point_mask(rounded[selected], ranges[selected], width, height, config)
+    selected = selected[visible]
+    if not len(selected):
+        return SparseDepthMap(
+            (height, width),
+            np.empty(0, dtype=np.int32),
+            np.empty(0, dtype=np.float32),
+            np.empty(0, dtype=np.float32),
+            np.empty(0, dtype=np.int64),
+            np.empty(0, dtype=np.int32),
+        )
     selected_pixels = pixels[selected]
     selected_xy = rounded[selected]
     pixel_index = selected_xy[:, 1] * width + selected_xy[:, 0]
@@ -284,6 +349,20 @@ def project_lidar_depth(
             np.empty(0, dtype=np.int32),
         )
 
+    local_xy = rounded[source_index] - np.array([[window.x, window.y]], dtype=np.int64)
+    visible = visible_point_mask(
+        local_xy, ranges[source_index], window.width, window.height, config
+    )
+    source_index = source_index[visible]
+    if not len(source_index):
+        return SparseDepthMap(
+            output_shape,
+            np.empty(0, dtype=np.int32),
+            np.empty(0, dtype=np.float32),
+            np.empty(0, dtype=np.float32),
+            np.empty(0, dtype=np.int64),
+            np.empty(0, dtype=np.int32),
+        )
     selected_uv = uv[source_index]
     selected_xy = rounded[source_index]
     local_x = selected_xy[:, 0] - window.x

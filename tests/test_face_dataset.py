@@ -34,6 +34,8 @@ from cloudstudio_3dgs.training.face_dataset import (
     FACE_MANIFEST_NAME,
     FaceCacheDataset,
     sign_face_manifest,
+    _dilate_bool,
+    tile_ownership_masks,
 )
 from cloudstudio_3dgs.data.depth_cache import load_sparse_depth
 from cloudstudio_3dgs.data.mono_depth import sign_mono_depth_manifest
@@ -592,6 +594,78 @@ class FaceCacheRoundTripTest(unittest.TestCase):
             self.assertTrue(np.all(sample.mono_depth_mask <= sample.rgb_mask))
             self.assertEqual(sample.depth_to_range_scale.shape, (3, 4))
 
+    def test_mono_depth_far_cutoff_masks_saturated_targets(self) -> None:
+        """Aligned monocular depth saturates in the sky and aligns to
+        kilometres; a far cutoff must drop those pixels from supervision and
+        must not touch anything when it is left unset."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            manifest_path = self.copy_cache(root)
+            face_manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            da2_path = root / "da2_front.npz"
+            relative = np.full((4, 4), 10.0, np.float16)
+            relative[0, :] = 5000.0
+            with da2_path.open("wb") as stream:
+                np.savez(stream, relative_depth=relative)
+            da2_sha = hashlib.sha256(da2_path.read_bytes()).hexdigest()
+            mono = sign_mono_depth_manifest(
+                {
+                    "schema_version": 1,
+                    "kind": "face4_da2_relative_depth_cache",
+                    "split": "train",
+                    "source_face_manifest_sha256": face_manifest[
+                        "face_manifest_sha256"
+                    ],
+                    "dataset_manifest_sha256": "synthetic",
+                    "lidar_depth_manifest_sha256": "d" * 64,
+                    "complete_face_cache": True,
+                    "expected_face_count": 2,
+                    "records": [
+                        {
+                            "sample_id": f"{BASE_IMAGE_ID}__front",
+                            "path": da2_path.name,
+                            "sha256": da2_sha,
+                            "alignment": {
+                                "valid": True,
+                                "scale": 2.0,
+                                "shift": 1.0,
+                            },
+                        },
+                        {
+                            "sample_id": f"{BASE_IMAGE_ID}__tilt",
+                            "path": da2_path.name,
+                            "sha256": da2_sha,
+                            "alignment": {"valid": False},
+                        },
+                    ],
+                }
+            )
+            mono_path = root / "mono_depth_manifest.json"
+            mono_path.write_text(json.dumps(mono), encoding="utf-8")
+
+            def build(max_range):
+                return FaceCacheDataset(
+                    manifest_path,
+                    root,
+                    mono_depth_manifest_path=mono_path,
+                    mono_depth_root=root,
+                    mono_depth_max_range_m=max_range,
+                )
+
+            unset = build(None)[0]
+            cut = build(30.0)[0]
+            # Row 0 of the relative map aligns to 10,001 m, the rest to 21 m;
+            # the resize to the face grid smears the saturated row, so gate on
+            # the aligned range the dataset actually produced.
+            expected_far = unset.mono_depth_mask & (unset.mono_depth_range_m < 30.0)
+            np.testing.assert_array_equal(cut.mono_depth_mask, expected_far)
+            self.assertLess(int(cut.mono_depth_mask.sum()), int(unset.mono_depth_mask.sum()))
+            self.assertGreater(int(cut.mono_depth_mask.sum()), 0)
+            self.assertTrue(np.array_equal(unset.mono_depth_range_m, cut.mono_depth_range_m))
+            self.assertTrue(np.all(build(20.0)[0].mono_depth_mask == False))  # noqa: E712
+            with self.assertRaises(ValueError):
+                build(0.0)
+
     def test_rig_frame_surface_for_pose_refinement(self) -> None:
         """Pose refinement needs the same three members S1TrainingDataset has;
         their absence killed the first pose-refined face-cache run at step 0."""
@@ -641,3 +715,49 @@ class FaceCacheRoundTripTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TileOwnershipMaskTests(unittest.TestCase):
+    def test_dilate_bool_matches_brute_force_without_wraparound(self) -> None:
+        rng = np.random.default_rng(3)
+        mask = rng.random((13, 17)) < 0.08
+        radius = 2
+        expected = np.zeros_like(mask)
+        for i in range(mask.shape[0]):
+            for j in range(mask.shape[1]):
+                lo_i, hi_i = max(0, i - radius), min(mask.shape[0], i + radius + 1)
+                lo_j, hi_j = max(0, j - radius), min(mask.shape[1], j + radius + 1)
+                expected[i, j] = mask[lo_i:hi_i, lo_j:hi_j].any()
+        np.testing.assert_array_equal(_dilate_bool(mask, radius), expected)
+        self.assertIs(_dilate_bool(mask, 0), mask)
+
+    def test_foreign_returns_are_removed_and_owned_neighbourhoods_protected(self) -> None:
+        # Identity pose, unit-focal camera looking down +z; the box owns z < 5.
+        height, width = 9, 9
+        K = np.array([[4.0, 0.0, 4.5], [0.0, 4.0, 4.5], [0.0, 0.0, 1.0]], np.float32)
+        c2w = np.eye(4, dtype=np.float32)
+        depth_range = np.zeros((height, width), np.float32)
+        depth_mask = np.zeros((height, width), bool)
+        # Owned return at the centre (z-depth 2 m), foreign return in the corner (z 9 m).
+        for (v, u, z) in ((4, 4, 2.0), (0, 8, 9.0)):
+            x = (u + 0.5 - 4.5) / 4.0
+            y = (v + 0.5 - 4.5) / 4.0
+            depth_range[v, u] = z * np.sqrt(1.0 + x * x + y * y)
+            depth_mask[v, u] = True
+        box = np.array([[-10.0, -10.0, 0.0], [10.0, 10.0, 5.0]])
+        owned, foreign_region = tile_ownership_masks(
+            depth_range, depth_mask, K, c2w, box, margin_m=0.0, dilation_px=1
+        )
+        self.assertTrue(owned[4, 4])
+        self.assertFalse(owned[0, 8])
+        self.assertEqual(int(owned.sum()), 1)
+        # Foreign neighbourhood is the 2x2 corner block; the owned block is untouched.
+        self.assertTrue(foreign_region[0, 8] and foreign_region[1, 7])
+        self.assertFalse(foreign_region[4, 4] and foreign_region[3, 3])
+        self.assertEqual(int(foreign_region.sum()), 4)
+        # A margin that swallows the foreign return makes everything owned.
+        owned_all, region_none = tile_ownership_masks(
+            depth_range, depth_mask, K, c2w, box, margin_m=5.0, dilation_px=1
+        )
+        self.assertEqual(int(owned_all.sum()), 2)
+        self.assertFalse(region_none.any())

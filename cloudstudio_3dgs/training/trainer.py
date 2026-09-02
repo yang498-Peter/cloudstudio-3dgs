@@ -247,6 +247,21 @@ class TrainerConfig:
     lidar_alpha_target: float = 0.95
     lidar_alpha_dilation_radius_px: int = 0
     da2_depth_weight: float = 0.0
+    # Monocular depth supervision: pixels whose aligned target is at or beyond
+    # this range are excluded (sky and far background saturate the relative
+    # depth and align to kilometres). None keeps every finite positive target.
+    mono_depth_max_range_m: float | None = None
+    # "linear" compares ray ranges in metres; "compressed" compares them in the
+    # bounded distance space the mesh term already uses, so a far residual
+    # cannot dominate the gradient.
+    da2_depth_space: str = "linear"
+    # Tile ownership masking: drop supervision on pixels whose LiDAR return
+    # lies outside the selected Tile's training box (plus margin), and the
+    # dilated neighbourhood of such returns, so a Tile is not asked to
+    # rebuild its neighbours with geometry the merge later discards.
+    tile_ownership_masking: bool = False
+    tile_ownership_margin_m: float = 0.5
+    tile_ownership_dilation_px: int = 15
     mesh_depth_weight: float = 0.0
     mesh_normal_weight: float = 0.0
     competitor_loss_schedule_enabled: bool = False
@@ -487,6 +502,11 @@ class TrainerConfig:
                 "lidar_alpha_target",
                 "lidar_alpha_dilation_radius_px",
                 "da2_depth_weight",
+                "mono_depth_max_range_m",
+                "da2_depth_space",
+                "tile_ownership_masking",
+                "tile_ownership_margin_m",
+                "tile_ownership_dilation_px",
                 "mesh_depth_weight",
                 "mesh_normal_weight",
                 "competitor_loss_schedule_enabled",
@@ -766,6 +786,24 @@ class TrainerConfig:
             raise ValueError("SSIM sigma/valid fraction are outside the supported range")
         if self.lidar_range_loss_mode not in {"linear_l1", "robust_log_huber"}:
             raise ValueError("lidar_range_loss_mode must be linear_l1 or robust_log_huber")
+        if self.da2_depth_space not in {"linear", "compressed"}:
+            raise ValueError("da2_depth_space must be linear or compressed")
+        if self.tile_ownership_masking:
+            if self.tile_inputs_manifest is None or self.face_cache_manifest is None:
+                raise ValueError(
+                    "tile_ownership_masking requires Tile inputs and a face cache"
+                )
+            if float(self.tile_ownership_margin_m) < 0.0:
+                raise ValueError("tile_ownership_margin_m must be non-negative")
+            if (
+                isinstance(self.tile_ownership_dilation_px, bool)
+                or int(self.tile_ownership_dilation_px) < 0
+            ):
+                raise ValueError("tile_ownership_dilation_px must be a non-negative integer")
+        if self.mono_depth_max_range_m is not None and not (
+            float(self.mono_depth_max_range_m) > 0.0
+        ):
+            raise ValueError("mono_depth_max_range_m must be positive when set")
         if self.lidar_log_range_huber_delta <= 0.0:
             raise ValueError("lidar_log_range_huber_delta must be positive")
         if not 0.0 < self.lidar_alpha_target <= 1.0:
@@ -1711,6 +1749,19 @@ class TrainerConfig:
             loss_weights["rgb_gradient_l1"] = self.rgb_gradient_weight
         if uses_lidar_alpha:
             loss_weights["lidar_alpha_coverage"] = self.lidar_alpha_weight
+        if self.da2_depth_weight > 0.0 and (
+            self.mono_depth_max_range_m is not None
+            or self.da2_depth_space != "linear"
+        ):
+            loss_weights["da2_depth_contract"] = {
+                "max_range_m": self.mono_depth_max_range_m,
+                "space": self.da2_depth_space,
+            }
+        if self.tile_ownership_masking:
+            loss_weights["tile_ownership_masking"] = {
+                "margin_m": float(self.tile_ownership_margin_m),
+                "dilation_px": int(self.tile_ownership_dilation_px),
+            }
         lidar_range_contract = {
             "mode": self.lidar_range_loss_mode,
             "semantics": "euclidean_ray_range_m",
@@ -2780,9 +2831,17 @@ def _render_supervision_loss(
             & (tensors["da2_range_m"] > 0.0)
         )
         if bool(da2_valid.any()):
+            if config.da2_depth_space == "compressed":
+                da2_prediction = _mipmap_compress_depth(backend.torch, rendered_range)
+                da2_target = _mipmap_compress_depth(
+                    backend.torch, tensors["da2_range_m"]
+                )
+            else:
+                da2_prediction = rendered_range
+                da2_target = tensors["da2_range_m"]
             da2_depth_loss = confidence_weighted_range_l1(
-                rendered_range,
-                tensors["da2_range_m"],
+                da2_prediction,
+                da2_target,
                 backend.torch.ones_like(tensors["da2_range_m"]),
                 da2_valid,
             )
@@ -3101,6 +3160,7 @@ def train(
     output_dir.mkdir(parents=True, exist_ok=True)
 
     tile_views = None
+    tile_ownership_box = None
     if config.tile_inputs_manifest is not None:
         tile_inputs = json.loads(
             config.tile_inputs_manifest.read_text(encoding="utf-8")
@@ -3113,6 +3173,9 @@ def train(
         if len(selected_tiles) != 1:
             raise ValueError("Tile inputs do not contain a unique selected Tile")
         tile_views = selected_tiles[0]["views"]
+        if config.tile_ownership_masking:
+            tile_ownership_box = selected_tiles[0]["training_and_export_box"]
+    tile_ownership_box = tile_ownership_box if config.tile_ownership_masking else None
 
     if config.face_cache_manifest is not None:
         # Fisheye face-split training: supervision comes from pre-warped
@@ -3131,6 +3194,10 @@ def train(
             renderer_mask_manifest_path=config.renderer_mask_manifest,
             mono_depth_manifest_path=config.mono_depth_manifest,
             mono_depth_root=config.mono_depth_root,
+            mono_depth_max_range_m=config.mono_depth_max_range_m,
+            tile_ownership_box=tile_ownership_box,
+            tile_ownership_margin_m=config.tile_ownership_margin_m,
+            tile_ownership_dilation_px=config.tile_ownership_dilation_px,
             face_lidar_geometry_manifest_path=(
                 config.face_lidar_geometry_manifest
             ),
