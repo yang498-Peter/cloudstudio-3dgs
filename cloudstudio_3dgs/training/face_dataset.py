@@ -122,45 +122,21 @@ def _sha256_file(path: Path) -> str:
 
 
 def _dilate_bool(mask: np.ndarray, radius: int) -> np.ndarray:
-    """Separable square max-filter; radius 0 returns the mask itself."""
+    """Separable square max-filter with zero padding; radius 0 returns the
+    mask itself and any radius larger than the array is safe."""
     if radius <= 0:
         return mask
-    out = mask.copy()
+    out = mask
     for axis in (0, 1):
-        acc = out.copy()
-        for shift in range(1, radius + 1):
-            acc |= np.roll(out, shift, axis=axis)
-            acc |= np.roll(out, -shift, axis=axis)
-        # np.roll wraps around; kill the wrapped band on both ends.
-        if axis == 0:
-            acc[:radius] = out[:radius] | _dilate_edge(out, radius, 0, True)
-            acc[-radius:] = out[-radius:] | _dilate_edge(out, radius, 0, False)
-        else:
-            acc[:, :radius] = out[:, :radius] | _dilate_edge(out, radius, 1, True)
-            acc[:, -radius:] = out[:, -radius:] | _dilate_edge(out, radius, 1, False)
+        pad = [(0, 0), (0, 0)]
+        pad[axis] = (radius, radius)
+        padded = np.pad(out, pad, mode="constant", constant_values=False)
+        n = out.shape[axis]
+        acc = np.zeros_like(out)
+        for shift in range(2 * radius + 1):
+            acc |= np.take(padded, range(shift, shift + n), axis=axis)
         out = acc
     return out
-
-
-def _dilate_edge(mask: np.ndarray, radius: int, axis: int, leading: bool) -> np.ndarray:
-    """Max over a window that stops at the array edge (no wrap-around)."""
-    n = mask.shape[axis]
-    if leading:
-        block = np.take(mask, range(0, min(n, 2 * radius)), axis=axis)
-    else:
-        block = np.take(mask, range(max(0, n - 2 * radius), n), axis=axis)
-    result = np.zeros(np.take(mask, range(0, radius), axis=axis).shape, dtype=bool)
-    if axis == 0:
-        for i in range(radius):
-            src = i if leading else block.shape[0] - radius + i
-            lo, hi = max(0, src - radius), min(block.shape[0], src + radius + 1)
-            result[i] = block[lo:hi].any(axis=0)
-    else:
-        for i in range(radius):
-            src = i if leading else block.shape[1] - radius + i
-            lo, hi = max(0, src - radius), min(block.shape[1], src + radius + 1)
-            result[:, i] = block[:, lo:hi].any(axis=1)
-    return result
 
 
 def tile_ownership_masks(
