@@ -1,0 +1,41 @@
+{
+ "source": "C:\\Peter\\3dgs-runs\\house0305_sop\\delivery_t2\\merged.pt",
+ "step": 7000,
+ "gaussian_count": 18443970,
+ "views": 48,
+ "view_set": "held_out_faces",
+ "pixel_scope": "full_mask",
+ "psnr_mean": 15.3242809176445,
+ "psnr_p10": 14.14815559387207,
+ "alpha_mean": 0.9624883234500885,
+ "alpha_p05": 0.8048978932201862,
+ "lidar_range_mae_m": 3.4880844653525855,
+ "lidar_views": 48,
+ "foreground_radius_px": 15,
+ "foreground_views": 48,
+ "psnr_fg_mean": 15.243155300617218,
+ "psnr_fg_p10": 14.012500095367432,
+ "alpha_fg_p05_pooled": 0.8167587518692017,
+ "psnr_by_face": {
+  "pitch_down": {
+   "views": 12,
+   "mean": 16.51504389444987,
+   "min": 14.509361267089844
+  },
+  "pitch_up": {
+   "views": 12,
+   "mean": 14.015474637349447,
+   "min": 12.713136672973633
+  },
+  "yaw_minus": {
+   "views": 12,
+   "mean": 15.613578955332438,
+   "min": 14.389991760253906
+  },
+  "yaw_plus": {
+   "views": 12,
+   "mean": 15.153026183446249,
+   "min": 14.260417938232422
+  }
+ }
+}
