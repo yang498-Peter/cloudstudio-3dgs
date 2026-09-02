@@ -68,7 +68,24 @@ def main() -> int:
     parser.add_argument("--dataset-manifest", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--report-every", type=int, default=200)
+    parser.add_argument(
+        "--tile-inputs",
+        type=Path,
+        help="Tile inputs manifest: raster only the selected Tile's views at "
+        "their training crops and record the crop, which the trainer requires",
+    )
+    parser.add_argument("--tile-id", type=int, default=0)
+    parser.add_argument(
+        "--raster-factor",
+        type=int,
+        default=1,
+        help="raster at 1/N resolution (K scaled by 1/N); the trainer expands "
+        "the arrays back to the crop with nearest-neighbour repetition. A full "
+        "resolution cache is ~16 MB per face; 2 keeps it at a quarter of that",
+    )
     args = parser.parse_args()
+    if int(args.raster_factor) < 1:
+        parser.error("--raster-factor must be >= 1")
 
     manifest_path = args.output / "mesh_geometry_manifest.json"
     if manifest_path.exists():
@@ -96,10 +113,26 @@ def main() -> int:
         flush=True,
     )
 
+    crop_by_sample = None
+    if args.tile_inputs is not None:
+        tile_inputs = json.loads(args.tile_inputs.read_text(encoding="utf-8"))
+        selected = [t for t in tile_inputs["tiles"] if int(t["tile_id"]) == int(args.tile_id)]
+        if len(selected) != 1:
+            parser.error("Tile inputs do not contain a unique selected Tile")
+        crop_by_sample = {
+            str(v["sample_id"]): {k: int(v[k]) for k in ("x", "y", "width", "height")}
+            for v in selected[0]["views"]
+        }
+    factor = int(args.raster_factor)
+
     (args.output / "depth").mkdir(parents=True, exist_ok=True)
     records: list[dict] = []
     started = time.time()
-    total = sum(len(image["faces"]) for image in face["images"])
+    total = (
+        len(crop_by_sample)
+        if crop_by_sample is not None
+        else sum(len(image["faces"]) for image in face["images"])
+    )
 
     for image in face["images"]:
         image_id = str(image["image_id"])
@@ -108,10 +141,31 @@ def main() -> int:
         for face_entry in image["faces"]:
             face_id = str(face_entry["face_id"])
             sample_id = f"{image_id}{SAMPLE_ID_SEPARATOR}{face_id}"
+            crop = None
+            if crop_by_sample is not None:
+                crop = crop_by_sample.get(sample_id)
+                if crop is None:
+                    continue
             spec = face_specs[(str(image["camera_id"]), face_id)]
             width = int(spec["width"])
             height = int(spec["height"])
             K = np.asarray(spec["K_face"], dtype=np.float64)
+            crop_x = crop_y = 0
+            if crop is not None:
+                crop_x, crop_y = crop["x"], crop["y"]
+                width, height = crop["width"], crop["height"]
+                K = K.copy()
+                K[0, 2] -= crop_x
+                K[1, 2] -= crop_y
+            face_shape = (height, width)
+            if factor > 1:
+                K = K.copy()
+                K[0, 0] /= factor
+                K[1, 1] /= factor
+                K[0, 2] /= factor
+                K[1, 2] /= factor
+                width = -(-width // factor)
+                height = -(-height // factor)
             face_to_base = np.eye(4, dtype=np.float64)
             face_to_base[:3, :3] = np.asarray(spec["R_face"], dtype=np.float64)
             w2c = np.linalg.inv(image_c2w @ face_to_base)
@@ -138,7 +192,11 @@ def main() -> int:
 
             with Image.open(args.face_root / str(face_entry["mask_path"])) as m:
                 face_mask = np.asarray(m.convert("L")) > 0
-            valid &= face_mask
+            if crop is not None:
+                face_mask = face_mask[crop_y : crop_y + face_shape[0], crop_x : crop_x + face_shape[1]]
+            if factor > 1:
+                face_mask = face_mask[::factor, ::factor]
+            valid &= face_mask[: valid.shape[0], : valid.shape[1]]
             confidence = valid.astype(np.float32)
 
             relative = f"depth/{sample_id.replace(SAMPLE_ID_SEPARATOR, '__')}.npz"
@@ -146,15 +204,19 @@ def main() -> int:
                 depth_range, normal_camera, confidence, valid, source_type=1
             )
             _atomic_bytes(args.output / relative, payload)
-            records.append(
-                {
-                    "sample_id": sample_id,
-                    "path": relative,
-                    "sha256": hashlib.sha256(payload).hexdigest(),
-                    "shape": [height, width],
-                    "valid_fraction": float(valid.mean()),
-                }
-            )
+            record = {
+                "sample_id": sample_id,
+                "path": relative,
+                "sha256": hashlib.sha256(payload).hexdigest(),
+                "shape": [height, width],
+                "valid_fraction": float(valid.mean()),
+            }
+            if crop is not None:
+                record["crop"] = dict(crop)
+            if factor > 1:
+                record["raster_factor"] = factor
+                record["face_shape"] = [int(face_shape[0]), int(face_shape[1])]
+            records.append(record)
             if len(records) % args.report_every == 0:
                 rate = len(records) / max(1e-9, time.time() - started)
                 print(
@@ -172,6 +234,8 @@ def main() -> int:
             "source_face_manifest_sha256": face_sha,
             "mesh_path": str(args.mesh),
             "mesh_sha256": mesh_sha,
+            "raster_factor": factor,
+            "tile_id": int(args.tile_id) if crop_by_sample is not None else None,
             "records": records,
         }
     )

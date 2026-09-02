@@ -139,6 +139,14 @@ def _dilate_bool(mask: np.ndarray, radius: int) -> np.ndarray:
     return out
 
 
+def expand_raster(array: np.ndarray, factor: int, shape: tuple[int, int]) -> np.ndarray:
+    """Nearest-neighbour expansion of a 1/factor raster back to ``shape``."""
+    if factor <= 1:
+        return array
+    out = np.repeat(np.repeat(array, factor, axis=0), factor, axis=1)
+    return np.ascontiguousarray(out[: shape[0], : shape[1]])
+
+
 def tile_ownership_masks(
     depth_range: np.ndarray,
     depth_mask: np.ndarray,
@@ -884,6 +892,12 @@ class FaceCacheDataset:
                 mesh_confidence = np.asarray(payload["confidence"], np.float32)
                 mesh_depth_valid = np.asarray(payload["valid"], bool)
             mesh_shape = (int(crop["height"]), int(crop["width"]))
+            raster_factor = int(mesh_record.get("raster_factor", 1))
+            if raster_factor > 1:
+                mesh_depth_range = expand_raster(mesh_depth_range, raster_factor, mesh_shape)
+                mesh_normal_camera = expand_raster(mesh_normal_camera, raster_factor, mesh_shape)
+                mesh_confidence = expand_raster(mesh_confidence, raster_factor, mesh_shape)
+                mesh_depth_valid = expand_raster(mesh_depth_valid, raster_factor, mesh_shape)
             if mesh_depth_range.shape != mesh_shape:
                 raise ValueError("mesh geometry depth shape differs from Tile crop")
             if mesh_normal_camera.shape != (*mesh_shape, 3):
