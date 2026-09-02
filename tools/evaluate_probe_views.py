@@ -21,6 +21,14 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 
+def _pooled_p05(torch, chunks):
+    # torch.quantile refuses inputs beyond ~16M elements; 48 full faces of
+    # foreground alpha exceed that, so take the 5th percentile by rank.
+    pooled = torch.cat(chunks)
+    k = max(1, int(0.05 * pooled.numel()))
+    return float(torch.kthvalue(pooled, k).values)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--config", type=Path, required=True)
@@ -242,9 +250,7 @@ def main() -> int:
         "psnr_fg_mean": float(np.mean(fg_psnrs)) if fg_psnrs else None,
         "psnr_fg_p10": float(np.percentile(fg_psnrs, 10)) if fg_psnrs else None,
         "alpha_fg_p05_pooled": (
-            float(torch.quantile(torch.cat(fg_alpha_all), 0.05))
-            if fg_alpha_all
-            else None
+            _pooled_p05(torch, fg_alpha_all) if fg_alpha_all else None
         ),
         "psnr_by_face": {
             kind: {
