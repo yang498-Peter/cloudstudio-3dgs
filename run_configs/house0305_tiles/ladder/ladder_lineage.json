@@ -82,5 +82,11 @@
   "description": "R5 + size hinge at 2x the median initial size (scale_upper 0.01, ratio 2)",
   "config_sha256": "cb6598f5228549151e3c33f337f65c21665c4f3e204ec6b7b3633b64c2a9598e",
   "repo": "C:\\Peter\\cloudstudio-3dgs-work"
+ },
+ "R5r_cull05": {
+  "base": "R3_split",
+  "description": "R5 reproduced from the explicit-lineage stager (config_as_run recorded)",
+  "config_sha256": "29164c00e38996fc4c4f0d935dd6504a60f29d2cfd01483f5df7b9d9038c1290",
+  "repo": "C:\\Peter\\cloudstudio-3dgs-work"
  }
 }
