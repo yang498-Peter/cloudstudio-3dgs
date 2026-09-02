@@ -1,6 +1,6 @@
 {
- "run_id": "house0305-t0-R4_flatabs",
- "output_dir": "C:\\Peter\\3dgs-runs\\house0305_sop\\tile0_R4_flatabs",
+ "run_id": "house0305-t0-C1_own",
+ "output_dir": "C:\\Peter\\3dgs-runs\\house0305_sop\\tile0_C1_own",
  "device": "cuda:0",
  "seed": 42,
  "trainer_preset": "custom",
@@ -66,10 +66,9 @@
   "weight_flatten": 0.05,
   "weight_tangent_isotropy": 0.1,
   "planarity_gate": 0.6,
-  "flatten_mode": "absolute_m",
+  "flatten_mode": "tangent_ratio",
   "flatten_ratio_target": 0.1,
-  "tangent_isotropy_max_ratio": 60.0,
-  "flatten_target_m": 0.001
+  "tangent_isotropy_max_ratio": 60.0
  },
  "geometry_regularization": {
   "enabled": true,
@@ -119,7 +118,7 @@
   "grow_grad2d": 0.00015,
   "split_scale_m": 0.2,
   "prune_scale_m": 0.2,
-  "prune_opa": 0.1,
+  "prune_opa": 0.05,
   "prune_opa_late": 0.05,
   "prune_switch_step": 24780,
   "prune_scale2d": 0.15,
@@ -135,7 +134,7 @@
   "growth_metric": "footprint_weighted",
   "relaxed_cull_at_capacity": false,
   "opacity_cull_policy": "immediate",
-  "vendor_cull_warmup_profile": "exact_0p10_to_0p05",
+  "vendor_cull_warmup_profile": "compatibility_uniform_0p05",
   "vendor_opacity_reset_profile": "deferred_every3000_compatibility",
   "detail_split_scale_m": 0.02,
   "detail_split_screen_radius": 0.0035
@@ -145,5 +144,8 @@
  "mono_depth_manifest": "C:\\Peter\\3dgs-datasets\\house0305_sop_v8\\da2_train\\mono_depth_manifest.json",
  "mono_depth_root": "C:\\Peter\\3dgs-datasets\\house0305_sop_v8\\da2_train",
  "controlled_stop_after_steps": 3500,
- "checkpoint_keep_every": 3500
+ "checkpoint_keep_every": 3500,
+ "tile_ownership_masking": true,
+ "tile_ownership_margin_m": 0.5,
+ "tile_ownership_dilation_px": 15
 }

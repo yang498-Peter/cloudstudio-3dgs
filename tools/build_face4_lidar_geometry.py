@@ -126,6 +126,7 @@ def build_face4_lidar_geometry(
     point_cloud_path: Path | None = None,
     storage_profile: str = "audit",
     workers: int = 1,
+    projection_overrides: dict | None = None,
 ) -> dict[str, Any]:
     face = _read(face_manifest_path)
     dataset = _read(dataset_manifest_path)
@@ -151,7 +152,9 @@ def build_face4_lidar_geometry(
         )
     points: np.ndarray | None = None
     point_source_index: np.ndarray | None = None
-    projection_config = DepthProjectionConfig(**depth.get("projection", {}))
+    projection_settings = dict(depth.get("projection", {}))
+    projection_settings.update(projection_overrides or {})
+    projection_config = DepthProjectionConfig(**projection_settings)
     if direct_projection:
         assert point_cloud_path is not None
         expected_cloud_sha = str(depth.get("point_cloud_sha256", ""))
@@ -396,7 +399,26 @@ def main() -> int:
         ),
     )
     parser.add_argument("--workers", type=int, default=1)
+    parser.add_argument(
+        "--visibility-cell-px",
+        type=int,
+        default=0,
+        help=(
+            "hidden-point rejection cell size in face pixels (0 = off): a point "
+            "farther than (1 + tolerance) x the nearest range in its 3x3 cell "
+            "neighbourhood + margin is dropped instead of becoming a target"
+        ),
+    )
+    parser.add_argument("--visibility-tolerance", type=float, default=0.2)
+    parser.add_argument("--visibility-margin-m", type=float, default=0.1)
     args = parser.parse_args()
+    projection_overrides = None
+    if int(args.visibility_cell_px) > 0:
+        projection_overrides = {
+            "visibility_cell_px": int(args.visibility_cell_px),
+            "visibility_tolerance": float(args.visibility_tolerance),
+            "visibility_margin_m": float(args.visibility_margin_m),
+        }
     manifest_path = args.output / "face_lidar_geometry_manifest.json"
     if manifest_path.exists():
         raise FileExistsError(f"refusing to replace {manifest_path}")
@@ -408,6 +430,7 @@ def main() -> int:
         depth_root=args.depth_root,
         output_root=args.output,
         point_cloud_path=args.point_cloud,
+        projection_overrides=projection_overrides,
         storage_profile=args.storage_profile,
         workers=args.workers,
     )

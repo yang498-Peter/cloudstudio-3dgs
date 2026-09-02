@@ -1084,6 +1084,7 @@ class DefaultStrategyAdapterTests(unittest.TestCase):
             "radii": torch.tensor([0.01, 0.002, 0.01]),
             "scene_scale": 10.0,
         }
+        state["_cloudstudio_current_step"] = 700
         clone_count, split_count = adapter._grow_mipmap(params, optimizers, state)
         self.assertEqual(split_count, 1)
         opacities = params["opacities"].detach()
@@ -1091,6 +1092,17 @@ class DefaultStrategyAdapterTests(unittest.TestCase):
         children = torch.sigmoid(opacities[-2:])
         self.assertTrue(bool((children < 1.0).all()))
         self.assertTrue(bool((children > 0.999).all()))
+        # Lineage: post-optimizer order appends clones first, then the two
+        # split children; the three original rows stay "init" with step -1.
+        kind = state["_cloudstudio_birth_kind"].tolist()
+        born = state["_cloudstudio_birth_step"].tolist()
+        self.assertEqual(len(kind), 3 - 1 + clone_count + 2)
+        self.assertEqual(kind[-2:], [2, 2])
+        self.assertEqual(kind[-2 - clone_count : -2], [1] * clone_count)
+        self.assertTrue(all(b == 700 for b in born[-2 - clone_count :]))
+        self.assertTrue(all(b == -1 for b in born[: -2 - clone_count]))
+        summary = adapter._last_growth_event["split_parent_opacity"]
+        self.assertEqual(summary["frac_saturated"], 1.0)
 
 
 class BackendWiringTests(unittest.TestCase):

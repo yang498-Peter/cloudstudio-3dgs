@@ -426,6 +426,47 @@ class DefaultStrategyAdapter:
             if not isinstance(value, torch.Tensor) or len(value) != count:
                 state[key] = torch.zeros(count, dtype=dtype, device=device)
 
+    @staticmethod
+    def _opacity_summary(values: Any) -> dict[str, float] | None:
+        if values.numel() == 0:
+            return None
+        import torch
+
+        sample = values.detach().float().flatten()
+        if sample.numel() > 1_000_000:
+            sample = sample[torch.randperm(sample.numel(), device=sample.device)[:1_000_000]]
+        q = torch.quantile(sample, torch.tensor([0.5, 0.9, 0.95], device=sample.device))
+        return {
+            "p50": float(q[0]),
+            "p90": float(q[1]),
+            "p95": float(q[2]),
+            "frac_above_0p9": float((sample > 0.9).float().mean()),
+            "frac_saturated": float((sample >= 1.0).float().mean()),
+        }
+
+    def _ensure_lineage(self, params: Any, state: dict[str, Any]) -> None:
+        """Per-Gaussian birth step and birth kind (0 init, 1 clone, 2 split).
+
+        Stored in strategy state so the library's duplicate/split/remove keep
+        them aligned with the population and checkpoints carry them; an
+        offline probe can then read child opacity, size and survival by
+        birth kind and age, which a population-level histogram cannot.
+        """
+        import torch
+
+        count = len(params["means"])
+        device = params["means"].device
+        step_tensor = state.get("_cloudstudio_birth_step")
+        if not isinstance(step_tensor, torch.Tensor) or len(step_tensor) != count:
+            state["_cloudstudio_birth_step"] = torch.full(
+                (count,), -1, dtype=torch.int32, device=device
+            )
+        kind_tensor = state.get("_cloudstudio_birth_kind")
+        if not isinstance(kind_tensor, torch.Tensor) or len(kind_tensor) != count:
+            state["_cloudstudio_birth_kind"] = torch.zeros(
+                count, dtype=torch.int8, device=device
+            )
+
     def check_sanity(self, params: Any, optimizers: dict[str, Any]) -> None:
         self.inner.check_sanity(params, optimizers)
 
@@ -829,6 +870,8 @@ class DefaultStrategyAdapter:
             "selected_parent_count": int(eligible.sum().item()),
             "clone_parent_count": duplicate_count,
             "split_parent_count": split_count,
+            "split_parent_opacity": self._opacity_summary(opacity[split_mask]),
+            "clone_parent_opacity": self._opacity_summary(opacity[duplicate_mask]),
             "capacity_conserving_clone_opacity": (
                 self.capacity_conserving_clone_opacity
             ),
@@ -905,6 +948,21 @@ class DefaultStrategyAdapter:
                     params["quats"][newborn_start:].copy_(proposed["quats"])
                 if "scales" in proposed:
                     params["scales"][newborn_start:].copy_(proposed["scales"])
+        newborn_total = duplicate_count + 2 * split_count
+        if newborn_total:
+            self._ensure_lineage(params, state)
+            with torch.no_grad():
+                current_step = int(state.get("_cloudstudio_current_step", -1))
+                tail_step = state["_cloudstudio_birth_step"][-newborn_total:]
+                tail_kind = state["_cloudstudio_birth_kind"][-newborn_total:]
+                tail_step.fill_(current_step)
+                if self.lifecycle_execution_order == "pre_optimizer_vendor":
+                    # Split children were appended first, clones after.
+                    tail_kind[: 2 * split_count].fill_(2)
+                    tail_kind[2 * split_count :].fill_(1)
+                else:
+                    tail_kind[:duplicate_count].fill_(1)
+                    tail_kind[duplicate_count:].fill_(2)
         self._last_surface_birth_event = (
             None
             if not guarded_births
@@ -1332,6 +1390,8 @@ class DefaultStrategyAdapter:
         from gsplat.strategy.ops import reset_opa
 
         self.last_lifecycle_event = None
+        state["_cloudstudio_current_step"] = int(step)
+        self._ensure_lineage(params, state)
         self._last_surface_birth_event = None
         self._last_growth_event = None
         self._last_cull_event = None
