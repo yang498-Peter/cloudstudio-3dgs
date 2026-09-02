@@ -87,6 +87,17 @@ ARMS = {
     "S1c_sizeprior": ("C2_da2", "C2 + size hinge at 2x the median initial size (scale_upper 0.01, ratio 2)",
                       _many(_set("geometry_regularization.scale_upper_weight", 0.01),
                             _set("geometry_regularization.max_scale_ratio_to_reference", 2.0)), WORK),
+    # Spatial hold-out arms: 10% of the Tile's views (whole 2 m camera cells)
+    # withheld from training; scored on those views with --holdout-from.
+    "C2h": ("C2_da2", "C2 with a 10% spatial hold-out (2 m cells, seed 0)",
+            _many(_set("holdout_spatial_cell_m", 2.0), _set("holdout_fraction", 0.1), _set("holdout_seed", 0)), WORK),
+    "R5h": ("R5_cull05", "R5 with the same 10% spatial hold-out",
+            _many(_set("holdout_spatial_cell_m", 2.0), _set("holdout_fraction", 0.1), _set("holdout_seed", 0)), WORK),
+    "T2h_split05": ("C2h", "C2h + detail split gate 0.005 m",
+                    _set("default_strategy.detail_split_scale_m", 0.005), WORK),
+    "S1h_sizeprior": ("C2h", "C2h + size hinge at 2x the median initial size",
+                      _many(_set("geometry_regularization.scale_upper_weight", 0.01),
+                            _set("geometry_regularization.max_scale_ratio_to_reference", 2.0)), WORK),
     "C4_all": ("C3_vis", "C3 + Tile ownership masking + monocular far cutoff (supervision-correctness bundle)",
                _many(_set("tile_ownership_masking", True), _set("tile_ownership_margin_m", 0.5),
                      _set("tile_ownership_dilation_px", 15),

@@ -106,5 +106,29 @@
   "description": "C2 + size hinge at 2x the median initial size (scale_upper 0.01, ratio 2)",
   "config_sha256": "d2b43c206019c0dcf95bd82ddf05c53ce07ec536a55a1f14549d3a327fc85037",
   "repo": "C:\\Peter\\cloudstudio-3dgs-work"
+ },
+ "R5h": {
+  "base": "R5_cull05",
+  "description": "R5 with the same 10% spatial hold-out",
+  "config_sha256": "845110c2f81fcfdd6a6e763e0a5523f8b7a68bf073361ea0ab4afd2f12faf37f",
+  "repo": "C:\\Peter\\cloudstudio-3dgs-work"
+ },
+ "C2h": {
+  "base": "C2_da2",
+  "description": "C2 with a 10% spatial hold-out (2 m cells, seed 0)",
+  "config_sha256": "677028985695de59908d2333486553b4b102485100f9ae6bad2ff1e144ff9da0",
+  "repo": "C:\\Peter\\cloudstudio-3dgs-work"
+ },
+ "T2h_split05": {
+  "base": "C2h",
+  "description": "C2h + detail split gate 0.005 m",
+  "config_sha256": "561f395563f50a2917d07898be9ea1bc201f65d8634939b839a1e766d1250d8f",
+  "repo": "C:\\Peter\\cloudstudio-3dgs-work"
+ },
+ "S1h_sizeprior": {
+  "base": "C2h",
+  "description": "C2h + size hinge at 2x the median initial size",
+  "config_sha256": "182f938c6b6ede0deca642feb2e7524bf8576ff4fb82ea098d9594eca700d125",
+  "repo": "C:\\Peter\\cloudstudio-3dgs-work"
  }
 }
