@@ -1,0 +1,56 @@
+{
+  "schema_version": 1,
+  "kind": "snow_v28_tile_checkpoint_merge_v2",
+  "status": "PASS",
+  "merge_policy": "core_owner_only",
+  "tile_inputs_manifest_sha256": "337a426c7cdf4373f0b9011334aa49f674cb672c293634ef0d35421d3a96c0d2",
+  "coordinate_transform_sha256": "5188b35a4150a7d9010079bc929ff661e4a090400515ac7108b49e4f379093ae",
+  "tile_count": 3,
+  "source_gaussian_count": 21228097,
+  "merged_gaussian_count": 18443970,
+  "discarded_by_merge_policy_count": 2784127,
+  "exposure_harmonized": true,
+  "shared_boundary_rule": "minimum_tile_id",
+  "records": [
+    {
+      "tile_id": 0,
+      "checkpoint": "C:/Peter/3dgs-runs/house0305_sop/tile0_X7_T2/checkpoints/latest.pt",
+      "checkpoint_sha256": "e3b46468d1860ceac94f1641b1b7fac4082331ac5b512b7c76aa1698270b71ff",
+      "completed_steps": 7000,
+      "exposure_gain_applied": 0.958165168762207,
+      "input_gaussian_count": 10929595,
+      "core_gaussian_count": 9959056,
+      "retained_gaussian_count": 9959056,
+      "discarded_by_merge_policy_count": 970539,
+      "retained_dead_opacity_below_0_005_count": 1826
+    },
+    {
+      "tile_id": 1,
+      "checkpoint": "C:/Peter/3dgs-runs/house0305_sop/tile1_T2c_split05/checkpoints/latest.pt",
+      "checkpoint_sha256": "a3947b8b733854982e6ddc8f8d84db06230ea191ac8e6339d327622b76d4302d",
+      "completed_steps": 7000,
+      "exposure_gain_applied": 0.9876717925071716,
+      "input_gaussian_count": 3240211,
+      "core_gaussian_count": 2444010,
+      "retained_gaussian_count": 2444010,
+      "discarded_by_merge_policy_count": 796201,
+      "retained_dead_opacity_below_0_005_count": 384
+    },
+    {
+      "tile_id": 2,
+      "checkpoint": "C:/Peter/3dgs-runs/house0305_sop/tile2_T2c_split05/checkpoints/latest.pt",
+      "checkpoint_sha256": "6137ba610f551c167e5ccc31ab2a837849c344959d18bc725e484e925d3446b0",
+      "completed_steps": 7000,
+      "exposure_gain_applied": 0.9875207543373108,
+      "input_gaussian_count": 7058291,
+      "core_gaussian_count": 6040904,
+      "retained_gaussian_count": 6040904,
+      "discarded_by_merge_policy_count": 1017387,
+      "retained_dead_opacity_below_0_005_count": 1927
+    }
+  ],
+  "merge_report_sha256": "9bc368a5e5f30ec1c29f875c6e3b3b8138d390639a2f78b1e0ae208e6d6f9fdc",
+  "output_checkpoint": "C:/Peter/3dgs-runs/house0305_sop/delivery_t2/merged.pt",
+  "output_checkpoint_sha256": "0e3baf91517c7258715c81dc5ec0b9ae8aa6044c9b78dd78d5428f1c7ed8dce6",
+  "delivery_report_sha256": "c16dc9921d1ac7ad3f3feef62fc78f92e772a38283f3e4f89d4514afc181b960"
+}
