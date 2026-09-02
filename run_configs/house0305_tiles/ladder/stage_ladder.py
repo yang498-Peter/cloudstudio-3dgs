@@ -1,76 +1,109 @@
-"""Stage the cumulative fix ladder from the tile0_h5v baseline.
+"""Stage ladder arms with explicit lineage.
 
-Each rung adds exactly one verified change on top of the previous rung, so the
-delta between consecutive rungs is attributable. Every rung is a 3,500-step
-probe (one full opacity-reset cycle plus the flush at 3,101 and 400 steps of
-recovery), scored on morphology and the Tile-level battery.
+Every arm names the base it is derived from and the single change it makes on
+top of that base; nothing is inherited implicitly, and a rejected arm can never
+leak into a later one. The stager writes ``ladder_lineage.json`` next to the
+configs so each result can be traced to base + diff, and the driver copies the
+exact config it ran into the run directory.
 """
 import copy
+import hashlib
 import json
 import sys
 from pathlib import Path
 
 RUN = Path(r"C:\Peter\3dgs-runs\house0305_sop")
 SCRATCH = Path(__file__).resolve().parent
-BASE = json.loads((RUN / "tile0_h5v.json").read_text(encoding="utf-8"))
+BASE_ID = "h5v"
 STOP = 3500
+GATE1 = r"C:\Peter\cloudstudio-3dgs-gate1"
+WORK = r"C:\Peter\cloudstudio-3dgs-work"
 
-RUNGS = [
-    # id, description, mutator
-    ("R1_range", "LiDAR range term back to the trainer default: 0.05 robust log-Huber (was 0.5 linear L1)",
-     lambda c: c.update({"lidar_range_weight": 0.05,
-                         "lidar_range_loss_mode": "robust_log_huber",
-                         "lidar_log_range_huber_delta": 0.05})),
-    ("R2_noalpha", "R1 + remove the one-sided LiDAR alpha floor (weight 0.5 target 0.95 dilation 6 -> off)",
-     lambda c: c.update({"lidar_alpha_weight": 0.0,
-                         "lidar_alpha_dilation_radius_px": 0,
-                         "surface_alpha_floor_profile": False})),
-    ("R3_split", "R2 + reachable split: detail split policy (0.02 m / 0.0035 screen radius, revised opacity)",
-     lambda c: c["default_strategy"].update({"detail_split_policy": "lidar_surface_screen_detail",
-                                             "detail_split_scale_m": 0.02,
-                                             "detail_split_screen_radius": 0.0035,
-                                             "revised_opacity": True})),
-    ("R4_flatabs", "R3 + flatten acts on the short axis only (absolute 1 mm target instead of tangent ratio)",
-     lambda c: c["lidar_normal_alignment"].update({"flatten_mode": "absolute_m",
-                                                   "flatten_target_m": 0.001})),
-    ("R5_cull05", "R4 + uniform 0.05 cull from the first refine (reference floor) instead of 0.10 until step 24,780",
-     lambda c: c["default_strategy"].update({"vendor_cull_warmup_profile": "compatibility_uniform_0p05",
-                                             "prune_opa": 0.05,
-                                             "prune_opa_late": 0.05})),
-    ("R6_opreg", "R5 + mean-opacity drain 0.01 (reference schedule term)",
-     lambda c: c["geometry_regularization"].update({"opacity_sparsity_weight": 0.01})),
-    # The next two need the fix branch (worktree) and run from there.
-    ("R7_own", "R6 + Tile ownership masking (foreign-surface pixels leave supervision)",
-     lambda c: c.update({"tile_ownership_masking": True,
-                         "tile_ownership_margin_m": 0.5,
-                         "tile_ownership_dilation_px": 15})),
-    ("R8_da2", "R7 + monocular depth far cutoff 30 m and bounded depth space",
-     lambda c: c.update({"mono_depth_max_range_m": 30.0,
-                         "da2_depth_space": "compressed"})),
-]
-WORKTREE_RUNGS = {"R7_own", "R8_da2"}
+
+def _set(path, value):
+    def apply(c):
+        node = c
+        keys = path.split(".")
+        for key in keys[:-1]:
+            node = node[key]
+        node[keys[-1]] = value
+    return apply
+
+
+def _many(*fns):
+    def apply(c):
+        for fn in fns:
+            fn(c)
+    return apply
+
+
+# id -> (base id, description, mutator, repo)
+ARMS = {
+    "R1_range": ("h5v", "LiDAR range term back to the trainer default: 0.05 robust log-Huber (was 0.5 linear L1)",
+                 _many(_set("lidar_range_weight", 0.05), _set("lidar_range_loss_mode", "robust_log_huber"),
+                       _set("lidar_log_range_huber_delta", 0.05)), GATE1),
+    "R2_noalpha": ("R1_range", "R1 + LiDAR alpha floor off",
+                   _many(_set("lidar_alpha_weight", 0.0), _set("lidar_alpha_dilation_radius_px", 0),
+                         _set("surface_alpha_floor_profile", False)), GATE1),
+    "R3_split": ("R1_range", "R1 + adaptive detail split (0.02 m / 0.0035 screen radius, revised child opacity); alpha floor kept",
+                 _many(_set("default_strategy.detail_split_policy", "lidar_surface_screen_detail"),
+                       _set("default_strategy.detail_split_scale_m", 0.02),
+                       _set("default_strategy.detail_split_screen_radius", 0.0035),
+                       _set("default_strategy.revised_opacity", True)), GATE1),
+    "R3B_split_noalpha": ("R3_split", "R3 with the alpha floor off (interaction check for R2 x split)",
+                          _many(_set("lidar_alpha_weight", 0.0), _set("lidar_alpha_dilation_radius_px", 0),
+                                _set("surface_alpha_floor_profile", False)), GATE1),
+    "R4_flatabs": ("R3_split", "R3 + flatten absolute 1 mm (rejected: short axis 1.14 -> 3.33 mm)",
+                   _many(_set("lidar_normal_alignment.flatten_mode", "absolute_m"),
+                         _set("lidar_normal_alignment.flatten_target_m", 0.001)), GATE1),
+    "R5_cull05": ("R3_split", "R3 + uniform 0.05 cull from the first refine",
+                  _many(_set("default_strategy.vendor_cull_warmup_profile", "compatibility_uniform_0p05"),
+                        _set("default_strategy.prune_opa", 0.05), _set("default_strategy.prune_opa_late", 0.05)), GATE1),
+    "R6_opreg": ("R5_cull05", "R5 + mean-opacity drain 0.01",
+                 _set("geometry_regularization.opacity_sparsity_weight", 0.01), GATE1),
+    "C1_own": ("R5_cull05", "R5 + Tile ownership masking (foreign-surface pixels leave supervision)",
+               _many(_set("tile_ownership_masking", True), _set("tile_ownership_margin_m", 0.5),
+                     _set("tile_ownership_dilation_px", 15)), WORK),
+    "C2_da2": ("R5_cull05", "R5 + monocular depth far cutoff 30 m and bounded depth space",
+               _many(_set("mono_depth_max_range_m", 30.0), _set("da2_depth_space", "compressed")), WORK),
+}
+
+
+def build(arm_id: str, cache: dict) -> dict:
+    if arm_id == BASE_ID:
+        cfg = json.loads((RUN / "tile0_h5v.json").read_text(encoding="utf-8"))
+        cfg.pop("resume_checkpoint", None)
+        cfg["controlled_stop_after_steps"] = STOP
+        cfg["checkpoint_keep_every"] = STOP
+        cfg["checkpoint_every"] = STOP
+        return cfg
+    if arm_id in cache:
+        return copy.deepcopy(cache[arm_id])
+    base_id, _, mutate, _ = ARMS[arm_id]
+    cfg = build(base_id, cache)
+    mutate(cfg)
+    cache[arm_id] = copy.deepcopy(cfg)
+    return cfg
 
 
 def main() -> None:
-    only = set(sys.argv[1:])
-    cfg = copy.deepcopy(BASE)
-    cfg.pop("resume_checkpoint", None)
-    cfg["controlled_stop_after_steps"] = STOP
-    cfg["checkpoint_keep_every"] = STOP
-    cfg["checkpoint_every"] = STOP
-    for rung_id, desc, mutate in RUNGS:
-        mutate(cfg)
-        if only and rung_id not in only:
-            continue
-        repo = (
-            r"C:\Peter\cloudstudio-3dgs-work"
-            if rung_id in WORKTREE_RUNGS
-            else r"C:\Peter\cloudstudio-3dgs-gate1"
-        )
-        out = copy.deepcopy(cfg)
-        out["run_id"] = f"house0305-t0-{rung_id}"
-        out["output_dir"] = str(RUN / f"tile0_{rung_id}")
-        (RUN / f"tile0_{rung_id}.json").write_text(json.dumps(out, indent=1), encoding="utf-8")
+    wanted = sys.argv[1:] or list(ARMS)
+    cache: dict = {}
+    lineage_path = RUN / "ladder_lineage.json"
+    lineage = json.loads(lineage_path.read_text(encoding="utf-8")) if lineage_path.exists() else {}
+    for arm_id in wanted:
+        base_id, desc, _, repo = ARMS[arm_id]
+        cfg = build(arm_id, cache)
+        cfg["run_id"] = f"house0305-t0-{arm_id}"
+        cfg["output_dir"] = str(RUN / f"tile0_{arm_id}")
+        text = json.dumps(cfg, indent=1)
+        (RUN / f"tile0_{arm_id}.json").write_text(text, encoding="utf-8")
+        lineage[arm_id] = {
+            "base": base_id,
+            "description": desc,
+            "config_sha256": hashlib.sha256(text.encode("utf-8")).hexdigest(),
+            "repo": repo,
+        }
         cmd = "\n".join([
             "@echo off",
             r"call C:\Peter\cloudstudio-3dgs-gate1\train\env_machine_b.cmd",
@@ -79,15 +112,17 @@ def main() -> None:
             "set PYTHONIOENCODING=utf-8",
             rf"set RUN={RUN}",
             r"set PY=C:\Peter\cloudstudio-3dgs\.venv-train\Scripts\python.exe",
-            rf'%PY% tools/train_gsplat.py --config "%RUN%\tile0_{rung_id}.json" > "%RUN%\tile0_{rung_id}.log" 2> "%RUN%\tile0_{rung_id}.log.err"',
-            rf'echo EXIT %ERRORLEVEL% >> "%RUN%\tile0_{rung_id}.log"',
-            rf'%PY% "{SCRATCH}\morph_ckpt.py" "%RUN%\tile0_{rung_id}\checkpoints\latest.pt" {rung_id} > "%RUN%\tile0_{rung_id}\morph.txt" 2>&1',
-            rf'%PY% tools/evaluate_probe_views.py --config "%RUN%\tile0_{rung_id}.json" --checkpoint "%RUN%\tile0_{rung_id}\checkpoints\latest.pt" --views 48 --tile-views --output "%RUN%\tile0_{rung_id}\battery_tile.json" > "%RUN%\tile0_{rung_id}\battery.log" 2>&1',
+            rf'%PY% tools/train_gsplat.py --config "%RUN%\tile0_{arm_id}.json" > "%RUN%\tile0_{arm_id}.log" 2> "%RUN%\tile0_{arm_id}.log.err"',
+            rf'echo EXIT %ERRORLEVEL% >> "%RUN%\tile0_{arm_id}.log"',
+            rf'copy /Y "%RUN%\tile0_{arm_id}.json" "%RUN%\tile0_{arm_id}\config_as_run.json" >nul',
+            rf'%PY% "{SCRATCH}\morph_ckpt.py" "%RUN%\tile0_{arm_id}\checkpoints\latest.pt" {arm_id} > "%RUN%\tile0_{arm_id}\morph.txt" 2>&1',
+            rf'%PY% tools/evaluate_probe_views.py --config "%RUN%\tile0_{arm_id}.json" --checkpoint "%RUN%\tile0_{arm_id}\checkpoints\latest.pt" --views 48 --tile-views --output "%RUN%\tile0_{arm_id}\battery_tile.json" > "%RUN%\tile0_{arm_id}\battery.log" 2>&1',
             "exit /b 0",
             "",
         ])
-        (SCRATCH / f"run_{rung_id}.cmd").write_text(cmd, encoding="ascii")
-        print(f"staged {rung_id}: {desc}")
+        (SCRATCH / f"run_{arm_id}.cmd").write_text(cmd, encoding="ascii")
+        print(f"staged {arm_id} <- {base_id}: {desc}")
+    lineage_path.write_text(json.dumps(lineage, indent=1), encoding="utf-8")
 
 
 if __name__ == "__main__":

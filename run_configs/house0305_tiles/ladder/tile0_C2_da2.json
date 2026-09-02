@@ -1,6 +1,6 @@
 {
- "run_id": "house0305-t0-R7_own",
- "output_dir": "C:\\Peter\\3dgs-runs\\house0305_sop\\tile0_R7_own",
+ "run_id": "house0305-t0-C2_da2",
+ "output_dir": "C:\\Peter\\3dgs-runs\\house0305_sop\\tile0_C2_da2",
  "device": "cuda:0",
  "seed": 42,
  "trainer_preset": "custom",
@@ -66,14 +66,13 @@
   "weight_flatten": 0.05,
   "weight_tangent_isotropy": 0.1,
   "planarity_gate": 0.6,
-  "flatten_mode": "absolute_m",
+  "flatten_mode": "tangent_ratio",
   "flatten_ratio_target": 0.1,
-  "tangent_isotropy_max_ratio": 60.0,
-  "flatten_target_m": 0.001
+  "tangent_isotropy_max_ratio": 60.0
  },
  "geometry_regularization": {
   "enabled": true,
-  "opacity_sparsity_weight": 0.01,
+  "opacity_sparsity_weight": 0.0,
   "scale_upper_weight": 0.0,
   "anisotropy_weight": 0.01,
   "max_world_size_m": 0.2,
@@ -104,7 +103,7 @@
   "enabled": false
  },
  "final_evaluation_artifacts": false,
- "lidar_alpha_weight": 0.0,
+ "lidar_alpha_weight": 0.5,
  "lidar_alpha_target": 0.95,
  "background_image_manifest": "C:\\Peter\\3dgs-runs\\house0305_sop\\tile_backgrounds\\Tile_0\\background_manifest.json",
  "background_image_root": "C:\\Peter\\3dgs-runs\\house0305_sop\\tile_backgrounds\\Tile_0",
@@ -140,13 +139,12 @@
   "detail_split_scale_m": 0.02,
   "detail_split_screen_radius": 0.0035
  },
- "surface_alpha_floor_profile": false,
- "lidar_alpha_dilation_radius_px": 0,
+ "surface_alpha_floor_profile": true,
+ "lidar_alpha_dilation_radius_px": 6,
  "mono_depth_manifest": "C:\\Peter\\3dgs-datasets\\house0305_sop_v8\\da2_train\\mono_depth_manifest.json",
  "mono_depth_root": "C:\\Peter\\3dgs-datasets\\house0305_sop_v8\\da2_train",
  "controlled_stop_after_steps": 3500,
  "checkpoint_keep_every": 3500,
- "tile_ownership_masking": true,
- "tile_ownership_margin_m": 0.5,
- "tile_ownership_dilation_px": 15
+ "mono_depth_max_range_m": 30.0,
+ "da2_depth_space": "compressed"
 }

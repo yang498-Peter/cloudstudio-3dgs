@@ -1,0 +1,56 @@
+{
+ "R1_range": {
+  "base": "h5v",
+  "description": "LiDAR range term back to the trainer default: 0.05 robust log-Huber (was 0.5 linear L1)",
+  "config_sha256": "5cc2bed462cd5c96dc9a23d31f025fa8995156366277cda510d3e009715ecdcf",
+  "repo": "C:\\Peter\\cloudstudio-3dgs-gate1"
+ },
+ "R2_noalpha": {
+  "base": "R1_range",
+  "description": "R1 + LiDAR alpha floor off",
+  "config_sha256": "0477af7306cbc27b404a5b8a77a8b8db69311155435a06a2535d42c545b20443",
+  "repo": "C:\\Peter\\cloudstudio-3dgs-gate1"
+ },
+ "R3_split": {
+  "base": "R1_range",
+  "description": "R1 + adaptive detail split (0.02 m / 0.0035 screen radius, revised child opacity); alpha floor kept",
+  "config_sha256": "19e40036ff6a69cbb2ca5046157c2eec6af96d2bd5078f0eb6b4062459298d11",
+  "repo": "C:\\Peter\\cloudstudio-3dgs-gate1"
+ },
+ "R3B_split_noalpha": {
+  "base": "R3_split",
+  "description": "R3 with the alpha floor off (interaction check for R2 x split)",
+  "config_sha256": "74bd77a5718463a79b7b38f5dc4c154b5ef7487bd7d790b0ae9dd19f277b3445",
+  "repo": "C:\\Peter\\cloudstudio-3dgs-gate1"
+ },
+ "R4_flatabs": {
+  "base": "R3_split",
+  "description": "R3 + flatten absolute 1 mm (rejected: short axis 1.14 -> 3.33 mm)",
+  "config_sha256": "c404e15d24bf8534d63330b939efef049f6c0f8fe7563246e117c43ad00e9d0f",
+  "repo": "C:\\Peter\\cloudstudio-3dgs-gate1"
+ },
+ "R5_cull05": {
+  "base": "R3_split",
+  "description": "R3 + uniform 0.05 cull from the first refine",
+  "config_sha256": "6a9c1f96a10b99703a25cbdbcedad5ee735d74b31cd9a59218dced5ce57b6ff7",
+  "repo": "C:\\Peter\\cloudstudio-3dgs-gate1"
+ },
+ "R6_opreg": {
+  "base": "R5_cull05",
+  "description": "R5 + mean-opacity drain 0.01",
+  "config_sha256": "ba2fd2b945554e0f6455055938db5e4fa2384fcac50943825c521d15e87ce1b6",
+  "repo": "C:\\Peter\\cloudstudio-3dgs-gate1"
+ },
+ "C1_own": {
+  "base": "R5_cull05",
+  "description": "R5 + Tile ownership masking (foreign-surface pixels leave supervision)",
+  "config_sha256": "a8b9b9ccf6af482317cc6248a49fb7b0c4669192dd31268bfc9ae0b7b7c53e52",
+  "repo": "C:\\Peter\\cloudstudio-3dgs-work"
+ },
+ "C2_da2": {
+  "base": "R5_cull05",
+  "description": "R5 + monocular depth far cutoff 30 m and bounded depth space",
+  "config_sha256": "0d6655b27310ebdcaf0b96b576e2aa5519d13d665e0b1fa808812fe91cdfa0e1",
+  "repo": "C:\\Peter\\cloudstudio-3dgs-work"
+ }
+}

@@ -103,7 +103,7 @@
   "enabled": false
  },
  "final_evaluation_artifacts": false,
- "lidar_alpha_weight": 0.0,
+ "lidar_alpha_weight": 0.5,
  "lidar_alpha_target": 0.95,
  "background_image_manifest": "C:\\Peter\\3dgs-runs\\house0305_sop\\tile_backgrounds\\Tile_0\\background_manifest.json",
  "background_image_root": "C:\\Peter\\3dgs-runs\\house0305_sop\\tile_backgrounds\\Tile_0",
@@ -139,8 +139,8 @@
   "detail_split_scale_m": 0.02,
   "detail_split_screen_radius": 0.0035
  },
- "surface_alpha_floor_profile": false,
- "lidar_alpha_dilation_radius_px": 0,
+ "surface_alpha_floor_profile": true,
+ "lidar_alpha_dilation_radius_px": 6,
  "mono_depth_manifest": "C:\\Peter\\3dgs-datasets\\house0305_sop_v8\\da2_train\\mono_depth_manifest.json",
  "mono_depth_root": "C:\\Peter\\3dgs-datasets\\house0305_sop_v8\\da2_train",
  "controlled_stop_after_steps": 3500,
