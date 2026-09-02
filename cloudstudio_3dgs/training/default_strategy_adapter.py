@@ -135,6 +135,8 @@ class DefaultStrategyAdapter:
         prune_switch_step: int | None = None,
         reset_opacity_cap: float | None = None,
         reset_adam_step: bool = False,
+        reset_optimizer_state: str = "zero_moments",
+        reset_before_cull: bool = False,
         capacity_cap: int | None = None,
         surface_birth_proposal: Any | None = None,
         opacity_cull_policy: str = "immediate",
@@ -185,6 +187,16 @@ class DefaultStrategyAdapter:
         # ~100 steps. Restarting the counter makes them lr-sized again. Kept
         # off by default: an integration audit knob, not a lifecycle fact.
         self.reset_adam_step = bool(reset_adam_step)
+        # What the opacity reset does to the opacities' Adam state:
+        #   "zero_moments" - the library behaviour (moments zeroed, step kept);
+        #   "keep"         - nothing touched: moments and step carry over, so the
+        #                    momentum a row had before the clamp keeps acting.
+        if reset_optimizer_state not in {"zero_moments", "keep"}:
+            raise ValueError("reset_optimizer_state must be zero_moments or keep")
+        self.reset_optimizer_state = str(reset_optimizer_state)
+        # Execution order inside one refine step: grow -> cull -> reset (library)
+        # or grow -> reset -> cull.
+        self.reset_before_cull = bool(reset_before_cull)
         self.capacity_cap = None if capacity_cap is None else int(capacity_cap)
         if self.capacity_cap is not None and self.capacity_cap <= 4:
             raise ValueError("capacity_cap must be greater than four")
@@ -1409,6 +1421,34 @@ class DefaultStrategyAdapter:
             0, gs_ids, opacity_now[gs_ids] * radii
         )
 
+    def _reset_opacities(self, params, optimizers, state) -> None:
+        """Clamp opacities to the reset cap with the configured optimizer-state policy."""
+        import torch
+        from gsplat.strategy.ops import _update_param_with_optimizer, reset_opa
+
+        if self.reset_optimizer_state == "keep":
+            cap_logit = torch.logit(torch.tensor(float(self.reset_opacity_cap))).item()
+
+            def param_fn(name: str, p: torch.Tensor) -> torch.Tensor:
+                if name != "opacities":
+                    raise ValueError(f"Unexpected parameter name: {name}")
+                return torch.nn.Parameter(
+                    torch.clamp(p, max=cap_logit), requires_grad=p.requires_grad
+                )
+
+            _update_param_with_optimizer(
+                param_fn, lambda key, v: v, params, optimizers, names=["opacities"]
+            )
+        else:
+            reset_opa(
+                params=params,
+                optimizers=optimizers,
+                state=state,
+                value=float(self.reset_opacity_cap),
+            )
+        if self.reset_adam_step:
+            _restart_adam_step(optimizers.get("opacities"), params["opacities"])
+
     def _step_post_backward_mipmap(
         self,
         *,
@@ -1419,7 +1459,6 @@ class DefaultStrategyAdapter:
         info: dict[str, Any],
     ) -> None:
         import torch
-        from gsplat.strategy.ops import reset_opa
 
         self.last_lifecycle_event = None
         state["_cloudstudio_current_step"] = int(step)
@@ -1451,6 +1490,11 @@ class DefaultStrategyAdapter:
         clone_count, split_count = self._grow_mipmap(
             params, optimizers, state
         )
+        reset = step % int(self.inner.reset_every) == 0
+        if reset and self.lifecycle_dry_run:
+            reset = False
+        if reset and self.reset_before_cull:
+            self._reset_opacities(params, optimizers, state)
         cull_count = self._prune_mipmap(
             params,
             optimizers,
@@ -1458,18 +1502,9 @@ class DefaultStrategyAdapter:
             step=step,
             densify_allowed=densify_allowed,
         )
-        reset = step % int(self.inner.reset_every) == 0
-        if reset and self.lifecycle_dry_run:
-            reset = False
+        if reset and not self.reset_before_cull:
+            self._reset_opacities(params, optimizers, state)
         if reset:
-            reset_opa(
-                params=params,
-                optimizers=optimizers,
-                state=state,
-                value=float(self.reset_opacity_cap),
-            )
-            if self.reset_adam_step:
-                _restart_adam_step(optimizers.get("opacities"), params["opacities"])
             if self.opacity_cull_policy != "immediate":
                 state["_cloudstudio_cull_low_streak"].zero_()
                 state["_cloudstudio_cull_observations"].zero_()
@@ -1557,6 +1592,8 @@ class DefaultStrategyAdapter:
             "prune_switch_step": self.prune_switch_step,
             "reset_opacity_cap": self.reset_opacity_cap,
             "reset_adam_step": self.reset_adam_step,
+            "reset_optimizer_state": self.reset_optimizer_state,
+            "reset_before_cull": self.reset_before_cull,
             "capacity_cap": self.capacity_cap,
             "surface_birth_guard": (
                 None
