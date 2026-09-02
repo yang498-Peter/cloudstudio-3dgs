@@ -220,5 +220,17 @@
   "description": "parity profile + sparse LiDAR range 0.05 robust, reset 300",
   "config_sha256": "f78b5292512d947da4a1adda58550d460473cd4d885991146788bea93c7c5a46",
   "repo": "C:\\Peter\\cloudstudio-3dgs-work"
+ },
+ "P3_mesh_r300": {
+  "base": "P0_exact300",
+  "description": "parity profile + mesh depth 0.25 / normal 0.05 + mesh-aligned DA2 0.5, reset 300",
+  "config_sha256": "634488be8ceed987406eb765123f47cf572cbe1713fe343be1deb8f784981565",
+  "repo": "C:\\Peter\\cloudstudio-3dgs-work"
+ },
+ "P3_mesh_r3000": {
+  "base": "P3_mesh_r300",
+  "description": "same with the deferred 3000-step reset",
+  "config_sha256": "fa8ec39fdc2a0c0fd221a4ac1b98113029c80510442497d81affe1b68764bb31",
+  "repo": "C:\\Peter\\cloudstudio-3dgs-work"
  }
 }
