@@ -61,10 +61,18 @@ def main() -> int:
         "LiDAR returns and their neighbourhood leave the mask), the same "
         "rule tile_ownership_masking applies in training",
     )
+    parser.add_argument(
+        "--holdout-from",
+        type=Path,
+        help="with --tile-views: score only the views listed as held out in "
+        "this run directory's holdout_views.json (views the run never trained on)",
+    )
     parser.add_argument("--output", type=Path)
     args = parser.parse_args()
     if args.tile_owned and not args.tile_views:
         parser.error("--tile-owned needs --tile-views")
+    if args.holdout_from is not None and not args.tile_views:
+        parser.error("--holdout-from needs --tile-views")
     if (args.checkpoint is None) == (args.reference_ply is None):
         parser.error("pass exactly one of --checkpoint or --reference-ply")
 
@@ -94,13 +102,23 @@ def main() -> int:
             parser.error("Tile inputs do not contain a unique selected Tile")
         # Training faces, cropped exactly as the trainer crops them; the
         # held-out split has no Tile crops, so a Tile-level score is by
-        # construction a training-view score and must be read as such.
+        # construction a training-view score and must be read as such -
+        # unless --holdout-from restricts it to views the run withheld.
+        tile_view_list = selected[0]["views"]
+        if args.holdout_from is not None:
+            record = args.holdout_from
+            if record.is_dir():
+                record = record / "holdout_views.json"
+            held = set(json.loads(record.read_text(encoding="utf-8"))["held_out_sample_ids"])
+            tile_view_list = [v for v in tile_view_list if str(v["sample_id"]) in held]
+            if not tile_view_list:
+                parser.error("no Tile views match the hold-out record")
         dataset = FaceCacheDataset(
             Path(raw["face_cache_manifest"]),
             Path(raw["face_cache_root"]),
             verify_artifacts=False,
             dataset_manifest_path=Path(raw["dataset_manifest"]),
-            tile_views=selected[0]["views"],
+            tile_views=tile_view_list,
             renderer_mask_manifest_path=Path(raw["renderer_mask_manifest"]),
             face_lidar_geometry_manifest_path=Path(
                 raw["face_lidar_geometry_manifest"]
@@ -252,7 +270,11 @@ def main() -> int:
         "step": step,
         "gaussian_count": int(len(params["means"])),
         "views": len(picks),
-        "view_set": "tile_training_crops" if args.tile_views else "held_out_faces",
+        "view_set": (
+            "tile_holdout_crops" if args.holdout_from is not None
+            else "tile_training_crops" if args.tile_views
+            else "held_out_faces"
+        ),
         "pixel_scope": "tile_owned" if args.tile_owned else "full_mask",
         "psnr_mean": float(np.mean(psnrs)),
         "psnr_p10": float(np.percentile(psnrs, 10)),

@@ -262,6 +262,11 @@ class TrainerConfig:
     # lies outside the selected Tile's training box (plus margin), and the
     # dilated neighbourhood of such returns, so a Tile is not asked to
     # rebuild its neighbours with geometry the merge later discards.
+    # Spatial hold-out inside the Tile: whole 2D cells of camera positions
+    # are removed from training so the Tile arm has views it never saw.
+    holdout_spatial_cell_m: float | None = None
+    holdout_fraction: float = 0.1
+    holdout_seed: int = 0
     tile_ownership_masking: bool = False
     tile_ownership_margin_m: float = 0.5
     tile_ownership_dilation_px: int = 15
@@ -507,6 +512,9 @@ class TrainerConfig:
                 "da2_depth_weight",
                 "mono_depth_max_range_m",
                 "da2_depth_space",
+                "holdout_spatial_cell_m",
+                "holdout_fraction",
+                "holdout_seed",
                 "tile_ownership_masking",
                 "tile_ownership_margin_m",
                 "tile_ownership_dilation_px",
@@ -791,6 +799,13 @@ class TrainerConfig:
             raise ValueError("lidar_range_loss_mode must be linear_l1 or robust_log_huber")
         if self.da2_depth_space not in {"linear", "compressed"}:
             raise ValueError("da2_depth_space must be linear or compressed")
+        if self.holdout_spatial_cell_m is not None:
+            if self.tile_inputs_manifest is None or self.face_cache_manifest is None:
+                raise ValueError("holdout_spatial_cell_m requires Tile inputs and a face cache")
+            if not (float(self.holdout_spatial_cell_m) > 0.0):
+                raise ValueError("holdout_spatial_cell_m must be positive")
+            if not 0.0 < float(self.holdout_fraction) < 1.0:
+                raise ValueError("holdout_fraction must be within (0, 1)")
         if self.tile_ownership_masking:
             if self.tile_inputs_manifest is None or self.face_cache_manifest is None:
                 raise ValueError(
@@ -1765,6 +1780,12 @@ class TrainerConfig:
             loss_weights["da2_depth_contract"] = {
                 "max_range_m": self.mono_depth_max_range_m,
                 "space": self.da2_depth_space,
+            }
+        if self.holdout_spatial_cell_m is not None:
+            view_sampling_contract["spatial_holdout"] = {
+                "cell_m": float(self.holdout_spatial_cell_m),
+                "fraction": float(self.holdout_fraction),
+                "seed": int(self.holdout_seed),
             }
         if self.tile_ownership_masking:
             loss_weights["tile_ownership_masking"] = {
@@ -3170,6 +3191,7 @@ def train(
 
     tile_views = None
     tile_ownership_box = None
+    holdout_view_count = 0
     if config.tile_inputs_manifest is not None:
         tile_inputs = json.loads(
             config.tile_inputs_manifest.read_text(encoding="utf-8")
@@ -3182,6 +3204,36 @@ def train(
         if len(selected_tiles) != 1:
             raise ValueError("Tile inputs do not contain a unique selected Tile")
         tile_views = selected_tiles[0]["views"]
+        if config.holdout_spatial_cell_m is not None:
+            from cloudstudio_3dgs.training.holdout import select_spatial_holdout
+
+            dataset_images = json.loads(
+                config.dataset_manifest.read_text(encoding="utf-8")
+            )["images"]
+            position_by_image = {
+                str(image["image_id"]): [
+                    float(image["c2w"][0][3]),
+                    float(image["c2w"][1][3]),
+                    float(image["c2w"][2][3]),
+                ]
+                for image in dataset_images
+            }
+            holdout = select_spatial_holdout(
+                tile_views,
+                position_by_image,
+                cell_m=float(config.holdout_spatial_cell_m),
+                fraction=float(config.holdout_fraction),
+                seed=int(config.holdout_seed),
+            )
+            held = set(holdout["held_out_sample_ids"])
+            holdout_view_count = len(held)
+            tile_views = [view for view in tile_views if str(view["sample_id"]) not in held]
+            _atomic_json(output_dir / "holdout_views.json", holdout)
+            print(
+                f"spatial hold-out: {holdout_view_count} of {holdout['total_view_count']} "
+                f"Tile views in {holdout['held_out_cell_count']} cells withheld",
+                flush=True,
+            )
         if config.tile_ownership_masking:
             tile_ownership_box = selected_tiles[0]["training_and_export_box"]
     tile_ownership_box = tile_ownership_box if config.tile_ownership_masking else None
@@ -3250,7 +3302,7 @@ def train(
         config.view_sampling_mode
         == "fisher_yates_without_replacement_per_epoch"
         and config.topology_policy.mode == "adaptive_growth"
-        and config.max_steps != 20 * len(trainset)
+        and config.max_steps != 20 * (len(trainset) + holdout_view_count)
     ):
         raise ValueError(
             "MipMap epoch-permutation sampling requires exactly 20 complete view epochs"
