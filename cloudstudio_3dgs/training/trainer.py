@@ -313,6 +313,10 @@ class TrainerConfig:
     # MipMap lifecycle's prune gate; a coherent whole-machine transplant
     # starts at that machine's reset cap (0.2) instead.
     init_opacity: float = 0.1
+    # Deterministic thinning of the signed initialization (every k-th point,
+    # applied identically to the per-point geometry) so initial population
+    # density can be varied without a new signed artifact. 1 = as signed.
+    initialization_subsample_stride: int = 1
     # Optional pre-baked far-shell sky layer (checkpoint-convention params)
     # concatenated into the trainable set at initialization, so sky pixels
     # have an owner and the white background stops pressing scene gaussians
@@ -553,6 +557,7 @@ class TrainerConfig:
                 "default_strategy",
                 "densification_gradient_source",
                 "init_opacity",
+                "initialization_subsample_stride",
                 "learning_rates",
                 "warm_start_min_opacity",
                 "warm_start_scale_multiplier",
@@ -999,6 +1004,11 @@ class TrainerConfig:
             )
         if not 0.0 < float(self.init_opacity) < 1.0:
             raise ValueError("init_opacity must be within (0, 1)")
+        if (
+            isinstance(self.initialization_subsample_stride, bool)
+            or int(self.initialization_subsample_stride) < 1
+        ):
+            raise ValueError("initialization_subsample_stride must be a positive integer")
         if self.sky_shell_checkpoint is not None:
             if not self.sky_shell_checkpoint.is_file():
                 raise FileNotFoundError(
@@ -1908,6 +1918,11 @@ class TrainerConfig:
             "initialization": {
                 "fixed_scale_m": self.init_scale_m,
                 **self.metric_scale_calibration.to_dict(),
+                **(
+                    {"subsample_stride": int(self.initialization_subsample_stride)}
+                    if int(self.initialization_subsample_stride) > 1
+                    else {}
+                ),
             },
             "loss_weights": loss_weights,
             "view_sampling": view_sampling_contract,
@@ -3406,6 +3421,23 @@ def train(
             expected_initialization_ply_sha256=initialization_sha256,
             expected_count=len(xyz),
         )
+    initialization_full_count = len(xyz)
+    subsample_stride = int(config.initialization_subsample_stride)
+    if subsample_stride > 1:
+        xyz = np.ascontiguousarray(xyz[::subsample_stride])
+        rgb = np.ascontiguousarray(rgb[::subsample_stride])
+        if exact_geometry is not None:
+            exact_scales, exact_quats, exact_geometry_report = exact_geometry
+            exact_geometry = (
+                np.ascontiguousarray(exact_scales[::subsample_stride]),
+                np.ascontiguousarray(exact_quats[::subsample_stride]),
+                {**exact_geometry_report, "subsample_stride": subsample_stride},
+            )
+        print(
+            f"initialization thinned by stride {subsample_stride}: "
+            f"{initialization_full_count} -> {len(xyz)} points",
+            flush=True,
+        )
     initial_scales_m, scale_calibration = build_metric_scale_calibration(
         xyz,
         policy=config.metric_scale_calibration,
@@ -3441,8 +3473,13 @@ def train(
         else:
             geometry_normals, geometry_eigenvalues = load_initialization_geometry(
                 config.initialization_geometry,
-                expected_count=len(xyz),
+                expected_count=initialization_full_count,
             )
+            if subsample_stride > 1:
+                geometry_normals = np.ascontiguousarray(geometry_normals[::subsample_stride])
+                geometry_eigenvalues = np.ascontiguousarray(
+                    geometry_eigenvalues[::subsample_stride]
+                )
             (
                 initial_scales_m,
                 initial_quaternions,
