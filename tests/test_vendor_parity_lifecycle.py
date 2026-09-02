@@ -166,5 +166,41 @@ class VendorParityLifecycleTests(unittest.TestCase):
             self.assertEqual(float(step), 0.0 if restart else 1.0)
 
 
+class ResetOptimizerStatePolicyTests(unittest.TestCase):
+    def _reset_with(self, **overrides):
+        import torch
+
+        adapter = _adapter(**overrides)
+        params = _params([[0.01] * 3] * 3, [0.9, 0.2, 0.15])
+        optimizers = _optimizers(params)
+        params["opacities"].grad = torch.ones_like(params["opacities"])
+        optimizers["opacities"].step()
+        adapter._step_post_backward_mipmap(
+            params=params, optimizers=optimizers, state=_state(3, grad=0.0), step=600, info=_info(3)
+        )
+        return params, optimizers["opacities"].state[params["opacities"]]
+
+    def test_keep_policy_leaves_moments_and_step_untouched(self) -> None:
+        import torch
+
+        params, opt_state = self._reset_with(reset_optimizer_state="keep")
+        after = torch.sigmoid(params["opacities"].detach())
+        self.assertAlmostEqual(float(after[0]), 0.2, places=5)
+        self.assertGreater(float(opt_state["exp_avg"].abs().sum()), 0.0)
+        self.assertGreater(float(opt_state["exp_avg_sq"].abs().sum()), 0.0)
+        self.assertEqual(float(opt_state["step"]), 1.0)
+
+    def test_reset_before_cull_gives_the_same_opacities(self) -> None:
+        import torch
+
+        a, _ = self._reset_with(reset_before_cull=False)
+        b, _ = self._reset_with(reset_before_cull=True)
+        torch.testing.assert_close(a["opacities"].detach(), b["opacities"].detach())
+
+    def test_invalid_policy_is_rejected(self) -> None:
+        with self.assertRaises(ValueError):
+            _adapter(reset_optimizer_state="drop")
+
+
 if __name__ == "__main__":
     unittest.main()

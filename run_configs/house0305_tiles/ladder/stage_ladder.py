@@ -204,6 +204,17 @@ ARMS = {
     # length asks whether the population now survives eight reset cycles.
     "P7b_adamstep_r300_3500": ("P7_adamstep_r300", "Adam step restart at reset, run to the ladder's 3,500-step stop",
                                _set("controlled_stop_after_steps", 3500), WORK),
+    # Reset-state parity (host disassembly 2026-09-03): the vendor reset leaves
+    # the opacities' Adam state untouched (moments and step) and runs
+    # split/clone -> reset -> cull. Three states: library = moments zeroed,
+    # step kept; P7 = everything cleared; P9 = nothing touched.
+    "P9_keep_r300": ("P0_exact300", "parity profile, reset leaves Adam state untouched and runs before the cull, reset 300, stop 1000",
+                     _many(_set("default_strategy.reset_optimizer_state", "keep"),
+                           _set("default_strategy.reset_before_cull", True),
+                           _set("controlled_stop_after_steps", 1000)), WORK),
+    "P9b_keeponly_r300": ("P0_exact300", "parity profile, reset leaves Adam state untouched, library order (cull before reset), stop 1000",
+                          _many(_set("default_strategy.reset_optimizer_state", "keep"),
+                                _set("controlled_stop_after_steps", 1000)), WORK),
     # Enhancement track: the 7k extension doubled the population in the second
     # reset cycle without held-out gains; stop refinement before that wave.
     "X7h_T2_stop5k": ("T2h_split05", "T2h to 7,000 steps with refinement stopped at 5,000 (no second split wave)",

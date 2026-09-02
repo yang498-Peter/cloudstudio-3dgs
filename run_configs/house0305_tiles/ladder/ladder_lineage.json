@@ -286,5 +286,17 @@
   "description": "Adam step restart at reset, run to the ladder's 3,500-step stop",
   "config_sha256": "383d7375aee0fc33b2b5756a7e542aeaf28b8f7096492aba17b3936d0c48019d",
   "repo": "C:\\Peter\\cloudstudio-3dgs-work"
+ },
+ "P9_keep_r300": {
+  "base": "P0_exact300",
+  "description": "parity profile, reset leaves Adam state untouched and runs before the cull, reset 300, stop 1000",
+  "config_sha256": "86f025a91f6862bef9931b02080794cede90504a13f6d8f9c1f27f7e9d4e2a18",
+  "repo": "C:\\Peter\\cloudstudio-3dgs-work"
+ },
+ "P9b_keeponly_r300": {
+  "base": "P0_exact300",
+  "description": "parity profile, reset leaves Adam state untouched, library order (cull before reset), stop 1000",
+  "config_sha256": "991e20bab27d35838f00a9da6b4b9880777638f35ef1ae3882db07790df0f24f",
+  "repo": "C:\\Peter\\cloudstudio-3dgs-work"
  }
 }
