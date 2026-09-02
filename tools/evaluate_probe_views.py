@@ -54,8 +54,17 @@ def main() -> int:
         "so the held-out battery cannot compare Tile-level arms to each other "
         "or to a whole-scene delivery",
     )
+    parser.add_argument(
+        "--tile-owned",
+        action="store_true",
+        help="with --tile-views: score only pixels the Tile owns (foreign "
+        "LiDAR returns and their neighbourhood leave the mask), the same "
+        "rule tile_ownership_masking applies in training",
+    )
     parser.add_argument("--output", type=Path)
     args = parser.parse_args()
+    if args.tile_owned and not args.tile_views:
+        parser.error("--tile-owned needs --tile-views")
     if (args.checkpoint is None) == (args.reference_ply is None):
         parser.error("pass exactly one of --checkpoint or --reference-ply")
 
@@ -97,6 +106,11 @@ def main() -> int:
                 raw["face_lidar_geometry_manifest"]
             ),
             face_lidar_geometry_root=Path(raw["face_lidar_geometry_root"]),
+            tile_ownership_box=(
+                selected[0]["training_and_export_box"] if args.tile_owned else None
+            ),
+            tile_ownership_margin_m=float(raw.get("tile_ownership_margin_m", 0.5)),
+            tile_ownership_dilation_px=int(raw.get("tile_ownership_dilation_px", 15)),
         )
         backgrounds = None
         if raw.get("background_image_manifest"):
@@ -239,6 +253,7 @@ def main() -> int:
         "gaussian_count": int(len(params["means"])),
         "views": len(picks),
         "view_set": "tile_training_crops" if args.tile_views else "held_out_faces",
+        "pixel_scope": "tile_owned" if args.tile_owned else "full_mask",
         "psnr_mean": float(np.mean(psnrs)),
         "psnr_p10": float(np.percentile(psnrs, 10)),
         "alpha_mean": float(np.mean(alpha_means)),
