@@ -142,5 +142,29 @@
   "description": "C2h without the sparse LiDAR range term",
   "config_sha256": "2afa02c027ed585a750505fe1c2e288efdc1a4546f2e0e5acb5c91e6ed30ff11",
   "repo": "C:\\Peter\\cloudstudio-3dgs-work"
+ },
+ "C5T2_split05": {
+  "base": "C5_norange",
+  "description": "C5 + detail split gate 0.005 m",
+  "config_sha256": "347a1f42dcade59942be55488f6a9296c496b53a8efacb776231872f2135f5ca",
+  "repo": "C:\\Peter\\cloudstudio-3dgs-work"
+ },
+ "C5T2h_split05": {
+  "base": "C5h_norange",
+  "description": "C5h + detail split gate 0.005 m",
+  "config_sha256": "2d42ff538074a0e07b8f8766ebe2eabab5c60005052ee9fc8e88ed66f13a5d0a",
+  "repo": "C:\\Peter\\cloudstudio-3dgs-work"
+ },
+ "X7_C5T2": {
+  "base": "C5T2_split05",
+  "description": "C5T2 extended to 7,000 steps (two reset cycles)",
+  "config_sha256": "f60ef78d20c64bcac2290ecd8893641460f0e20a06fd65611036ef2f36c2a028",
+  "repo": "C:\\Peter\\cloudstudio-3dgs-work"
+ },
+ "X7h_C5T2": {
+  "base": "C5T2h_split05",
+  "description": "C5T2h extended to 7,000 steps with the hold-out",
+  "config_sha256": "fba830ec1a1adfb8da910b8a66e2379c9f01f1ef4a1466a97a83e1a8b04b191e",
+  "repo": "C:\\Peter\\cloudstudio-3dgs-work"
  }
 }
