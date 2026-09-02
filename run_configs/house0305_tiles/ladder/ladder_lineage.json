@@ -190,5 +190,23 @@
   "description": "same profile with the CloudStudio deferred 3000-step reset (competitor_equivalent=false)",
   "config_sha256": "a7a5c8d18deac9b80667f3d8281fdaef31567d6bd54e4df49b2b9cac199ec645",
   "repo": "C:\\Peter\\cloudstudio-3dgs-work"
+ },
+ "P1_init4_r300": {
+  "base": "P0_exact300",
+  "description": "parity profile, initialization thinned to 1/4 (stride 4), reset 300",
+  "config_sha256": "1c5a9dd98e9da5966db42c1c1f963eed3143b069bb4908827105153a93908681",
+  "repo": "C:\\Peter\\cloudstudio-3dgs-work"
+ },
+ "P1_init4_r3000": {
+  "base": "P0_exact3000",
+  "description": "parity profile, initialization thinned to 1/4, deferred reset 3000",
+  "config_sha256": "bfda4d731da0ea6ef669f357755e12e22dc82d2a980cf7c7b7852cb9e2665241",
+  "repo": "C:\\Peter\\cloudstudio-3dgs-work"
+ },
+ "P1_init2_r300": {
+  "base": "P0_exact300",
+  "description": "parity profile, initialization thinned to 1/2, reset 300",
+  "config_sha256": "5cfd743144a2dbd31eb97ec8b98298b78e1e64b88db4c4ddc854a3425bf33fe0",
+  "repo": "C:\\Peter\\cloudstudio-3dgs-work"
  }
 }

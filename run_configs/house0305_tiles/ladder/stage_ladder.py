@@ -135,6 +135,14 @@ ARMS = {
     "P0_exact3000": ("P0_exact300", "same profile with the CloudStudio deferred 3000-step reset (competitor_equivalent=false)",
                      _many(_set("default_strategy.vendor_opacity_reset_profile", "deferred_every3000_compatibility"),
                            _set("default_strategy.reset_every", 3000)), WORK),
+    # Initial-density A/B on the parity profile: does a sparser initial
+    # population survive the vendor 300-step reset in our integration?
+    "P1_init4_r300": ("P0_exact300", "parity profile, initialization thinned to 1/4 (stride 4), reset 300",
+                      _set("initialization_subsample_stride", 4), WORK),
+    "P1_init4_r3000": ("P0_exact3000", "parity profile, initialization thinned to 1/4, deferred reset 3000",
+                       _set("initialization_subsample_stride", 4), WORK),
+    "P1_init2_r300": ("P0_exact300", "parity profile, initialization thinned to 1/2, reset 300",
+                      _set("initialization_subsample_stride", 2), WORK),
     "C4_all": ("C3_vis", "C3 + Tile ownership masking + monocular far cutoff (supervision-correctness bundle)",
                _many(_set("tile_ownership_masking", True), _set("tile_ownership_margin_m", 0.5),
                      _set("tile_ownership_dilation_px", 15),

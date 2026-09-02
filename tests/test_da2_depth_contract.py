@@ -132,5 +132,21 @@ class TileOwnershipContractTests(unittest.TestCase):
                     ).validate()
 
 
+@unittest.skipUnless(HAS_TORCH, "torch is an optional training dependency")
+class InitializationStrideContractTests(unittest.TestCase):
+    def test_default_is_as_signed_and_absent_from_the_contract(self) -> None:
+        config = _base()
+        config.validate()
+        self.assertEqual(config.initialization_subsample_stride, 1)
+        self.assertNotIn("subsample_stride", config.contract_dict()["initialization"])
+
+    def test_stride_enters_the_contract_and_is_validated(self) -> None:
+        config = _base(initialization_subsample_stride=4)
+        config.validate()
+        self.assertEqual(config.contract_dict()["initialization"]["subsample_stride"], 4)
+        with self.assertRaisesRegex(ValueError, "initialization_subsample_stride"):
+            _base(initialization_subsample_stride=0).validate()
+
+
 if __name__ == "__main__":
     unittest.main()
