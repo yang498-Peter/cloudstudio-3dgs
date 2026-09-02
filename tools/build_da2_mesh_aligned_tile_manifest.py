@@ -180,8 +180,8 @@ def main() -> int:
                 "pair_sampling": "all_common_valid_pixels",
                 "invalid_view_policy": "disable_da2_loss_for_view",
             },
-            "complete_face_cache": len(records) == int(mesh_manifest["expected_face_count"]),
-            "expected_face_count": int(mesh_manifest["expected_face_count"]),
+            "complete_face_cache": len(records) == int(mesh_manifest.get("expected_face_count", len(mesh_manifest["records"]))),
+            "expected_face_count": int(mesh_manifest.get("expected_face_count", len(mesh_manifest["records"]))),
             "records": sorted(records, key=lambda item: item["sample_id"]),
             "summary": {
                 "face_count": len(records),

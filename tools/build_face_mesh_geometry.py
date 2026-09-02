@@ -235,6 +235,7 @@ def main() -> int:
             "mesh_path": str(args.mesh),
             "mesh_sha256": mesh_sha,
             "raster_factor": factor,
+            "expected_face_count": len(records),
             "tile_id": int(args.tile_id) if crop_by_sample is not None else None,
             "records": records,
         }
