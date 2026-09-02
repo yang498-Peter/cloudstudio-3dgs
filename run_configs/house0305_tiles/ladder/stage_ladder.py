@@ -170,6 +170,14 @@ ARMS = {
                        _set("default_strategy.grow_grad2d", 0.000075), WORK),
     "P4_grad100_r300": ("P0_exact300", "parity profile, grow_grad2d 1e-4, reset 300",
                         _set("default_strategy.grow_grad2d", 0.0001), WORK),
+    # Enhancement track: the 7k extension doubled the population in the second
+    # reset cycle without held-out gains; stop refinement before that wave.
+    "X7h_T2_stop5k": ("T2h_split05", "T2h to 7,000 steps with refinement stopped at 5,000 (no second split wave)",
+                      _many(_set("controlled_stop_after_steps", 7000), _set("checkpoint_every", 3500),
+                            _set("checkpoint_keep_every", 3500),
+                            _set("mcmc_refine_stop_iter", 5000),
+                            _set("default_strategy.refine_stop_iter", 5000),
+                            _set("default_strategy.refine_scale2d_stop_iter", 5000)), WORK),
     "C4_all": ("C3_vis", "C3 + Tile ownership masking + monocular far cutoff (supervision-correctness bundle)",
                _many(_set("tile_ownership_masking", True), _set("tile_ownership_margin_m", 0.5),
                      _set("tile_ownership_dilation_px", 15),

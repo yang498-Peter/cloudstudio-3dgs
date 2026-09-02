@@ -244,5 +244,11 @@
   "description": "parity profile, grow_grad2d 1e-4, reset 300",
   "config_sha256": "2484099b26e25659546368b72dbb3a34afa3e8cbf23ff1cd2705f34e8a1a7bf5",
   "repo": "C:\\Peter\\cloudstudio-3dgs-work"
+ },
+ "X7h_T2_stop5k": {
+  "base": "T2h_split05",
+  "description": "T2h to 7,000 steps with refinement stopped at 5,000 (no second split wave)",
+  "config_sha256": "3a175b711d5852d91bed1063b8fcd2818a559c8d606d36385c20194e4eab10e4",
+  "repo": "C:\\Peter\\cloudstudio-3dgs-work"
  }
 }
