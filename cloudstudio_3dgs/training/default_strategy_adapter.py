@@ -74,6 +74,13 @@ def _sampled_quantile(values: Any, levels: Any) -> Any:
     return torch.quantile(values, levels)
 
 
+# Detail split thresholds the validators accept. 0.02 m is the value the
+# adaptive-detail split was first tuned with; the smaller values exist because
+# split children of 30-45 mm parents land at 18-28 mm and never split again
+# under a 20 mm gate, so the population cannot get smaller than ~12 mm.
+DETAIL_SPLIT_SCALES_M = (0.02, 0.01, 0.005)
+
+
 class DefaultStrategyAdapter:
     """gsplat ``DefaultStrategy`` behind the attribute surface MCMC exposes."""
 
