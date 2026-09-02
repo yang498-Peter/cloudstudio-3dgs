@@ -597,6 +597,41 @@ class DefaultStrategyAdapter:
                     params["opacities"].index_copy_(0, selected, reshaped)
                     params["opacities"][-selected.numel() :].copy_(reshaped)
 
+        def split_selected(mask: Any) -> None:
+            """Split rows; the revised child opacity is computed here so a
+            parent whose sigmoid has saturated to exactly 1.0 (logit beyond
+            float32 resolution) cannot turn into an infinite child logit.
+            The library formula 1 - sqrt(1 - p) on such a parent gives 1.0 and
+            logit(1.0) is +inf, which the next optimizer step spreads as NaN."""
+
+            selected = torch.where(mask)[0]
+            revised_logits = None
+            if self.inner.revised_opacity and selected.numel():
+                parent_opacity = torch.sigmoid(
+                    params["opacities"][selected].detach()
+                )
+                revised_opacity = 1.0 - torch.sqrt(
+                    (1.0 - parent_opacity).clamp_min(0.0)
+                )
+                revised_logits = torch.logit(
+                    revised_opacity.clamp(1e-6, 1.0 - 1e-6)
+                )
+            split(
+                params=params,
+                optimizers=optimizers,
+                state=state,
+                mask=mask,
+                revised_opacity=False,
+                scene=scene,
+            )
+            if revised_logits is not None:
+                with torch.no_grad():
+                    count = selected.numel()
+                    tail = params["opacities"][-2 * count :]
+                    # The library appends the two children of parent i at
+                    # tail rows i and count + i.
+                    tail.copy_(revised_logits.reshape(count, *tail.shape[1:]).repeat(2, *([1] * (tail.dim() - 1))))
+
         if self.growth_metric == "footprint_weighted":
             weight_sum = state.get("_footprint_weight_sum")
             if weight_sum is None or len(weight_sum) != len(params["means"]):
@@ -819,14 +854,7 @@ class DefaultStrategyAdapter:
             # so remap the clone mask onto that layout before duplicating.
             if split_count:
                 original_split_mask = split_mask
-                split(
-                    params=params,
-                    optimizers=optimizers,
-                    state=state,
-                    mask=original_split_mask,
-                    revised_opacity=self.inner.revised_opacity,
-                    scene=scene,
-                )
+                split_selected(original_split_mask)
                 duplicate_mask = torch.cat(
                     [
                         duplicate_mask[~original_split_mask],
@@ -853,14 +881,7 @@ class DefaultStrategyAdapter:
                         ),
                     ]
                 )
-                split(
-                    params=params,
-                    optimizers=optimizers,
-                    state=state,
-                    mask=split_mask,
-                    revised_opacity=self.inner.revised_opacity,
-                    scene=scene,
-                )
+                split_selected(split_mask)
         if parent_means is not None:
             # ``split`` removes its parents, keeps all non-split rows, then
             # appends two children per parent.  Duplicates therefore precede
