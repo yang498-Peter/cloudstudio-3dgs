@@ -1082,6 +1082,9 @@ class TrainerConfig:
                     "compatibility_uniform_0p05": (0.05, 0.05),
                     "calibrated_uniform_0p04": (0.04, 0.04),
                     "calibrated_geometry_only_0p00": (0.0, 0.0),
+                    # Audit reference only: the published Kerbl et al. cull threshold,
+                    # to ask whether the reset dynamics collapse under it. Not a vendor fact.
+                    "audit_uniform_0p005": (0.005, 0.005),
                 }
                 expected_cull_thresholds = vendor_cull_thresholds.get(
                     vendor_cull_warmup_profile

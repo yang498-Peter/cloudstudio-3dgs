@@ -193,6 +193,13 @@ ARMS = {
     "P7_adamstep_r300": ("P0_exact300", "parity profile, Adam step counter restarted at each opacity reset, reset 300, stop 1000",
                          _many(_set("default_strategy.reset_adam_step", True),
                                _set("controlled_stop_after_steps", 1000)), WORK),
+    # Cull-threshold audit: the vendor opacity cull constant came from a
+    # disassembly whose threshold mapping was never settled; this asks whether
+    # the same reset dynamics collapse under the published 0.005 threshold.
+    "P8_cull005_r300": ("P0_exact300", "parity profile, opacity cull 0.005 (published threshold, audit profile), reset 300, stop 1300",
+                        _many(_set("default_strategy.vendor_cull_warmup_profile", "audit_uniform_0p005"),
+                              _set("default_strategy.prune_opa", 0.005), _set("default_strategy.prune_opa_late", 0.005),
+                              _set("controlled_stop_after_steps", 1300)), WORK),
     # Enhancement track: the 7k extension doubled the population in the second
     # reset cycle without held-out gains; stop refinement before that wave.
     "X7h_T2_stop5k": ("T2h_split05", "T2h to 7,000 steps with refinement stopped at 5,000 (no second split wave)",

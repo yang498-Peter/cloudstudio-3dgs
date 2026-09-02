@@ -274,5 +274,11 @@
   "description": "parity profile, Adam step counter restarted at each opacity reset, reset 300, stop 1000",
   "config_sha256": "c17f1369230dc19a105d9d96ecc58875bb4d1dd0966a86fb57aec130b293fb51",
   "repo": "C:\\Peter\\cloudstudio-3dgs-work"
+ },
+ "P8_cull005_r300": {
+  "base": "P0_exact300",
+  "description": "parity profile, opacity cull 0.005 (published threshold, audit profile), reset 300, stop 1300",
+  "config_sha256": "d52e35c0958b9f2a644ae0898eac8ae66f798b0814e003b72801ce98270cbcaa",
+  "repo": "C:\\Peter\\cloudstudio-3dgs-work"
  }
 }
