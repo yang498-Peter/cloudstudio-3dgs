@@ -90,7 +90,10 @@ from cloudstudio_3dgs.training.rig_pose import (
     build_pose_refinement_report,
     disabled_pose_refinement_report,
 )
-from cloudstudio_3dgs.training.default_strategy_adapter import DENSIFICATION_STRATEGIES
+from cloudstudio_3dgs.training.default_strategy_adapter import (
+    DENSIFICATION_STRATEGIES,
+    DETAIL_SPLIT_SCALES_M,
+)
 from cloudstudio_3dgs.training.error_weighted_mcmc import ErrorScoreConfig
 from cloudstudio_3dgs.training.contribution_attribution import (
     ContributionConfig,
@@ -1129,8 +1132,14 @@ class TrainerConfig:
                     "capacity-conserving clone opacity flag must be boolean"
                 )
             if detail_split_policy == "lidar_surface_screen_detail":
-                if self.default_strategy.get("detail_split_scale_m") != 0.02:
-                    raise ValueError("detail split scale must be 0.02 m")
+                if (
+                    self.default_strategy.get("detail_split_scale_m")
+                    not in DETAIL_SPLIT_SCALES_M
+                ):
+                    raise ValueError(
+                        "detail split scale must be one of "
+                        f"{DETAIL_SPLIT_SCALES_M} m"
+                    )
                 if self.default_strategy.get("detail_split_screen_radius") != 0.0035:
                     raise ValueError(
                         "detail split screen radius must be 0.0035"

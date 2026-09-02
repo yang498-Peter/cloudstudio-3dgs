@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from cloudstudio_3dgs.data.manifest import canonical_json_bytes
+from cloudstudio_3dgs.training.default_strategy_adapter import DETAIL_SPLIT_SCALES_M
 from cloudstudio_3dgs.data.depth_cache import verify_depth_manifest
 from cloudstudio_3dgs.data.mono_depth import verify_mono_depth_manifest
 from cloudstudio_3dgs.data.renderer_masks import verify_renderer_mask_manifest
@@ -1320,8 +1321,11 @@ def advance_adaptive_growth_gate(
     }:
         raise ValueError("pre-optimizer vendor lifecycle requires plain gradients")
     if detail_split_policy == "lidar_surface_screen_detail":
-        if strategy.get("detail_split_scale_m") != 0.02:
-            raise ValueError("adaptive detail split scale must be 0.02 m")
+        if strategy.get("detail_split_scale_m") not in DETAIL_SPLIT_SCALES_M:
+            raise ValueError(
+                "adaptive detail split scale must be one of "
+                f"{DETAIL_SPLIT_SCALES_M} m"
+            )
         if strategy.get("detail_split_screen_radius") != 0.0035:
             raise ValueError(
                 "adaptive detail split screen radius must be 0.0035"

@@ -52,5 +52,35 @@
   "description": "R5 + monocular depth far cutoff 30 m and bounded depth space",
   "config_sha256": "0d6655b27310ebdcaf0b96b576e2aa5519d13d665e0b1fa808812fe91cdfa0e1",
   "repo": "C:\\Peter\\cloudstudio-3dgs-work"
+ },
+ "C3_vis": {
+  "base": "R5_cull05",
+  "description": "R5 + face LiDAR cache with hidden-point rejection (6 px cells)",
+  "config_sha256": "90ae32a1724c622a679e7db59f935ea2d620db0febce6171b9fb4fa2e2ab6ea8",
+  "repo": "C:\\Peter\\cloudstudio-3dgs-work"
+ },
+ "C4_all": {
+  "base": "C3_vis",
+  "description": "C3 + Tile ownership masking + monocular far cutoff (supervision-correctness bundle)",
+  "config_sha256": "ff08e45c715ae209467a5279f8a7caf1b908fb088003490eb564748863f0e951",
+  "repo": "C:\\Peter\\cloudstudio-3dgs-work"
+ },
+ "T1_split10": {
+  "base": "R5_cull05",
+  "description": "R5 + detail split gate 0.01 m (children of 20-45 mm parents can split again)",
+  "config_sha256": "d67dd6c3c8453812817f7523f2dcf58ea24e02db900788a8d391785453c1718d",
+  "repo": "C:\\Peter\\cloudstudio-3dgs-work"
+ },
+ "T2_split05": {
+  "base": "R5_cull05",
+  "description": "R5 + detail split gate 0.005 m",
+  "config_sha256": "ffecfd125f1165eb04dd9977c7ac2ad8773c65087a238182bb19f985a8fc3945",
+  "repo": "C:\\Peter\\cloudstudio-3dgs-work"
+ },
+ "S1_sizeprior": {
+  "base": "R5_cull05",
+  "description": "R5 + size hinge at 2x the median initial size (scale_upper 0.01, ratio 2)",
+  "config_sha256": "cb6598f5228549151e3c33f337f65c21665c4f3e204ec6b7b3633b64c2a9598e",
+  "repo": "C:\\Peter\\cloudstudio-3dgs-work"
  }
 }

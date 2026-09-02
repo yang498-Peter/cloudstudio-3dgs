@@ -66,6 +66,20 @@ ARMS = {
                      _set("tile_ownership_dilation_px", 15)), WORK),
     "C2_da2": ("R5_cull05", "R5 + monocular depth far cutoff 30 m and bounded depth space",
                _many(_set("mono_depth_max_range_m", 30.0), _set("da2_depth_space", "compressed")), WORK),
+    "C3_vis": ("R5_cull05", "R5 + face LiDAR cache with hidden-point rejection (6 px cells)",
+               _many(_set("face_lidar_geometry_manifest", "C:/Peter/3dgs-datasets/house0305_sop_v8/face4_lidar_train_vis6/face_lidar_geometry_manifest.json"),
+                     _set("face_lidar_geometry_root", "C:/Peter/3dgs-datasets/house0305_sop_v8/face4_lidar_train_vis6")), WORK),
+    "T1_split10": ("R5_cull05", "R5 + detail split gate 0.01 m (children of 20-45 mm parents can split again)",
+                   _set("default_strategy.detail_split_scale_m", 0.01), WORK),
+    "T2_split05": ("R5_cull05", "R5 + detail split gate 0.005 m",
+                   _set("default_strategy.detail_split_scale_m", 0.005), WORK),
+    "S1_sizeprior": ("R5_cull05", "R5 + size hinge at 2x the median initial size (scale_upper 0.01, ratio 2)",
+                     _many(_set("geometry_regularization.scale_upper_weight", 0.01),
+                           _set("geometry_regularization.max_scale_ratio_to_reference", 2.0)), WORK),
+    "C4_all": ("C3_vis", "C3 + Tile ownership masking + monocular far cutoff (supervision-correctness bundle)",
+               _many(_set("tile_ownership_masking", True), _set("tile_ownership_margin_m", 0.5),
+                     _set("tile_ownership_dilation_px", 15),
+                     _set("mono_depth_max_range_m", 30.0), _set("da2_depth_space", "compressed")), WORK),
 }
 
 
