@@ -150,6 +150,21 @@ class VendorParityLifecycleTests(unittest.TestCase):
         self.assertEqual(float(opt_state["exp_avg"].abs().sum()), 0.0)
         self.assertEqual(float(opt_state["exp_avg_sq"].abs().sum()), 0.0)
 
+    def test_reset_keeps_adam_step_unless_the_audit_knob_restarts_it(self) -> None:
+        import torch
+
+        for restart in (False, True):
+            adapter = _adapter(reset_adam_step=restart)
+            params = _params([[0.01] * 3] * 3, [0.9, 0.2, 0.15])
+            optimizers = _optimizers(params)
+            params["opacities"].grad = torch.ones_like(params["opacities"])
+            optimizers["opacities"].step()
+            adapter._step_post_backward_mipmap(
+                params=params, optimizers=optimizers, state=_state(3, grad=0.0), step=600, info=_info(3)
+            )
+            step = optimizers["opacities"].state[params["opacities"]]["step"]
+            self.assertEqual(float(step), 0.0 if restart else 1.0)
+
 
 if __name__ == "__main__":
     unittest.main()

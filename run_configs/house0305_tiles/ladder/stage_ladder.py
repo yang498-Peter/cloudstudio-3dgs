@@ -170,6 +170,29 @@ ARMS = {
                        _set("default_strategy.grow_grad2d", 0.000075), WORK),
     "P4_grad100_r300": ("P0_exact300", "parity profile, grow_grad2d 1e-4, reset 300",
                         _set("default_strategy.grow_grad2d", 0.0001), WORK),
+    # Opacity-dynamics audit: parity profile stopped at 700 with per-row opacity
+    # logits dumped every 5 steps from the post-reset state at 600 to 699 so the rows that
+    # die before the 700 cull can be attributed (visibility, gradient sign, birth kind, stacking).
+    "P5_trace_r300": ("P0_exact300", "parity profile, opacity trace 600-699 every 5 (one refine-free window), controlled stop 700",
+                      _many(_set("opacity_trace", {"start_step": 600, "stop_step": 699, "every": 5}),
+                            _set("controlled_stop_after_steps", 700)), WORK),
+    # Background-blending audit (integration, not a vendor fact): the parity
+    # profile composites onto a per-view photographic backdrop, so lowering an
+    # opacity reveals a plausible image; a constant background makes
+    # transparency expensive. Judged by the reset+101 death fraction, not PSNR.
+    "P6_bgblack_r300": ("P0_exact300", "parity profile, constant black background instead of the per-view backdrop, reset 300, stop 1000",
+                        _many(_set("background_image_manifest", None), _set("background_image_root", None),
+                              _set("background_color", [0.0, 0.0, 0.0]),
+                              _set("controlled_stop_after_steps", 1000)), WORK),
+    "P6_bgwhite_r300": ("P0_exact300", "parity profile, constant white background instead of the per-view backdrop, reset 300, stop 1000",
+                        _many(_set("background_image_manifest", None), _set("background_image_root", None),
+                              _set("background_color", [1.0, 1.0, 1.0]),
+                              _set("controlled_stop_after_steps", 1000)), WORK),
+    # Reset-state audit: the library reset keeps Adam's step counter, so the
+    # ~100 post-reset opacity updates run at 2-4x lr; restart the counter.
+    "P7_adamstep_r300": ("P0_exact300", "parity profile, Adam step counter restarted at each opacity reset, reset 300, stop 1000",
+                         _many(_set("default_strategy.reset_adam_step", True),
+                               _set("controlled_stop_after_steps", 1000)), WORK),
     # Enhancement track: the 7k extension doubled the population in the second
     # reset cycle without held-out gains; stop refinement before that wave.
     "X7h_T2_stop5k": ("T2h_split05", "T2h to 7,000 steps with refinement stopped at 5,000 (no second split wave)",

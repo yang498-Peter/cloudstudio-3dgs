@@ -250,5 +250,29 @@
   "description": "T2h to 7,000 steps with refinement stopped at 5,000 (no second split wave)",
   "config_sha256": "3a175b711d5852d91bed1063b8fcd2818a559c8d606d36385c20194e4eab10e4",
   "repo": "C:\\Peter\\cloudstudio-3dgs-work"
+ },
+ "P5_trace_r300": {
+  "base": "P0_exact300",
+  "description": "parity profile, opacity trace 600-699 every 5 (one refine-free window), controlled stop 700",
+  "config_sha256": "3e933c7cbd5de835aa7c49db24b03eb5c8a3be89d4fd83f4a75de1080a51667a",
+  "repo": "C:\\Peter\\cloudstudio-3dgs-work"
+ },
+ "P6_bgblack_r300": {
+  "base": "P0_exact300",
+  "description": "parity profile, constant black background instead of the per-view backdrop, reset 300, stop 1000",
+  "config_sha256": "6ac7c3d6328a12239414b20b2ec656fe92a8e1349f980b69b52b5d6667ad53ff",
+  "repo": "C:\\Peter\\cloudstudio-3dgs-work"
+ },
+ "P6_bgwhite_r300": {
+  "base": "P0_exact300",
+  "description": "parity profile, constant white background instead of the per-view backdrop, reset 300, stop 1000",
+  "config_sha256": "affa187bdf1fe8b379fd32eb35e180d93346153d7c69d94cf2ae9fd96f747325",
+  "repo": "C:\\Peter\\cloudstudio-3dgs-work"
+ },
+ "P7_adamstep_r300": {
+  "base": "P0_exact300",
+  "description": "parity profile, Adam step counter restarted at each opacity reset, reset 300, stop 1000",
+  "config_sha256": "c17f1369230dc19a105d9d96ecc58875bb4d1dd0966a86fb57aec130b293fb51",
+  "repo": "C:\\Peter\\cloudstudio-3dgs-work"
  }
 }

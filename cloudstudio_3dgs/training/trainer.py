@@ -214,6 +214,10 @@ class TrainerConfig:
     mipmap_pipeline_gate: Path | None = None
     config_manifest_sha256: str | None = None
     controlled_stop_after_steps: int | None = None
+    # Diagnostic: dump per-row opacity logits (and lifecycle counters) on a
+    # step window so post-reset fate can be attributed offline. Never part of
+    # a delivery profile.
+    opacity_trace: dict | None = None
     implementation_smoke_only: bool = False
     topology_policy: TopologyPolicyConfig = field(default_factory=TopologyPolicyConfig)
     fixed_topology_schedule: FixedTopologyScheduleConfig = field(
@@ -568,6 +572,7 @@ class TrainerConfig:
                 "implementation_smoke_only",
                 "config_manifest_sha256",
                 "controlled_stop_after_steps",
+                "opacity_trace",
             )
             if key in value
         }
@@ -607,6 +612,15 @@ class TrainerConfig:
             raise ValueError(
                 "controlled_stop_after_steps must be between zero and max_steps"
             )
+        if self.opacity_trace is not None:
+            trace = dict(self.opacity_trace)
+            start = int(trace.get("start_step", 0))
+            stop = int(trace.get("stop_step", 0))
+            every = int(trace.get("every", 1))
+            if not (0 <= start < stop <= self.max_steps) or every <= 0:
+                raise ValueError(
+                    "opacity_trace needs 0 <= start_step < stop_step <= max_steps and every > 0"
+                )
         self.topology_policy.validate(max_steps=self.max_steps)
         self.fixed_topology_schedule.validate(
             max_steps=self.max_steps, topology_mode=self.topology_policy.mode
@@ -2218,6 +2232,47 @@ def _atomic_json(path: Path, value: dict[str, Any]) -> None:
     except BaseException:
         temporary.unlink(missing_ok=True)
         raise
+
+
+def _maybe_dump_opacity_trace(
+    trace: dict,
+    *,
+    completed: int,
+    params,
+    state: dict,
+    output_dir: Path,
+) -> None:
+    """Write one .npz of per-row opacity logits inside the trace window.
+
+    Rows are written in parameter order so consecutive dumps line up while the
+    population is stable; a refine event between dumps changes the row count,
+    which the offline probe handles by trimming to the shortest dump.
+    """
+    start = int(trace.get("start_step", 0))
+    stop = int(trace.get("stop_step", 0))
+    every = int(trace.get("every", 1))
+    if completed < start or completed > stop:
+        return
+    if (completed - start) % every != 0 and completed != stop:
+        return
+    directory = Path(output_dir) / "opacity_trace"
+    directory.mkdir(parents=True, exist_ok=True)
+    arrays = {
+        "opacities": params["opacities"].detach().float().cpu().numpy(),
+    }
+    if completed == start:
+        arrays["means"] = params["means"].detach().float().cpu().numpy()
+        arrays["scales"] = params["scales"].detach().float().cpu().numpy()
+    for key, name in (
+        ("count", "count"),
+        ("grad2d", "grad2d"),
+        ("_cloudstudio_birth_kind", "birth_kind"),
+        ("_cloudstudio_birth_step", "birth_step"),
+    ):
+        tensor = state.get(key) if isinstance(state, dict) else None
+        if tensor is not None and hasattr(tensor, "detach"):
+            arrays[name] = tensor.detach().cpu().numpy()
+    np.savez(directory / f"step_{completed:05d}.npz", **arrays)
 
 
 def _append_monitor_event(path: Path, value: dict[str, Any]) -> None:
@@ -4647,6 +4702,14 @@ def train(
             initial_loss = last_metrics["loss"]
         best_loss = min(best_loss, last_metrics["loss"])
         completed = step + 1
+        if config.opacity_trace is not None:
+            _maybe_dump_opacity_trace(
+                config.opacity_trace,
+                completed=completed,
+                params=params,
+                state=strategy_state,
+                output_dir=config.output_dir,
+            )
         if (
             completed == 1
             or completed % 10 == 0

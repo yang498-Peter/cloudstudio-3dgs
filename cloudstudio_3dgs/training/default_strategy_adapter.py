@@ -81,6 +81,20 @@ def _sampled_quantile(values: Any, levels: Any) -> Any:
 DETAIL_SPLIT_SCALES_M = (0.02, 0.01, 0.005)
 
 
+def _restart_adam_step(optimizer, parameter) -> None:
+    """Zero Adam's step counter for ``parameter`` so bias correction restarts."""
+    if optimizer is None:
+        return
+    state = optimizer.state.get(parameter)
+    if not state or "step" not in state:
+        return
+    step = state["step"]
+    if hasattr(step, "zero_"):
+        step.zero_()
+    else:
+        state["step"] = 0
+
+
 class DefaultStrategyAdapter:
     """gsplat ``DefaultStrategy`` behind the attribute surface MCMC exposes."""
 
@@ -120,6 +134,7 @@ class DefaultStrategyAdapter:
         prune_opa_late: float | None = None,
         prune_switch_step: int | None = None,
         reset_opacity_cap: float | None = None,
+        reset_adam_step: bool = False,
         capacity_cap: int | None = None,
         surface_birth_proposal: Any | None = None,
         opacity_cull_policy: str = "immediate",
@@ -164,6 +179,12 @@ class DefaultStrategyAdapter:
         self.prune_opa_late = prune_opa_late
         self.prune_switch_step = prune_switch_step
         self.reset_opacity_cap = reset_opacity_cap
+        # The library reset zeroes Adam's moments but keeps its step counter,
+        # so bias correction stays saturated and the first post-reset updates
+        # are (1-b1^k)/sqrt((1-b2^k)/(1-b2^t)) ~ 2-4x the learning rate for
+        # ~100 steps. Restarting the counter makes them lr-sized again. Kept
+        # off by default: an integration audit knob, not a lifecycle fact.
+        self.reset_adam_step = bool(reset_adam_step)
         self.capacity_cap = None if capacity_cap is None else int(capacity_cap)
         if self.capacity_cap is not None and self.capacity_cap <= 4:
             raise ValueError("capacity_cap must be greater than four")
@@ -1443,6 +1464,8 @@ class DefaultStrategyAdapter:
                 state=state,
                 value=float(self.reset_opacity_cap),
             )
+            if self.reset_adam_step:
+                _restart_adam_step(optimizers.get("opacities"), params["opacities"])
             if self.opacity_cull_policy != "immediate":
                 state["_cloudstudio_cull_low_streak"].zero_()
                 state["_cloudstudio_cull_observations"].zero_()
@@ -1529,6 +1552,7 @@ class DefaultStrategyAdapter:
             "prune_opa_late": self.prune_opa_late,
             "prune_switch_step": self.prune_switch_step,
             "reset_opacity_cap": self.reset_opacity_cap,
+            "reset_adam_step": self.reset_adam_step,
             "capacity_cap": self.capacity_cap,
             "surface_birth_guard": (
                 None
