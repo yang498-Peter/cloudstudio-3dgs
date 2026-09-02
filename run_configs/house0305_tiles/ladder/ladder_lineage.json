@@ -88,5 +88,23 @@
   "description": "R5 reproduced from the explicit-lineage stager (config_as_run recorded)",
   "config_sha256": "29164c00e38996fc4c4f0d935dd6504a60f29d2cfd01483f5df7b9d9038c1290",
   "repo": "C:\\Peter\\cloudstudio-3dgs-work"
+ },
+ "T1c_split10": {
+  "base": "C2_da2",
+  "description": "C2 + detail split gate 0.01 m",
+  "config_sha256": "a7089b8499ad71741578729a3648c28f6b42c2ee0d423ce0d97130c52b54f6ea",
+  "repo": "C:\\Peter\\cloudstudio-3dgs-work"
+ },
+ "T2c_split05": {
+  "base": "C2_da2",
+  "description": "C2 + detail split gate 0.005 m",
+  "config_sha256": "cec80b2eef80b1899a6d1ce144748b6541171b221e3939f17a961d7d76f8079d",
+  "repo": "C:\\Peter\\cloudstudio-3dgs-work"
+ },
+ "S1c_sizeprior": {
+  "base": "C2_da2",
+  "description": "C2 + size hinge at 2x the median initial size (scale_upper 0.01, ratio 2)",
+  "config_sha256": "d2b43c206019c0dcf95bd82ddf05c53ce07ec536a55a1f14549d3a327fc85037",
+  "repo": "C:\\Peter\\cloudstudio-3dgs-work"
  }
 }
