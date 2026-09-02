@@ -166,5 +166,17 @@
   "description": "C5T2h extended to 7,000 steps with the hold-out",
   "config_sha256": "fba830ec1a1adfb8da910b8a66e2379c9f01f1ef4a1466a97a83e1a8b04b191e",
   "repo": "C:\\Peter\\cloudstudio-3dgs-work"
+ },
+ "X7_T2": {
+  "base": "T2c_split05",
+  "description": "T2c (C2 + 5 mm split) extended to 7,000 steps",
+  "config_sha256": "26bbeb098299734b60cd89aab92e83dbd3812c726eaa684003e18987c78ffc23",
+  "repo": "C:\\Peter\\cloudstudio-3dgs-work"
+ },
+ "X7h_T2": {
+  "base": "T2h_split05",
+  "description": "T2h extended to 7,000 steps with the hold-out",
+  "config_sha256": "668173fc4896b55cd00630918351c88615ca5538b930604e597d818955d1e343",
+  "repo": "C:\\Peter\\cloudstudio-3dgs-work"
  }
 }
