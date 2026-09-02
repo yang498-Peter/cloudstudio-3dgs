@@ -52,5 +52,17 @@
   "description": "R5 + monocular depth far cutoff 30 m and bounded depth space",
   "config_sha256": "0d6655b27310ebdcaf0b96b576e2aa5519d13d665e0b1fa808812fe91cdfa0e1",
   "repo": "C:\\Peter\\cloudstudio-3dgs-work"
+ },
+ "C3_vis": {
+  "base": "R5_cull05",
+  "description": "R5 + face LiDAR cache with hidden-point rejection (6 px cells)",
+  "config_sha256": "90ae32a1724c622a679e7db59f935ea2d620db0febce6171b9fb4fa2e2ab6ea8",
+  "repo": "C:\\Peter\\cloudstudio-3dgs-work"
+ },
+ "C4_all": {
+  "base": "C3_vis",
+  "description": "C3 + Tile ownership masking + monocular far cutoff (supervision-correctness bundle)",
+  "config_sha256": "ff08e45c715ae209467a5279f8a7caf1b908fb088003490eb564748863f0e951",
+  "repo": "C:\\Peter\\cloudstudio-3dgs-work"
  }
 }
