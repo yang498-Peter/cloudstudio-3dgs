@@ -178,5 +178,17 @@
   "description": "T2h extended to 7,000 steps with the hold-out",
   "config_sha256": "668173fc4896b55cd00630918351c88615ca5538b930604e597d818955d1e343",
   "repo": "C:\\Peter\\cloudstudio-3dgs-work"
+ },
+ "P0_exact300": {
+  "base": "h5v",
+  "description": "vendor-parity lifecycle profile: reset 300, 0.2 m split/clone, no alpha floor, no sparse range, DA2 0.5 compressed",
+  "config_sha256": "b0b5908c47bb0dfb8193b082a596e1089443b8a6e2234d8355330394acb7471c",
+  "repo": "C:\\Peter\\cloudstudio-3dgs-work"
+ },
+ "P0_exact3000": {
+  "base": "P0_exact300",
+  "description": "same profile with the CloudStudio deferred 3000-step reset (competitor_equivalent=false)",
+  "config_sha256": "a7a5c8d18deac9b80667f3d8281fdaef31567d6bd54e4df49b2b9cac199ec645",
+  "repo": "C:\\Peter\\cloudstudio-3dgs-work"
  }
 }

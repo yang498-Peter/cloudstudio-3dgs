@@ -257,14 +257,14 @@ def build_high_type2_parameter_spec(
                 "cull_opacity_second_half": 0.05,
                 "cull_max_linear_scale_m": 0.2,
                 "cull_max_screen_radius": 0.15,
-                # NOT closed from the source evidence. What is recorded is a
-                # reset parameter of 30 against a 100-step refine interval,
-                # which reads as ~3000 steps rather than 300, and the
-                # lowest-level audit leaves the interval explicitly unresolved.
-                # Every measured population collapse lands at reset+100, so
-                # this cadence is a prime suspect and must not carry an "exact"
-                # label until the 300-vs-3000 comparison settles it.
-                "opacity_reset_step_period": "UNRESOLVED_300_OR_3000",
+                # Closed at evidence level E3 (2026-09-02): the refine
+                # interval 100 and the reset parameter 30 are both applied to
+                # the same natural step counter, so the reset period is 300
+                # and the first reset after the 500-step start lands on 600.
+                # Our 3000-step profile is a CloudStudio integration
+                # compatibility measure, never a vendor claim.
+                "opacity_reset_step_period": 300,
+                "opacity_reset_first_step": 600,
                 "opacity_reset_probability_cap": 0.2,
             },
             "deferred_optional_experiments": {
