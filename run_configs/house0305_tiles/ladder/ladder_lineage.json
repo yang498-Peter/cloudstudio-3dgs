@@ -208,5 +208,17 @@
   "description": "parity profile, initialization thinned to 1/2, reset 300",
   "config_sha256": "5cfd743144a2dbd31eb97ec8b98298b78e1e64b88db4c4ddc854a3425bf33fe0",
   "repo": "C:\\Peter\\cloudstudio-3dgs-work"
+ },
+ "P2_floor_r300": {
+  "base": "P0_exact300",
+  "description": "parity profile + LiDAR alpha floor (0.5, 0.95, 6 px), reset 300",
+  "config_sha256": "3a749ff33ba6a431ef4a28258a469d5d7da830a402ad5276ca04893bd83a7037",
+  "repo": "C:\\Peter\\cloudstudio-3dgs-work"
+ },
+ "P2_range_r300": {
+  "base": "P0_exact300",
+  "description": "parity profile + sparse LiDAR range 0.05 robust, reset 300",
+  "config_sha256": "f78b5292512d947da4a1adda58550d460473cd4d885991146788bea93c7c5a46",
+  "repo": "C:\\Peter\\cloudstudio-3dgs-work"
  }
 }

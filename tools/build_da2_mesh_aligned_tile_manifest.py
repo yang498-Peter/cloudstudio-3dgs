@@ -110,6 +110,15 @@ def main() -> int:
         with np.load(mesh_path, allow_pickle=False) as payload:
             metric = np.asarray(payload["depth_range_m"], dtype=np.float32)
             valid = np.asarray(payload["valid"], dtype=bool)
+        raster_factor = int(mesh_record.get("raster_factor", 1))
+        if raster_factor > 1:
+            # Reduced-resolution raster: expand back to the crop the same way
+            # the trainer does before pairing with the native DA2 grid.
+            from cloudstudio_3dgs.training.face_dataset import expand_raster
+
+            face_shape = (int(mesh_record["crop"]["height"]), int(mesh_record["crop"]["width"]))
+            metric = expand_raster(metric, raster_factor, face_shape)
+            valid = expand_raster(valid, raster_factor, face_shape)
         mono_values, metric_values = native_da2_mesh_pairs(
             relative,
             metric,
