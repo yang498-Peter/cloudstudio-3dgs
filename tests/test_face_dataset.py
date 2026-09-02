@@ -35,6 +35,7 @@ from cloudstudio_3dgs.training.face_dataset import (
     FaceCacheDataset,
     sign_face_manifest,
     _dilate_bool,
+    expand_raster,
     tile_ownership_masks,
 )
 from cloudstudio_3dgs.data.depth_cache import load_sparse_depth
@@ -768,3 +769,16 @@ class TileOwnershipMaskTests(unittest.TestCase):
         )
         self.assertEqual(int(owned_all.sum()), 2)
         self.assertFalse(region_none.any())
+
+
+class RasterExpansionTests(unittest.TestCase):
+    def test_expand_raster_repeats_and_trims_to_the_crop(self) -> None:
+        small = np.arange(6, dtype=np.float32).reshape(2, 3)
+        big = expand_raster(small, 2, (3, 5))
+        self.assertEqual(big.shape, (3, 5))
+        np.testing.assert_array_equal(big[0], [0, 0, 1, 1, 2])
+        np.testing.assert_array_equal(big[2], [3, 3, 4, 4, 5])
+        vec = np.zeros((2, 3, 3), np.float32)
+        vec[1, 2] = [0.0, 0.0, 1.0]
+        self.assertEqual(expand_raster(vec, 2, (3, 5)).shape, (3, 5, 3))
+        self.assertIs(expand_raster(small, 1, (2, 3)), small)
