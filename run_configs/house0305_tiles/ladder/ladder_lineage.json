@@ -224,13 +224,25 @@
  "P3_mesh_r300": {
   "base": "P0_exact300",
   "description": "parity profile + mesh depth 0.25 / normal 0.05 + mesh-aligned DA2 0.5, reset 300",
-  "config_sha256": "634488be8ceed987406eb765123f47cf572cbe1713fe343be1deb8f784981565",
+  "config_sha256": "c91ebcaf41fd486097c3b7d9cdeee986879e7d86979948ef7262cd5f0646c4cb",
   "repo": "C:\\Peter\\cloudstudio-3dgs-work"
  },
  "P3_mesh_r3000": {
   "base": "P3_mesh_r300",
   "description": "same with the deferred 3000-step reset",
-  "config_sha256": "fa8ec39fdc2a0c0fd221a4ac1b98113029c80510442497d81affe1b68764bb31",
+  "config_sha256": "8aeef2e389dfea2f7a679608db73b22961b8a2320400aa87e90fdf49027fc7dc",
+  "repo": "C:\\Peter\\cloudstudio-3dgs-work"
+ },
+ "P4_grad75_r300": {
+  "base": "P0_exact300",
+  "description": "parity profile, grow_grad2d 7.5e-5 (approved calibrated profile), reset 300",
+  "config_sha256": "b8ee30ec29f0997dc2c3075f0bf382d789916ecf89479d4b6c292ce590ab99e5",
+  "repo": "C:\\Peter\\cloudstudio-3dgs-work"
+ },
+ "P4_grad100_r300": {
+  "base": "P0_exact300",
+  "description": "parity profile, grow_grad2d 1e-4, reset 300",
+  "config_sha256": "2484099b26e25659546368b72dbb3a34afa3e8cbf23ff1cd2705f34e8a1a7bf5",
   "repo": "C:\\Peter\\cloudstudio-3dgs-work"
  }
 }
