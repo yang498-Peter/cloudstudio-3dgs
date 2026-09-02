@@ -158,10 +158,18 @@ ARMS = {
                            _set("mesh_geometry_root", "C:/Peter/3dgs-datasets/house0305_sop_v8/mesh_geometry_tile0_r2"),
                            _set("mesh_depth_weight", 0.25), _set("mesh_normal_weight", 0.05),
                            _set("mono_depth_manifest", "C:/Peter/3dgs-datasets/house0305_sop_v8/da2_tile0_meshaligned_manifest.json"),
-                           _set("mono_depth_root", "C:/Peter/3dgs-datasets/house0305_sop_v8/da2_train")), WORK),
+                           _set("mono_depth_root", "C:/Peter/3dgs-datasets/house0305_sop_v8/da2_train"),
+                           _set("mipmap_pipeline_gate", "C:/Peter/3dgs-runs/house0305_sop/gates/gate_18_training_multi_da2mesh.json")), WORK),
     "P3_mesh_r3000": ("P3_mesh_r300", "same with the deferred 3000-step reset",
                       _many(_set("default_strategy.vendor_opacity_reset_profile", "deferred_every3000_compatibility"),
                             _set("default_strategy.reset_every", 3000)), WORK),
+    # Growth-rate hypothesis for the reset-300 collapse: if the vendor's
+    # projected-gradient carrier selects more parents per refine, births
+    # outpace the post-reset deaths. Lower thresholds from the approved set.
+    "P4_grad75_r300": ("P0_exact300", "parity profile, grow_grad2d 7.5e-5 (approved calibrated profile), reset 300",
+                       _set("default_strategy.grow_grad2d", 0.000075), WORK),
+    "P4_grad100_r300": ("P0_exact300", "parity profile, grow_grad2d 1e-4, reset 300",
+                        _set("default_strategy.grow_grad2d", 0.0001), WORK),
     "C4_all": ("C3_vis", "C3 + Tile ownership masking + monocular far cutoff (supervision-correctness bundle)",
                _many(_set("tile_ownership_masking", True), _set("tile_ownership_margin_m", 0.5),
                      _set("tile_ownership_dilation_px", 15),

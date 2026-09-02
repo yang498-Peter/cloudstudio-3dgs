@@ -1,0 +1,152 @@
+{
+  "authorized_scope": {
+    "capacity_cap": 14000000,
+    "growth_allowed": false,
+    "initialization_count": 10445142,
+    "measured_peak_vram_bytes": 6599139328,
+    "resolution_factor": 1
+  },
+  "bindings": {
+    "at_report_sha256": "f8fa2eefabe4b09931002f84319ecab80e66f84a91ed584b2b410bf4c1a9417e",
+    "candidate_model_sha256": "f4f12cff2b70c6db8d8ffce6a824cf9eeaf335b18eb4cdaddb9c3589c5a2b626",
+    "core_ownership_contract_sha256": "52e3836d9f965c5953cf6e0246f0e30b610dcd64745be943cb3761e8feb93bc8",
+    "face4_train_manifest_sha256": "19552ab49ac0a91405e00e7778b5d6eea4ddb809c4e76729a74f314778d0b878",
+    "face4_val_manifest_sha256": "040b0b0653368b515671670f91281992199baa6daa53ff591902a0a20e0a9882",
+    "lidar_depth_manifest_sha256": "af8fb5400fd5b1fbb63b315fb602fe18b388f4b66a53634520f68b3ff41f14da",
+    "lidar_depth_point_cloud_sha256": "8bed917b1614f146df8ef3cf9814d170b575a6e8a7df43a6ce901884f1fe11aa",
+    "raw_dataset_manifest_sha256": "f8e2cf723ff5caf17ff93f280d0f5588b7000d6fd857a9fd759fda3f5aa8c4a4",
+    "renderer_mask_train_manifest_sha256": "20e632a7b1490a87e525ce369816401735f01c8b0d56a97791d39a6f67f7d5e5",
+    "renderer_mask_val_manifest_sha256": "bdbb3d6a11334c14530c53e10e83f90a474f6a1dc36418658867639649b10613",
+    "spatial_tile_plan_manifest_sha256": "168b43c339f83271b0bada1746202cf22e31266e7bd7cb1628ef71a595f5cb6a",
+    "split_manifest_sha256": "a792f3c8bb8b3f8355df50baf49232cfab446465e9e7d473eb26b2189069e367",
+    "training_circle_mask_manifest_sha256": "b96cffe2354a8a7efee661aab781004ab1c19979fb1fbc4ce10e36cec46ef8a4",
+    "training_dataset_manifest_sha256": "33f5f81419dd587c54985f141cde647716b6d491aa5924efc3be26d121bcbd15",
+    "training_person_mask_manifest_sha256": "52a2701123251a4eec5e8c5c689cfd0b1be8f1682faac0d2e466d74d89ced10f",
+    "da2_train_manifest_sha256": "460c8d94b3e9370941c1b45ecb84847d104fc5646f0f9a6fea1a3fa932743a6f",
+    "da2_val_manifest_sha256": "ce318cbc77ae1a72d5edaf6ad4088c679854ef304d7943fd51e4f498f698d712"
+  },
+  "blocking_reasons": [],
+  "completed_stages": [
+    "input_preflight",
+    "time_sync_audit",
+    "raw_circle_mask",
+    "raw_person_mask",
+    "masked_feature_matching",
+    "known_pose_triangulation",
+    "shared_single_focal_kb4_at",
+    "accepted_training_manifest",
+    "rebased_masks_and_split",
+    "face4_rgb_and_person_mask",
+    "renderer_dynamic_mask",
+    "new_at_lidar_depth",
+    "da2_monocular_depth",
+    "spatial_tile_plan"
+  ],
+  "deferral_reason": "surface route: per-view prerendered backdrops stand in for the independent sky model, so that stage stays deferred",
+  "deferred_stages": [
+    "independent_sky_background"
+  ],
+  "evidence": {
+    "at_report": {
+      "path": "C:\\Peter\\3dgs-runs\\house0305_sop\\at_v7c\\at_report.json",
+      "sha256": "e5e6dd6f962472865db78b6ec4f195739771fa6dc3166ffc19d95dec322348f0"
+    },
+    "candidate_model": {
+      "path": "C:\\Peter\\3dgs-runs\\house0305_sop\\at_v7c\\candidate_model",
+      "sha256": "f4f12cff2b70c6db8d8ffce6a824cf9eeaf335b18eb4cdaddb9c3589c5a2b626"
+    },
+    "core_ownership": {
+      "path": "C:\\Peter\\3dgs-runs\\house0305_sop\\gates\\core_ownership_multi.json",
+      "sha256": "aed643bbf1cf45332d51028842d8432a486f2ecfc46f4064db109b02c7037c39"
+    },
+    "face4_train": {
+      "path": "C:\\Peter\\3dgs-datasets\\house0305_sop_v8\\face4\\face_manifest.json",
+      "sha256": "549644ec49d54921c53e3208ee402c7a5516990f51354d754061954f46cbe3d5"
+    },
+    "face4_val": {
+      "path": "C:\\Peter\\3dgs-datasets\\house0305_sop_v8\\face4_val\\face_manifest.json",
+      "sha256": "93cff42d30040ebf68cf596e3883615f117caaa29f8c3962596265d601bec42e"
+    },
+    "feature_runtime": {
+      "path": "C:\\Peter\\3dgs-runs\\house0305_sop\\features_masked\\feature_runtime_manifest.json",
+      "sha256": "990d41ca414c2b68293b78d1221e7fc32e656a0ef342424357efaf7da16e7423"
+    },
+    "fullres_smoke": {
+      "gaussian_count": 10445142,
+      "path": "C:\\Peter\\3dgs-runs\\house0305_sop\\tile0_smoke\\run_manifest.json",
+      "peak_vram_bytes": 6599139328,
+      "run_id": "house0305-t0-smoke",
+      "sha256": "ce8a4d16ac55507d0afd2f90224036d05c17e4f9f1af7725b4b3a533b599b9b7"
+    },
+    "lidar_depth": {
+      "path": "C:\\Peter\\3dgs-datasets\\house0305_sop_v8\\depth\\depth_manifest.json",
+      "sha256": "311bcaef258fd411806e57f88c4ebc799c5be9a224705b5e1f175f9cd9be2aa8"
+    },
+    "raw_circle_criterion": {
+      "kind": "theta_max_deg",
+      "theta_max_deg": 95.0
+    },
+    "raw_circle_mask": {
+      "path": "C:\\Peter\\3dgs-datasets\\house0305_manifest_ba\\mask_manifest.json",
+      "sha256": "01014e7610d55445983b64cfdb917aed7745c371e1e85fefb49c874b337aba0b"
+    },
+    "raw_dataset": {
+      "path": "C:\\Peter\\3dgs-datasets\\house0305_manifest_ba\\dataset_manifest.json",
+      "sha256": "5e45178459af2923d356980a726517ad465cf214a01a6e1de6f71479b2e4ca22"
+    },
+    "raw_person_composition": "base_rgb_mask & ~person_dynamic_mask",
+    "raw_person_mask": {
+      "path": "C:\\Peter\\3dgs-datasets\\house0305_manifest_ba\\person_mask_manifest.json",
+      "sha256": "bff08bbfe9a2aebca67fa450078802e97b669bc8191c663b77ce0d1b875cf6f8"
+    },
+    "renderer_mask_train": {
+      "path": "C:\\Peter\\3dgs-datasets\\house0305_sop_v8\\renderer_mask_train.json",
+      "sha256": "e4311f04cbb84db1d7da7182593d7790867465d5f7d4d67be40d3321d0bac0de"
+    },
+    "renderer_mask_val": {
+      "path": "C:\\Peter\\3dgs-datasets\\house0305_sop_v8\\renderer_mask_val.json",
+      "sha256": "41298e84797d6a65f75c5fc0400e52aeb58bbfe710855bbca998d08ea2435838"
+    },
+    "spatial_tile_plan": {
+      "path": "C:\\Peter\\3dgs-runs\\house0305_sop\\tile_plan_multi\\adaptive_tile_plan.json",
+      "sha256": "b12a9199cbca45597deda3906e577e8afab018be2673be353e692f6599239de6"
+    },
+    "split_manifest": {
+      "path": "C:\\Peter\\3dgs-datasets\\house0305_sop_v8\\split_manifest.json",
+      "sha256": "23e2fd4ebded384d4361f9c46b1b4448d764e06c554e9845c109d78a7bc20930"
+    },
+    "tile_plan": {
+      "anchor_count": 2230795,
+      "halo_overlap_factor": 1.8651118815001575,
+      "retained_tile_count": 3
+    },
+    "time_sync_report": {
+      "path": "C:\\Peter\\3dgs-runs\\house0305_sop\\time_sync_final",
+      "sha256": "b5ddc4963cd6e85041800ea3db37d704c4fb0a876b638293b412be040732501c"
+    },
+    "training_circle_mask": {
+      "path": "C:\\Peter\\3dgs-datasets\\house0305_sop_v8\\masks\\mask_manifest.json",
+      "sha256": "396ed1188112e0c321722c989436607979f09d82b8737b9cea1696a294aac106"
+    },
+    "training_dataset": {
+      "path": "C:\\Peter\\3dgs-datasets\\house0305_sop_v8\\dataset_manifest.json",
+      "sha256": "d9b3bbd13fef82c81d272efb8ac234fd38b8cb4a039bb68b48a6636090acdeaa"
+    },
+    "training_person_mask": {
+      "path": "C:\\Peter\\3dgs-datasets\\house0305_sop_v8\\person_mask_manifest.json",
+      "sha256": "4e42db81ee7c067dfd543e5b183b878257b6205677677fcd9581cfc9aa003181"
+    },
+    "triangulation_runtime": {
+      "path": "C:\\Peter\\3dgs-runs\\house0305_sop\\triangulation\\triangulation_runtime_manifest.json",
+      "sha256": "0d6221f8b1dd9fc172d6ba4145865dced7770b67e7c97c6340b85668119d7dc5"
+    }
+  },
+  "next_required_stage": "tile_gaussian_training",
+  "profile": "mipmap_aligned_face4_v2",
+  "route": "surface_only",
+  "schema_version": 2,
+  "status": "SURFACE_FROZEN_TRAINING_READY",
+  "topology_policy": "strict_fixed",
+  "training_allowed": true,
+  "gate_manifest_sha256": "c3309c0bbf4f6bbea3d18b6a23268181fe7556ad27f4f578f896f3991cc83a71"
+}
