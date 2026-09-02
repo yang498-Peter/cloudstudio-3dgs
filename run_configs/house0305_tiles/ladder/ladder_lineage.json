@@ -280,5 +280,11 @@
   "description": "parity profile, opacity cull 0.005 (published threshold, audit profile), reset 300, stop 1300",
   "config_sha256": "d52e35c0958b9f2a644ae0898eac8ae66f798b0814e003b72801ce98270cbcaa",
   "repo": "C:\\Peter\\cloudstudio-3dgs-work"
+ },
+ "P7b_adamstep_r300_3500": {
+  "base": "P7_adamstep_r300",
+  "description": "Adam step restart at reset, run to the ladder's 3,500-step stop",
+  "config_sha256": "383d7375aee0fc33b2b5756a7e542aeaf28b8f7096492aba17b3936d0c48019d",
+  "repo": "C:\\Peter\\cloudstudio-3dgs-work"
  }
 }
