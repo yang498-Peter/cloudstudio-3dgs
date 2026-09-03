@@ -328,5 +328,11 @@
   "description": "F3 recipe, Tile_0 full length (max_steps), spatial-cell hold-out v1.1",
   "config_sha256": "fa6aa540de5eda450191a21b79614f5a77d032acc1e10ec6a7e15ef0269f452e",
   "repo": "C:\\Peter\\cloudstudio-3dgs-work"
+ },
+ "F5_keep_split05_t2h_20k": {
+  "base": "F3_keep_split05_t2h_7k",
+  "description": "F3 recipe on the compressed schedule: refine stop 14k, stop 20k, spatial hold-out",
+  "config_sha256": "96da1b211cbd3bccd98a14eb7495754f6b7445c38bb171302e5a03607ff7c157",
+  "repo": "C:\\Peter\\cloudstudio-3dgs-work"
  }
 }
