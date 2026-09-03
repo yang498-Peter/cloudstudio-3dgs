@@ -7,6 +7,7 @@ import math
 import os
 import shutil
 import tempfile
+import time
 from pathlib import Path
 from typing import Any
 
@@ -235,7 +236,17 @@ def save_checkpoint(
             os.fsync(stream.fileno())
         os.replace(temporary, path)
     except BaseException:
-        temporary.unlink(missing_ok=True)
+        # Windows can still hold the temp file open (indexer, antivirus, a
+        # reader that raced the replace); a failed cleanup must not mask the
+        # original error, so retry briefly and otherwise leave the temp file.
+        for attempt in range(5):
+            try:
+                temporary.unlink(missing_ok=True)
+                break
+            except PermissionError:
+                if attempt == 4:
+                    break
+                time.sleep(0.5 * (attempt + 1))
         raise
 
 
