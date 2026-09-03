@@ -115,7 +115,7 @@
   "lifecycle_execution_order": "pre_optimizer_vendor",
   "detail_split_policy": "vendor_0_2m",
   "absgrad": false,
-  "grow_grad2d": 0.00015,
+  "grow_grad2d": 7.5e-05,
   "split_scale_m": 0.2,
   "prune_scale_m": 0.2,
   "prune_opa": 0.1,
