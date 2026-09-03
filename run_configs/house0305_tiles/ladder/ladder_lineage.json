@@ -304,5 +304,11 @@
   "description": "vendor reset-state form run to the ladder's 3,500-step stop",
   "config_sha256": "08c150d5d648247be075e6220c1cef6da05424151f79a651b5799147576d6202",
   "repo": "C:\\Peter\\cloudstudio-3dgs-work"
+ },
+ "F1_keep_r300_full": {
+  "base": "P9_keep_r300",
+  "description": "reference reset-state form, Tile_0 full length (max_steps), spatial-cell hold-out v1.1",
+  "config_sha256": "a9cd53f7b96007f7512b048ff9f10193df8d0a04b66e04bbbb31e4c2b75093ae",
+  "repo": "C:\\Peter\\cloudstudio-3dgs-work"
  }
 }
