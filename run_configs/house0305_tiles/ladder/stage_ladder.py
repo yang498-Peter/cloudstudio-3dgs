@@ -231,6 +231,17 @@ ARMS = {
                                 _set("holdout_spatial_cell_m", 2.0), _set("holdout_fraction", 0.1),
                                 _set("holdout_seed", 0), _set("holdout_guard_m", 1.5),
                                 _set("checkpoint_keep_every", 7000)), WORK),
+    # F1 stop-loss (2026-09-03 15:30): population never grew (5.9M -> 1.9M by
+    # 21k), reset death climbed to 20%, long axis 73 mm at 17.5k. The parity
+    # base needs a size-reducing operator: the CloudStudio detail split
+    # (20/10/5 mm gates, revised opacity) on top of the reference reset form.
+    "F2_keep_split05_7k": ("F1_keep_r300_full", "reference reset form + 7.5e-5 + detail split 5 mm gate, 7k with spatial hold-out",
+                           _many(_set("default_strategy.detail_split_policy", "lidar_surface_screen_detail"),
+                                 _set("default_strategy.detail_split_scale_m", 0.005),
+                                 _set("default_strategy.detail_split_screen_radius", 0.0035),
+                                 _set("default_strategy.revised_opacity", True),
+                                 _set("controlled_stop_after_steps", 7000),
+                                 _set("checkpoint_keep_every", 3500)), WORK),
     # Enhancement track: the 7k extension doubled the population in the second
     # reset cycle without held-out gains; stop refinement before that wave.
     "X7h_T2_stop5k": ("T2h_split05", "T2h to 7,000 steps with refinement stopped at 5,000 (no second split wave)",

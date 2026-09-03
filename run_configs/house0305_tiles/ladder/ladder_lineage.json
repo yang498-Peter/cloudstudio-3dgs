@@ -310,5 +310,11 @@
   "description": "reference reset-state form + calibrated carrier 7.5e-5, Tile_0 full length (max_steps), spatial-cell hold-out v1.1",
   "config_sha256": "3576b5dbf365e46dc2b0825bd877d3c5112803d8aee4ca3c16926b48f77aa2b1",
   "repo": "C:\\Peter\\cloudstudio-3dgs-work"
+ },
+ "F2_keep_split05_7k": {
+  "base": "F1_keep_r300_full",
+  "description": "reference reset form + 7.5e-5 + detail split 5 mm gate, 7k with spatial hold-out",
+  "config_sha256": "0b2983ced5ce5d3464e9a40e093699232b5a39a47a489631fe6536419443b4c6",
+  "repo": "C:\\Peter\\cloudstudio-3dgs-work"
  }
 }
