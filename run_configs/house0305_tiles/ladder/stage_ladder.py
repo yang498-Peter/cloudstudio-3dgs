@@ -255,6 +255,18 @@ ARMS = {
     "F4_keep_split05_t2h_full": ("F3_keep_split05_t2h_7k", "F3 recipe, Tile_0 full length (max_steps), spatial-cell hold-out v1.1",
                                  _many(_set("controlled_stop_after_steps", None),
                                        _set("checkpoint_keep_every", 7000)), WORK),
+    # Compressed schedule (user decision 2026-09-03 18:20): keep the reset-300
+    # cycle structure and a convergence tail at 40% of the 20-epoch cost -
+    # refine/reset stop at 14k, controlled stop at 20k. Research arms and the
+    # first complete-scene delivery run on this; full length only once the
+    # recipe is trusted.
+    "F5_keep_split05_t2h_20k": ("F3_keep_split05_t2h_7k", "F3 recipe on the compressed schedule: refine stop 14k, stop 20k, spatial hold-out",
+                                _many(_set("mcmc_refine_stop_iter", 14000),
+                                      _set("default_strategy.refine_stop_iter", 14000),
+                                      _set("default_strategy.refine_scale2d_stop_iter", 14000),
+                                      _set("controlled_stop_after_steps", 20000),
+                                      _set("checkpoint_every", 5000),
+                                      _set("checkpoint_keep_every", 5000)), WORK),
     # Enhancement track: the 7k extension doubled the population in the second
     # reset cycle without held-out gains; stop refinement before that wave.
     "X7h_T2_stop5k": ("T2h_split05", "T2h to 7,000 steps with refinement stopped at 5,000 (no second split wave)",
