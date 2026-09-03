@@ -131,7 +131,22 @@ def main() -> int:
     parser.add_argument("--device", default="cuda")
     parser.add_argument("--input-size", type=int, default=518)
     parser.add_argument("--max-faces", type=int)
+    parser.add_argument(
+        "--shard",
+        help=(
+            "K/N: process only every N-th face starting at K (0-based) and skip "
+            "the manifest; the per-face records are the resume state, so a final "
+            "run without --shard assembles the signed manifest from all shards. "
+            "The builder is I/O-bound and leaves the GPU idle, so several shards "
+            "run concurrently on one GPU."
+        ),
+    )
     args = parser.parse_args()
+    shard_index, shard_count = 0, 1
+    if args.shard:
+        shard_index, shard_count = (int(part) for part in args.shard.split("/", 1))
+        if shard_count <= 0 or not 0 <= shard_index < shard_count:
+            raise ValueError("--shard must be K/N with 0 <= K < N")
 
     if args.device == "cuda" and not torch.cuda.is_available():
         raise RuntimeError("CUDA was requested but is unavailable")
@@ -161,6 +176,8 @@ def main() -> int:
         if args.max_faces <= 0:
             raise ValueError("max-faces must be positive")
         selected = selected[: args.max_faces]
+    if shard_count > 1:
+        selected = selected[shard_index::shard_count]
 
     args.output.mkdir(parents=True, exist_ok=True)
     cache_dir = args.output / "depth"
@@ -283,6 +300,13 @@ def main() -> int:
 
     records.sort(key=lambda item: item["sample_id"])
     valid_count = sum(bool(item["alignment"]["valid"]) for item in records)
+    if shard_count > 1:
+        print(
+            f"DA2 shard {shard_index}/{shard_count}: {len(records)} faces, "
+            f"aligned={valid_count}; manifest deferred to the unsharded run",
+            flush=True,
+        )
+        return 0
     manifest = sign_mono_depth_manifest(
         {
             "schema_version": MONO_DEPTH_SCHEMA_VERSION,
