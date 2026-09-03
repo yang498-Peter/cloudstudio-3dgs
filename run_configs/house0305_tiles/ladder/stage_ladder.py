@@ -222,8 +222,12 @@ ARMS = {
     # Full-length Tile_0 run of the reference reset-state form (user decision
     # 2026-09-03: start as soon as P9f reports). Spatial-cell hold-out v1.1 so
     # the final battery is on held-out views; retained checkpoints thinned.
-    "F1_keep_r300_full": ("P9_keep_r300", "reference reset-state form, Tile_0 full length (max_steps), spatial-cell hold-out v1.1",
+    # P9f cycles 2-3 still lose ~9% per cycle (births 70-100k vs ~15% deaths),
+    # so the full run uses the reviewer's calibrated carrier profile (7.5e-5,
+    # births x2.4 in P4) on top of the reference reset-state form.
+    "F1_keep_r300_full": ("P9_keep_r300", "reference reset-state form + calibrated carrier 7.5e-5, Tile_0 full length (max_steps), spatial-cell hold-out v1.1",
                           _many(_set("controlled_stop_after_steps", None),
+                                _set("default_strategy.grow_grad2d", 0.000075),
                                 _set("holdout_spatial_cell_m", 2.0), _set("holdout_fraction", 0.1),
                                 _set("holdout_seed", 0), _set("holdout_guard_m", 1.5),
                                 _set("checkpoint_keep_every", 7000)), WORK),

@@ -307,8 +307,8 @@
  },
  "F1_keep_r300_full": {
   "base": "P9_keep_r300",
-  "description": "reference reset-state form, Tile_0 full length (max_steps), spatial-cell hold-out v1.1",
-  "config_sha256": "a9cd53f7b96007f7512b048ff9f10193df8d0a04b66e04bbbb31e4c2b75093ae",
+  "description": "reference reset-state form + calibrated carrier 7.5e-5, Tile_0 full length (max_steps), spatial-cell hold-out v1.1",
+  "config_sha256": "3576b5dbf365e46dc2b0825bd877d3c5112803d8aee4ca3c16926b48f77aa2b1",
   "repo": "C:\\Peter\\cloudstudio-3dgs-work"
  }
 }
