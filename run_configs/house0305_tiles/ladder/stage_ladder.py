@@ -219,6 +219,14 @@ ARMS = {
     # see the population and morphology over eight reset cycles.
     "P9f_keep_r300_3500": ("P9_keep_r300", "vendor reset-state form run to the ladder's 3,500-step stop",
                            _set("controlled_stop_after_steps", 3500), WORK),
+    # Full-length Tile_0 run of the reference reset-state form (user decision
+    # 2026-09-03: start as soon as P9f reports). Spatial-cell hold-out v1.1 so
+    # the final battery is on held-out views; retained checkpoints thinned.
+    "F1_keep_r300_full": ("P9_keep_r300", "reference reset-state form, Tile_0 full length (max_steps), spatial-cell hold-out v1.1",
+                          _many(_set("controlled_stop_after_steps", None),
+                                _set("holdout_spatial_cell_m", 2.0), _set("holdout_fraction", 0.1),
+                                _set("holdout_seed", 0), _set("holdout_guard_m", 1.5),
+                                _set("checkpoint_keep_every", 7000)), WORK),
     # Enhancement track: the 7k extension doubled the population in the second
     # reset cycle without held-out gains; stop refinement before that wave.
     "X7h_T2_stop5k": ("T2h_split05", "T2h to 7,000 steps with refinement stopped at 5,000 (no second split wave)",
