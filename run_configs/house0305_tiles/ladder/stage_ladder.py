@@ -242,6 +242,14 @@ ARMS = {
                                  _set("default_strategy.revised_opacity", True),
                                  _set("controlled_stop_after_steps", 7000),
                                  _set("checkpoint_keep_every", 3500)), WORK),
+    # Next in line so the GPU never idles: the full T2h supervision bundle
+    # (alpha floor, sparse range 0.05 robust, DA2 0.15) on F2. Enhancement
+    # layer on the reference reset form, judged on the same hold-out.
+    "F3_keep_split05_t2h_7k": ("F2_keep_split05_7k", "F2 + T2h supervision bundle (alpha floor 0.5/6 px, sparse range 0.05 robust, DA2 0.15), 7k hold-out",
+                               _many(_set("surface_alpha_floor_profile", True),
+                                     _set("lidar_alpha_weight", 0.5), _set("lidar_alpha_dilation_radius_px", 6),
+                                     _set("lidar_range_weight", 0.05), _set("lidar_range_loss_mode", "robust_log_huber"),
+                                     _set("da2_depth_weight", 0.15)), WORK),
     # Enhancement track: the 7k extension doubled the population in the second
     # reset cycle without held-out gains; stop refinement before that wave.
     "X7h_T2_stop5k": ("T2h_split05", "T2h to 7,000 steps with refinement stopped at 5,000 (no second split wave)",

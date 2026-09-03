@@ -316,5 +316,11 @@
   "description": "reference reset form + 7.5e-5 + detail split 5 mm gate, 7k with spatial hold-out",
   "config_sha256": "0b2983ced5ce5d3464e9a40e093699232b5a39a47a489631fe6536419443b4c6",
   "repo": "C:\\Peter\\cloudstudio-3dgs-work"
+ },
+ "F3_keep_split05_t2h_7k": {
+  "base": "F2_keep_split05_7k",
+  "description": "F2 + T2h supervision bundle (alpha floor 0.5/6 px, sparse range 0.05 robust, DA2 0.15), 7k hold-out",
+  "config_sha256": "fdf68aa481423e90602e9ef145d5880dd17cdeaaf9e9fd28d4203b3a3dbad137",
+  "repo": "C:\\Peter\\cloudstudio-3dgs-work"
  }
 }
