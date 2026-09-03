@@ -1,6 +1,6 @@
 {
- "run_id": "house0305-t0-F2_keep_split05_7k-rec",
- "output_dir": "C:\\Peter\\3dgs-runs\\house0305_sop\\tile0_F2_keep_split05_7k_rec",
+ "run_id": "house0305-t0-F3_keep_split05_t2h_7k-rec",
+ "output_dir": "C:\\Peter\\3dgs-runs\\house0305_sop\\tile0_F3_keep_split05_t2h_7k_rec",
  "device": "cuda:0",
  "seed": 42,
  "trainer_preset": "custom",
@@ -56,10 +56,10 @@
  "rgb_l1_weight": 0.6,
  "rgb_ssim_weight": 0.4,
  "rgb_ssim_mode": "local_gaussian",
- "lidar_range_weight": 0.0,
- "lidar_range_loss_mode": "linear_l1",
+ "lidar_range_weight": 0.05,
+ "lidar_range_loss_mode": "robust_log_huber",
  "lidar_log_range_huber_delta": 0.05,
- "da2_depth_weight": 0.5,
+ "da2_depth_weight": 0.15,
  "lidar_normal_alignment": {
   "enabled": true,
   "weight_align": 0.05,
@@ -103,7 +103,7 @@
   "enabled": false
  },
  "final_evaluation_artifacts": false,
- "lidar_alpha_weight": 0.0,
+ "lidar_alpha_weight": 0.5,
  "lidar_alpha_target": 0.95,
  "background_image_manifest": "C:\\Peter\\3dgs-runs\\house0305_sop\\tile_backgrounds\\Tile_0\\background_manifest.json",
  "background_image_root": "C:\\Peter\\3dgs-runs\\house0305_sop\\tile_backgrounds\\Tile_0",
@@ -141,8 +141,8 @@
   "detail_split_scale_m": 0.005,
   "detail_split_screen_radius": 0.0035
  },
- "surface_alpha_floor_profile": false,
- "lidar_alpha_dilation_radius_px": 0,
+ "surface_alpha_floor_profile": true,
+ "lidar_alpha_dilation_radius_px": 6,
  "mono_depth_manifest": "C:\\Peter\\3dgs-datasets\\house0305_sop_v8\\da2_train\\mono_depth_manifest.json",
  "mono_depth_root": "C:\\Peter\\3dgs-datasets\\house0305_sop_v8\\da2_train",
  "controlled_stop_after_steps": 7199,
@@ -153,5 +153,5 @@
  "holdout_fraction": 0.1,
  "holdout_seed": 0,
  "holdout_guard_m": 1.5,
- "resume_checkpoint": "C:\\Peter\\3dgs-runs\\house0305_sop\\tile0_F2_keep_split05_7k\\checkpoints\\step_00007000.pt"
+ "resume_checkpoint": "C:\\Peter\\3dgs-runs\\house0305_sop\\tile0_F3_keep_split05_t2h_7k\\checkpoints\\step_00007000.pt"
 }

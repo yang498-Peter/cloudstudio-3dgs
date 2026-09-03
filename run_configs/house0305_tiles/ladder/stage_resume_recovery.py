@@ -19,7 +19,7 @@ cfg["output_dir"] = str(RUN / f"tile0_{new}")
 cfg["resume_checkpoint"] = str(RUN / f"tile0_{arm}" / "checkpoints" / "step_00007000.pt")
 cfg["controlled_stop_after_steps"] = stop
 cfg["checkpoint_every"] = stop
-cfg["checkpoint_keep_every"] = 0
+# checkpoint retention is part of the identity contract: leave it as in the source run
 (RUN / f"tile0_{new}.json").write_text(json.dumps(cfg, indent=1, ensure_ascii=False), encoding="utf-8")
 cmd = (SC / f"run_{arm}.cmd").read_text(encoding="ascii")
 cmd = cmd.replace(f"tile0_{arm}", f"tile0_{new}")

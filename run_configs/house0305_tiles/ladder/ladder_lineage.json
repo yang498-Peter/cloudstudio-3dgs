@@ -322,5 +322,11 @@
   "description": "F2 + T2h supervision bundle (alpha floor 0.5/6 px, sparse range 0.05 robust, DA2 0.15), 7k hold-out",
   "config_sha256": "fdf68aa481423e90602e9ef145d5880dd17cdeaaf9e9fd28d4203b3a3dbad137",
   "repo": "C:\\Peter\\cloudstudio-3dgs-work"
+ },
+ "F4_keep_split05_t2h_full": {
+  "base": "F3_keep_split05_t2h_7k",
+  "description": "F3 recipe, Tile_0 full length (max_steps), spatial-cell hold-out v1.1",
+  "config_sha256": "fa6aa540de5eda450191a21b79614f5a77d032acc1e10ec6a7e15ef0269f452e",
+  "repo": "C:\\Peter\\cloudstudio-3dgs-work"
  }
 }

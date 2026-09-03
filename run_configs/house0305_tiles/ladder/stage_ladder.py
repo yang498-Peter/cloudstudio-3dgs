@@ -250,6 +250,11 @@ ARMS = {
                                      _set("lidar_alpha_weight", 0.5), _set("lidar_alpha_dilation_radius_px", 6),
                                      _set("lidar_range_weight", 0.05), _set("lidar_range_loss_mode", "robust_log_huber"),
                                      _set("da2_depth_weight", 0.15)), WORK),
+    # F3 at 7k (reset+100 phase): hold-out 14.49 / P10 11.26 / alpha P05 0.479,
+    # population 8.4M growing, long axis 4.8 mm. Full length of that recipe.
+    "F4_keep_split05_t2h_full": ("F3_keep_split05_t2h_7k", "F3 recipe, Tile_0 full length (max_steps), spatial-cell hold-out v1.1",
+                                 _many(_set("controlled_stop_after_steps", None),
+                                       _set("checkpoint_keep_every", 7000)), WORK),
     # Enhancement track: the 7k extension doubled the population in the second
     # reset cycle without held-out gains; stop refinement before that wave.
     "X7h_T2_stop5k": ("T2h_split05", "T2h to 7,000 steps with refinement stopped at 5,000 (no second split wave)",
