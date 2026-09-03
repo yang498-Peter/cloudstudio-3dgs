@@ -215,6 +215,10 @@ ARMS = {
     "P9b_keeponly_r300": ("P0_exact300", "parity profile, reset leaves Adam state untouched, library order (cull before reset), stop 1000",
                           _many(_set("default_strategy.reset_optimizer_state", "keep"),
                                 _set("controlled_stop_after_steps", 1000)), WORK),
+    # P9 at 701: reset+101 death 8.6% (baseline 30.0%). Full ladder length to
+    # see the population and morphology over eight reset cycles.
+    "P9f_keep_r300_3500": ("P9_keep_r300", "vendor reset-state form run to the ladder's 3,500-step stop",
+                           _set("controlled_stop_after_steps", 3500), WORK),
     # Enhancement track: the 7k extension doubled the population in the second
     # reset cycle without held-out gains; stop refinement before that wave.
     "X7h_T2_stop5k": ("T2h_split05", "T2h to 7,000 steps with refinement stopped at 5,000 (no second split wave)",

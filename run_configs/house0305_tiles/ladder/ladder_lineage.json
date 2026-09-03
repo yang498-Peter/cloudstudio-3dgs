@@ -298,5 +298,11 @@
   "description": "parity profile, reset leaves Adam state untouched, library order (cull before reset), stop 1000",
   "config_sha256": "991e20bab27d35838f00a9da6b4b9880777638f35ef1ae3882db07790df0f24f",
   "repo": "C:\\Peter\\cloudstudio-3dgs-work"
+ },
+ "P9f_keep_r300_3500": {
+  "base": "P9_keep_r300",
+  "description": "vendor reset-state form run to the ladder's 3,500-step stop",
+  "config_sha256": "08c150d5d648247be075e6220c1cef6da05424151f79a651b5799147576d6202",
+  "repo": "C:\\Peter\\cloudstudio-3dgs-work"
  }
 }
