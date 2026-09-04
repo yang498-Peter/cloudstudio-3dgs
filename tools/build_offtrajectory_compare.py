@@ -14,8 +14,18 @@ from cloudstudio_3dgs.training.view_backgrounds import ViewBackgroundLibrary
 cfg = Path(sys.argv[1]); ckpt = Path(sys.argv[2]); out = Path(sys.argv[3]); frames = int(sys.argv[4]) if len(sys.argv) > 4 else 6
 raw = json.loads(cfg.read_text(encoding="utf-8"))
 backend, _ = _load_backend(raw)
+# A Tile config owns only its own views (and its background library only holds
+# those), so restrict the picks the same way the three-way compare does.
+tile_views = None
+if raw.get("tile_inputs_manifest"):
+    tiles = json.loads(Path(raw["tile_inputs_manifest"]).read_text(encoding="utf-8"))["tiles"]
+    selected = [t for t in tiles if int(t["tile_id"]) == int(raw.get("mipmap_tile_id", 0))]
+    if len(selected) != 1:
+        raise ValueError("Tile inputs do not contain a unique selected Tile")
+    tile_views = selected[0]["views"]
 dataset = FaceCacheDataset(Path(raw["face_cache_manifest"]), Path(raw["face_cache_root"]), verify_artifacts=False,
-                           dataset_manifest_path=Path(raw["dataset_manifest"]), renderer_mask_manifest_path=Path(raw["renderer_mask_manifest"]))
+                           dataset_manifest_path=Path(raw["dataset_manifest"]), renderer_mask_manifest_path=Path(raw["renderer_mask_manifest"]),
+                           tile_views=tile_views)
 device = raw.get("device", "cuda:0")
 backgrounds = ViewBackgroundLibrary(Path(raw["background_image_manifest"]), Path(raw["background_image_root"]), device=device) if raw.get("background_image_manifest") else None
 td = lambda p: {k: (v.to(device) if hasattr(v, "to") else v) for k, v in p.items()}
