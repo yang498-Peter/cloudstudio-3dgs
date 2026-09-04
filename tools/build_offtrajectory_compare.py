@@ -43,9 +43,14 @@ def displaced(c2w, kind):
         c2w[:3, :3] = R @ c2w[:3, :3]
     return c2w
 
+def _model_sh_degree(params) -> int:
+    """SH degree the params actually carry (a DC-only export carries 0)."""
+    coefficients = int(params["sh0"].shape[-2]) + int(params["shN"].shape[-2])
+    return max(0, int(round(coefficients ** 0.5)) - 1)
+
 def render(params, sample, c2w, bg):
     with torch.no_grad():
-        img, _, _, _ = backend.render(params, sample, with_range=False, background_rgb=bg, c2w_override=c2w)
+        img, _, _, _ = backend.render(params, sample, with_range=False, background_rgb=bg, c2w_override=c2w, active_sh_degree=_model_sh_degree(params))
     return (img.detach().clamp(0, 1).cpu().numpy() * 255).astype(np.uint8)
 
 out.mkdir(parents=True, exist_ok=True)

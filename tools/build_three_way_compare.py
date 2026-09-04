@@ -80,6 +80,13 @@ def _load_ply_gaussians(path: Path, transform: np.ndarray | None):
     }
 
 
+def _model_sh_degree(params) -> int:
+    """SH degree the params actually carry (a DC-only export carries 0)."""
+    coefficients = int(params["sh0"].shape[-2]) + int(params["shN"].shape[-2])
+    degree = int(round(coefficients ** 0.5)) - 1
+    return max(0, degree)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--config", type=Path, required=True)
@@ -199,6 +206,7 @@ def main() -> int:
                 rendered, _, _, _ = backend.render(
                     params, sample, with_range=False,
                     background_rgb=view_background,
+                    active_sh_degree=_model_sh_degree(params),
                 )
             image = (
                 rendered.detach().clamp(0.0, 1.0).cpu().numpy() * 255.0
