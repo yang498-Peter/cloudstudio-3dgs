@@ -1310,6 +1310,7 @@ def advance_adaptive_growth_gate(
         (False, 0.00015): "vendor_plain_1p5e4",
         (False, 0.000075): "calibrated_plain_7p5e5",
         (False, 0.00005): "calibrated_plain_5e5",
+        (False, 0.000035): "calibrated_plain_3p5e5",
         (False, 0.0001): "calibrated_plain_1e4",
         (True, 0.0004): "absgrad_4e4",
         (True, 0.0008): "absgrad_8e4",
@@ -1322,6 +1323,7 @@ def advance_adaptive_growth_gate(
         "vendor_plain_1p5e4",
         "calibrated_plain_7p5e5",
         "calibrated_plain_5e5",
+        "calibrated_plain_3p5e5",
         "calibrated_plain_1e4",
     }:
         raise ValueError("pre-optimizer vendor lifecycle requires plain gradients")

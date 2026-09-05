@@ -1164,6 +1164,11 @@ class TrainerConfig:
                 # than the 7.5e-5 arms reach while the cap stays untouched,
                 # so the gate is the growth threshold, not the cap.
                 (False, 0.00005),
+                # Density push arm (2026-09-05 research loop): 5e-5 is the only
+                # knob that moved sharpness and the reference still holds 1.8x
+                # more gaussians per shared voxel, so step the threshold once
+                # more with the cap as the safety.
+                (False, 0.000035),
                 # Bounded AbsGrad calibration arms.
                 (True, 0.0004),
                 (True, 0.0008),
@@ -1257,9 +1262,9 @@ class TrainerConfig:
                 vendor_grow_grad2d = self.default_strategy.get("grow_grad2d")
                 # The type-2 preset runs 1.5e-4; 2e-4 is the library default
                 # the preset overrides, kept selectable for calibration arms.
-                if vendor_grow_grad2d not in {0.00005, 0.000075, 0.0001, 0.00015, 0.0002}:
+                if vendor_grow_grad2d not in {0.000035, 0.00005, 0.000075, 0.0001, 0.00015, 0.0002}:
                     vendor_mismatches["grow_grad2d"] = (
-                        "one of 5e-5, 7.5e-5, 1e-4, 1.5e-4, 2e-4",
+                        "one of 3.5e-5, 5e-5, 7.5e-5, 1e-4, 1.5e-4, 2e-4",
                         vendor_grow_grad2d,
                     )
                 for key, expected in vendor_expected.items():

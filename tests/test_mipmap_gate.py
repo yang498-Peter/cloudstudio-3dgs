@@ -553,6 +553,21 @@ class MipMapPipelineGateTests(unittest.TestCase):
             "calibrated_plain_5e5",
         )
 
+        density_push_config = copy.deepcopy(deferred_reset_config)
+        density_push_config["run_id"] = "d1-density-push"
+        density_push_config["default_strategy"]["grow_grad2d"] = 0.000035
+        density_push_config.pop("config_manifest_sha256")
+        density_push_config["config_manifest_sha256"] = hashlib.sha256(
+            canonical_json_bytes(density_push_config)
+        ).hexdigest()
+        density_push_gate = advance_adaptive_growth_gate(
+            _upstream_data_gate(), density_push_config, stage="boundary"
+        )
+        self.assertEqual(
+            density_push_gate["projected_gradient_profile"],
+            "calibrated_plain_3p5e5",
+        )
+
         calibrated_cull_config = copy.deepcopy(deferred_reset_config)
         calibrated_cull_config["run_id"] = "v42-calibrated-cull"
         calibrated_cull_config["default_strategy"].update(
