@@ -1,6 +1,6 @@
 {
- "run_id": "house0305-t0-D1-grow35e5",
- "output_dir": "C:\\Peter\\3dgs-runs\\house0305_sop\\tile0_D1_grow35e5_20k",
+ "run_id": "house0305-t0-C1-cap15m",
+ "output_dir": "C:\\Peter\\3dgs-runs\\house0305_sop\\tile0_C1_cap15m_20k",
  "device": "cuda:0",
  "seed": 42,
  "trainer_preset": "custom",
@@ -84,7 +84,7 @@
  },
  "densification_strategy": "default_3dgs",
  "densification_gradient_source": "total_loss",
- "cap_max": 12000000,
+ "cap_max": 15000000,
  "mcmc_noise_lr": 0.0,
  "mcmc_noise_injection_stop_iter": 0,
  "learning_rates": {
@@ -115,7 +115,7 @@
   "lifecycle_execution_order": "pre_optimizer_vendor",
   "detail_split_policy": "lidar_surface_screen_detail",
   "absgrad": false,
-  "grow_grad2d": 3.5e-05,
+  "grow_grad2d": 5e-05,
   "split_scale_m": 0.2,
   "prune_scale_m": 0.2,
   "prune_opa": 0.1,

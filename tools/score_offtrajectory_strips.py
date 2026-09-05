@@ -23,7 +23,7 @@ for arm, d in arms.items():
     res[arm] = rows
     print(arm, "n", len(rows), "median psnr full %.2f  1/4 %.2f  1/8 %.2f  sharpness ours/ref %.3f" % tuple(statistics.median([r[k] for r in rows]) for k in ("psnr_full","psnr_q","psnr_e","sharp_ratio")))
 # paired wins vs F6 at 1/4 res
-for arm in [a for a in arms if a != "F6"]:
+for arm in [a for a in arms if a != "F6" and "F6" in res]:
     f6 = {r["file"]: r for r in res["F6"]}
     wins = sum(1 for r in res[arm] if r["file"] in f6 and r["psnr_q"] > f6[r["file"]]["psnr_q"]); n = sum(1 for r in res[arm] if r["file"] in f6)
     print(arm, "wins vs F6 at 1/4 res", wins, "/", n)
