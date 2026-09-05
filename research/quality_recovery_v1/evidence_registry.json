@@ -1,0 +1,188 @@
+{
+ "schema_version": 1,
+ "entries": [
+  {
+   "artifact": "research/quality_recovery_v1/identity/delivery_g9_merged.json",
+   "sha256": "c50743dece7ac225785d65739858ed351f60d2f70b0a5c59f70e3c1e6445c72f",
+   "verdict": "PASS",
+   "claim": "identity frozen: config_as_run, inputs, checkpoint, extension hashed",
+   "wp": "WP00",
+   "gaussian_count": 19305570,
+   "sh_rest_coeffs": 3,
+   "cap_max": null,
+   "missing_inputs": [],
+   "extension_sha256": "60e7a45870f64d8e98659aa05666a98dcba5b8eb9352b066ec1b2e59caaf738e"
+  },
+  {
+   "artifact": "research/quality_recovery_v1/identity/tile0_G9_candidate_t0_20k.json",
+   "sha256": "bd67674de61a04f4fd6dd7ada6347ed14fd5cac3223972b2022099267091974a",
+   "verdict": "PASS",
+   "claim": "identity frozen: config_as_run, inputs, checkpoint, extension hashed",
+   "wp": "WP00",
+   "gaussian_count": 9257813,
+   "sh_rest_coeffs": 3,
+   "cap_max": 12000000,
+   "missing_inputs": [],
+   "extension_sha256": "60e7a45870f64d8e98659aa05666a98dcba5b8eb9352b066ec1b2e59caaf738e"
+  },
+  {
+   "artifact": "research/quality_recovery_v1/identity/tile0_G9d_delivery_20k.json",
+   "sha256": "f2bdbec4e6bb4d3cf4276112de319df6ef005246fa0f4a517e241589bd4ae40a",
+   "verdict": "PASS",
+   "claim": "identity frozen: config_as_run, inputs, checkpoint, extension hashed",
+   "wp": "WP00",
+   "gaussian_count": 7749559,
+   "sh_rest_coeffs": 3,
+   "cap_max": 10000000,
+   "missing_inputs": [],
+   "extension_sha256": "60e7a45870f64d8e98659aa05666a98dcba5b8eb9352b066ec1b2e59caaf738e"
+  },
+  {
+   "artifact": "research/quality_recovery_v1/identity/tile1_G9d_delivery_20k.json",
+   "sha256": "7180f0add263d5a33aa5bb8a319466c0f7ea0492bdd03fdfe2917f23782f0983",
+   "verdict": "PASS",
+   "claim": "identity frozen: config_as_run, inputs, checkpoint, extension hashed",
+   "wp": "WP00",
+   "gaussian_count": 3748697,
+   "sh_rest_coeffs": 3,
+   "cap_max": 6834640,
+   "missing_inputs": [],
+   "extension_sha256": "60e7a45870f64d8e98659aa05666a98dcba5b8eb9352b066ec1b2e59caaf738e"
+  },
+  {
+   "artifact": "research/quality_recovery_v1/identity/tile2_G9d_delivery_20k.json",
+   "sha256": "0c6fc5bc65285348276d6f04c11005e80e2e58c4bc3de35df930d708ac3900f8",
+   "verdict": "PASS",
+   "claim": "identity frozen: config_as_run, inputs, checkpoint, extension hashed",
+   "wp": "WP00",
+   "gaussian_count": 5412985,
+   "sh_rest_coeffs": 3,
+   "cap_max": 6619148,
+   "missing_inputs": [],
+   "extension_sha256": "60e7a45870f64d8e98659aa05666a98dcba5b8eb9352b066ec1b2e59caaf738e"
+  },
+  {
+   "artifact": "research/quality_recovery_v1/identity/tile3_G9d_delivery_20k.json",
+   "sha256": "31b6dbf7bcadb0416954e72a3f2d93347b1f0f6343f1a71a657cbe583b558ab9",
+   "verdict": "PASS",
+   "claim": "identity frozen: config_as_run, inputs, checkpoint, extension hashed",
+   "wp": "WP00",
+   "gaussian_count": 7656310,
+   "sh_rest_coeffs": 3,
+   "cap_max": 10000000,
+   "missing_inputs": [],
+   "extension_sha256": "60e7a45870f64d8e98659aa05666a98dcba5b8eb9352b066ec1b2e59caaf738e"
+  },
+  {
+   "artifact": "research/quality_recovery_v1/cache_dependency_dag.json",
+   "sha256": "3fb25257e42fe80e3976a6b92f0c9b933ea9152e3d51a71426d1523bd45cebcf",
+   "verdict": "PASS",
+   "claim": "cache dependency DAG generated from frozen identities",
+   "wp": "WP00",
+   "nodes": 44,
+   "edges": 87,
+   "protected_roots": 23
+  },
+  {
+   "artifact": "research/quality_recovery_v1/ci/collection-cpu-local.json",
+   "sha256": "b322fbd25e55a3d076d36d1edf0a701078aab892424ed4309e19ec9c13fd42cb",
+   "verdict": "PASS",
+   "claim": "cpu test channel audited by tests/check_collection.py",
+   "wp": "WP00",
+   "collected": 535,
+   "passed": 302,
+   "skipped": 205,
+   "failed": 10,
+   "errored": 18,
+   "optional_not_run": {
+    "torch": 218,
+    "gsplat": 4,
+    "pycolmap": 11
+   },
+   "violations": []
+  },
+  {
+   "artifact": "research/quality_recovery_v1/ci/collection-torch-cpu.json",
+   "sha256": null,
+   "verdict": "NOT_RUN",
+   "claim": "torch-cpu test channel audited",
+   "wp": "WP00"
+  },
+  {
+   "artifact": "research/quality_recovery_v1/ci/collection-cuda.json",
+   "sha256": "e439d9e9a362ac2b3646709e80e276b8f7bf7096479f2412043eae60b7f18c20",
+   "verdict": "FAIL",
+   "claim": "cuda test channel audited by tests/check_collection.py",
+   "wp": "WP00",
+   "collected": 778,
+   "passed": 774,
+   "skipped": 0,
+   "failed": 4,
+   "errored": 0,
+   "optional_not_run": {},
+   "violations": [
+    "failure tests::test_matrix_has_signed_shared_inputs_and_single_variable_arms: ValueError: trainer_preset 'legacy_minimal_v1' does not match fields: geometry_regularization self = <test_ab_matrix.TrainerAbMatrixTests testMethod=test_matrix_has_signed_shared_inputs_and_single_var",
+    "failure tests::test_depth_balanced_candidate_changes_only_linear_aux_weight: ValueError: trainer_preset 'gate2_quality_australian_p5_depth_balanced_v1' does not match fields: geometry_regularization self = <test_training_presets.TrainerPresetTests testMethod=test_depth_balance",
+    "failure tests::test_named_presets_are_complete_and_fail_on_contradiction: ValueError: trainer_preset 'gate2_knn_only_v1' does not match fields: geometry_regularization self = <test_training_presets.TrainerPresetTests testMethod=test_named_presets_are_complete_and_fail_on_co",
+    "failure tests::test_legacy_preset_executes_global_masked_moment_loss: AttributeError: 'Backend' object has no attribute 'torch' self = <test_training_presets.LegacyPresetLossTests testMethod=test_legacy_preset_executes_global_masked_moment_loss>\n\n    def test_legacy_pre"
+   ]
+  },
+  {
+   "artifact": "research/quality_recovery_v1/wp01_roundtrip/report.json",
+   "sha256": "cbf7ec9b3838f019699d6b9fd820249c95bbb5334a11909062e015428a9e1fdf",
+   "verdict": "PASS",
+   "claim": "checkpoint -> PLY -> checkpoint -> same-backend render roundtrip with controls",
+   "wp": "WP01",
+   "sub_verdicts": {
+    "tensor": "PASS",
+    "render": "PASS",
+    "controls": "PASS"
+   },
+   "gaussian_count": 19305570,
+   "sh_degree": 1,
+   "tensor_max_abs": {
+    "means": 0.0,
+    "scales": 0.0,
+    "quats": 2.384185791015625e-07,
+    "opacities": 0.0,
+    "sh0": 0.0,
+    "shN": 0.0
+   },
+   "render_max_abs": [
+    0.0021660327911376953,
+    0.003147810697555542,
+    0.0025250613689422607,
+    0.0011609196662902832
+   ],
+   "render_psnr": [
+    118.61846984806817,
+    115.45265156965127,
+    115.41310340410195,
+    119.47330971063545
+   ],
+   "controls": {
+    "repeat_render": {
+     "max_abs": 0.0,
+     "psnr": Infinity
+    },
+    "dc_only_sh": {
+     "max_abs": 0.12374433875083923,
+     "psnr": 33.539639855880125
+    },
+    "camera_shift": {
+     "max_abs": 0.7870199456810951,
+     "psnr": 20.780356829599484
+    },
+    "background_change": {
+     "max_abs": 0.6900735199451447,
+     "psnr": 26.832051648213373
+    }
+   }
+  }
+ ],
+ "counts": {
+  "PASS": 9,
+  "FAIL": 1,
+  "NOT_RUN": 1
+ }
+}

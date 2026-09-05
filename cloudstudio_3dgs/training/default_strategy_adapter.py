@@ -478,7 +478,15 @@ class DefaultStrategyAdapter:
 
         sample = values.detach().float().flatten()
         if sample.numel() > 1_000_000:
-            sample = sample[torch.randperm(sample.numel(), device=sample.device)[:1_000_000]]
+            # Private generator: this read happens inside _grow_mipmap before
+            # the split draws its offsets, so touching the global stream would
+            # let a diagnostic change topology (house0305 G9 crossed this
+            # threshold at 42 refine events on Tile_0).
+            generator = torch.Generator(device=sample.device).manual_seed(0)
+            order = torch.randperm(
+                sample.numel(), device=sample.device, generator=generator
+            )
+            sample = sample[order[:1_000_000]]
         q = torch.quantile(sample, torch.tensor([0.5, 0.9, 0.95], device=sample.device))
         return {
             "p50": float(q[0]),
@@ -912,6 +920,16 @@ class DefaultStrategyAdapter:
                 (gradients > float(self.inner.grow_grad2d)).sum().item()
             ),
             "selected_parent_count": int(eligible.sum().item()),
+            # The budget is consumed on this branch (topk over candidates when
+            # they exceed the headroom), so record what it did instead of
+            # leaving "was the cap live" to be argued from the population curve.
+            "capacity_cap": self.capacity_cap,
+            "capacity_available_before_growth": (
+                None
+                if self.capacity_cap is None
+                else max(0, self.capacity_cap - int(observed.numel()))
+            ),
+            "capacity_rejected_count": capacity_rejected_count,
             "clone_parent_count": duplicate_count,
             "split_parent_count": split_count,
             "split_parent_opacity": self._opacity_summary(opacity[split_mask]),

@@ -1,0 +1,125 @@
+{
+ "channel": "cpu",
+ "collected": 535,
+ "passed": 302,
+ "skipped": 205,
+ "failed": 10,
+ "errored": 18,
+ "optional_not_run": {
+  "torch": 218,
+  "gsplat": 4,
+  "pycolmap": 11
+ },
+ "skip_reasons": {
+  "error_weighted_mcmc unavailable on this host: torch is not installed": 69,
+  "torch is not installed": 33,
+  "torch is an optional training dependency": 30,
+  "gaussian_lifecycle unavailable on this host: torch is not installed": 28,
+  "module unavailable: torch missing": 27,
+  "optional pycolmap runtime is not installed": 10,
+  "CUDA + gsplat required for the real rasterizer": 3,
+  "torch is required": 3,
+  "collection skipped": 2
+ },
+ "per_file": {
+  "tests": {
+   "total": 515,
+   "passed": 302,
+   "skipped": 203,
+   "failed": 10
+  },
+  "tests.test_ab_matrix": {
+   "total": 1,
+   "errored": 1
+  },
+  "tests.test_da2_depth_contract": {
+   "total": 1,
+   "errored": 1
+  },
+  "tests.test_default_strategy_adapter": {
+   "total": 1,
+   "errored": 1
+  },
+  "tests.test_export_gaussian_ply": {
+   "total": 1,
+   "errored": 1
+  },
+  "tests.test_frozen_tail": {
+   "total": 1,
+   "errored": 1
+  },
+  "tests.test_lidar_normals": {
+   "total": 1,
+   "errored": 1
+  },
+  "tests.test_lpips_tool": {
+   "total": 1,
+   "errored": 1
+  },
+  "tests.test_mesh_normal_loss": {
+   "total": 1,
+   "errored": 1
+  },
+  "tests.test_mipmap_gate": {
+   "total": 1,
+   "errored": 1
+  },
+  "tests.test_opacity_trace": {
+   "total": 1,
+   "errored": 1
+  },
+  "tests.test_ppisp": {
+   "total": 1,
+   "errored": 1
+  },
+  "tests.test_range_loss_degenerate_prediction": {
+   "total": 1,
+   "errored": 1
+  },
+  "tests.test_sampling_rebind": {
+   "total": 1,
+   "errored": 1
+  },
+  "tests.test_sky_layer": {
+   "total": 1,
+   "errored": 1
+  },
+  "tests.test_tangent_isotropy": {
+   "total": 1,
+   "skipped": 1
+  },
+  "tests.test_topology_policy": {
+   "total": 1,
+   "errored": 1
+  },
+  "tests.test_training": {
+   "total": 1,
+   "errored": 1
+  },
+  "tests.test_training_presets": {
+   "total": 1,
+   "errored": 1
+  },
+  "tests.test_view_backgrounds": {
+   "total": 1,
+   "errored": 1
+  },
+  "tests.test_world_shrink": {
+   "total": 1,
+   "skipped": 1
+  }
+ },
+ "failures_that_should_skip": [
+  "tests::test_mono_depth_far_cutoff_masks_saturated_targets (torch)",
+  "tests::test_tile_crop_shifts_intrinsics_and_consumes_aligned_da2 (torch)",
+  "tests::test_cli_roundtrip (torch)",
+  "tests::test_component_gradient_audit_reports_alignment_and_conflict (torch)",
+  "tests::test_empty_shn_gradient_and_update_are_zero (torch)",
+  "tests::test_colmap4_binary_model_contains_trivial_rig_and_frame (pycolmap)",
+  "tests::test_parent_gate_rejects_unbounded_plane_extension (torch)",
+  "tests::test_invalid_policy_is_rejected (gsplat)",
+  "tests::test_keep_policy_leaves_moments_and_step_untouched (torch)",
+  "tests::test_reset_before_cull_gives_the_same_opacities (torch)"
+ ],
+ "violations": []
+}

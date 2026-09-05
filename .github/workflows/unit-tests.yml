@@ -7,6 +7,12 @@ on:
 permissions:
   contents: read
 
+# Three test channels, each with an explicit policy enforced by
+# tests/check_collection.py so a job cannot go green by skipping:
+#   cpu        locked dependencies only; torch/gsplat/pycolmap absent by design
+#   torch-cpu  CPU torch wheel on top of the lock; "torch missing" is a failure
+#   cuda       needs the machine-B GPU host; run tools/run_cuda_test_channel.cmd
+#              there and attach its summary - GitHub-hosted runners cannot.
 jobs:
   cpu-tests:
     runs-on: windows-latest
@@ -20,9 +26,13 @@ jobs:
         run: |
           python -m pip install "uv>=0.12,<0.13" --disable-pip-version-check
           uv sync --frozen
-      - name: Run unit tests
+          uv pip install --python .venv "pytest>=9,<10"
+      - name: Run unit tests (cpu channel)
         shell: pwsh
-        run: uv run python -m unittest discover -s tests -v
+        run: |
+          uv run python -m pytest tests -q -p no:cacheprovider --continue-on-collection-errors --junitxml junit-cpu.xml
+          if ($LASTEXITCODE -ne 0) { Write-Host "pytest exit $LASTEXITCODE (policy check decides)" }
+          uv run python tests/check_collection.py junit-cpu.xml --channel cpu --min-tests 400 --summary collection-cpu.json
       - name: Compile Python sources
         shell: pwsh
         run: uv run python -m compileall -q cloudstudio_3dgs converter tools tests
@@ -32,6 +42,41 @@ jobs:
           $lock = Get-Content -LiteralPath upstream\gsplat.lock.json -Encoding UTF8 | ConvertFrom-Json
           $actual = (Get-FileHash -LiteralPath $lock.patch -Algorithm SHA256).Hash.ToLowerInvariant()
           if ($actual -ne $lock.patch_sha256) { throw "Patch hash mismatch" }
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: collection-cpu
+          path: |
+            junit-cpu.xml
+            collection-cpu.json
+
+  torch-cpu-tests:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - name: Install locked dependencies plus CPU torch
+        shell: pwsh
+        run: |
+          python -m pip install "uv>=0.12,<0.13" --disable-pip-version-check
+          uv sync --frozen
+          uv pip install --python .venv "pytest>=9,<10"
+          uv pip install --python .venv "torch==2.11.0" --index-url https://download.pytorch.org/whl/cpu
+      - name: Run unit tests (torch-cpu channel)
+        shell: pwsh
+        run: |
+          uv run python -m pytest tests -q -p no:cacheprovider --continue-on-collection-errors --junitxml junit-torch-cpu.xml
+          if ($LASTEXITCODE -ne 0) { Write-Host "pytest exit $LASTEXITCODE (policy check decides)" }
+          uv run python tests/check_collection.py junit-torch-cpu.xml --channel torch-cpu --min-tests 700 --summary collection-torch-cpu.json
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: collection-torch-cpu
+          path: |
+            junit-torch-cpu.xml
+            collection-torch-cpu.json
 
   patch-applicability:
     runs-on: ubuntu-latest

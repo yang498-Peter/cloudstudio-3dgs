@@ -1,0 +1,312 @@
+{
+ "schema_version": 1,
+ "repo": {
+  "root": "C:\\Peter\\cloudstudio-3dgs-work",
+  "head": "7a2b9e9bfa6446c2cb7f5a6aa37c5c7c1fc2926e",
+  "branch": "fix/loss-parity-and-split",
+  "dirty_files": [
+   "M cloudstudio_3dgs/training/default_strategy_adapter.py",
+   " M cloudstudio_3dgs/training/trainer.py",
+   " M \"docs/2026-09-02_house0305\\346\\240\\271\\345\\233\\240\\345\\210\\206\\346\\236\\220\\344\\270\\216\\344\\277\\256\\345\\244\\215\\350\\267\\257\\347\\272\\277.zh-CN.md\"",
+   " M tests/test_default_strategy_adapter.py",
+   "?? research/",
+   "?? tests/check_collection.py",
+   "?? tests/test_lifecycle_rng_isolation.py",
+   "?? tools/freeze_run_identity.py",
+   "?? tools/roundtrip_checkpoint_ply.py",
+   "?? tools/run_cuda_test_channel.cmd"
+  ]
+ },
+ "runtime": {
+  "python": "3.12.10",
+  "platform": "Windows-11-10.0.26200-SP0",
+  "torch_extensions_dir": "C:\\Peter\\cloudstudio-3dgs\\.torch-ext",
+  "cublas_workspace_config": null,
+  "torch": "2.11.0+cu128",
+  "cuda_runtime": "12.8",
+  "cudnn_deterministic": false,
+  "cudnn_benchmark": false,
+  "gpu": "NVIDIA GeForce RTX 5070 Ti",
+  "gsplat": {
+   "version": "1.5.3",
+   "package": "C:\\Peter\\cloudstudio-3dgs\\external\\gsplat-clean\\gsplat",
+   "git_head": "f2d14131483644e9977451b6403f6f0b73e6637f",
+   "git_dirty_files": [
+    "M examples/datasets/colmap.py",
+    " M examples/simple_trainer.py",
+    " M gsplat/cuda/build.py",
+    " M gsplat/cuda/csrc/Rasterization.cpp",
+    " M gsplat/cuda/csrc/RasterizeToPixelsFromWorld3DGSParallelBatchBwd.cu"
+   ],
+   "extension": {
+    "path": "C:\\Peter\\cloudstudio-3dgs\\.torch-ext\\gsplat_cuda\\gsplat_cuda.pyd",
+    "sha256": "60e7a45870f64d8e98659aa05666a98dcba5b8eb9352b066ec1b2e59caaf738e",
+    "size": 107533824
+   }
+  }
+ },
+ "run": {
+  "run_dir": "C:\\Peter\\3dgs-runs\\house0305_sop\\tile0_G9_candidate_t0_20k",
+  "config_as_run": {
+   "path": "C:\\Peter\\3dgs-runs\\house0305_sop\\tile0_G9_candidate_t0_20k\\config_as_run.json",
+   "sha256": "9c1634d70eb2199a188c9c1a8dd6c6fedaebc853c9b5d7c4ef431ad127e731bb",
+   "size": 5980
+  },
+  "resolved": {
+   "seed": 42,
+   "cap_max": 12000000,
+   "max_steps": 42640,
+   "controlled_stop_after_steps": 20000,
+   "sh_degree": 1,
+   "color_model": "sh",
+   "background_color": [
+    1.0,
+    1.0,
+    1.0
+   ],
+   "default_strategy": {
+    "exact_mipmap_lifecycle": true,
+    "lifecycle_execution_order": "pre_optimizer_vendor",
+    "detail_split_policy": "lidar_surface_screen_detail",
+    "absgrad": false,
+    "grow_grad2d": 5e-05,
+    "split_scale_m": 0.2,
+    "prune_scale_m": 0.2,
+    "prune_opa": 0.1,
+    "prune_opa_late": 0.05,
+    "prune_switch_step": 21320,
+    "prune_scale2d": 0.15,
+    "reset_every": 300,
+    "reset_opacity_cap": 0.2,
+    "refine_scale2d_stop_iter": 14000,
+    "refine_start_iter": 500,
+    "refine_stop_iter": 14000,
+    "refine_every": 100,
+    "capacity_conserving_clone_opacity": false,
+    "relaxed_cull_when_no_growth": true,
+    "revised_opacity": true,
+    "growth_metric": "footprint_weighted",
+    "relaxed_cull_at_capacity": false,
+    "opacity_cull_policy": "immediate",
+    "vendor_cull_warmup_profile": "exact_0p10_to_0p05",
+    "vendor_opacity_reset_profile": "exact_every300",
+    "reset_optimizer_state": "keep",
+    "reset_before_cull": true,
+    "detail_split_scale_m": 0.005,
+    "detail_split_screen_radius": 0.0035
+   },
+   "densification_strategy": "default_3dgs",
+   "densification_gradient_source": "total_loss",
+   "geometry_regularization": {
+    "enabled": true,
+    "opacity_sparsity_weight": 0.0,
+    "scale_upper_weight": 0.0,
+    "anisotropy_weight": 0.01,
+    "max_world_size_m": 0.2,
+    "world_shrink_factor": 0.8,
+    "max_anisotropy": 80.0
+   },
+   "learning_rates": {
+    "means": 1.6e-05,
+    "scales": 0.005,
+    "quats": 0.001,
+    "opacities": 0.05,
+    "colors": 0.0025
+   },
+   "lidar_alpha_weight": 0.1,
+   "lidar_alpha_target": 0.95,
+   "lidar_range_weight": 0.05,
+   "lidar_range_loss_mode": "robust_log_huber",
+   "lidar_normal_alignment": {
+    "enabled": true,
+    "weight_align": 0.05,
+    "weight_flatten": 0.05,
+    "weight_tangent_isotropy": 0.1,
+    "planarity_gate": 0.6,
+    "flatten_mode": "tangent_ratio",
+    "flatten_ratio_target": 0.33,
+    "tangent_isotropy_max_ratio": 60.0
+   },
+   "da2_depth_weight": 0.15,
+   "exposure_compensation": {
+    "enabled": true,
+    "learning_rate": 0.005
+   },
+   "pinhole_rasterize_mode": "classic",
+   "pinhole_with_ut": false,
+   "mipmap_tile_id": 0,
+   "mipmap_pipeline_gate": "C:\\Peter\\3dgs-runs\\house0305_sop\\gates_v9\\gate_17_training_da2.json",
+   "trainer_preset": "custom",
+   "factor": 1
+  },
+  "inputs": {
+   "dataset_manifest": {
+    "path": "C:\\Peter\\3dgs-datasets\\house0305_sop_v8\\dataset_manifest.json",
+    "sha256": "d9b3bbd13fef82c81d272efb8ac234fd38b8cb4a039bb68b48a6636090acdeaa",
+    "size": 1151606
+   },
+   "face_cache_manifest": {
+    "path": "C:\\Peter\\3dgs-datasets\\house0305_sop_v9\\face4_train\\face_manifest.json",
+    "sha256": "4fb4dc6296858d56cea360f0e28360185e2f86d7882b14764a6884cd04c38905",
+    "size": 2970401
+   },
+   "face_lidar_geometry_manifest": {
+    "path": "C:\\Peter\\3dgs-datasets\\house0305_sop_v9\\face4_lidar_train_vis6\\face_lidar_geometry_manifest.json",
+    "sha256": "f8222fc7d3251c6717d440889096aa4b5078e0f0ab0d8b167c6637405b522a99",
+    "size": 1558220
+   },
+   "tile_inputs_manifest": {
+    "path": "C:\\Peter\\3dgs-runs\\house0305_sop\\tile_inputs_v9\\tile_inputs_manifest.json",
+    "sha256": "47420de85e2df2f65e03c72323e3dab63b6cae3ae702c9d88cce99fa2dd2b97d",
+    "size": 1987068
+   },
+   "initialization_ply": {
+    "path": "C:\\Peter\\3dgs-runs\\house0305_sop\\tile_inputs_v9\\Tile_0\\initialization_full_lidar.ply",
+    "sha256": "0340aba0a4b5273afb1aa201bbf3ddc46ff45c0c6173ca845f5c21dd695aa16a",
+    "size": 105671836
+   },
+   "initialization_geometry_manifest": {
+    "path": "C:\\Peter\\3dgs-runs\\house0305_sop\\tile_geometry_v9\\tile_geometry_manifest.json",
+    "sha256": "e6c1138b7179a75aa5270d8e3ec7a9df4149f650b87c96b633c6476888b87251",
+    "size": 8296
+   },
+   "background_image_manifest": {
+    "path": "C:\\Peter\\3dgs-runs\\house0305_sop\\tile_backgrounds_v9\\Tile_0\\background_manifest.json",
+    "sha256": "1ca3b8682c6545bd3ff894e6cede66d5f895d26d3db6339eb51c591bc49a7987",
+    "size": 331803
+   },
+   "depth_manifest": {
+    "path": "C:\\Peter\\3dgs-datasets\\house0305_sop_v8\\depth\\depth_manifest.json",
+    "sha256": "311bcaef258fd411806e57f88c4ebc799c5be9a224705b5e1f175f9cd9be2aa8",
+    "size": 733398
+   },
+   "mono_depth_manifest": {
+    "path": "C:\\Peter\\3dgs-datasets\\house0305_sop_v9\\da2_train\\mono_depth_manifest.json",
+    "sha256": "c3b2cf9804be6bc569d20d558d4c17b07182b9da2bde090a7291405f3f5b7678",
+    "size": 4250673
+   },
+   "mask_manifest": {
+    "path": "C:\\Peter\\3dgs-datasets\\house0305_sop_v8\\masks\\mask_manifest.json",
+    "sha256": "396ed1188112e0c321722c989436607979f09d82b8737b9cea1696a294aac106",
+    "size": 667804
+   },
+   "person_mask_manifest": {
+    "path": "C:\\Peter\\3dgs-datasets\\house0305_sop_v8\\person_mask_manifest.json",
+    "sha256": "4e42db81ee7c067dfd543e5b183b878257b6205677677fcd9581cfc9aa003181",
+    "size": 899900
+   },
+   "renderer_mask_manifest": {
+    "path": "C:\\Peter\\3dgs-datasets\\house0305_sop_v9\\renderer_mask_train.json",
+    "sha256": "35f97198b9cda726e9b31be32ed3dd319ad5473e2d600953cd6c3f40fc49f3b7",
+    "size": 1285104
+   },
+   "gsplat_lock": {
+    "path": "C:\\Peter\\cloudstudio-3dgs-gate1\\upstream\\gsplat.lock.json",
+    "sha256": "142169b06b7f77951f242e29b31fd76985d1a3bbebf9e97c35fd58a0849b5339",
+    "size": 611
+   },
+   "surface_initialization_report.json": {
+    "path": "C:\\Peter\\3dgs-runs\\house0305_sop\\tile0_G9_candidate_t0_20k\\surface_initialization_report.json",
+    "sha256": "2f787313e4c7627e33c9ace489a19aa8f6f857f3b957a41b6980d409cf4397b2",
+    "size": 2001
+   },
+   "coordinate_transform_manifest.json": {
+    "path": "C:\\Peter\\3dgs-runs\\house0305_sop\\tile0_G9_candidate_t0_20k\\coordinate_transform_manifest.json",
+    "sha256": "36f4f8ada811e54b8efb300e73e6ed80e792c011536a156638929ecf5cd2d2ef",
+    "size": 891
+   }
+  },
+  "checkpoint": {
+   "file": {
+    "path": "C:\\Peter\\3dgs-runs\\house0305_sop\\tile0_G9_candidate_t0_20k\\checkpoints\\latest.pt",
+    "sha256": "795ad105ab18b69ae339b29a491234c1009d6fab8a2b4cc752f24931387a7e08",
+    "size": 2824042442
+   },
+   "payload": {
+    "schema_version": 1,
+    "step": 20000,
+    "gaussian_count": 9257813,
+    "sh_rest_coeffs": 3,
+    "param_shapes": {
+     "means": [
+      9257813,
+      3
+     ],
+     "opacities": [
+      9257813
+     ],
+     "quats": [
+      9257813,
+      4
+     ],
+     "scales": [
+      9257813,
+      3
+     ],
+     "sh0": [
+      9257813,
+      1,
+      3
+     ],
+     "shN": [
+      9257813,
+      3,
+      3
+     ]
+    },
+    "identity": {
+     "face_manifest_sha256": "449e7f9b7d2cdd878d497dea82f65a033048729563d42655d669df8615391ea1",
+     "face_plan": "mipmap_face4",
+     "source_identity": {
+      "crop": null,
+      "dataset_manifest_sha256": "33f5f81419dd587c54985f141cde647716b6d491aa5924efc3be26d121bcbd15",
+      "depth_manifest_sha256": "af8fb5400fd5b1fbb63b315fb602fe18b388f4b66a53634520f68b3ff41f14da",
+      "factor": 1,
+      "mask_manifest_sha256": "b96cffe2354a8a7efee661aab781004ab1c19979fb1fbc4ce10e36cec46ef8a4",
+      "person_mask_manifest_sha256": "52a2701123251a4eec5e8c5c689cfd0b1be8f1682faac0d2e466d74d89ced10f",
+      "split": "train",
+      "split_manifest_sha256": "f78afec0e6e0e72fe7abe2d0d9c1d72ad6110cddf592d90d4124682c33d46545"
+     },
+     "fov_deg": 190.0,
+     "split": "train",
+     "min_face_weight": 0.02,
+     "mono_depth_manifest_sha256": "ff105ca719b37d97a7cc214b19c7f628a2a37fc5c3981d136a54c85ff02d5377",
+     "renderer_mask_manifest_sha256": "c7a3688f06186b201e521050f0eae5ae5162906bff92615d0d33c241bdc4bf8f",
+     "face_lidar_geometry_manifest_sha256": "98305c46e0a73e3d606ea985469d3467982fc0590073fa8f14ba995ce8917bc7",
+     "tile_cropped": true,
+     "coordinate_transform_sha256": "5188b35a4150a7d9010079bc929ff661e4a090400515ac7108b49e4f379093ae",
+     "trainer_config_sha256": "6d9c2497656e8fcc9ff97396c4ac9283c7938ccfe204bc03fed467692353babb",
+     "initialization_ply_sha256": "0340aba0a4b5273afb1aa201bbf3ddc46ff45c0c6173ca845f5c21dd695aa16a",
+     "scale_calibration_sha256": "a9291e07609d40d864724b4f43806508b5d3e6aa8aaad2fa9fe7bafae23b4671",
+     "gsplat_runtime": {
+      "package": "gsplat",
+      "version": "1.5.3",
+      "locked_commit": "f2d14131483644e9977451b6403f6f0b73e6637f",
+      "source_kind": "locked_patch",
+      "commit": "f2d14131483644e9977451b6403f6f0b73e6637f"
+     },
+     "initialization_geometry_sha256": "5f23d6f27fb023cb0dbc47c5dbd59f4e1b997e2eb6d11de82fceb11f034efbf4",
+     "surface_initialization_sha256": "4fd6668e8ee43b6ccc81fc55361458160f396cc179c95d325b9d9f2eee7f6f58"
+    },
+    "has_torch_rng_state": true,
+    "has_cuda_rng_state": true,
+    "has_sampler_state": true,
+    "strategy_state_keys": [
+     "_cloudstudio_birth_kind",
+     "_cloudstudio_birth_step",
+     "_cloudstudio_current_step",
+     "_footprint_grad_sum",
+     "_footprint_weight_sum",
+     "_visible_alpha_sum",
+     "count",
+     "grad2d",
+     "radii",
+     "scene_scale"
+    ],
+    "sky_layer": null,
+    "imported": null
+   }
+  }
+ },
+ "extra_files": []
+}

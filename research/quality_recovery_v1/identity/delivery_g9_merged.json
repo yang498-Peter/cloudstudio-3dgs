@@ -1,0 +1,155 @@
+{
+ "schema_version": 1,
+ "repo": {
+  "root": "C:\\Peter\\cloudstudio-3dgs-work",
+  "head": "7a2b9e9bfa6446c2cb7f5a6aa37c5c7c1fc2926e",
+  "branch": "fix/loss-parity-and-split",
+  "dirty_files": [
+   "M cloudstudio_3dgs/training/default_strategy_adapter.py",
+   " M cloudstudio_3dgs/training/trainer.py",
+   " M \"docs/2026-09-02_house0305\\346\\240\\271\\345\\233\\240\\345\\210\\206\\346\\236\\220\\344\\270\\216\\344\\277\\256\\345\\244\\215\\350\\267\\257\\347\\272\\277.zh-CN.md\"",
+   " M tests/test_default_strategy_adapter.py",
+   "?? research/",
+   "?? tests/check_collection.py",
+   "?? tests/test_lifecycle_rng_isolation.py",
+   "?? tools/freeze_run_identity.py",
+   "?? tools/roundtrip_checkpoint_ply.py",
+   "?? tools/run_cuda_test_channel.cmd"
+  ]
+ },
+ "runtime": {
+  "python": "3.12.10",
+  "platform": "Windows-11-10.0.26200-SP0",
+  "torch_extensions_dir": "C:\\Peter\\cloudstudio-3dgs\\.torch-ext",
+  "cublas_workspace_config": null,
+  "torch": "2.11.0+cu128",
+  "cuda_runtime": "12.8",
+  "cudnn_deterministic": false,
+  "cudnn_benchmark": false,
+  "gpu": "NVIDIA GeForce RTX 5070 Ti",
+  "gsplat": {
+   "version": "1.5.3",
+   "package": "C:\\Peter\\cloudstudio-3dgs\\external\\gsplat-clean\\gsplat",
+   "git_head": "f2d14131483644e9977451b6403f6f0b73e6637f",
+   "git_dirty_files": [
+    "M examples/datasets/colmap.py",
+    " M examples/simple_trainer.py",
+    " M gsplat/cuda/build.py",
+    " M gsplat/cuda/csrc/Rasterization.cpp",
+    " M gsplat/cuda/csrc/RasterizeToPixelsFromWorld3DGSParallelBatchBwd.cu"
+   ],
+   "extension": {
+    "path": "C:\\Peter\\cloudstudio-3dgs\\.torch-ext\\gsplat_cuda\\gsplat_cuda.pyd",
+    "sha256": "60e7a45870f64d8e98659aa05666a98dcba5b8eb9352b066ec1b2e59caaf738e",
+    "size": 107533824
+   }
+  }
+ },
+ "checkpoint": {
+  "file": {
+   "path": "C:\\Peter\\3dgs-runs\\house0305_sop\\delivery_g9\\merged.pt",
+   "sha256": "0bc93add0bab40fbcf4b6181b1b5e78bffbc6897677f8d9a507848519466574c",
+   "size": 1776119269
+  },
+  "payload": {
+   "schema_version": 1,
+   "step": 20000,
+   "gaussian_count": 19305570,
+   "sh_rest_coeffs": 3,
+   "param_shapes": {
+    "means": [
+     19305570,
+     3
+    ],
+    "opacities": [
+     19305570
+    ],
+    "quats": [
+     19305570,
+     4
+    ],
+    "scales": [
+     19305570,
+     3
+    ],
+    "sh0": [
+     19305570,
+     1,
+     3
+    ],
+    "shN": [
+     19305570,
+     3,
+     3
+    ]
+   },
+   "identity": {
+    "face_manifest_sha256": "449e7f9b7d2cdd878d497dea82f65a033048729563d42655d669df8615391ea1",
+    "face_plan": "mipmap_face4",
+    "source_identity": {
+     "crop": null,
+     "dataset_manifest_sha256": "33f5f81419dd587c54985f141cde647716b6d491aa5924efc3be26d121bcbd15",
+     "depth_manifest_sha256": "af8fb5400fd5b1fbb63b315fb602fe18b388f4b66a53634520f68b3ff41f14da",
+     "factor": 1,
+     "mask_manifest_sha256": "b96cffe2354a8a7efee661aab781004ab1c19979fb1fbc4ce10e36cec46ef8a4",
+     "person_mask_manifest_sha256": "52a2701123251a4eec5e8c5c689cfd0b1be8f1682faac0d2e466d74d89ced10f",
+     "split": "train",
+     "split_manifest_sha256": "f78afec0e6e0e72fe7abe2d0d9c1d72ad6110cddf592d90d4124682c33d46545"
+    },
+    "fov_deg": 190.0,
+    "split": "train",
+    "min_face_weight": 0.02,
+    "mono_depth_manifest_sha256": "ff105ca719b37d97a7cc214b19c7f628a2a37fc5c3981d136a54c85ff02d5377",
+    "renderer_mask_manifest_sha256": "c7a3688f06186b201e521050f0eae5ae5162906bff92615d0d33c241bdc4bf8f",
+    "face_lidar_geometry_manifest_sha256": "98305c46e0a73e3d606ea985469d3467982fc0590073fa8f14ba995ce8917bc7",
+    "tile_cropped": true,
+    "coordinate_transform_sha256": "5188b35a4150a7d9010079bc929ff661e4a090400515ac7108b49e4f379093ae",
+    "trainer_config_sha256": "5f11c749e022c9f397a0485d6cacdf5a697374091f8d17024213a470e6a271de",
+    "initialization_ply_sha256": "0340aba0a4b5273afb1aa201bbf3ddc46ff45c0c6173ca845f5c21dd695aa16a",
+    "scale_calibration_sha256": "a9291e07609d40d864724b4f43806508b5d3e6aa8aaad2fa9fe7bafae23b4671",
+    "gsplat_runtime": {
+     "package": "gsplat",
+     "version": "1.5.3",
+     "locked_commit": "f2d14131483644e9977451b6403f6f0b73e6637f",
+     "source_kind": "locked_patch",
+     "commit": "f2d14131483644e9977451b6403f6f0b73e6637f"
+    },
+    "initialization_geometry_sha256": "5f23d6f27fb023cb0dbc47c5dbd59f4e1b997e2eb6d11de82fceb11f034efbf4",
+    "surface_initialization_sha256": "4fd6668e8ee43b6ccc81fc55361458160f396cc179c95d325b9d9f2eee7f6f58",
+    "kind": "snow_v28_merged_tile_checkpoint_v2",
+    "merge_policy": "core_owner_only",
+    "tile_inputs_manifest_sha256": "7af17f43c5c3884521ddff037ecc756c9ef4a2f8825c4b62480da1a9d8621e03",
+    "merge_report_sha256": "7912eca4f679bcda2318c8d87966cdb8bf5c4afa97f04c39d9a23325f2d34ad7",
+    "source_tile_checkpoint_sha256": {
+     "0": "771e97467f694ec43baa123b405bffd89a922f17781de20f8f2f8e454ee63975",
+     "1": "e8001dad2626da72788ba3c56e07c43681077c657f146ee5eb28e095d12f9f41",
+     "2": "8bbdcc7201601c0ce387a7db93fb905b5d51cd979593bb849d3454a26495e45a",
+     "3": "133406169fa380c7650e4f3ac2b07dbfd1f3de613cb0c60c9ec9fbce0eb55a62"
+    }
+   },
+   "has_torch_rng_state": false,
+   "has_cuda_rng_state": false,
+   "has_sampler_state": false,
+   "strategy_state_keys": null,
+   "sky_layer": null,
+   "imported": null
+  }
+ },
+ "extra_files": [
+  {
+   "path": "C:\\Peter\\3dgs-runs\\house0305_sop\\delivery_g9\\merge_report.json",
+   "sha256": "460a38e1ae17cfce05394b48cdaebf5bb66ed4fe586f8cb066298a141417c379",
+   "size": 3080
+  },
+  {
+   "path": "C:\\Peter\\3dgs-runs\\exports\\house0305_g9_sh1_merged_20260905.ply",
+   "sha256": "8030f5ac5b31394f5d3ff98b7f8de964ededd9f2a798d6174ac7ccb0ab8ee787",
+   "size": 1411960170
+  },
+  {
+   "path": "C:\\Peter\\3dgs-runs\\exports\\house0305_g9_sky_20260905.ply",
+   "sha256": "9e51c2fb1c454e27b63931c8cc6d9d0d6a4705183ad5e9e0d4f18178bfd1fd8a",
+   "size": 6800416
+  }
+ ]
+}

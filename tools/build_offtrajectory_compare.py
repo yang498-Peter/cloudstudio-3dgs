@@ -48,6 +48,9 @@ def _model_sh_degree(params) -> int:
     coefficients = int(params["sh0"].shape[-2]) + int(params["shN"].shape[-2])
     return max(0, int(round(coefficients ** 0.5)) - 1)
 
+# The eval config's sh_degree caps what render() may use; take the model's.
+backend.sh_degree = max(int(backend.sh_degree), _model_sh_degree(ours))
+
 def render(params, sample, c2w, bg):
     with torch.no_grad():
         img, _, _, _ = backend.render(params, sample, with_range=False, background_rgb=bg, c2w_override=c2w, active_sh_degree=_model_sh_degree(params))

@@ -81,7 +81,7 @@ def main() -> int:
     from cloudstudio_3dgs.training.face_dataset import FaceCacheDataset
     from cloudstudio_3dgs.training.view_backgrounds import ViewBackgroundLibrary
     from cloudstudio_3dgs.training.trainer import rendered_range_to_euclidean
-    from tools.sharpness_metrics import _load_backend
+    from tools.sharpness_metrics import _load_backend, model_sh_degree
 
     raw = json.loads(args.config.read_text(encoding="utf-8"))
     backend, torch_mod = _load_backend(raw)
@@ -188,6 +188,10 @@ def main() -> int:
         }
         step = int(payload.get("step", 0))
         source = str(args.checkpoint)
+        # The eval config's sh_degree caps what render() may use; take the
+        # model's, or an SH1 checkpoint is scored DC-only (delivery_eval*.json
+        # say 0 and did exactly that to every G9 battery number).
+        backend.sh_degree = max(int(backend.sh_degree), model_sh_degree(params))
 
     stride = max(1, len(dataset) // args.views)
     picks = list(range(0, len(dataset), stride))[: args.views]

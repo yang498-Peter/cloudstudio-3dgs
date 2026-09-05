@@ -1,0 +1,5 @@
+# derived, multi-GB or image evidence stays local; report.json and identity JSON are the record
+*.ply
+*.pt
+*.png
+*.xml

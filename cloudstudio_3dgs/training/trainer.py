@@ -4645,6 +4645,8 @@ def train(
                     "lifecycle_split_parent_frac_saturated": (growth.get("split_parent_opacity") or {}).get("frac_saturated"),
                     "lifecycle_clone_parent_op_p50": (growth.get("clone_parent_opacity") or {}).get("p50"),
                     "lifecycle_growth_eligible": growth.get("selected_parent_count"),
+                    "lifecycle_capacity_cap": growth.get("capacity_cap"),
+                    "lifecycle_capacity_rejected": growth.get("capacity_rejected_count"),
                     "lifecycle_grad_threshold": growth.get("gradient_threshold"),
                     "lifecycle_grad_p90": quantiles.get("p90"),
                     "lifecycle_grad_p99": quantiles.get("p99"),

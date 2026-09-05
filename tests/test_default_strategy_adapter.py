@@ -1373,3 +1373,80 @@ class CapacityGuardTests(unittest.TestCase):
         self._backend(hard_cap=None).enforce_capacity(
             {"means": range(10_000_000)}, step=1200
         )
+
+
+class CapacityBudgetOnSelectedPathTests(unittest.TestCase):
+    """house0305 G9 ran exact_mipmap_lifecycle with pre_optimizer_vendor order.
+
+    Whether cap_max is a live budget there was argued from population curves;
+    this pins it to the code path the run actually took and makes the budget
+    outcome visible in the growth event the trainer publishes.
+    """
+
+    def _fixture(self, **overrides):
+        import torch
+
+        settings = dict(
+            scene_scale=10.0,
+            refine_start_iter=500,
+            refine_stop_iter=2000,
+            refine_every=100,
+            reset_every=300,
+            grow_grad2d=0.00015,
+            prune_opa=0.1,
+            split_scale_m=0.2,
+            prune_scale_m=0.2,
+            exact_mipmap_lifecycle=True,
+            lifecycle_execution_order="pre_optimizer_vendor",
+            growth_min_opacity=0.15,
+            prune_opa_late=0.05,
+            prune_switch_step=1000,
+            reset_opacity_cap=0.2,
+        )
+        settings.update(overrides)
+        adapter = DefaultStrategyAdapter(**settings)
+        params = torch.nn.ParameterDict(
+            {
+                "means": torch.nn.Parameter(torch.zeros(3, 3)),
+                "scales": torch.nn.Parameter(torch.full((3, 3), 0.05).log()),
+                "quats": torch.nn.Parameter(
+                    torch.tensor([[1.0, 0.0, 0.0, 0.0]] * 3)
+                ),
+                "opacities": torch.nn.Parameter(torch.full((3,), 0.3).logit()),
+                "colors": torch.nn.Parameter(torch.zeros(3, 3)),
+            }
+        )
+        optimizers = {
+            name: torch.optim.Adam([parameter], lr=1e-3)
+            for name, parameter in params.items()
+        }
+        state = {
+            "grad2d": torch.tensor([0.001, 0.003, 0.002]),
+            "count": torch.ones(3),
+            "radii": torch.zeros(3),
+            "scene_scale": 10.0,
+        }
+        return adapter, params, optimizers, state
+
+    def test_capacity_consumed_on_actual_selected_path(self):
+        adapter, params, optimizers, state = self._fixture(capacity_cap=5)
+        clone_count, split_count = adapter._grow_mipmap(
+            params, optimizers, state
+        )
+        event = adapter._last_growth_event
+        self.assertEqual(event["gradient_only_candidate_count"], 3)
+        self.assertEqual(event["capacity_cap"], 5)
+        self.assertEqual(event["capacity_available_before_growth"], 2)
+        self.assertEqual(event["capacity_rejected_count"], 1)
+        self.assertEqual(event["selected_parent_count"], 2)
+        self.assertEqual((clone_count, split_count), (2, 0))
+        self.assertEqual(len(params["means"]), 5)
+
+    def test_uncapped_path_reports_no_budget(self):
+        adapter, params, optimizers, state = self._fixture()
+        adapter._grow_mipmap(params, optimizers, state)
+        event = adapter._last_growth_event
+        self.assertIsNone(event["capacity_cap"])
+        self.assertIsNone(event["capacity_available_before_growth"])
+        self.assertEqual(event["capacity_rejected_count"], 0)
+        self.assertEqual(len(params["means"]), 6)

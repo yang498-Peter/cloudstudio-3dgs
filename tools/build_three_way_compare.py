@@ -167,6 +167,8 @@ def main() -> int:
 
     checkpoint = torch.load(args.checkpoint, map_location="cpu", weights_only=False)
     ours = to_device(checkpoint["params"])
+    # The eval config's sh_degree caps what render() may use; take the model's.
+    backend.sh_degree = max(int(backend.sh_degree), _model_sh_degree(ours))
     step = int(checkpoint.get("step", 0))
 
     reference = None

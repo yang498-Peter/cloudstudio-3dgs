@@ -1,0 +1,24 @@
+{
+ "channel": "cuda",
+ "collected": 778,
+ "passed": 774,
+ "skipped": 0,
+ "failed": 4,
+ "errored": 0,
+ "optional_not_run": {},
+ "skip_reasons": {},
+ "per_file": {
+  "tests": {
+   "total": 778,
+   "passed": 774,
+   "failed": 4
+  }
+ },
+ "failures_that_should_skip": [],
+ "violations": [
+  "failure tests::test_matrix_has_signed_shared_inputs_and_single_variable_arms: ValueError: trainer_preset 'legacy_minimal_v1' does not match fields: geometry_regularization self = <test_ab_matrix.TrainerAbMatrixTests testMethod=test_matrix_has_signed_shared_inputs_and_single_var",
+  "failure tests::test_depth_balanced_candidate_changes_only_linear_aux_weight: ValueError: trainer_preset 'gate2_quality_australian_p5_depth_balanced_v1' does not match fields: geometry_regularization self = <test_training_presets.TrainerPresetTests testMethod=test_depth_balance",
+  "failure tests::test_named_presets_are_complete_and_fail_on_contradiction: ValueError: trainer_preset 'gate2_knn_only_v1' does not match fields: geometry_regularization self = <test_training_presets.TrainerPresetTests testMethod=test_named_presets_are_complete_and_fail_on_co",
+  "failure tests::test_legacy_preset_executes_global_masked_moment_loss: AttributeError: 'Backend' object has no attribute 'torch' self = <test_training_presets.LegacyPresetLossTests testMethod=test_legacy_preset_executes_global_masked_moment_loss>\n\n    def test_legacy_pre"
+ ]
+}

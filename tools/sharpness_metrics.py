@@ -137,7 +137,15 @@ def highest_texture_crop(reference: np.ndarray, mask: np.ndarray,
     return best
 
 
-def _load_backend(config: dict):
+def model_sh_degree(params) -> int:
+    """Degree the checkpoint actually carries: sqrt(K0 + KN) - 1."""
+    import math
+
+    total = int(params["sh0"].shape[-2] + params["shN"].shape[-2])
+    return max(0, int(round(math.sqrt(total))) - 1)
+
+
+def _load_backend(config: dict, sh_degree: int | None = None):
     import torch
     from cloudstudio_3dgs.training.backend import GsplatBackend
 
@@ -148,7 +156,12 @@ def _load_backend(config: dict):
         mcmc_config={"noise_injection_stop_iter": 0},
     )
     backend.color_model = config.get("color_model", "sh")
-    backend.sh_degree = int(config.get("sh_degree", 3))
+    # render() clamps active_sh_degree to this value, so an eval config that
+    # says sh_degree 0 silently renders an SH1 checkpoint DC-only. Callers that
+    # know the model's degree pass it here; the config alone is not enough.
+    backend.sh_degree = int(
+        config.get("sh_degree", 3) if sh_degree is None else sh_degree
+    )
     return backend, torch
 
 
@@ -187,6 +200,8 @@ def main() -> int:
     payload = torch.load(args.checkpoint, map_location="cpu", weights_only=False)
     device = config.get("device", "cuda:0")
     params = {k: v.to(device) for k, v in payload["params"].items()}
+    # The eval config's sh_degree caps what render() may use; take the model's.
+    backend.sh_degree = max(int(backend.sh_degree), model_sh_degree(params))
 
     dataset = S1TrainingDataset(
         dataset_manifest_path=Path(config["dataset_manifest"]),

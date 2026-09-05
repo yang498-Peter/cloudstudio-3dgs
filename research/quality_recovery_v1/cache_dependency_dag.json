@@ -1,0 +1,836 @@
+{
+ "schema_version": 1,
+ "generated_from": "research/quality_recovery_v1/identity/*.json",
+ "protected_roots": [
+  "C:\\Peter\\3dgs-datasets\\house0305_sop_v8",
+  "C:\\Peter\\3dgs-datasets\\house0305_sop_v8\\depth",
+  "C:\\Peter\\3dgs-datasets\\house0305_sop_v8\\masks",
+  "C:\\Peter\\3dgs-datasets\\house0305_sop_v9",
+  "C:\\Peter\\3dgs-datasets\\house0305_sop_v9\\da2_train",
+  "C:\\Peter\\3dgs-datasets\\house0305_sop_v9\\face4_lidar_train_vis6",
+  "C:\\Peter\\3dgs-datasets\\house0305_sop_v9\\face4_train",
+  "C:\\Peter\\3dgs-runs\\house0305_sop\\tile0_G9_candidate_t0_20k",
+  "C:\\Peter\\3dgs-runs\\house0305_sop\\tile0_G9d_delivery_20k",
+  "C:\\Peter\\3dgs-runs\\house0305_sop\\tile1_G9d_delivery_20k",
+  "C:\\Peter\\3dgs-runs\\house0305_sop\\tile2_G9d_delivery_20k",
+  "C:\\Peter\\3dgs-runs\\house0305_sop\\tile3_G9d_delivery_20k",
+  "C:\\Peter\\3dgs-runs\\house0305_sop\\tile_backgrounds_v9\\Tile_0",
+  "C:\\Peter\\3dgs-runs\\house0305_sop\\tile_backgrounds_v9\\Tile_1",
+  "C:\\Peter\\3dgs-runs\\house0305_sop\\tile_backgrounds_v9\\Tile_2",
+  "C:\\Peter\\3dgs-runs\\house0305_sop\\tile_backgrounds_v9\\Tile_3",
+  "C:\\Peter\\3dgs-runs\\house0305_sop\\tile_geometry_v9",
+  "C:\\Peter\\3dgs-runs\\house0305_sop\\tile_inputs_v9",
+  "C:\\Peter\\3dgs-runs\\house0305_sop\\tile_inputs_v9\\Tile_0",
+  "C:\\Peter\\3dgs-runs\\house0305_sop\\tile_inputs_v9\\Tile_1",
+  "C:\\Peter\\3dgs-runs\\house0305_sop\\tile_inputs_v9\\Tile_2",
+  "C:\\Peter\\3dgs-runs\\house0305_sop\\tile_inputs_v9\\Tile_3",
+  "C:\\Peter\\cloudstudio-3dgs-gate1\\upstream"
+ ],
+ "nodes": {
+  "C:\\Peter\\3dgs-runs\\house0305_sop\\delivery_g9\\merged.pt": {
+   "kind": "merged_checkpoint",
+   "sha256": "0bc93add0bab40fbcf4b6181b1b5e78bffbc6897677f8d9a507848519466574c",
+   "size": 1776119269,
+   "referenced_by": []
+  },
+  "C:\\Peter\\3dgs-runs\\house0305_sop\\delivery_g9\\merge_report.json": {
+   "kind": "delivery",
+   "sha256": "460a38e1ae17cfce05394b48cdaebf5bb66ed4fe586f8cb066298a141417c379",
+   "size": 3080,
+   "referenced_by": []
+  },
+  "C:\\Peter\\3dgs-runs\\exports\\house0305_g9_sh1_merged_20260905.ply": {
+   "kind": "delivery",
+   "sha256": "8030f5ac5b31394f5d3ff98b7f8de964ededd9f2a798d6174ac7ccb0ab8ee787",
+   "size": 1411960170,
+   "referenced_by": []
+  },
+  "C:\\Peter\\3dgs-runs\\exports\\house0305_g9_sky_20260905.ply": {
+   "kind": "delivery",
+   "sha256": "9e51c2fb1c454e27b63931c8cc6d9d0d6a4705183ad5e9e0d4f18178bfd1fd8a",
+   "size": 6800416,
+   "referenced_by": []
+  },
+  "C:\\Peter\\3dgs-runs\\house0305_sop\\tile0_G9_candidate_t0_20k": {
+   "kind": "run",
+   "sha256": null,
+   "size": null,
+   "referenced_by": []
+  },
+  "C:\\Peter\\3dgs-datasets\\house0305_sop_v8\\dataset_manifest.json": {
+   "kind": "input:dataset_manifest",
+   "sha256": "d9b3bbd13fef82c81d272efb8ac234fd38b8cb4a039bb68b48a6636090acdeaa",
+   "size": 1151606,
+   "referenced_by": [
+    "tile0_G9_candidate_t0_20k",
+    "tile0_G9d_delivery_20k",
+    "tile1_G9d_delivery_20k",
+    "tile2_G9d_delivery_20k",
+    "tile3_G9d_delivery_20k"
+   ]
+  },
+  "C:\\Peter\\3dgs-datasets\\house0305_sop_v9\\face4_train\\face_manifest.json": {
+   "kind": "input:face_cache_manifest",
+   "sha256": "4fb4dc6296858d56cea360f0e28360185e2f86d7882b14764a6884cd04c38905",
+   "size": 2970401,
+   "referenced_by": [
+    "tile0_G9_candidate_t0_20k",
+    "tile0_G9d_delivery_20k",
+    "tile1_G9d_delivery_20k",
+    "tile2_G9d_delivery_20k",
+    "tile3_G9d_delivery_20k"
+   ]
+  },
+  "C:\\Peter\\3dgs-datasets\\house0305_sop_v9\\face4_lidar_train_vis6\\face_lidar_geometry_manifest.json": {
+   "kind": "input:face_lidar_geometry_manifest",
+   "sha256": "f8222fc7d3251c6717d440889096aa4b5078e0f0ab0d8b167c6637405b522a99",
+   "size": 1558220,
+   "referenced_by": [
+    "tile0_G9_candidate_t0_20k",
+    "tile0_G9d_delivery_20k",
+    "tile1_G9d_delivery_20k",
+    "tile2_G9d_delivery_20k",
+    "tile3_G9d_delivery_20k"
+   ]
+  },
+  "C:\\Peter\\3dgs-runs\\house0305_sop\\tile_inputs_v9\\tile_inputs_manifest.json": {
+   "kind": "input:tile_inputs_manifest",
+   "sha256": "47420de85e2df2f65e03c72323e3dab63b6cae3ae702c9d88cce99fa2dd2b97d",
+   "size": 1987068,
+   "referenced_by": [
+    "tile0_G9_candidate_t0_20k",
+    "tile0_G9d_delivery_20k",
+    "tile1_G9d_delivery_20k",
+    "tile2_G9d_delivery_20k",
+    "tile3_G9d_delivery_20k"
+   ]
+  },
+  "C:\\Peter\\3dgs-runs\\house0305_sop\\tile_inputs_v9\\Tile_0\\initialization_full_lidar.ply": {
+   "kind": "input:initialization_ply",
+   "sha256": "0340aba0a4b5273afb1aa201bbf3ddc46ff45c0c6173ca845f5c21dd695aa16a",
+   "size": 105671836,
+   "referenced_by": [
+    "tile0_G9_candidate_t0_20k",
+    "tile0_G9d_delivery_20k"
+   ]
+  },
+  "C:\\Peter\\3dgs-runs\\house0305_sop\\tile_geometry_v9\\tile_geometry_manifest.json": {
+   "kind": "input:initialization_geometry_manifest",
+   "sha256": "e6c1138b7179a75aa5270d8e3ec7a9df4149f650b87c96b633c6476888b87251",
+   "size": 8296,
+   "referenced_by": [
+    "tile0_G9_candidate_t0_20k",
+    "tile0_G9d_delivery_20k",
+    "tile1_G9d_delivery_20k",
+    "tile2_G9d_delivery_20k",
+    "tile3_G9d_delivery_20k"
+   ]
+  },
+  "C:\\Peter\\3dgs-runs\\house0305_sop\\tile_backgrounds_v9\\Tile_0\\background_manifest.json": {
+   "kind": "input:background_image_manifest",
+   "sha256": "1ca3b8682c6545bd3ff894e6cede66d5f895d26d3db6339eb51c591bc49a7987",
+   "size": 331803,
+   "referenced_by": [
+    "tile0_G9_candidate_t0_20k",
+    "tile0_G9d_delivery_20k"
+   ]
+  },
+  "C:\\Peter\\3dgs-datasets\\house0305_sop_v8\\depth\\depth_manifest.json": {
+   "kind": "input:depth_manifest",
+   "sha256": "311bcaef258fd411806e57f88c4ebc799c5be9a224705b5e1f175f9cd9be2aa8",
+   "size": 733398,
+   "referenced_by": [
+    "tile0_G9_candidate_t0_20k",
+    "tile0_G9d_delivery_20k",
+    "tile1_G9d_delivery_20k",
+    "tile2_G9d_delivery_20k",
+    "tile3_G9d_delivery_20k"
+   ]
+  },
+  "C:\\Peter\\3dgs-datasets\\house0305_sop_v9\\da2_train\\mono_depth_manifest.json": {
+   "kind": "input:mono_depth_manifest",
+   "sha256": "c3b2cf9804be6bc569d20d558d4c17b07182b9da2bde090a7291405f3f5b7678",
+   "size": 4250673,
+   "referenced_by": [
+    "tile0_G9_candidate_t0_20k",
+    "tile0_G9d_delivery_20k",
+    "tile1_G9d_delivery_20k",
+    "tile2_G9d_delivery_20k",
+    "tile3_G9d_delivery_20k"
+   ]
+  },
+  "C:\\Peter\\3dgs-datasets\\house0305_sop_v8\\masks\\mask_manifest.json": {
+   "kind": "input:mask_manifest",
+   "sha256": "396ed1188112e0c321722c989436607979f09d82b8737b9cea1696a294aac106",
+   "size": 667804,
+   "referenced_by": [
+    "tile0_G9_candidate_t0_20k",
+    "tile0_G9d_delivery_20k",
+    "tile1_G9d_delivery_20k",
+    "tile2_G9d_delivery_20k",
+    "tile3_G9d_delivery_20k"
+   ]
+  },
+  "C:\\Peter\\3dgs-datasets\\house0305_sop_v8\\person_mask_manifest.json": {
+   "kind": "input:person_mask_manifest",
+   "sha256": "4e42db81ee7c067dfd543e5b183b878257b6205677677fcd9581cfc9aa003181",
+   "size": 899900,
+   "referenced_by": [
+    "tile0_G9_candidate_t0_20k",
+    "tile0_G9d_delivery_20k",
+    "tile1_G9d_delivery_20k",
+    "tile2_G9d_delivery_20k",
+    "tile3_G9d_delivery_20k"
+   ]
+  },
+  "C:\\Peter\\3dgs-datasets\\house0305_sop_v9\\renderer_mask_train.json": {
+   "kind": "input:renderer_mask_manifest",
+   "sha256": "35f97198b9cda726e9b31be32ed3dd319ad5473e2d600953cd6c3f40fc49f3b7",
+   "size": 1285104,
+   "referenced_by": [
+    "tile0_G9_candidate_t0_20k",
+    "tile0_G9d_delivery_20k",
+    "tile1_G9d_delivery_20k",
+    "tile2_G9d_delivery_20k",
+    "tile3_G9d_delivery_20k"
+   ]
+  },
+  "C:\\Peter\\cloudstudio-3dgs-gate1\\upstream\\gsplat.lock.json": {
+   "kind": "input:gsplat_lock",
+   "sha256": "142169b06b7f77951f242e29b31fd76985d1a3bbebf9e97c35fd58a0849b5339",
+   "size": 611,
+   "referenced_by": [
+    "tile0_G9_candidate_t0_20k",
+    "tile0_G9d_delivery_20k",
+    "tile1_G9d_delivery_20k",
+    "tile2_G9d_delivery_20k",
+    "tile3_G9d_delivery_20k"
+   ]
+  },
+  "C:\\Peter\\3dgs-runs\\house0305_sop\\tile0_G9_candidate_t0_20k\\surface_initialization_report.json": {
+   "kind": "input:surface_initialization_report.json",
+   "sha256": "2f787313e4c7627e33c9ace489a19aa8f6f857f3b957a41b6980d409cf4397b2",
+   "size": 2001,
+   "referenced_by": [
+    "tile0_G9_candidate_t0_20k"
+   ]
+  },
+  "C:\\Peter\\3dgs-runs\\house0305_sop\\tile0_G9_candidate_t0_20k\\coordinate_transform_manifest.json": {
+   "kind": "input:coordinate_transform_manifest.json",
+   "sha256": "36f4f8ada811e54b8efb300e73e6ed80e792c011536a156638929ecf5cd2d2ef",
+   "size": 891,
+   "referenced_by": [
+    "tile0_G9_candidate_t0_20k"
+   ]
+  },
+  "C:\\Peter\\3dgs-runs\\house0305_sop\\tile0_G9_candidate_t0_20k\\checkpoints\\latest.pt": {
+   "kind": "checkpoint",
+   "sha256": "795ad105ab18b69ae339b29a491234c1009d6fab8a2b4cc752f24931387a7e08",
+   "size": 2824042442,
+   "referenced_by": []
+  },
+  "C:\\Peter\\3dgs-runs\\house0305_sop\\tile0_G9d_delivery_20k": {
+   "kind": "run",
+   "sha256": null,
+   "size": null,
+   "referenced_by": []
+  },
+  "C:\\Peter\\3dgs-runs\\house0305_sop\\tile0_G9d_delivery_20k\\surface_initialization_report.json": {
+   "kind": "input:surface_initialization_report.json",
+   "sha256": "2f787313e4c7627e33c9ace489a19aa8f6f857f3b957a41b6980d409cf4397b2",
+   "size": 2001,
+   "referenced_by": [
+    "tile0_G9d_delivery_20k"
+   ]
+  },
+  "C:\\Peter\\3dgs-runs\\house0305_sop\\tile0_G9d_delivery_20k\\coordinate_transform_manifest.json": {
+   "kind": "input:coordinate_transform_manifest.json",
+   "sha256": "36f4f8ada811e54b8efb300e73e6ed80e792c011536a156638929ecf5cd2d2ef",
+   "size": 891,
+   "referenced_by": [
+    "tile0_G9d_delivery_20k"
+   ]
+  },
+  "C:\\Peter\\3dgs-runs\\house0305_sop\\tile0_G9d_delivery_20k\\checkpoints\\latest.pt": {
+   "kind": "checkpoint",
+   "sha256": "771e97467f694ec43baa123b405bffd89a922f17781de20f8f2f8e454ee63975",
+   "size": 2364024650,
+   "referenced_by": []
+  },
+  "C:\\Peter\\3dgs-runs\\house0305_sop\\tile1_G9d_delivery_20k": {
+   "kind": "run",
+   "sha256": null,
+   "size": null,
+   "referenced_by": []
+  },
+  "C:\\Peter\\3dgs-runs\\house0305_sop\\tile_inputs_v9\\Tile_1\\initialization_full_lidar.ply": {
+   "kind": "input:initialization_ply",
+   "sha256": "3bc33f9690a1020241b518f2c140f0ac116d3d52121a6a9adcb0e27965b44e88",
+   "size": 51259981,
+   "referenced_by": [
+    "tile1_G9d_delivery_20k"
+   ]
+  },
+  "C:\\Peter\\3dgs-runs\\house0305_sop\\tile_backgrounds_v9\\Tile_1\\background_manifest.json": {
+   "kind": "input:background_image_manifest",
+   "sha256": "0a02ec3c801caacd3bc937db4597cfa7af873af2b8e7b626f61781fd43755eff",
+   "size": 284676,
+   "referenced_by": [
+    "tile1_G9d_delivery_20k"
+   ]
+  },
+  "C:\\Peter\\3dgs-runs\\house0305_sop\\tile1_G9d_delivery_20k\\surface_initialization_report.json": {
+   "kind": "input:surface_initialization_report.json",
+   "sha256": "fc7f6cfc0073613a305cea841397e2701d0f89413174b8a6fbfb79cb2d54533f",
+   "size": 2005,
+   "referenced_by": [
+    "tile1_G9d_delivery_20k"
+   ]
+  },
+  "C:\\Peter\\3dgs-runs\\house0305_sop\\tile1_G9d_delivery_20k\\coordinate_transform_manifest.json": {
+   "kind": "input:coordinate_transform_manifest.json",
+   "sha256": "36f4f8ada811e54b8efb300e73e6ed80e792c011536a156638929ecf5cd2d2ef",
+   "size": 891,
+   "referenced_by": [
+    "tile1_G9d_delivery_20k"
+   ]
+  },
+  "C:\\Peter\\3dgs-runs\\house0305_sop\\tile1_G9d_delivery_20k\\checkpoints\\latest.pt": {
+   "kind": "checkpoint",
+   "sha256": "e8001dad2626da72788ba3c56e07c43681077c657f146ee5eb28e095d12f9f41",
+   "size": 1143760010,
+   "referenced_by": []
+  },
+  "C:\\Peter\\3dgs-runs\\house0305_sop\\tile2_G9d_delivery_20k": {
+   "kind": "run",
+   "sha256": null,
+   "size": null,
+   "referenced_by": []
+  },
+  "C:\\Peter\\3dgs-runs\\house0305_sop\\tile_inputs_v9\\Tile_2\\initialization_full_lidar.ply": {
+   "kind": "input:initialization_ply",
+   "sha256": "6572fec9d78da5f818f0af15eab6c7ce5b0ac51f927a4d58ff69a128e23b18ef",
+   "size": 49643791,
+   "referenced_by": [
+    "tile2_G9d_delivery_20k"
+   ]
+  },
+  "C:\\Peter\\3dgs-runs\\house0305_sop\\tile_backgrounds_v9\\Tile_2\\background_manifest.json": {
+   "kind": "input:background_image_manifest",
+   "sha256": "b66048581a0dfe82257565aa2a544ca4a7bcf13b2e4b2e493e468d3d67cb43a5",
+   "size": 262232,
+   "referenced_by": [
+    "tile2_G9d_delivery_20k"
+   ]
+  },
+  "C:\\Peter\\3dgs-runs\\house0305_sop\\tile2_G9d_delivery_20k\\surface_initialization_report.json": {
+   "kind": "input:surface_initialization_report.json",
+   "sha256": "c28f5db416698790bf672c119aa414cc8721aa7dceb3ce4ec31fac7a31cdb8e8",
+   "size": 1983,
+   "referenced_by": [
+    "tile2_G9d_delivery_20k"
+   ]
+  },
+  "C:\\Peter\\3dgs-runs\\house0305_sop\\tile2_G9d_delivery_20k\\coordinate_transform_manifest.json": {
+   "kind": "input:coordinate_transform_manifest.json",
+   "sha256": "36f4f8ada811e54b8efb300e73e6ed80e792c011536a156638929ecf5cd2d2ef",
+   "size": 891,
+   "referenced_by": [
+    "tile2_G9d_delivery_20k"
+   ]
+  },
+  "C:\\Peter\\3dgs-runs\\house0305_sop\\tile2_G9d_delivery_20k\\checkpoints\\latest.pt": {
+   "kind": "checkpoint",
+   "sha256": "8bbdcc7201601c0ce387a7db93fb905b5d51cd979593bb849d3454a26495e45a",
+   "size": 1651368138,
+   "referenced_by": []
+  },
+  "C:\\Peter\\3dgs-runs\\house0305_sop\\tile3_G9d_delivery_20k": {
+   "kind": "run",
+   "sha256": null,
+   "size": null,
+   "referenced_by": []
+  },
+  "C:\\Peter\\3dgs-runs\\house0305_sop\\tile_inputs_v9\\Tile_3\\initialization_full_lidar.ply": {
+   "kind": "input:initialization_ply",
+   "sha256": "b65f64edbe246f9a4794a577ff8df2d055e7bea7dd1f797d68242389ee74b5f4",
+   "size": 84777586,
+   "referenced_by": [
+    "tile3_G9d_delivery_20k"
+   ]
+  },
+  "C:\\Peter\\3dgs-runs\\house0305_sop\\tile_backgrounds_v9\\Tile_3\\background_manifest.json": {
+   "kind": "input:background_image_manifest",
+   "sha256": "5af2da5c84abae92809c2334aa7d1bbe23ad2c238d0b9758ea87303805a88000",
+   "size": 360434,
+   "referenced_by": [
+    "tile3_G9d_delivery_20k"
+   ]
+  },
+  "C:\\Peter\\3dgs-runs\\house0305_sop\\tile3_G9d_delivery_20k\\surface_initialization_report.json": {
+   "kind": "input:surface_initialization_report.json",
+   "sha256": "dd84296e6a5299549844bacc2f2a3cbbbb49d3236c852f7f175ed9e24b089b34",
+   "size": 1999,
+   "referenced_by": [
+    "tile3_G9d_delivery_20k"
+   ]
+  },
+  "C:\\Peter\\3dgs-runs\\house0305_sop\\tile3_G9d_delivery_20k\\coordinate_transform_manifest.json": {
+   "kind": "input:coordinate_transform_manifest.json",
+   "sha256": "36f4f8ada811e54b8efb300e73e6ed80e792c011536a156638929ecf5cd2d2ef",
+   "size": 891,
+   "referenced_by": [
+    "tile3_G9d_delivery_20k"
+   ]
+  },
+  "C:\\Peter\\3dgs-runs\\house0305_sop\\tile3_G9d_delivery_20k\\checkpoints\\latest.pt": {
+   "kind": "checkpoint",
+   "sha256": "133406169fa380c7650e4f3ac2b07dbfd1f3de613cb0c60c9ec9fbce0eb55a62",
+   "size": 2335584970,
+   "referenced_by": []
+  },
+  "C:\\Peter\\cloudstudio-3dgs\\.torch-ext\\gsplat_cuda\\gsplat_cuda.pyd": {
+   "kind": "compiled_extension",
+   "sha256": "60e7a45870f64d8e98659aa05666a98dcba5b8eb9352b066ec1b2e59caaf738e",
+   "size": 107533824,
+   "referenced_by": []
+  }
+ },
+ "edges": [
+  [
+   "C:\\Peter\\3dgs-runs\\house0305_sop\\tile0_G9d_delivery_20k\\checkpoints\\latest.pt",
+   "C:\\Peter\\3dgs-runs\\house0305_sop\\delivery_g9\\merged.pt",
+   "merge core_owner_only"
+  ],
+  [
+   "C:\\Peter\\3dgs-runs\\house0305_sop\\tile1_G9d_delivery_20k\\checkpoints\\latest.pt",
+   "C:\\Peter\\3dgs-runs\\house0305_sop\\delivery_g9\\merged.pt",
+   "merge core_owner_only"
+  ],
+  [
+   "C:\\Peter\\3dgs-runs\\house0305_sop\\tile2_G9d_delivery_20k\\checkpoints\\latest.pt",
+   "C:\\Peter\\3dgs-runs\\house0305_sop\\delivery_g9\\merged.pt",
+   "merge core_owner_only"
+  ],
+  [
+   "C:\\Peter\\3dgs-runs\\house0305_sop\\tile3_G9d_delivery_20k\\checkpoints\\latest.pt",
+   "C:\\Peter\\3dgs-runs\\house0305_sop\\delivery_g9\\merged.pt",
+   "merge core_owner_only"
+  ],
+  [
+   "C:\\Peter\\3dgs-runs\\house0305_sop\\delivery_g9\\merged.pt",
+   "C:\\Peter\\3dgs-runs\\house0305_sop\\delivery_g9\\merge_report.json",
+   "export/copy"
+  ],
+  [
+   "C:\\Peter\\3dgs-runs\\house0305_sop\\delivery_g9\\merged.pt",
+   "C:\\Peter\\3dgs-runs\\exports\\house0305_g9_sh1_merged_20260905.ply",
+   "export/copy"
+  ],
+  [
+   "C:\\Peter\\3dgs-runs\\house0305_sop\\delivery_g9\\merged.pt",
+   "C:\\Peter\\3dgs-runs\\exports\\house0305_g9_sky_20260905.ply",
+   "export/copy"
+  ],
+  [
+   "C:\\Peter\\3dgs-datasets\\house0305_sop_v8\\dataset_manifest.json",
+   "C:\\Peter\\3dgs-runs\\house0305_sop\\tile0_G9_candidate_t0_20k",
+   "dataset_manifest"
+  ],
+  [
+   "C:\\Peter\\3dgs-datasets\\house0305_sop_v9\\face4_train\\face_manifest.json",
+   "C:\\Peter\\3dgs-runs\\house0305_sop\\tile0_G9_candidate_t0_20k",
+   "face_cache_manifest"
+  ],
+  [
+   "C:\\Peter\\3dgs-datasets\\house0305_sop_v9\\face4_lidar_train_vis6\\face_lidar_geometry_manifest.json",
+   "C:\\Peter\\3dgs-runs\\house0305_sop\\tile0_G9_candidate_t0_20k",
+   "face_lidar_geometry_manifest"
+  ],
+  [
+   "C:\\Peter\\3dgs-runs\\house0305_sop\\tile_inputs_v9\\tile_inputs_manifest.json",
+   "C:\\Peter\\3dgs-runs\\house0305_sop\\tile0_G9_candidate_t0_20k",
+   "tile_inputs_manifest"
+  ],
+  [
+   "C:\\Peter\\3dgs-runs\\house0305_sop\\tile_inputs_v9\\Tile_0\\initialization_full_lidar.ply",
+   "C:\\Peter\\3dgs-runs\\house0305_sop\\tile0_G9_candidate_t0_20k",
+   "initialization_ply"
+  ],
+  [
+   "C:\\Peter\\3dgs-runs\\house0305_sop\\tile_geometry_v9\\tile_geometry_manifest.json",
+   "C:\\Peter\\3dgs-runs\\house0305_sop\\tile0_G9_candidate_t0_20k",
+   "initialization_geometry_manifest"
+  ],
+  [
+   "C:\\Peter\\3dgs-runs\\house0305_sop\\tile_backgrounds_v9\\Tile_0\\background_manifest.json",
+   "C:\\Peter\\3dgs-runs\\house0305_sop\\tile0_G9_candidate_t0_20k",
+   "background_image_manifest"
+  ],
+  [
+   "C:\\Peter\\3dgs-datasets\\house0305_sop_v8\\depth\\depth_manifest.json",
+   "C:\\Peter\\3dgs-runs\\house0305_sop\\tile0_G9_candidate_t0_20k",
+   "depth_manifest"
+  ],
+  [
+   "C:\\Peter\\3dgs-datasets\\house0305_sop_v9\\da2_train\\mono_depth_manifest.json",
+   "C:\\Peter\\3dgs-runs\\house0305_sop\\tile0_G9_candidate_t0_20k",
+   "mono_depth_manifest"
+  ],
+  [
+   "C:\\Peter\\3dgs-datasets\\house0305_sop_v8\\masks\\mask_manifest.json",
+   "C:\\Peter\\3dgs-runs\\house0305_sop\\tile0_G9_candidate_t0_20k",
+   "mask_manifest"
+  ],
+  [
+   "C:\\Peter\\3dgs-datasets\\house0305_sop_v8\\person_mask_manifest.json",
+   "C:\\Peter\\3dgs-runs\\house0305_sop\\tile0_G9_candidate_t0_20k",
+   "person_mask_manifest"
+  ],
+  [
+   "C:\\Peter\\3dgs-datasets\\house0305_sop_v9\\renderer_mask_train.json",
+   "C:\\Peter\\3dgs-runs\\house0305_sop\\tile0_G9_candidate_t0_20k",
+   "renderer_mask_manifest"
+  ],
+  [
+   "C:\\Peter\\cloudstudio-3dgs-gate1\\upstream\\gsplat.lock.json",
+   "C:\\Peter\\3dgs-runs\\house0305_sop\\tile0_G9_candidate_t0_20k",
+   "gsplat_lock"
+  ],
+  [
+   "C:\\Peter\\3dgs-runs\\house0305_sop\\tile0_G9_candidate_t0_20k\\surface_initialization_report.json",
+   "C:\\Peter\\3dgs-runs\\house0305_sop\\tile0_G9_candidate_t0_20k",
+   "surface_initialization_report.json"
+  ],
+  [
+   "C:\\Peter\\3dgs-runs\\house0305_sop\\tile0_G9_candidate_t0_20k\\coordinate_transform_manifest.json",
+   "C:\\Peter\\3dgs-runs\\house0305_sop\\tile0_G9_candidate_t0_20k",
+   "coordinate_transform_manifest.json"
+  ],
+  [
+   "C:\\Peter\\3dgs-runs\\house0305_sop\\tile0_G9_candidate_t0_20k",
+   "C:\\Peter\\3dgs-runs\\house0305_sop\\tile0_G9_candidate_t0_20k\\checkpoints\\latest.pt",
+   "latest.pt"
+  ],
+  [
+   "C:\\Peter\\3dgs-datasets\\house0305_sop_v8\\dataset_manifest.json",
+   "C:\\Peter\\3dgs-runs\\house0305_sop\\tile0_G9d_delivery_20k",
+   "dataset_manifest"
+  ],
+  [
+   "C:\\Peter\\3dgs-datasets\\house0305_sop_v9\\face4_train\\face_manifest.json",
+   "C:\\Peter\\3dgs-runs\\house0305_sop\\tile0_G9d_delivery_20k",
+   "face_cache_manifest"
+  ],
+  [
+   "C:\\Peter\\3dgs-datasets\\house0305_sop_v9\\face4_lidar_train_vis6\\face_lidar_geometry_manifest.json",
+   "C:\\Peter\\3dgs-runs\\house0305_sop\\tile0_G9d_delivery_20k",
+   "face_lidar_geometry_manifest"
+  ],
+  [
+   "C:\\Peter\\3dgs-runs\\house0305_sop\\tile_inputs_v9\\tile_inputs_manifest.json",
+   "C:\\Peter\\3dgs-runs\\house0305_sop\\tile0_G9d_delivery_20k",
+   "tile_inputs_manifest"
+  ],
+  [
+   "C:\\Peter\\3dgs-runs\\house0305_sop\\tile_inputs_v9\\Tile_0\\initialization_full_lidar.ply",
+   "C:\\Peter\\3dgs-runs\\house0305_sop\\tile0_G9d_delivery_20k",
+   "initialization_ply"
+  ],
+  [
+   "C:\\Peter\\3dgs-runs\\house0305_sop\\tile_geometry_v9\\tile_geometry_manifest.json",
+   "C:\\Peter\\3dgs-runs\\house0305_sop\\tile0_G9d_delivery_20k",
+   "initialization_geometry_manifest"
+  ],
+  [
+   "C:\\Peter\\3dgs-runs\\house0305_sop\\tile_backgrounds_v9\\Tile_0\\background_manifest.json",
+   "C:\\Peter\\3dgs-runs\\house0305_sop\\tile0_G9d_delivery_20k",
+   "background_image_manifest"
+  ],
+  [
+   "C:\\Peter\\3dgs-datasets\\house0305_sop_v8\\depth\\depth_manifest.json",
+   "C:\\Peter\\3dgs-runs\\house0305_sop\\tile0_G9d_delivery_20k",
+   "depth_manifest"
+  ],
+  [
+   "C:\\Peter\\3dgs-datasets\\house0305_sop_v9\\da2_train\\mono_depth_manifest.json",
+   "C:\\Peter\\3dgs-runs\\house0305_sop\\tile0_G9d_delivery_20k",
+   "mono_depth_manifest"
+  ],
+  [
+   "C:\\Peter\\3dgs-datasets\\house0305_sop_v8\\masks\\mask_manifest.json",
+   "C:\\Peter\\3dgs-runs\\house0305_sop\\tile0_G9d_delivery_20k",
+   "mask_manifest"
+  ],
+  [
+   "C:\\Peter\\3dgs-datasets\\house0305_sop_v8\\person_mask_manifest.json",
+   "C:\\Peter\\3dgs-runs\\house0305_sop\\tile0_G9d_delivery_20k",
+   "person_mask_manifest"
+  ],
+  [
+   "C:\\Peter\\3dgs-datasets\\house0305_sop_v9\\renderer_mask_train.json",
+   "C:\\Peter\\3dgs-runs\\house0305_sop\\tile0_G9d_delivery_20k",
+   "renderer_mask_manifest"
+  ],
+  [
+   "C:\\Peter\\cloudstudio-3dgs-gate1\\upstream\\gsplat.lock.json",
+   "C:\\Peter\\3dgs-runs\\house0305_sop\\tile0_G9d_delivery_20k",
+   "gsplat_lock"
+  ],
+  [
+   "C:\\Peter\\3dgs-runs\\house0305_sop\\tile0_G9d_delivery_20k\\surface_initialization_report.json",
+   "C:\\Peter\\3dgs-runs\\house0305_sop\\tile0_G9d_delivery_20k",
+   "surface_initialization_report.json"
+  ],
+  [
+   "C:\\Peter\\3dgs-runs\\house0305_sop\\tile0_G9d_delivery_20k\\coordinate_transform_manifest.json",
+   "C:\\Peter\\3dgs-runs\\house0305_sop\\tile0_G9d_delivery_20k",
+   "coordinate_transform_manifest.json"
+  ],
+  [
+   "C:\\Peter\\3dgs-runs\\house0305_sop\\tile0_G9d_delivery_20k",
+   "C:\\Peter\\3dgs-runs\\house0305_sop\\tile0_G9d_delivery_20k\\checkpoints\\latest.pt",
+   "latest.pt"
+  ],
+  [
+   "C:\\Peter\\3dgs-datasets\\house0305_sop_v8\\dataset_manifest.json",
+   "C:\\Peter\\3dgs-runs\\house0305_sop\\tile1_G9d_delivery_20k",
+   "dataset_manifest"
+  ],
+  [
+   "C:\\Peter\\3dgs-datasets\\house0305_sop_v9\\face4_train\\face_manifest.json",
+   "C:\\Peter\\3dgs-runs\\house0305_sop\\tile1_G9d_delivery_20k",
+   "face_cache_manifest"
+  ],
+  [
+   "C:\\Peter\\3dgs-datasets\\house0305_sop_v9\\face4_lidar_train_vis6\\face_lidar_geometry_manifest.json",
+   "C:\\Peter\\3dgs-runs\\house0305_sop\\tile1_G9d_delivery_20k",
+   "face_lidar_geometry_manifest"
+  ],
+  [
+   "C:\\Peter\\3dgs-runs\\house0305_sop\\tile_inputs_v9\\tile_inputs_manifest.json",
+   "C:\\Peter\\3dgs-runs\\house0305_sop\\tile1_G9d_delivery_20k",
+   "tile_inputs_manifest"
+  ],
+  [
+   "C:\\Peter\\3dgs-runs\\house0305_sop\\tile_inputs_v9\\Tile_1\\initialization_full_lidar.ply",
+   "C:\\Peter\\3dgs-runs\\house0305_sop\\tile1_G9d_delivery_20k",
+   "initialization_ply"
+  ],
+  [
+   "C:\\Peter\\3dgs-runs\\house0305_sop\\tile_geometry_v9\\tile_geometry_manifest.json",
+   "C:\\Peter\\3dgs-runs\\house0305_sop\\tile1_G9d_delivery_20k",
+   "initialization_geometry_manifest"
+  ],
+  [
+   "C:\\Peter\\3dgs-runs\\house0305_sop\\tile_backgrounds_v9\\Tile_1\\background_manifest.json",
+   "C:\\Peter\\3dgs-runs\\house0305_sop\\tile1_G9d_delivery_20k",
+   "background_image_manifest"
+  ],
+  [
+   "C:\\Peter\\3dgs-datasets\\house0305_sop_v8\\depth\\depth_manifest.json",
+   "C:\\Peter\\3dgs-runs\\house0305_sop\\tile1_G9d_delivery_20k",
+   "depth_manifest"
+  ],
+  [
+   "C:\\Peter\\3dgs-datasets\\house0305_sop_v9\\da2_train\\mono_depth_manifest.json",
+   "C:\\Peter\\3dgs-runs\\house0305_sop\\tile1_G9d_delivery_20k",
+   "mono_depth_manifest"
+  ],
+  [
+   "C:\\Peter\\3dgs-datasets\\house0305_sop_v8\\masks\\mask_manifest.json",
+   "C:\\Peter\\3dgs-runs\\house0305_sop\\tile1_G9d_delivery_20k",
+   "mask_manifest"
+  ],
+  [
+   "C:\\Peter\\3dgs-datasets\\house0305_sop_v8\\person_mask_manifest.json",
+   "C:\\Peter\\3dgs-runs\\house0305_sop\\tile1_G9d_delivery_20k",
+   "person_mask_manifest"
+  ],
+  [
+   "C:\\Peter\\3dgs-datasets\\house0305_sop_v9\\renderer_mask_train.json",
+   "C:\\Peter\\3dgs-runs\\house0305_sop\\tile1_G9d_delivery_20k",
+   "renderer_mask_manifest"
+  ],
+  [
+   "C:\\Peter\\cloudstudio-3dgs-gate1\\upstream\\gsplat.lock.json",
+   "C:\\Peter\\3dgs-runs\\house0305_sop\\tile1_G9d_delivery_20k",
+   "gsplat_lock"
+  ],
+  [
+   "C:\\Peter\\3dgs-runs\\house0305_sop\\tile1_G9d_delivery_20k\\surface_initialization_report.json",
+   "C:\\Peter\\3dgs-runs\\house0305_sop\\tile1_G9d_delivery_20k",
+   "surface_initialization_report.json"
+  ],
+  [
+   "C:\\Peter\\3dgs-runs\\house0305_sop\\tile1_G9d_delivery_20k\\coordinate_transform_manifest.json",
+   "C:\\Peter\\3dgs-runs\\house0305_sop\\tile1_G9d_delivery_20k",
+   "coordinate_transform_manifest.json"
+  ],
+  [
+   "C:\\Peter\\3dgs-runs\\house0305_sop\\tile1_G9d_delivery_20k",
+   "C:\\Peter\\3dgs-runs\\house0305_sop\\tile1_G9d_delivery_20k\\checkpoints\\latest.pt",
+   "latest.pt"
+  ],
+  [
+   "C:\\Peter\\3dgs-datasets\\house0305_sop_v8\\dataset_manifest.json",
+   "C:\\Peter\\3dgs-runs\\house0305_sop\\tile2_G9d_delivery_20k",
+   "dataset_manifest"
+  ],
+  [
+   "C:\\Peter\\3dgs-datasets\\house0305_sop_v9\\face4_train\\face_manifest.json",
+   "C:\\Peter\\3dgs-runs\\house0305_sop\\tile2_G9d_delivery_20k",
+   "face_cache_manifest"
+  ],
+  [
+   "C:\\Peter\\3dgs-datasets\\house0305_sop_v9\\face4_lidar_train_vis6\\face_lidar_geometry_manifest.json",
+   "C:\\Peter\\3dgs-runs\\house0305_sop\\tile2_G9d_delivery_20k",
+   "face_lidar_geometry_manifest"
+  ],
+  [
+   "C:\\Peter\\3dgs-runs\\house0305_sop\\tile_inputs_v9\\tile_inputs_manifest.json",
+   "C:\\Peter\\3dgs-runs\\house0305_sop\\tile2_G9d_delivery_20k",
+   "tile_inputs_manifest"
+  ],
+  [
+   "C:\\Peter\\3dgs-runs\\house0305_sop\\tile_inputs_v9\\Tile_2\\initialization_full_lidar.ply",
+   "C:\\Peter\\3dgs-runs\\house0305_sop\\tile2_G9d_delivery_20k",
+   "initialization_ply"
+  ],
+  [
+   "C:\\Peter\\3dgs-runs\\house0305_sop\\tile_geometry_v9\\tile_geometry_manifest.json",
+   "C:\\Peter\\3dgs-runs\\house0305_sop\\tile2_G9d_delivery_20k",
+   "initialization_geometry_manifest"
+  ],
+  [
+   "C:\\Peter\\3dgs-runs\\house0305_sop\\tile_backgrounds_v9\\Tile_2\\background_manifest.json",
+   "C:\\Peter\\3dgs-runs\\house0305_sop\\tile2_G9d_delivery_20k",
+   "background_image_manifest"
+  ],
+  [
+   "C:\\Peter\\3dgs-datasets\\house0305_sop_v8\\depth\\depth_manifest.json",
+   "C:\\Peter\\3dgs-runs\\house0305_sop\\tile2_G9d_delivery_20k",
+   "depth_manifest"
+  ],
+  [
+   "C:\\Peter\\3dgs-datasets\\house0305_sop_v9\\da2_train\\mono_depth_manifest.json",
+   "C:\\Peter\\3dgs-runs\\house0305_sop\\tile2_G9d_delivery_20k",
+   "mono_depth_manifest"
+  ],
+  [
+   "C:\\Peter\\3dgs-datasets\\house0305_sop_v8\\masks\\mask_manifest.json",
+   "C:\\Peter\\3dgs-runs\\house0305_sop\\tile2_G9d_delivery_20k",
+   "mask_manifest"
+  ],
+  [
+   "C:\\Peter\\3dgs-datasets\\house0305_sop_v8\\person_mask_manifest.json",
+   "C:\\Peter\\3dgs-runs\\house0305_sop\\tile2_G9d_delivery_20k",
+   "person_mask_manifest"
+  ],
+  [
+   "C:\\Peter\\3dgs-datasets\\house0305_sop_v9\\renderer_mask_train.json",
+   "C:\\Peter\\3dgs-runs\\house0305_sop\\tile2_G9d_delivery_20k",
+   "renderer_mask_manifest"
+  ],
+  [
+   "C:\\Peter\\cloudstudio-3dgs-gate1\\upstream\\gsplat.lock.json",
+   "C:\\Peter\\3dgs-runs\\house0305_sop\\tile2_G9d_delivery_20k",
+   "gsplat_lock"
+  ],
+  [
+   "C:\\Peter\\3dgs-runs\\house0305_sop\\tile2_G9d_delivery_20k\\surface_initialization_report.json",
+   "C:\\Peter\\3dgs-runs\\house0305_sop\\tile2_G9d_delivery_20k",
+   "surface_initialization_report.json"
+  ],
+  [
+   "C:\\Peter\\3dgs-runs\\house0305_sop\\tile2_G9d_delivery_20k\\coordinate_transform_manifest.json",
+   "C:\\Peter\\3dgs-runs\\house0305_sop\\tile2_G9d_delivery_20k",
+   "coordinate_transform_manifest.json"
+  ],
+  [
+   "C:\\Peter\\3dgs-runs\\house0305_sop\\tile2_G9d_delivery_20k",
+   "C:\\Peter\\3dgs-runs\\house0305_sop\\tile2_G9d_delivery_20k\\checkpoints\\latest.pt",
+   "latest.pt"
+  ],
+  [
+   "C:\\Peter\\3dgs-datasets\\house0305_sop_v8\\dataset_manifest.json",
+   "C:\\Peter\\3dgs-runs\\house0305_sop\\tile3_G9d_delivery_20k",
+   "dataset_manifest"
+  ],
+  [
+   "C:\\Peter\\3dgs-datasets\\house0305_sop_v9\\face4_train\\face_manifest.json",
+   "C:\\Peter\\3dgs-runs\\house0305_sop\\tile3_G9d_delivery_20k",
+   "face_cache_manifest"
+  ],
+  [
+   "C:\\Peter\\3dgs-datasets\\house0305_sop_v9\\face4_lidar_train_vis6\\face_lidar_geometry_manifest.json",
+   "C:\\Peter\\3dgs-runs\\house0305_sop\\tile3_G9d_delivery_20k",
+   "face_lidar_geometry_manifest"
+  ],
+  [
+   "C:\\Peter\\3dgs-runs\\house0305_sop\\tile_inputs_v9\\tile_inputs_manifest.json",
+   "C:\\Peter\\3dgs-runs\\house0305_sop\\tile3_G9d_delivery_20k",
+   "tile_inputs_manifest"
+  ],
+  [
+   "C:\\Peter\\3dgs-runs\\house0305_sop\\tile_inputs_v9\\Tile_3\\initialization_full_lidar.ply",
+   "C:\\Peter\\3dgs-runs\\house0305_sop\\tile3_G9d_delivery_20k",
+   "initialization_ply"
+  ],
+  [
+   "C:\\Peter\\3dgs-runs\\house0305_sop\\tile_geometry_v9\\tile_geometry_manifest.json",
+   "C:\\Peter\\3dgs-runs\\house0305_sop\\tile3_G9d_delivery_20k",
+   "initialization_geometry_manifest"
+  ],
+  [
+   "C:\\Peter\\3dgs-runs\\house0305_sop\\tile_backgrounds_v9\\Tile_3\\background_manifest.json",
+   "C:\\Peter\\3dgs-runs\\house0305_sop\\tile3_G9d_delivery_20k",
+   "background_image_manifest"
+  ],
+  [
+   "C:\\Peter\\3dgs-datasets\\house0305_sop_v8\\depth\\depth_manifest.json",
+   "C:\\Peter\\3dgs-runs\\house0305_sop\\tile3_G9d_delivery_20k",
+   "depth_manifest"
+  ],
+  [
+   "C:\\Peter\\3dgs-datasets\\house0305_sop_v9\\da2_train\\mono_depth_manifest.json",
+   "C:\\Peter\\3dgs-runs\\house0305_sop\\tile3_G9d_delivery_20k",
+   "mono_depth_manifest"
+  ],
+  [
+   "C:\\Peter\\3dgs-datasets\\house0305_sop_v8\\masks\\mask_manifest.json",
+   "C:\\Peter\\3dgs-runs\\house0305_sop\\tile3_G9d_delivery_20k",
+   "mask_manifest"
+  ],
+  [
+   "C:\\Peter\\3dgs-datasets\\house0305_sop_v8\\person_mask_manifest.json",
+   "C:\\Peter\\3dgs-runs\\house0305_sop\\tile3_G9d_delivery_20k",
+   "person_mask_manifest"
+  ],
+  [
+   "C:\\Peter\\3dgs-datasets\\house0305_sop_v9\\renderer_mask_train.json",
+   "C:\\Peter\\3dgs-runs\\house0305_sop\\tile3_G9d_delivery_20k",
+   "renderer_mask_manifest"
+  ],
+  [
+   "C:\\Peter\\cloudstudio-3dgs-gate1\\upstream\\gsplat.lock.json",
+   "C:\\Peter\\3dgs-runs\\house0305_sop\\tile3_G9d_delivery_20k",
+   "gsplat_lock"
+  ],
+  [
+   "C:\\Peter\\3dgs-runs\\house0305_sop\\tile3_G9d_delivery_20k\\surface_initialization_report.json",
+   "C:\\Peter\\3dgs-runs\\house0305_sop\\tile3_G9d_delivery_20k",
+   "surface_initialization_report.json"
+  ],
+  [
+   "C:\\Peter\\3dgs-runs\\house0305_sop\\tile3_G9d_delivery_20k\\coordinate_transform_manifest.json",
+   "C:\\Peter\\3dgs-runs\\house0305_sop\\tile3_G9d_delivery_20k",
+   "coordinate_transform_manifest.json"
+  ],
+  [
+   "C:\\Peter\\3dgs-runs\\house0305_sop\\tile3_G9d_delivery_20k",
+   "C:\\Peter\\3dgs-runs\\house0305_sop\\tile3_G9d_delivery_20k\\checkpoints\\latest.pt",
+   "latest.pt"
+  ]
+ ]
+}
