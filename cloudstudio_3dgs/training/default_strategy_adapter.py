@@ -164,6 +164,7 @@ class DefaultStrategyAdapter:
         vendor_opacity_reset_profile: str = "exact_every300",
         lifecycle_dry_run: bool = False,
         relaxed_cull_when_no_growth: bool = False,
+        post_refine_cull_every: int | None = None,
         relaxed_cull_at_capacity: bool = True,
         growth_metric: str = "count_mean",
     ) -> None:
@@ -236,6 +237,16 @@ class DefaultStrategyAdapter:
         # contract is broken.
         self.lifecycle_dry_run = bool(lifecycle_dry_run)
         self.relaxed_cull_when_no_growth = bool(relaxed_cull_when_no_growth)
+        # Opt-in cull-only phase after growth stops. The recovered lifecycle
+        # does nothing past refine_stop_iter, which freezes whatever the last
+        # reset left transparent into the delivery: on house0305 46-48% of
+        # the final population sat below opacity 0.1, nearly all born in the
+        # last growth window. None keeps vendor parity.
+        self.post_refine_cull_every = (
+            None if post_refine_cull_every is None else int(post_refine_cull_every)
+        )
+        if self.post_refine_cull_every is not None and self.post_refine_cull_every <= 0:
+            raise ValueError("post_refine_cull_every must be a positive step count")
         # Whether sitting at the capacity cap counts as "cannot densify" for the
         # anti-starvation branch. It does by the recovered contract, but a run
         # that saturates its cap for tens of thousands of steps is a regime the
@@ -1485,6 +1496,7 @@ class DefaultStrategyAdapter:
         self._last_growth_event = None
         self._last_cull_event = None
         if step >= self.refine_stop_iter:
+            self._post_refine_cull(params, optimizers, state, step)
             return
         self.inner._update_state(params, state, info, packed=False)
         self._accumulate_footprint_weighted_gradient(params, state, info)
@@ -1576,6 +1588,51 @@ class DefaultStrategyAdapter:
         if params["means"].is_cuda:
             torch.cuda.empty_cache()
 
+    def _post_refine_cull(
+        self,
+        params: Any,
+        optimizers: dict[str, Any],
+        state: dict[str, Any],
+        step: int,
+    ) -> None:
+        """Cull-only cycle after refine_stop_iter; no growth, no reset.
+
+        Full-strength thresholds on purpose: densify_allowed is left None so
+        the relaxed no-growth branch (x0.25 opacity) does not apply. The
+        point is to remove the mass a final reset left behind, not to spare
+        it. Screen-space and gradient windows are not accumulated past
+        refine stop, so only the opacity and world-size gates carry weight.
+        """
+        import torch
+
+        every = self.post_refine_cull_every
+        if not every or step % every != 0 or self.lifecycle_dry_run:
+            return
+        self._ensure_cull_tracking(params, state)
+        before = len(params["means"])
+        cull_count = self._prune_mipmap(
+            params, optimizers, state, step=step, densify_allowed=None
+        )
+        self.last_lifecycle_event = {
+            "kind": "post_refine_cull",
+            "before_count": int(before),
+            "clone_count": 0,
+            "split_parent_count": 0,
+            "split_child_count": 0,
+            "cull_count": int(cull_count),
+            "opacity_reset": False,
+            "after_count": int(len(params["means"])),
+            "cull_opacity_threshold": (
+                float(self.prune_opa_late)
+                if step >= int(self.prune_switch_step)
+                else float(self.inner.prune_opa)
+            ),
+        }
+        if self._last_cull_event is not None:
+            self.last_lifecycle_event["cull_reasons"] = dict(self._last_cull_event)
+        if params["means"].is_cuda:
+            torch.cuda.empty_cache()
+
     def state_dict(self) -> dict[str, Any]:
         """Every knob, plus the metres each normalised threshold resolves to.
 
@@ -1593,6 +1650,7 @@ class DefaultStrategyAdapter:
             "grow_scale2d": float(self.inner.grow_scale2d),
             "prune_scale2d": float(self.inner.prune_scale2d),
             "refine_scale2d_stop_iter": int(self.inner.refine_scale2d_stop_iter),
+            "post_refine_cull_every": self.post_refine_cull_every,
             "prune_opa": float(self.inner.prune_opa),
             "absgrad": bool(self.inner.absgrad),
             "revised_opacity": bool(self.inner.revised_opacity),

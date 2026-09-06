@@ -1,0 +1,187 @@
+{
+ "checkpoint": "C:\\Peter\\3dgs-runs\\house0305_sop\\tile0_R0_rngfix_20k\\checkpoints\\latest.pt",
+ "step": 20000,
+ "gaussian_count": 7737967,
+ "dead_threshold": 0.1,
+ "dead_fraction": 0.44411537051200867,
+ "opacity_quantiles": {
+  "0.5": 0.1376083493232727,
+  "0.9": 0.9196833968162537,
+  "0.99": 0.9948592185974121
+ },
+ "by_birth_kind": {
+  "init": {
+   "count": 3679,
+   "share_of_population": 0.0004754478792685469,
+   "dead_fraction": 0.13944005966186523,
+   "share_of_dead": 0.00014927761854185157,
+   "opacity_p50": 0.6990160346031189,
+   "long_axis_mm_p50": 94.74809265136719,
+   "short_axis_mm_p50": 3.1682322025299072
+  },
+  "clone": {
+   "count": 3649334,
+   "share_of_population": 0.4716140557332436,
+   "dead_fraction": 0.48134809732437134,
+   "share_of_dead": 0.5111521729641646,
+   "opacity_p50": 0.1105884239077568,
+   "long_axis_mm_p50": 3.864415168762207,
+   "short_axis_mm_p50": 0.4392201602458954
+  },
+  "split": {
+   "count": 4084954,
+   "share_of_population": 0.5279104963874878,
+   "dead_fraction": 0.411127507686615,
+   "share_of_dead": 0.4886985494172935,
+   "opacity_p50": 0.17085596919059753,
+   "long_axis_mm_p50": 5.756021022796631,
+   "short_axis_mm_p50": 0.46037912368774414
+  }
+ },
+ "by_birth_step": {
+  "born_1_1999": {
+   "count": 8138,
+   "share_of_population": 0.0010516974290533934,
+   "dead_fraction": 0.12410911917686462,
+   "share_of_dead": 0.0002938994049264524,
+   "opacity_p50": 0.5929263234138489,
+   "long_axis_mm_p50": 4.360436916351318,
+   "short_axis_mm_p50": 0.8250259160995483
+  },
+  "born_2000_4999": {
+   "count": 45698,
+   "share_of_population": 0.0059056855631459786,
+   "dead_fraction": 0.15501771867275238,
+   "share_of_dead": 0.002061369687622761,
+   "opacity_p50": 0.44649234414100647,
+   "long_axis_mm_p50": 3.454455852508545,
+   "short_axis_mm_p50": 0.5545983910560608
+  },
+  "born_5000_9999": {
+   "count": 338712,
+   "share_of_population": 0.043772737722970384,
+   "dead_fraction": 0.21695423126220703,
+   "share_of_dead": 0.021383364129723123,
+   "opacity_p50": 0.35499170422554016,
+   "long_axis_mm_p50": 3.6642439365386963,
+   "short_axis_mm_p50": 0.5051231980323792
+  },
+  "born_10000_13999": {
+   "count": 7341740,
+   "share_of_population": 0.9487944314055617,
+   "dead_fraction": 0.45690232515335083,
+   "share_of_dead": 0.9761120891591858,
+   "opacity_p50": 0.12819279730319977,
+   "long_axis_mm_p50": 4.554690361022949,
+   "short_axis_mm_p50": 0.4457413852214813
+  }
+ },
+ "dead_age_steps": {
+  "0.5": 6400.0,
+  "0.9": 7900.0,
+  "0.99": 11900.0
+ },
+ "alive_age_steps": {
+  "0.5": 6600.0,
+  "0.9": 9400.0,
+  "0.99": 15500.0
+ },
+ "by_observation_count_since_last_refine": {
+  "seen_0_0": {
+   "count": 26738,
+   "share_of_population": 0.003455429572134386,
+   "dead_fraction": 0.49592339992523193,
+   "share_of_dead": 0.0038585209003215433,
+   "opacity_p50": 0.102420374751091,
+   "long_axis_mm_p50": 19.973094940185547,
+   "short_axis_mm_p50": 1.3309029340744019
+  },
+  "seen_1_4": {
+   "count": 40112,
+   "share_of_population": 0.005183790522756171,
+   "dead_fraction": 0.45647189021110535,
+   "share_of_dead": 0.005328017924953805,
+   "opacity_p50": 0.12777359783649445,
+   "long_axis_mm_p50": 15.166779518127441,
+   "short_axis_mm_p50": 1.2123303413391113
+  },
+  "seen_5_19": {
+   "count": 4292790,
+   "share_of_population": 0.5547697476611104,
+   "dead_fraction": 0.4389762878417969,
+   "share_of_dead": 0.5483502349740292,
+   "opacity_p50": 0.14282889664173126,
+   "long_axis_mm_p50": 4.56002950668335,
+   "short_axis_mm_p50": 0.4683837890625
+  },
+  "seen_20_99": {
+   "count": 3378327,
+   "share_of_population": 0.436591032243999,
+   "dead_fraction": 0.450088769197464,
+   "share_of_dead": 0.44246322620069545,
+   "opacity_p50": 0.1322239637374878,
+   "long_axis_mm_p50": 4.3578925132751465,
+   "short_axis_mm_p50": 0.42022964358329773
+  }
+ },
+ "visible_alpha_sum_dead": {
+  "0.5": 46.53484344482422,
+  "0.9": 125.73711395263672,
+  "0.99": 573.5746459960938
+ },
+ "visible_alpha_sum_alive": {
+  "0.5": 50.62018966674805,
+  "0.9": 178.10775756835938,
+  "0.99": 924.6429443359375
+ },
+ "by_long_axis": {
+  "long_0_1mm": {
+   "count": 1108,
+   "share_of_population": 0.0001431900652975129,
+   "dead_fraction": 0.2833935022354126,
+   "share_of_dead": 9.13707060860456e-05,
+   "opacity_p50": 0.2865581512451172,
+   "long_axis_mm_p50": 0.9202797412872314,
+   "short_axis_mm_p50": 0.1790822297334671
+  },
+  "long_1_5mm": {
+   "count": 4378035,
+   "share_of_population": 0.5657862071523437,
+   "dead_fraction": 0.5198014378547668,
+   "share_of_dead": 0.6622074464215565,
+   "opacity_p50": 0.08986668288707733,
+   "long_axis_mm_p50": 3.3868961334228516,
+   "short_axis_mm_p50": 0.37368425726890564
+  },
+  "long_5_20mm": {
+   "count": 2430828,
+   "share_of_population": 0.31414297838178945,
+   "dead_fraction": 0.37937650084495544,
+   "share_of_dead": 0.2683502349740292,
+   "opacity_p50": 0.19793227314949036,
+   "long_axis_mm_p50": 7.70391321182251,
+   "short_axis_mm_p50": 0.4828711152076721
+  },
+  "long_20_50mm": {
+   "count": 609473,
+   "share_of_population": 0.07876396991612913,
+   "dead_fraction": 0.3058839440345764,
+   "share_of_dead": 0.05424859233824621,
+   "opacity_p50": 0.3256305754184723,
+   "long_axis_mm_p50": 28.626869201660156,
+   "short_axis_mm_p50": 0.7959012389183044
+  },
+  "long_50_1000000mm": {
+   "count": 318523,
+   "share_of_population": 0.04116365448444016,
+   "dead_fraction": 0.16293956339359283,
+   "share_of_dead": 0.015102355560082058,
+   "opacity_p50": 0.7211722731590271,
+   "long_axis_mm_p50": 91.93557739257812,
+   "short_axis_mm_p50": 2.0396933555603027
+  }
+ },
+ "height_floor_alive_p01_m": 0.0669613853096962,
+ "dead_below_floor_fraction": 0.004101206082850695,
+ "alive_below_floor_fraction": 0.00808779988437891
+}
