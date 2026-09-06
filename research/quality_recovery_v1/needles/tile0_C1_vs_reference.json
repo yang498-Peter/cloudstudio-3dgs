@@ -1,0 +1,28 @@
+{
+ "ours": {
+  "live_count": 5957881,
+  "on_surface_count": 3745792,
+  "elongated_on_surface": 419924,
+  "needle_out_count": 6491,
+  "streak_in_count": 383532,
+  "needle_out_per_1k_surface": 1.7328778533351559,
+  "streak_in_per_1k_surface": 102.39009533898304,
+  "needle_out_long_mm_p50": 21.72641944885254,
+  "needle_out_opacity_p50": 0.6403387188911438,
+  "streak_in_long_mm_p50": 16.87680435180664,
+  "long_axis_vs_normal_deg_p50_on_surface": 87.08988952636719
+ },
+ "reference": {
+  "live_count": 17648707,
+  "on_surface_count": 12061783,
+  "elongated_on_surface": 1961625,
+  "needle_out_count": 31420,
+  "streak_in_count": 1802762,
+  "needle_out_per_1k_surface": 2.6049216770024795,
+  "streak_in_per_1k_surface": 149.46065602407205,
+  "needle_out_long_mm_p50": 18.486831665039062,
+  "needle_out_opacity_p50": 0.3015561103820801,
+  "streak_in_long_mm_p50": 18.02194595336914,
+  "long_axis_vs_normal_deg_p50_on_surface": 83.9726791381836
+ }
+}
