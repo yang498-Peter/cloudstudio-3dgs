@@ -165,6 +165,7 @@ class DefaultStrategyAdapter:
         lifecycle_dry_run: bool = False,
         relaxed_cull_when_no_growth: bool = False,
         post_refine_cull_every: int | None = None,
+        post_refine_cull_until: int | None = None,
         relaxed_cull_at_capacity: bool = True,
         growth_metric: str = "count_mean",
     ) -> None:
@@ -247,6 +248,16 @@ class DefaultStrategyAdapter:
         )
         if self.post_refine_cull_every is not None and self.post_refine_cull_every <= 0:
             raise ValueError("post_refine_cull_every must be a positive step count")
+        # Last step (inclusive) at which the post-refine cull may run. Culling
+        # every cycle until the end of training over-erodes: on house0305 K1
+        # the population fell from 12.8M to 3.8M and the survivors grew large
+        # and opaque to cover the holes. A short window right after refine
+        # stop removes the reset leftovers and then leaves the rest alone.
+        self.post_refine_cull_until = (
+            None if post_refine_cull_until is None else int(post_refine_cull_until)
+        )
+        if self.post_refine_cull_until is not None and self.post_refine_cull_every is None:
+            raise ValueError("post_refine_cull_until needs post_refine_cull_every")
         # Whether sitting at the capacity cap counts as "cannot densify" for the
         # anti-starvation branch. It does by the recovered contract, but a run
         # that saturates its cap for tens of thousands of steps is a regime the
@@ -1608,6 +1619,8 @@ class DefaultStrategyAdapter:
         every = self.post_refine_cull_every
         if not every or step % every != 0 or self.lifecycle_dry_run:
             return
+        if self.post_refine_cull_until is not None and step > self.post_refine_cull_until:
+            return
         self._ensure_cull_tracking(params, state)
         before = len(params["means"])
         cull_count = self._prune_mipmap(
@@ -1651,6 +1664,7 @@ class DefaultStrategyAdapter:
             "prune_scale2d": float(self.inner.prune_scale2d),
             "refine_scale2d_stop_iter": int(self.inner.refine_scale2d_stop_iter),
             "post_refine_cull_every": self.post_refine_cull_every,
+            "post_refine_cull_until": self.post_refine_cull_until,
             "prune_opa": float(self.inner.prune_opa),
             "absgrad": bool(self.inner.absgrad),
             "revised_opacity": bool(self.inner.revised_opacity),

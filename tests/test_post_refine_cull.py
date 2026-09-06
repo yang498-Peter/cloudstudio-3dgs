@@ -100,6 +100,18 @@ class PostRefineCullTests(unittest.TestCase):
         # the 0.03 row (0.1 x 0.25 = 0.025).
         self.assertEqual(len(optimizers["means"].param_groups[0]["params"][0]), 2)
 
+    def test_window_stops_culling_after_until(self):
+        adapter = self._adapter(post_refine_cull_every=100, post_refine_cull_until=2100)
+        params, optimizers, state = self._population()
+        self._step(adapter, params, optimizers, state, 2200)
+        self.assertEqual(len(params["means"]), 3, "past the window nothing may cull")
+        self.assertIsNone(adapter.last_lifecycle_event)
+        self._step(adapter, params, optimizers, state, 2100)
+        self.assertEqual(len(params["means"]), 2, "the window's last step still culls")
+        self.assertEqual(adapter.state_dict()["post_refine_cull_until"], 2100)
+        with self.assertRaises(ValueError):
+            self._adapter(post_refine_cull_until=2100)
+
     def test_knob_is_recorded_and_validated(self):
         adapter = self._adapter(post_refine_cull_every=250)
         self.assertEqual(adapter.state_dict()["post_refine_cull_every"], 250)
