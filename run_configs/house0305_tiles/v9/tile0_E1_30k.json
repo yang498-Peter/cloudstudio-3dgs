@@ -108,7 +108,7 @@
  "background_image_manifest": "C:\\Peter\\3dgs-runs\\house0305_sop\\tile_backgrounds_v9\\Tile_0\\background_manifest.json",
  "background_image_root": "C:\\Peter\\3dgs-runs\\house0305_sop\\tile_backgrounds_v9\\Tile_0",
  "mcmc_refine_start_iter": 500,
- "mcmc_refine_stop_iter": 14000,
+ "mcmc_refine_stop_iter": 21000,
  "mcmc_refine_every": 100,
  "default_strategy": {
   "exact_mipmap_lifecycle": true,
