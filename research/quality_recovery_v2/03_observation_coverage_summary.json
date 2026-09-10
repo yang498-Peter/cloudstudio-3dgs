@@ -1,0 +1,429 @@
+{
+  "inputs": {
+    "dataset_manifest_sha256": "33f5f81419dd587c54985f141cde647716b6d491aa5924efc3be26d121bcbd15",
+    "face_manifest_sha256": "449e7f9b7d2cdd878d497dea82f65a033048729563d42655d669df8615391ea1",
+    "lidar_geometry_manifest_sha256": "98305c46e0a73e3d606ea985469d3467982fc0590073fa8f14ba995ce8917bc7",
+    "tile_inputs_manifest_sha256": "7af17f43c5c3884521ddff037ecc756c9ef4a2f8825c4b62480da1a9d8621e03",
+    "training_views": 884,
+    "projection_config": {
+      "min_range_m": 0.2,
+      "max_range_m": 80.0,
+      "max_theta_deg": 95.0,
+      "confidence_support_points": 3,
+      "confidence_subpixel_sigma_px": 0.75,
+      "visibility_cell_px": 6,
+      "visibility_tolerance": 0.2,
+      "visibility_margin_m": 0.1
+    },
+    "sharpness_window_px": 64,
+    "support_search_radius_px": 6,
+    "seed": 20260911,
+    "samples_per_region": 2000
+  },
+  "regions": {
+    "indoor_door_leaf_Tile_1": {
+      "sample_count": 2000,
+      "n_images_fisheye": {
+        "median": 592.0,
+        "p10": 583.0,
+        "p90": 604.0,
+        "mean": 592.8235,
+        "count": 2000
+      },
+      "n_images_face": {
+        "median": 432.0,
+        "p10": 412.0,
+        "p90": 448.0,
+        "mean": 430.418,
+        "count": 2000
+      },
+      "n_views_loose_ok": {
+        "median": 176.0,
+        "p10": 147.9,
+        "p90": 207.0,
+        "mean": 176.577,
+        "count": 2000
+      },
+      "n_effective_views": {
+        "median": 98.0,
+        "p10": 50.0,
+        "p90": 145.10000000000014,
+        "mean": 97.416,
+        "count": 2000
+      },
+      "n_effective_views_le5m": {
+        "median": 31.0,
+        "p10": 15.0,
+        "p90": 55.0,
+        "mean": 32.3255,
+        "count": 2000
+      },
+      "strict_frac_occluded": {
+        "median": 0.7675911702793423,
+        "p10": 0.6555339805825243,
+        "p90": 0.8787950766573095,
+        "mean": 0.7694104167101047,
+        "count": 2000
+      },
+      "strict_support_frac": {
+        "median": 0.23005108817256448,
+        "p10": 0.11972327438133977,
+        "p90": 0.3393149882903982,
+        "mean": 0.22754611593328905,
+        "count": 2000
+      },
+      "n_cameras": {
+        "median": 2.0,
+        "p10": 2.0,
+        "p90": 2.0,
+        "mean": 1.9695,
+        "count": 2000
+      },
+      "n_rig_frames": {
+        "median": 93.0,
+        "p10": 48.0,
+        "p90": 135.0,
+        "mean": 91.7105,
+        "count": 2000
+      },
+      "time_span_s": {
+        "median": 181.010992512,
+        "p10": 143.008772096,
+        "p90": 215.51312512,
+        "mean": 178.25861508262398,
+        "count": 2000
+      },
+      "angle_span_deg": {
+        "median": 163.8440062959286,
+        "p10": 119.12046001829245,
+        "p90": 178.2682347917804,
+        "mean": 156.2179222961462,
+        "count": 2000
+      },
+      "range_min_m": {
+        "median": 1.1279121920065371,
+        "p10": 0.4915916673599995,
+        "p90": 2.1633625114426076,
+        "mean": 1.3319709006664289,
+        "count": 2000
+      },
+      "range_median_m": {
+        "median": 6.27287885065201,
+        "p10": 3.157295646972284,
+        "p90": 7.055779545624749,
+        "mean": 5.78833503970201,
+        "count": 2000
+      },
+      "footprint_px_per_m_fisheye": {
+        "median": 142.56605966028337,
+        "p10": 131.15954951792926,
+        "p90": 283.27244923770166,
+        "mean": 167.79182947402663,
+        "count": 2000
+      },
+      "footprint_px_per_m_face": {
+        "median": 230.48957461881213,
+        "p10": 184.91485692469112,
+        "p90": 363.19769287349084,
+        "mean": 255.61341229384877,
+        "count": 2000
+      },
+      "frac_occluded": {
+        "median": 0.586411646997294,
+        "p10": 0.5103448275862069,
+        "p90": 0.65338346281909,
+        "mean": 0.5827932964985291,
+        "count": 2000
+      },
+      "depth_support_frac": {
+        "median": 0.4083005406788879,
+        "p10": 0.34289405284980506,
+        "p90": 0.48352860620815585,
+        "mean": 0.41186449744052117,
+        "count": 2000
+      },
+      "rgb_valid_frac": {
+        "median": 0.981651376146789,
+        "p10": 0.9714285714285714,
+        "p90": 0.9907621247113164,
+        "mean": 0.9811198589731618,
+        "count": 2000
+      },
+      "sharpness_lapvar_median": {
+        "median": 496.1962351053953,
+        "p10": 170.98152632415295,
+        "p90": 824.9791149497033,
+        "mean": 499.6040548492223,
+        "count": 2000
+      },
+      "sharpness_lapvar_best": {
+        "median": 1704.5329295992851,
+        "p10": 849.4000989794731,
+        "p90": 3018.2612017512324,
+        "mean": 1858.174188936174,
+        "count": 2000
+      },
+      "sharpness_lapvar_min": {
+        "median": 21.34398517012596,
+        "p10": 5.461364817619324,
+        "p90": 100.73662969470026,
+        "mean": 36.635682130128146,
+        "count": 2000
+      },
+      "luma_mean_median": {
+        "median": 67.08514404296875,
+        "p10": 58.64471435546875,
+        "p90": 116.5612548828125,
+        "mean": 77.34392199707031,
+        "count": 2000
+      },
+      "luma_min": {
+        "median": 24.2491455078125,
+        "p10": 15.2394775390625,
+        "p90": 35.646826171875,
+        "mean": 25.268573486328126,
+        "count": 2000
+      },
+      "luma_max": {
+        "median": 168.63037109375,
+        "p10": 116.6876953125,
+        "p90": 242.16669921875,
+        "mean": 172.84119555664063,
+        "count": 2000
+      },
+      "luma_cv_across_views": {
+        "median": 0.44409196733466616,
+        "p10": 0.30780823088413567,
+        "p90": 0.594297784431548,
+        "mean": 0.4488939179190969,
+        "count": 2000
+      },
+      "samples_with_zero_effective_views": 0,
+      "samples_with_lt3_effective_views": 0,
+      "samples_with_two_cameras": 1939,
+      "tile": "Tile_1",
+      "status": "provisional",
+      "world_box": [
+        [
+          6.0,
+          -3.0,
+          1.6
+        ],
+        [
+          7.6,
+          -1.6,
+          3.2
+        ]
+      ],
+      "derivation": "img_4e61dfa73359cbec43694b5d (left camera, capture_fraction 0.767, camera at (8.00,-4.81,1.90)) face yaw_minus_35, window u 680-1290 / v 700-1130 = the white door leaf with its 6-pane window seen in tile1_R1d_20k/compare/compare_02. vis6 LiDAR in the window: range p5/50/95 = 2.06/3.64/20.17 m; 25-75 % band gave x 5.14-7.41, y -2.68..0.60, z 1.45-3.15; the door leaf itself occupies x 6-8, y -3..-1.5, z 1.85-3.03 and the box is clipped to Tile_1 (y <= -1.52). 300k Tile_1 PLY points inside.",
+      "ply_path": "C:\\Peter\\3dgs-runs\\house0305_sop\\tile_inputs_v9\\Tile_1\\initialization_full_lidar.ply",
+      "ply_sha256": "3bc33f9690a1020241b518f2c140f0ac116d3d52121a6a9adcb0e27965b44e88",
+      "ply_points_in_box": 299897,
+      "elapsed_s": 478.7,
+      "feature_for_crops": "door window frame / door edge",
+      "caveat": "a door leaf can move between passes; if the audit shows multi-modal ranges across views treat the region as a moving-object case, not a texture case"
+    },
+    "outdoor_gravel_Tile_0": {
+      "sample_count": 2000,
+      "n_images_fisheye": {
+        "median": 573.0,
+        "p10": 567.0,
+        "p90": 582.0,
+        "mean": 573.7745,
+        "count": 2000
+      },
+      "n_images_face": {
+        "median": 457.0,
+        "p10": 442.0,
+        "p90": 467.0,
+        "mean": 456.4895,
+        "count": 2000
+      },
+      "n_views_loose_ok": {
+        "median": 217.0,
+        "p10": 187.0,
+        "p90": 246.0,
+        "mean": 216.4635,
+        "count": 2000
+      },
+      "n_effective_views": {
+        "median": 194.0,
+        "p10": 168.0,
+        "p90": 221.0,
+        "mean": 194.494,
+        "count": 2000
+      },
+      "n_effective_views_le5m": {
+        "median": 113.0,
+        "p10": 105.0,
+        "p90": 122.0,
+        "mean": 113.308,
+        "count": 2000
+      },
+      "strict_frac_occluded": {
+        "median": 0.5677217932053928,
+        "p10": 0.5122440110815362,
+        "p90": 0.6111111111111112,
+        "mean": 0.5643313043028004,
+        "count": 2000
+      },
+      "strict_support_frac": {
+        "median": 0.4248927038626609,
+        "p10": 0.38208090732654054,
+        "p90": 0.48068669527896996,
+        "mean": 0.4287426088553065,
+        "count": 2000
+      },
+      "n_cameras": {
+        "median": 2.0,
+        "p10": 2.0,
+        "p90": 2.0,
+        "mean": 2.0,
+        "count": 2000
+      },
+      "n_rig_frames": {
+        "median": 173.0,
+        "p10": 155.0,
+        "p90": 192.0,
+        "mean": 173.015,
+        "count": 2000
+      },
+      "time_span_s": {
+        "median": 168.510179072,
+        "p10": 166.510018048,
+        "p90": 170.510205952,
+        "mean": 168.377155879424,
+        "count": 2000
+      },
+      "angle_span_deg": {
+        "median": 157.4078874901748,
+        "p10": 155.12372843008689,
+        "p90": 163.1063327321963,
+        "mean": 158.20083515472285,
+        "count": 2000
+      },
+      "range_min_m": {
+        "median": 1.5252249088074699,
+        "p10": 1.3099620685425652,
+        "p90": 1.7158950757706362,
+        "mean": 1.523250414051275,
+        "count": 2000
+      },
+      "range_median_m": {
+        "median": 4.4515226166584405,
+        "p10": 4.099712250434885,
+        "p90": 4.888345920827036,
+        "mean": 4.4822511450046,
+        "count": 2000
+      },
+      "footprint_px_per_m_fisheye": {
+        "median": 202.21070296530587,
+        "p10": 183.82622825257855,
+        "p90": 216.798225096816,
+        "mean": 201.0634608472093,
+        "count": 2000
+      },
+      "footprint_px_per_m_face": {
+        "median": 263.3434604938652,
+        "p10": 243.84659153908134,
+        "p90": 289.2575683280665,
+        "mean": 264.83835251052363,
+        "count": 2000
+      },
+      "frac_occluded": {
+        "median": 0.5218340611353712,
+        "p10": 0.45932270819688037,
+        "p90": 0.5730337078651685,
+        "mean": 0.5202971978573644,
+        "count": 2000
+      },
+      "depth_support_frac": {
+        "median": 0.4694317315026697,
+        "p10": 0.4185022026431718,
+        "p90": 0.5324816487859966,
+        "mean": 0.47209337227183984,
+        "count": 2000
+      },
+      "rgb_valid_frac": {
+        "median": 0.9825708061002179,
+        "p10": 0.9727210602609236,
+        "p90": 0.9911738592533295,
+        "mean": 0.9820846571900588,
+        "count": 2000
+      },
+      "sharpness_lapvar_median": {
+        "median": 4578.8560614436865,
+        "p10": 4198.875750297308,
+        "p90": 4988.8715465128425,
+        "mean": 4585.003805643975,
+        "count": 2000
+      },
+      "sharpness_lapvar_best": {
+        "median": 9439.777489036322,
+        "p10": 8585.729784101248,
+        "p90": 10129.370662730933,
+        "mean": 9408.112322611094,
+        "count": 2000
+      },
+      "sharpness_lapvar_min": {
+        "median": 0.0,
+        "p10": 0.0,
+        "p90": 0.0,
+        "mean": 0.0,
+        "count": 2000
+      },
+      "luma_mean_median": {
+        "median": 166.58837890625,
+        "p10": 146.55970458984376,
+        "p90": 175.36536865234376,
+        "mean": 163.62629193115234,
+        "count": 2000
+      },
+      "luma_min": {
+        "median": 104.3489990234375,
+        "p10": 96.657373046875,
+        "p90": 112.20180664062501,
+        "mean": 104.52179809570312,
+        "count": 2000
+      },
+      "luma_max": {
+        "median": 255.0,
+        "p10": 255.0,
+        "p90": 255.0,
+        "mean": 255.0,
+        "count": 2000
+      },
+      "luma_cv_across_views": {
+        "median": 0.22488661063893595,
+        "p10": 0.21001012314780138,
+        "p90": 0.2399363208915874,
+        "mean": 0.225185578560864,
+        "count": 2000
+      },
+      "samples_with_zero_effective_views": 0,
+      "samples_with_lt3_effective_views": 0,
+      "samples_with_two_cameras": 2000,
+      "tile": "Tile_0",
+      "status": "provisional",
+      "world_box": [
+        [
+          7.5,
+          -12.0,
+          0.2
+        ],
+        [
+          9.5,
+          -10.0,
+          0.7
+        ]
+      ],
+      "derivation": "Gravel yard in front of the shed. img_d14ce879e6a132a7c0aaf3ea (left camera, capture_fraction 0.339, camera at (9.89,-10.97,1.74)) face pitch_down_56 shows this ground patch (tile0_R1_range0_20k/compare/compare_05). The first candidate patch from img_0013434 yaw_minus_35 (x 12.0-13.0, y -11.9..-11.2, z 0.39) lies in Tile_3 (x > 9.52), so the box was moved 3 m west to stay inside Tile_0. Tile_0 PLY inside: 94k points, z p1-p99 = 0.39-0.42 m (flat ground), mean RGB (158,151,148).",
+      "ply_path": "C:\\Peter\\3dgs-runs\\house0305_sop\\tile_inputs_v9\\Tile_0\\initialization_full_lidar.ply",
+      "ply_sha256": "0340aba0a4b5273afb1aa201bbf3ddc46ff45c0c6173ca845f5c21dd695aa16a",
+      "ply_points_in_box": 94053,
+      "elapsed_s": 473.9,
+      "feature_for_crops": "gravel patch texture; shed roof edge (secondary, 30-40 m away)",
+      "caveat": "the operator's shadow crosses this patch in some frames (visible in compare_05); the shadow moves with the rig so it is a photometric-inconsistency source, not scene texture"
+    }
+  }
+}

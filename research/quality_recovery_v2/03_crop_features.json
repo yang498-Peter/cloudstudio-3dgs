@@ -1,0 +1,35 @@
+{
+  "note": "3D anchors for the source-vs-face crops (WP03). Each point is the median of the vis6 sparse LiDAR pixels in a +-20 px window around a hand-picked face pixel, restricted to the modal 0.1 m range bin +-0.15 m (so glass / see-through returns do not pull the anchor behind the surface). Frame: s1_local (dataset_manifest 33f5f81419dd…). Status: provisional, same ROIs as 03_roi_provisional.json.",
+  "features": [
+    {
+      "label": "door_lock_edge",
+      "region": "indoor_door_leaf_Tile_1",
+      "point_world": [7.253, -2.371, 1.959],
+      "source": "img_4e61dfa73359cbec43694b5d yaw_minus_35 face px (1180,1000), range 2.56 m, 166 LiDAR px, xyz spread (0.035,0.088,0.025) m"
+    },
+    {
+      "label": "door_window_bottom_rail",
+      "region": "indoor_door_leaf_Tile_1",
+      "point_world": [6.915, -2.334, 2.07],
+      "source": "img_4e61dfa73359cbec43694b5d yaw_minus_35 face px (1050,1080), range 2.75 m, 106 LiDAR px, spread (0.027,0.010,0.028) m"
+    },
+    {
+      "label": "ap_board_edge",
+      "region": "indoor_door_leaf_Tile_1",
+      "point_world": [6.177, -2.493, 2.653],
+      "source": "img_4e61dfa73359cbec43694b5d yaw_minus_35 face px (700,1180), black board edge left of the door, range 3.05 m, 38 LiDAR px"
+    },
+    {
+      "label": "gravel_centre",
+      "region": "outdoor_gravel_Tile_0",
+      "point_world": [9.092, -11.052, 0.417],
+      "source": "img_d14ce879e6a132a7c0aaf3ea pitch_down_56 face centre (1456,728), range 1.55 m, 20 LiDAR px, spread (0.017,0.014,0.001) m"
+    },
+    {
+      "label": "shed_wall_edge",
+      "region": "outdoor_gravel_Tile_0",
+      "point_world": [7.991, -44.938, 2.639],
+      "source": "img_0013434cabcfe39de86e02cb yaw_minus_35 face px (1150,1330), shed wall / roof edge 35 m from the yard, 47 LiDAR px; NOT inside the gravel box, secondary far-range control"
+    }
+  ]
+}
