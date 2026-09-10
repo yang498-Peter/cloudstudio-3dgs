@@ -3,21 +3,37 @@
 No torch, no GPU: the runner records which tool was invoked and plants the
 artifact that tool would have written, so the tests can assert which steps
 are skipped for a given set of existing artifacts.
+
+The fake trainer behaves like the real one under a controlled stop: it
+writes a zip checkpoint carrying ``step``, prints the
+ControlledTrainingInterruption traceback to stderr and exits 1. Its
+checkpoints are judged by ``inspect_checkpoint`` with a plain-pickle loader
+so the tests do not depend on whether torch is installed on this host.
 """
 
 from __future__ import annotations
 
+import io
 import json
+import pickle
 import tempfile
 import unittest
+import zipfile
 from pathlib import Path
 
 from tools.pipeline import (
+    CONFIG_AS_RUN_NAME,
+    CONFIG_FROZEN_NAME,
+    MIN_CHECKPOINT_BYTES,
+    STATE_EVALUATED,
+    STATE_QUALITY_ACCEPTED,
+    STATE_TRAINING_COMPLETE,
     PipelineContext,
     Step,
     StepFailed,
     arm_steps,
     deliver_steps,
+    inspect_checkpoint,
     parse_pipeline_config,
     plan_steps,
     run_arm,
@@ -25,18 +41,66 @@ from tools.pipeline import (
     run_steps,
 )
 
+TARGET_STEPS = 20000
+
 
 def _arg_after(argv: list[str], flag: str) -> Path:
     return Path(argv[argv.index(flag) + 1])
 
 
+def write_fake_checkpoint(path: Path, step: int) -> None:
+    """A torch-like zip: ``archive/data.pkl`` holding the payload dict."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {"schema_version": 1, "step": step, "params": {}, "identity": {"arm": path.parent.parent.name}}
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w") as archive:
+        archive.writestr("archive/data.pkl", pickle.dumps(payload, protocol=2))
+        archive.writestr("archive/data/0", b"\0" * MIN_CHECKPOINT_BYTES)
+        archive.writestr("archive/version", b"3\n")
+    path.write_bytes(buffer.getvalue())
+
+
+def fake_payload_loader(path: Path) -> dict:
+    """Stand-in for torch.load: unpickle data.pkl from the fake zip."""
+    with zipfile.ZipFile(path) as archive:
+        with archive.open("archive/data.pkl") as handle:
+            return pickle.load(handle)
+
+
+def fixture_inspector(path: Path):
+    return inspect_checkpoint(path, loader=fake_payload_loader)
+
+
+def controlled_stop_traceback(step: int, checkpoint: Path) -> str:
+    return (
+        "Traceback (most recent call last):\n"
+        '  File "tools/train_gsplat.py", line 21, in <module>\n'
+        "    manifest = train_from_json(args.config)\n"
+        f"cloudstudio_3dgs.training.trainer.ControlledTrainingInterruption: controlled interruption after {step} steps: {checkpoint}\n"
+    )
+
+
+def write_ply(path: Path, vertex_count: int) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    header = f"ply\nformat binary_little_endian 1.0\nelement vertex {vertex_count}\nproperty float x\nend_header\n"
+    path.write_bytes(header.encode("ascii") + b"\0" * (4 * vertex_count))
+
+
 class FakeRunner:
-    """Stands in for subprocess: records calls and fabricates artifacts."""
+    """Stands in for subprocess: records calls and fabricates artifacts.
+
+    ``train_outcome`` selects the fault injected into the next training:
+    ``controlled`` (default), ``oom``, ``crash``, ``garbage`` (unloadable
+    checkpoint) or ``silent`` (exit 0, no marker). ``train_steps`` overrides
+    the step the fake checkpoint stops at (default: the config's target).
+    """
 
     def __init__(self, run_root: Path, *, fail_on: set[str] | None = None) -> None:
         self.run_root = run_root
         self.fail_on = fail_on or set()
         self.calls: list[tuple[str, list[str]]] = []
+        self.train_outcome = "controlled"
+        self.train_steps: int | None = None
 
     def tools_called(self) -> list[str]:
         return [tool for tool, _ in self.calls]
@@ -51,12 +115,8 @@ class FakeRunner:
         if tool in self.fail_on:
             return 1
         if tool == "train_gsplat.py":
-            arm = _arg_after(rest, "--config").stem
-            checkpoints = self.run_root / arm / "checkpoints"
-            checkpoints.mkdir(parents=True, exist_ok=True)
-            (checkpoints / "latest.pt").write_bytes(b"ckpt")
-            (checkpoints / "step_000100.pt").write_bytes(b"stale")
-        elif tool == "build_offtrajectory_compare.py":
+            return self._train(_arg_after(rest, "--config"), stderr)
+        if tool == "build_offtrajectory_compare.py":
             out = Path(rest[2])
             out.mkdir(parents=True, exist_ok=True)
             (out / "offtraj_summary.json").write_text("[]", encoding="utf-8")
@@ -72,10 +132,46 @@ class FakeRunner:
             _arg_after(rest, "--output-checkpoint").write_bytes(b"merged")
             _arg_after(rest, "--output-report").write_text("{}", encoding="utf-8")
         elif tool == "export_gaussian_ply.py":
-            _arg_after(rest, "--output").write_bytes(b"ply")
+            threshold = float(rest[rest.index("--min-opacity") + 1])
+            # 1000 gaussians at threshold 0; 100 removed per 0.01 of opacity.
+            write_ply(_arg_after(rest, "--output"), 1000 - int(round(threshold * 10000)))
+        elif tool == "import_gaussian_ply.py":
+            _arg_after(rest, "--output").write_bytes(b"reimported:" + _arg_after(rest, "--ply").read_bytes()[:64])
         elif tool == "evaluate_probe_views.py":
             _arg_after(rest, "--output").write_text("{}", encoding="utf-8")
         return 0
+
+    def _train(self, arm_config: Path, stderr: Path | None) -> int:
+        arm = arm_config.stem
+        config = json.loads(arm_config.read_text(encoding="utf-8"))
+        step = self.train_steps if self.train_steps is not None else int(config.get("controlled_stop_after_steps", TARGET_STEPS))
+        checkpoints = self.run_root / arm / "checkpoints"
+        checkpoints.mkdir(parents=True, exist_ok=True)
+        checkpoint = checkpoints / "latest.pt"
+        outcome = self.train_outcome
+        err_text = ""
+        code = 1
+        if outcome == "controlled":
+            write_fake_checkpoint(checkpoint, step)
+            (checkpoints / "step_000100.pt").write_bytes(b"stale")
+            err_text = controlled_stop_traceback(step, checkpoint)
+        elif outcome == "garbage":
+            checkpoint.write_bytes(b"\xff" * (MIN_CHECKPOINT_BYTES * 2))
+            err_text = controlled_stop_traceback(step, checkpoint)
+        elif outcome == "oom":
+            err_text = (
+                "Traceback (most recent call last):\n  File \"trainer.py\", line 4000, in train\n"
+                "torch.OutOfMemoryError: CUDA out of memory. Tried to allocate 2.00 GiB\n"
+            )
+        elif outcome == "crash":
+            err_text = "Traceback (most recent call last):\n  File \"trainer.py\", line 10\nKeyError: 'means'\n"
+        elif outcome == "silent":
+            write_fake_checkpoint(checkpoint, step)
+            code = 0
+        if stderr is not None and err_text:
+            stderr.parent.mkdir(parents=True, exist_ok=True)
+            stderr.write_text(err_text, encoding="utf-8")
+        return code
 
 
 class PipelineFixture(unittest.TestCase):
@@ -106,22 +202,32 @@ class PipelineFixture(unittest.TestCase):
                 "offtraj": {"F6": "delivery_f6/offtraj_matched"},
             },
         }
+        self.raw_config = raw
         self.config = parse_pipeline_config(raw)
         self.runner = FakeRunner(self.run_root)
-        self.ctx = PipelineContext(self.config, run_command=self.runner, trainer_processes=lambda: [], stream=_Sink())
+        self.ctx = self.make_ctx()
+
+    def make_ctx(self, **overrides) -> PipelineContext:
+        kwargs = dict(run_command=self.runner, trainer_processes=lambda: [], checkpoint_inspector=fixture_inspector, stream=_Sink())
+        kwargs.update(overrides)
+        return PipelineContext(self.config, **kwargs)
 
     def tearDown(self) -> None:
         self._temporary.cleanup()
 
     def write_arm_config(self, arm: str, payload: dict | None = None) -> Path:
         path = self.config.arm_config(arm)
-        path.write_text(json.dumps(payload or {"arm": arm}), encoding="utf-8")
+        payload = payload or {"arm": arm, "controlled_stop_after_steps": TARGET_STEPS, "max_steps": 49560}
+        path.write_text(json.dumps(payload), encoding="utf-8")
         return path
 
-    def plant_checkpoint(self, arm: str) -> Path:
+    def plant_checkpoint(self, arm: str, step: int = TARGET_STEPS) -> Path:
+        """A trained arm from before job states: checkpoint plus trainer logs."""
         checkpoint = self.config.arm_checkpoint(arm)
-        checkpoint.parent.mkdir(parents=True, exist_ok=True)
-        checkpoint.write_bytes(b"ckpt")
+        write_fake_checkpoint(checkpoint, step)
+        log, err = self.config.arm_train_logs(arm)
+        log.write_text("train_gsplat.py ran\nEXIT 1\n", encoding="utf-8")
+        err.write_text(controlled_stop_traceback(step, checkpoint), encoding="utf-8")
         return checkpoint
 
 
@@ -134,6 +240,24 @@ class _Sink:
 
 
 ARM_STEPS = ["train", "prune_step_checkpoints", "config_as_run", "morph", "offtraj", "compare", "identity", "scores"]
+DELIVERY_STEPS_AFTER_TILES = [
+    "merge",
+    "morph",
+    "battery",
+    "compare_matched",
+    "offtraj_matched",
+    "pre_export_scores",
+    "export",
+    "threshold_control",
+    "reimport",
+    "final_morph",
+    "final_battery",
+    "final_compare_matched",
+    "final_offtraj_matched",
+    "identity",
+    "scores",
+    "publish",
+]
 
 
 class ArmResumeTests(PipelineFixture):
@@ -158,7 +282,8 @@ class ArmResumeTests(PipelineFixture):
         )
         out = self.config.arm_dir("armA")
         self.assertFalse(list((out / "checkpoints").glob("step_*.pt")), "stale step checkpoints pruned")
-        self.assertEqual((out / "config_as_run.json").read_text(encoding="utf-8"), json.dumps({"arm": "armA"}))
+        self.assertEqual((out / CONFIG_AS_RUN_NAME).read_bytes(), self.config.arm_config("armA").read_bytes())
+        self.assertEqual((out / CONFIG_FROZEN_NAME).read_bytes(), self.config.arm_config("armA").read_bytes())
         self.assertTrue((self.config.identity_dir / "armA.json").exists())
         scores = (out / "scores.txt").read_text(encoding="utf-8")
         self.assertIn("score_compare_sharpness.py ran", scores)
@@ -166,8 +291,11 @@ class ArmResumeTests(PipelineFixture):
         self.assertIn("checkpoint_morphology.py ran", scores, "morph.txt is appended to the scores")
         ledger = self.config.arm_scores_file().read_text(encoding="utf-8")
         self.assertIn("[armA] train start", ledger)
-        self.assertIn("[armA] train exit 0 done", ledger)
+        self.assertIn("[armA] train exit 1 done", ledger, "a controlled stop exits non-zero and still counts")
         self.assertIn("[armA] scores", ledger)
+        job = self.ctx.arm_job("armA")
+        self.assertEqual(job.state, STATE_EVALUATED)
+        self.assertTrue(job.training_verified())
 
     def test_arm_commands_carry_config_paths(self) -> None:
         self.write_arm_config("armA")
@@ -212,6 +340,9 @@ class ArmResumeTests(PipelineFixture):
         reports = run_steps(arm_steps(self.ctx, "armA"), status=lambda _: None)
         self.assertEqual(self.executed(reports), ARM_STEPS[2:])
         self.assertNotIn("train_gsplat.py", self.runner.tools_called())
+        job = self.ctx.arm_job("armA")
+        self.assertTrue(job.get("adopted"), "a pre-job-state run is adopted after verification")
+        self.assertTrue(job.training_verified())
 
     def test_plan_reports_without_running(self) -> None:
         self.write_arm_config("armA")
@@ -221,14 +352,20 @@ class ArmResumeTests(PipelineFixture):
         self.assertTrue(all(will_run for step, will_run in plan[3:]))
         self.assertEqual(self.runner.calls, [])
 
-    def test_edited_arm_config_is_recopied_without_forcing_downstream(self) -> None:
+    def test_edited_arm_config_is_refused_and_run_record_untouched(self) -> None:
         self.write_arm_config("armA")
-        run_steps(arm_steps(self.ctx, "armA"), status=lambda _: None)
-        self.write_arm_config("armA", {"arm": "armA", "edited": True})
+        self.assertEqual(run_arm(self.ctx, "armA"), 0)
+        original = self.config.arm_config("armA").read_bytes()
+        self.write_arm_config("armA", {"arm": "armA", "controlled_stop_after_steps": TARGET_STEPS, "edited": True})
         self.runner.calls.clear()
-        reports = run_steps(arm_steps(self.ctx, "armA"), status=lambda _: None)
-        self.assertEqual(self.executed(reports), ["config_as_run"])
+        self.assertEqual(run_arm(self.ctx, "armA"), 2)
         self.assertEqual(self.runner.calls, [])
+        out = self.config.arm_dir("armA")
+        self.assertEqual((out / CONFIG_AS_RUN_NAME).read_bytes(), original)
+        self.assertEqual((out / CONFIG_FROZEN_NAME).read_bytes(), original)
+        status = (self.run_root / "armA.pipeline_status.txt").read_text(encoding="utf-8")
+        self.assertIn("ARM_REFUSED", status)
+        self.assertIn("new arm name", status)
 
     def test_force_redoes_every_step(self) -> None:
         self.write_arm_config("armA")
@@ -273,15 +410,17 @@ class ArmResumeTests(PipelineFixture):
     def test_missing_arm_config_fails_before_training(self) -> None:
         self.assertEqual(run_arm(self.ctx, "ghost"), 1)
         self.assertEqual(self.runner.calls, [])
+        self.assertFalse(self.config.arm_dir("ghost").exists())
 
     def test_train_step_refuses_when_trainer_running(self) -> None:
         self.write_arm_config("armA")
-        ctx = PipelineContext(self.config, run_command=self.runner, trainer_processes=lambda: [(4242, "python train_gsplat.py --config other.json")], stream=_Sink())
+        ctx = self.make_ctx(trainer_processes=lambda: [(4242, "python train_gsplat.py --config other.json")])
         lines: list[str] = []
         reports = run_steps(arm_steps(ctx, "armA"), status=lines.append)
         self.assertEqual(reports[0].action, "failed")
         self.assertIn("4242", reports[0].detail)
         self.assertEqual(self.runner.calls, [])
+        self.assertFalse(self.config.gpu_lock_file().exists(), "the lease is released when the secondary scan refuses")
 
     def test_run_arm_returns_zero_and_writes_done_marker(self) -> None:
         self.write_arm_config("armA")
@@ -307,10 +446,7 @@ class DeliverResumeTests(PipelineFixture):
     def test_fresh_delivery_trains_missing_tiles_then_merges(self) -> None:
         self.plant_checkpoint("tile2_r1d_20k")
         reports = run_steps(deliver_steps(self.ctx, self.TAG, "tile0_R1"), status=lambda _: None)
-        self.assertEqual(
-            self.executed(reports),
-            ["train_tile1", "train_tile3", "merge", "export", "publish", "morph", "battery", "compare_matched", "offtraj_matched", "identity", "scores"],
-        )
+        self.assertEqual(self.executed(reports), ["train_tile1", "train_tile3", *DELIVERY_STEPS_AFTER_TILES])
         trained = [rest[1] for tool, rest in self.runner.calls if tool == "train_gsplat.py"]
         self.assertEqual(trained, [str(self.config.arm_config("tile1_r1d_20k")), str(self.config.arm_config("tile3_r1d_20k"))])
         out = self.config.delivery_dir(self.TAG)
@@ -319,30 +455,36 @@ class DeliverResumeTests(PipelineFixture):
         self.assertIn(f"2={self.config.arm_checkpoint('tile2_r1d_20k')}", merge)
         self.assertIn("--harmonize-exposure", merge)
         self.assertEqual(merge[merge.index("--merge-policy") + 1], "core_owner_only")
-        export = dict(self.runner.calls)["export_gaussian_ply.py"]
-        self.assertEqual(export[export.index("--min-opacity") + 1], "0.05")
-        self.assertEqual((self.exports / "house0305_r1d_merged.ply").read_bytes(), b"ply")
-        self.assertEqual((self.exports / "house0305_r1d_sky.ply").read_bytes(), b"sky")
-        battery = dict(self.runner.calls)["evaluate_probe_views.py"]
-        self.assertEqual(battery[battery.index("--views") + 1], "48")
-        self.assertEqual(battery[battery.index("--config") + 1], str(self.run_root / "delivery_eval.json"))
+        exports = [rest for tool, rest in self.runner.calls if tool == "export_gaussian_ply.py"]
+        self.assertEqual(exports[0][exports[0].index("--min-opacity") + 1], "0.05")
+        candidate = self.config.candidate_exports_dir(self.TAG)
+        self.assertEqual((candidate / "house0305_r1d_merged.ply").read_bytes(), (out / "house0305_r1d_merged.ply").read_bytes())
+        self.assertEqual((candidate / "house0305_r1d_sky.ply").read_bytes(), b"sky")
+        self.assertFalse((self.exports / "house0305_r1d_merged.ply").exists(), "not published without --publish")
+        batteries = [rest for tool, rest in self.runner.calls if tool == "evaluate_probe_views.py"]
+        self.assertEqual(batteries[0][batteries[0].index("--views") + 1], "48")
+        self.assertEqual(batteries[0][batteries[0].index("--config") + 1], str(self.run_root / "delivery_eval.json"))
         identity = dict(self.runner.calls)["freeze_run_identity.py"]
-        self.assertEqual(identity[identity.index("--extra-file") + 1], str(self.exports / "house0305_r1d_merged.ply"))
+        self.assertEqual(identity[identity.index("--extra-file") + 1], str(out / "house0305_r1d_merged.ply"))
         self.assertTrue((self.config.identity_dir / "delivery_r1d_merged.json").exists())
-        sharp = dict(self.runner.calls)["score_compare_sharpness.py"]
-        self.assertEqual(sharp, [str(self.run_root / "delivery_f6" / "compare_matched"), str(out / "compare_matched")])
-        strips = dict(self.runner.calls)["score_offtrajectory_strips.py"]
-        self.assertEqual(strips, [f"F6={self.run_root / 'delivery_f6' / 'offtraj_matched'}", f"r1d={out / 'offtraj_matched'}"])
+        # The tile arms score themselves first; only the delivery-level calls matter here.
+        sharps = [rest for tool, rest in self.runner.calls if tool == "score_compare_sharpness.py" and any("delivery_r1d" in a for a in rest)]
+        self.assertEqual(sharps[0], [str(self.run_root / "delivery_f6" / "compare_matched"), str(out / "compare_matched")])
+        self.assertEqual(sharps[1], [str(self.run_root / "delivery_f6" / "compare_matched"), str(out / "compare_final")])
+        strips = [rest for tool, rest in self.runner.calls if tool == "score_offtrajectory_strips.py" and any("delivery_r1d" in a for a in rest)]
+        self.assertEqual(strips[0], [f"F6={self.run_root / 'delivery_f6' / 'offtraj_matched'}", f"r1d={out / 'offtraj_matched'}"])
+        self.assertEqual(strips[1], [f"F6={self.run_root / 'delivery_f6' / 'offtraj_matched'}", f"r1d={out / 'offtraj_final'}"])
         self.assertIn("checkpoint_morphology.py ran", (out / "morph.txt").read_text(encoding="utf-8"))
         # The tile arms were fully post-processed, not just trained.
         self.assertTrue((self.config.arm_dir("tile1_r1d_20k") / "scores.txt").exists())
+        self.assertEqual(self.ctx.delivery_job(self.TAG).state, STATE_QUALITY_ACCEPTED)
 
     def test_delivery_status_log_matches_cmd_markers(self) -> None:
         for tile in (1, 2, 3):
             self.plant_checkpoint(self.config.delivery_tile_arm(self.TAG, tile))
         self.assertEqual(run_deliver(self.ctx, self.TAG, "tile0_R1"), 0)
         log = (self.config.delivery_dir(self.TAG) / "deliver_status.txt").read_text(encoding="utf-8")
-        for marker in ("[start] r1d delivery", "[merge]", "[export] done", "[scores]", "[complete]"):
+        for marker in ("[start] r1d delivery", "[merge]", "[scores pre-export]", "[threshold-control]", "[scores]", "[complete]", "[export] done"):
             self.assertIn(marker, log)
         self.assertNotIn("[train]", log)
 
@@ -353,7 +495,16 @@ class DeliverResumeTests(PipelineFixture):
         (self.config.delivery_dir(self.TAG) / "battery.json").unlink()
         self.runner.calls.clear()
         reports = run_steps(deliver_steps(self.ctx, self.TAG, "tile0_R1"), status=lambda _: None)
-        self.assertEqual(self.executed(reports), ["battery", "compare_matched", "offtraj_matched", "identity", "scores"])
+        self.assertEqual(self.executed(reports), DELIVERY_STEPS_AFTER_TILES[2:])
+
+    def test_delivery_second_run_skips_everything(self) -> None:
+        for tile in (1, 2, 3):
+            self.plant_checkpoint(self.config.delivery_tile_arm(self.TAG, tile))
+        run_steps(deliver_steps(self.ctx, self.TAG, "tile0_R1"), status=lambda _: None)
+        self.runner.calls.clear()
+        reports = run_steps(deliver_steps(self.ctx, self.TAG, "tile0_R1"), status=lambda _: None)
+        self.assertEqual(self.executed(reports), [])
+        self.assertEqual(self.runner.calls, [])
 
     def test_tile_training_failure_stops_delivery(self) -> None:
         self.runner.fail_on = {"train_gsplat.py"}
@@ -366,6 +517,17 @@ class DeliverResumeTests(PipelineFixture):
     def test_missing_tile0_checkpoint_refuses(self) -> None:
         self.assertEqual(run_deliver(self.ctx, self.TAG, "tile0_missing"), 1)
         self.assertEqual(self.runner.calls, [])
+
+    def test_tile_arm_state_recorded_in_delivery(self) -> None:
+        for tile in (1, 2, 3):
+            self.plant_checkpoint(self.config.delivery_tile_arm(self.TAG, tile))
+        self.assertEqual(run_deliver(self.ctx, self.TAG, "tile0_R1"), 0)
+        job = self.ctx.delivery_job(self.TAG)
+        history = [entry["state"] for entry in job.get("history")]
+        self.assertEqual(history[0], "RUNNING")
+        self.assertIn(STATE_TRAINING_COMPLETE, history)
+        self.assertEqual(job.get("training")["arms"]["tile0"]["arm"], "tile0_R1")
+        self.assertEqual(job.get("training")["arms"]["tile2"]["completed_steps"], TARGET_STEPS)
 
 
 class StepExecutorTests(unittest.TestCase):

@@ -16,7 +16,8 @@
     "scene_tag": "prefix of exported PLY names: <scene_tag>_<tag>_merged.ply",
     "delivery_tiles": "tiles trained per delivery; tile arm names follow delivery_tile_arm_pattern",
     "delivery_baselines": "earlier deliveries scored beside a new one; relative paths resolve against run_root",
-    "trainer_process_pattern": "substring of a live command line that means 'a trainer holds the GPU'",
+    "trainer_process_pattern": "substring of a live command line that means 'a trainer holds the GPU' (secondary check behind the gpu.lock lease)",
+    "gpu_device": "device id recorded in <run_root>/gpu.lock by every GPU step",
     "env": "extra environment variables for every subprocess"
   },
   "schema_version": 1,
@@ -51,6 +52,7 @@
     }
   },
   "trainer_process_pattern": "train_gsplat.py",
+  "gpu_device": "cuda:0",
   "env": {
     "PYTHONIOENCODING": "utf-8"
   }

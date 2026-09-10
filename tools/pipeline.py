@@ -19,24 +19,50 @@ the same behaviour with three properties the scripts lacked:
     python tools/pipeline.py queue tile0_R2_20k tile0_R3_20k
     python tools/pipeline.py score RUN/tile0_R1_20k RUN/tile0_R2_20k
 
-Training is never started while another trainer process holds the GPU: the
-2026-09-07 double start came from two cmd queues matching a stale status
-line, so the guard here scans live processes, not log files.
+Four audit gaps (P0-1..P0-4 of the 2026-09-11 quality-recovery brief) are
+closed here rather than in the cmd scripts:
+
+* **Completion is a verdict, not a file.** ``latest.pt`` existing used to
+  mean "trained"; a 5k leftover from an earlier job scored as a 20k arm. Now
+  every arm and delivery keeps ``<run>/job_state.json`` (RUNNING ->
+  CHECKPOINTED -> TRAINING_COMPLETE -> EVALUATED -> QUALITY_ACCEPTED ->
+  PUBLISHED, plus FAILED and CONTROLLED_PAUSE). TRAINING_COMPLETE needs a
+  loadable checkpoint, completed steps >= the declared target, an allowed
+  exit reason in the trainer log and a checkpoint newer than the job start.
+  Downstream steps refuse to run on anything else.
+* **Configs are frozen.** ``RUN/<arm>.json`` is snapshotted to
+  ``config_frozen.json`` before training; a later edit with the same arm
+  name is refused (exit 2) instead of silently re-scoring the old run.
+* **The delivered PLY is what gets scored.** The exported body PLY is
+  re-imported and the battery / three-way / off-trajectory strips run on
+  that checkpoint, bound to the PLY's sha256 in ``delivery_report.json``;
+  the merged.pt scores stay as a separate pre-export record. Publishing
+  lands in ``exports/candidate_<TAG>/`` unless ``--publish`` is passed.
+* **One GPU holder at a time, atomically.** Every GPU step takes the
+  ``<run_root>/gpu.lock`` lease (O_EXCL create, pid liveness for staleness)
+  before starting; the live-process scan from the 2026-09-07 double start
+  stays as a secondary check for the train step.
 """
 
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import pathlib
+import pickle
+import re
 import shutil
+import socket
 import subprocess
 import sys
 import time
-from dataclasses import dataclass
+import zipfile
+from contextlib import contextmanager
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable, Sequence
+from typing import Any, Callable, Iterator, Sequence
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -72,12 +98,18 @@ DEFAULTS: dict[str, Any] = {
     "delivery_tile_arm_pattern": "tile{tile}_{tag}_20k",
     "delivery_baselines": {"compare": [], "offtraj": {}},
     "trainer_process_pattern": "train_gsplat.py",
+    "gpu_device": "cuda:0",
     "env": {"PYTHONIOENCODING": "utf-8"},
 }
 
 KNOWN_KEYS = frozenset(
     ("schema_version",) + REQUIRED_PATH_KEYS + OPTIONAL_PATH_KEYS + tuple(DEFAULTS)
 )
+
+# Opacity thresholds of the export-threshold control step (P0-3): the count
+# removed at each one is recorded so a delivery cannot hide a transparency
+# problem behind the default 0.05 cut.
+EXPORT_THRESHOLD_CONTROL = (0.0, 0.01, 0.05)
 
 
 class PipelineError(RuntimeError):
@@ -88,8 +120,16 @@ class PipelineConfigError(PipelineError):
     """The pipeline config is missing or malformed; the message names the key."""
 
 
+class ConfigFrozenError(PipelineError):
+    """RUN/<arm>.json changed after the arm was frozen; a new arm name is needed."""
+
+
 class StepFailed(RuntimeError):
     """One step failed; the arm stops here and the message says why."""
+
+
+class GpuLeaseBusy(RuntimeError):
+    """Another live process holds the GPU lease."""
 
 
 def _timestamp() -> str:
@@ -102,6 +142,14 @@ def _write_text_atomic(path: Path, text: str) -> None:
     temporary = path.with_suffix(path.suffix + ".tmp")
     temporary.write_text(text, encoding="utf-8")
     os.replace(temporary, path)
+
+
+def _write_json_atomic(path: Path, payload: Any) -> None:
+    _write_text_atomic(path, json.dumps(payload, indent=2, sort_keys=False) + "\n")
+
+
+def _read_json(path: Path) -> Any:
+    return json.loads(path.read_text(encoding="utf-8"))
 
 
 def _copy_atomic(source: Path, target: Path) -> None:
@@ -123,6 +171,39 @@ def _same_content(left: Path, right: Path) -> bool:
         return False
     return left.read_bytes() == right.read_bytes()
 
+
+def file_sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with Path(path).open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1 << 20), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _file_stamp(path: Path) -> dict[str, Any]:
+    """Size and mtime: enough to notice a rewrite without hashing gigabytes."""
+    stat = Path(path).stat()
+    return {"bytes": stat.st_size, "mtime": stat.st_mtime}
+
+
+def read_ply_vertex_count(path: Path) -> int:
+    """Vertex count from a PLY header, without numpy or torch.
+
+    The exporter writes ``element vertex N``; reading it back is how the
+    threshold-control step records how many gaussians each opacity cut removed.
+    """
+    with Path(path).open("rb") as handle:
+        if handle.readline().strip() != b"ply":
+            raise ValueError(f"not a PLY file: {path}")
+        while True:
+            line = handle.readline()
+            if not line:
+                raise ValueError(f"unterminated PLY header: {path}")
+            tokens = line.decode("ascii", errors="replace").split()
+            if tokens[:2] == ["element", "vertex"]:
+                return int(tokens[2])
+            if tokens[:1] == ["end_header"]:
+                raise ValueError(f"PLY header has no vertex element: {path}")
 
 # --------------------------------------------------------------------------
 # Configuration
@@ -156,6 +237,7 @@ class PipelineConfig:
     delivery_tile_arm_pattern: str
     delivery_baselines: dict[str, Any]
     trainer_process_pattern: str
+    gpu_device: str
     env: dict[str, str]
 
     # Derived locations -----------------------------------------------------
@@ -169,14 +251,24 @@ class PipelineConfig:
     def arm_checkpoint(self, arm: str) -> Path:
         return self.arm_dir(arm) / "checkpoints" / "latest.pt"
 
+    def arm_train_logs(self, arm: str) -> tuple[Path, Path]:
+        """stdout and stderr logs of the trainer subprocess."""
+        return self.run_root / f"{arm}.log", self.run_root / f"{arm}.log.err"
+
     def arm_scores_file(self) -> Path:
         return self.run_root / "arm_scores.txt"
 
     def queue_status_file(self) -> Path:
         return self.run_root / "queue_status.txt"
 
+    def gpu_lock_file(self) -> Path:
+        return self.run_root / "gpu.lock"
+
     def delivery_dir(self, tag: str) -> Path:
         return self.run_root / f"delivery_{tag}"
+
+    def candidate_exports_dir(self, tag: str) -> Path:
+        return self.exports_dir / f"candidate_{tag}"
 
     def delivery_tile_arm(self, tag: str, tile: int) -> str:
         return self.delivery_tile_arm_pattern.format(tile=tile, tag=tag)
@@ -251,7 +343,7 @@ def parse_pipeline_config(raw: dict[str, Any], *, source: Path | None = None) ->
     pattern = merged["delivery_tile_arm_pattern"]
     if not isinstance(pattern, str) or "{tile}" not in pattern or "{tag}" not in pattern:
         raise PipelineConfigError("pipeline config key 'delivery_tile_arm_pattern' must contain {tile} and {tag}")
-    for key in ("scene_tag", "merge_policy", "trainer_process_pattern"):
+    for key in ("scene_tag", "merge_policy", "trainer_process_pattern", "gpu_device"):
         if not isinstance(merged[key], str) or not merged[key]:
             raise PipelineConfigError(f"pipeline config key '{key}' must be a non-empty string")
     env = merged["env"]
@@ -301,6 +393,7 @@ def parse_pipeline_config(raw: dict[str, Any], *, source: Path | None = None) ->
         delivery_tile_arm_pattern=pattern,
         delivery_baselines=baselines,
         trainer_process_pattern=merged["trainer_process_pattern"],
+        gpu_device=merged["gpu_device"],
         env=dict(env),
     )
 
@@ -406,6 +499,682 @@ def find_trainer_processes(pattern: str, processes: Sequence[tuple[int, str]] | 
     own = {os.getpid(), os.getppid()}
     listing = list_processes() if processes is None else processes
     return [(pid, command) for pid, command in listing if pattern in command and pid not in own]
+
+
+# --------------------------------------------------------------------------
+# GPU lease (P0-4)
+# --------------------------------------------------------------------------
+
+
+def _pid_alive(pid: int) -> bool:
+    """Is a process with this pid still running?
+
+    ``os.kill(pid, 0)`` is the POSIX idiom; on Windows ``os.kill`` with any
+    signal other than the console events *terminates* the target, so the
+    liveness probe goes through OpenProcess/GetExitCodeProcess instead.
+    """
+    if pid <= 0:
+        return False
+    if os.name == "nt":
+        import ctypes
+
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        process_query_limited_information = 0x1000
+        still_active = 259
+        handle = kernel32.OpenProcess(process_query_limited_information, False, int(pid))
+        if not handle:
+            # ERROR_ACCESS_DENIED means the process exists but belongs to
+            # another session; ERROR_INVALID_PARAMETER means no such pid.
+            return ctypes.get_last_error() == 5
+        try:
+            code = ctypes.c_ulong()
+            if kernel32.GetExitCodeProcess(handle, ctypes.byref(code)):
+                return code.value == still_active
+            return True
+        finally:
+            kernel32.CloseHandle(handle)
+    try:
+        os.kill(int(pid), 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
+def _command_sha256(command: Sequence[str] | str) -> str:
+    text = command if isinstance(command, str) else "\x00".join(str(item) for item in command)
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def read_gpu_lease(path: Path) -> dict[str, Any] | None:
+    """The holder record, or None when the lock file is absent/unreadable."""
+    try:
+        payload = _read_json(path)
+    except (OSError, ValueError):
+        return None
+    return payload if isinstance(payload, dict) else None
+
+
+@dataclass
+class GpuLease:
+    """A held ``gpu.lock``; ``release`` removes it only if we still own it."""
+
+    path: Path
+    holder: dict[str, Any]
+
+    def release(self) -> None:
+        current = read_gpu_lease(self.path)
+        if current is not None and current.get("pid") == self.holder.get("pid") and current.get("token") == self.holder.get("token"):
+            try:
+                self.path.unlink()
+            except FileNotFoundError:
+                pass
+
+
+def acquire_gpu_lease(
+    path: Path,
+    *,
+    command: Sequence[str] | str,
+    device: str,
+    owner: str = "",
+    pid: int | None = None,
+    pid_alive: Callable[[int], bool] = _pid_alive,
+) -> GpuLease:
+    """Take the process-level GPU lease or raise :class:`GpuLeaseBusy`.
+
+    The lock is created with ``O_EXCL`` so two processes racing for it cannot
+    both succeed; the holder record (pid, start time, command hash, device)
+    is written into the file *after* the exclusive create, and a reader that
+    sees an empty or half-written file simply treats it as busy. A lease whose
+    pid is dead is stale (the holder crashed without releasing) and is
+    reclaimed by the next caller.
+    """
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    holder = {
+        "pid": int(os.getpid() if pid is None else pid),
+        "started_at": time.time(),
+        "started_at_text": _timestamp(),
+        "host": socket.gethostname(),
+        "device": device,
+        "owner": owner,
+        "command": command if isinstance(command, str) else [str(item) for item in command],
+        "command_sha256": _command_sha256(command),
+        "token": f"{os.getpid()}-{time.time_ns()}",
+    }
+    for attempt in range(2):
+        try:
+            descriptor = os.open(str(path), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+        except FileExistsError:
+            current = read_gpu_lease(path)
+            if current is None:
+                # Unreadable: either being written right now or garbage. Only
+                # reclaim garbage that has sat there for a while.
+                try:
+                    age = time.time() - path.stat().st_mtime
+                except FileNotFoundError:
+                    continue
+                if age > 30.0 and attempt == 0:
+                    path.unlink(missing_ok=True)
+                    continue
+                raise GpuLeaseBusy(f"GPU lease {path} is being written by another process")
+            holder_pid = int(current.get("pid", 0) or 0)
+            if holder_pid != holder["pid"] and not pid_alive(holder_pid) and attempt == 0:
+                path.unlink(missing_ok=True)
+                continue
+            raise GpuLeaseBusy(
+                f"GPU lease {path} held by pid {holder_pid} since {current.get('started_at_text', '?')} "
+                f"({current.get('owner', '')}: {str(current.get('command', ''))[:120]})"
+            )
+        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+            json.dump(holder, handle, indent=2)
+            handle.flush()
+            os.fsync(handle.fileno())
+        return GpuLease(path, holder)
+    raise GpuLeaseBusy(f"GPU lease {path} could not be acquired")
+
+
+# --------------------------------------------------------------------------
+# Checkpoint inspection (P0-1)
+# --------------------------------------------------------------------------
+
+# torch.save archives are zip files with <name>/data.pkl inside; a real
+# checkpoint is megabytes, so anything under this is a stub or a truncation.
+MIN_CHECKPOINT_BYTES = 1024
+
+
+@dataclass
+class CheckpointInfo:
+    """What could be established about a checkpoint file."""
+
+    path: Path
+    exists: bool
+    loadable: bool
+    step: int | None
+    method: str  # "torch" (payload validated) or "header" (zip layout only)
+    reason: str = ""
+    size_bytes: int = 0
+    mtime: float = 0.0
+
+    def record(self) -> dict[str, Any]:
+        return {
+            "path": str(self.path),
+            "exists": self.exists,
+            "loadable": self.loadable,
+            "step": self.step,
+            "method": self.method,
+            "reason": self.reason,
+            "bytes": self.size_bytes,
+            "mtime": self.mtime,
+        }
+
+
+CheckpointLoader = Callable[[Path], dict[str, Any]]
+
+
+def _torch_checkpoint_loader() -> CheckpointLoader | None:
+    """The torch path: returns None when torch is not importable here."""
+    try:
+        import torch  # type: ignore[import-not-found]
+    except ImportError:
+        return None
+
+    def load(path: Path) -> dict[str, Any]:
+        try:
+            payload = torch.load(path, map_location="cpu", weights_only=False, mmap=True)
+        except TypeError:  # older torch without mmap
+            payload = torch.load(path, map_location="cpu", weights_only=False)
+        if not isinstance(payload, dict):
+            raise ValueError("checkpoint payload is not a dict")
+        return payload
+
+    return load
+
+
+class _StubObject:
+    """Stands in for every torch/numpy object while peeking at a pickle."""
+
+    def __new__(cls, *args: Any, **kwargs: Any) -> "_StubObject":
+        return object.__new__(cls)
+
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        pass
+
+    def __setstate__(self, state: Any) -> None:
+        pass
+
+    def __call__(self, *args: Any, **kwargs: Any) -> "_StubObject":
+        return _StubObject()
+
+    def __setitem__(self, key: Any, value: Any) -> None:
+        pass
+
+    def append(self, item: Any) -> None:
+        pass
+
+    def extend(self, items: Any) -> None:
+        pass
+
+
+_PEEK_SAFE_CLASSES = frozenset(
+    {
+        ("collections", "OrderedDict"),
+        ("builtins", "set"),
+        ("builtins", "frozenset"),
+        ("builtins", "bytearray"),
+        ("builtins", "complex"),
+        ("builtins", "range"),
+        ("builtins", "slice"),
+    }
+)
+
+
+class _PeekUnpickler(pickle.Unpickler):
+    """Rebuilds the checkpoint dict skeleton without importing torch.
+
+    Tensor storages arrive as persistent ids and become None; every class
+    outside a tiny safe list becomes :class:`_StubObject`. Only the scalar
+    ``step`` survives intact, which is all the verdict needs, and no foreign
+    code can run because nothing outside the safe list is ever imported.
+    """
+
+    def find_class(self, module: str, name: str) -> Any:
+        if (module, name) in _PEEK_SAFE_CLASSES:
+            return super().find_class(module, name)
+        return _StubObject
+
+    def persistent_load(self, pid: Any) -> Any:
+        return None
+
+
+def peek_checkpoint_step(path: Path) -> int | None:
+    """``step`` from a torch zip checkpoint without torch; None if unreadable."""
+    try:
+        with zipfile.ZipFile(path) as archive:
+            names = [name for name in archive.namelist() if name.endswith("/data.pkl") or name == "data.pkl"]
+            if not names:
+                return None
+            with archive.open(names[0]) as handle:
+                payload = _PeekUnpickler(handle).load()
+    except Exception:  # noqa: BLE001 - any failure just means "unknown"
+        return None
+    if not isinstance(payload, dict):
+        return None
+    step = payload.get("step")
+    return int(step) if isinstance(step, int) and not isinstance(step, bool) else None
+
+
+def inspect_checkpoint(path: Path, *, loader: CheckpointLoader | None = None) -> CheckpointInfo:
+    """Is this checkpoint loadable, and at which step?
+
+    With torch (the training host) the payload is loaded and validated:
+    a dict with ``params`` and an integer ``step``. Without torch the zip
+    layout and size are checked and ``step`` is peeked from ``data.pkl``;
+    that is weaker, so the verdict also cross-checks the trainer log.
+    """
+    path = Path(path)
+    if not path.is_file():
+        return CheckpointInfo(path, False, False, None, "none", "checkpoint file missing")
+    stat = path.stat()
+    info = CheckpointInfo(path, True, False, None, "header", size_bytes=stat.st_size, mtime=stat.st_mtime)
+    if stat.st_size < MIN_CHECKPOINT_BYTES:
+        info.reason = f"checkpoint is {stat.st_size} bytes (< {MIN_CHECKPOINT_BYTES}); truncated or a stub"
+        return info
+    loader = _torch_checkpoint_loader() if loader is None else loader
+    if loader is not None:
+        info.method = "torch"
+        try:
+            payload = loader(path)
+        except Exception as error:  # noqa: BLE001 - the reason is the point
+            info.reason = f"torch.load failed: {type(error).__name__}: {str(error)[:200]}"
+            return info
+        step = payload.get("step")
+        if "params" not in payload or not isinstance(step, int) or isinstance(step, bool):
+            info.reason = "checkpoint payload lacks 'params' or an integer 'step'"
+            return info
+        info.loadable = True
+        info.step = int(step)
+        return info
+    if not zipfile.is_zipfile(path):
+        info.reason = "not a torch zip archive"
+        return info
+    try:
+        with zipfile.ZipFile(path) as archive:
+            names = archive.namelist()
+            if archive.testzip() is not None:
+                info.reason = "zip archive has a corrupt member"
+                return info
+    except zipfile.BadZipFile as error:
+        info.reason = f"bad zip archive: {error}"
+        return info
+    if not any(name.endswith("data.pkl") for name in names):
+        info.reason = "zip archive has no data.pkl (not a torch checkpoint)"
+        return info
+    info.loadable = True
+    info.step = peek_checkpoint_step(path)
+    return info
+
+
+# --------------------------------------------------------------------------
+# Trainer exit classification (P0-1)
+# --------------------------------------------------------------------------
+
+EXIT_CONTROLLED_STOP = "controlled_stop"
+EXIT_COMPLETED = "completed"
+EXIT_OOM = "oom"
+EXIT_CRASH = "crash"
+EXIT_UNKNOWN = "unknown"
+ALLOWED_EXIT_KINDS = (EXIT_CONTROLLED_STOP, EXIT_COMPLETED)
+
+_CONTROLLED_STOP_RE = re.compile(r"ControlledTrainingInterruption: controlled interruption after (\d+) steps")
+_TRAINING_COMPLETE_RE = re.compile(r"training complete: run=.*?steps=(\d+)")
+_OOM_MARKERS = (
+    "CUDA out of memory",
+    "OutOfMemoryError",
+    "cudaErrorMemoryAllocation",
+    "CUBLAS_STATUS_ALLOC_FAILED",
+    "CUDNN_STATUS_ALLOC_FAILED",
+)
+LOG_TAIL_BYTES = 64 * 1024
+
+
+@dataclass
+class TrainerExit:
+    kind: str
+    steps: int | None
+    detail: str
+
+    def record(self) -> dict[str, Any]:
+        return {"kind": self.kind, "steps": self.steps, "detail": self.detail}
+
+
+def read_log_tail(paths: Sequence[Path], *, max_bytes: int = LOG_TAIL_BYTES) -> str:
+    """Last ``max_bytes`` of each log, concatenated; missing logs are skipped."""
+    pieces: list[str] = []
+    for path in paths:
+        path = Path(path)
+        if not path.is_file():
+            continue
+        with path.open("rb") as handle:
+            handle.seek(0, os.SEEK_END)
+            size = handle.tell()
+            handle.seek(max(0, size - max_bytes))
+            pieces.append(handle.read().decode("utf-8", errors="replace"))
+    return "\n".join(pieces)
+
+
+def classify_trainer_exit(exit_code: int | None, tail: str) -> TrainerExit:
+    """Why did the trainer stop, according to its log tail?
+
+    A controlled stop is raised as an exception, so its traceback *is* the
+    marker; it is checked before the generic Traceback rule. OOM beats a
+    plain crash because it is the case a retry can never fix by itself.
+    """
+    controlled = _CONTROLLED_STOP_RE.findall(tail)
+    if controlled:
+        return TrainerExit(EXIT_CONTROLLED_STOP, int(controlled[-1]), "ControlledTrainingInterruption marker in log")
+    for marker in _OOM_MARKERS:
+        if marker in tail:
+            return TrainerExit(EXIT_OOM, None, f"{marker} in log (exit {exit_code})")
+    if "Traceback (most recent call last)" in tail:
+        return TrainerExit(EXIT_CRASH, None, f"traceback in log without controlled-stop marker (exit {exit_code})")
+    complete = _TRAINING_COMPLETE_RE.findall(tail)
+    if complete and exit_code == 0:
+        return TrainerExit(EXIT_COMPLETED, int(complete[-1]), "training complete marker in log")
+    if exit_code == 0:
+        return TrainerExit(EXIT_UNKNOWN, None, "exit 0 without a completion marker in log")
+    return TrainerExit(EXIT_UNKNOWN, None, f"exit {exit_code} without a recognised marker in log")
+
+
+# --------------------------------------------------------------------------
+# Job state (P0-1)
+# --------------------------------------------------------------------------
+
+JOB_STATE_VERSION = 1
+JOB_STATE_NAME = "job_state.json"
+
+STATE_RUNNING = "RUNNING"
+STATE_CHECKPOINTED = "CHECKPOINTED"
+STATE_TRAINING_COMPLETE = "TRAINING_COMPLETE"
+STATE_EVALUATED = "EVALUATED"
+STATE_QUALITY_ACCEPTED = "QUALITY_ACCEPTED"
+STATE_PUBLISHED = "PUBLISHED"
+STATE_FAILED = "FAILED"
+STATE_CONTROLLED_PAUSE = "CONTROLLED_PAUSE"
+JOB_STATES = (
+    STATE_RUNNING,
+    STATE_CHECKPOINTED,
+    STATE_TRAINING_COMPLETE,
+    STATE_EVALUATED,
+    STATE_QUALITY_ACCEPTED,
+    STATE_PUBLISHED,
+    STATE_FAILED,
+    STATE_CONTROLLED_PAUSE,
+)
+# States that imply verified training; the ordering is the milestone ladder.
+TRAINED_STATES = (STATE_TRAINING_COMPLETE, STATE_EVALUATED, STATE_QUALITY_ACCEPTED, STATE_PUBLISHED)
+
+
+class JobState:
+    """``<run>/job_state.json``: the persisted state of one arm or delivery.
+
+    ``state`` is the pipeline's position; ``training`` is the verdict on the
+    checkpoint and is kept separately so a failed *scoring* step marks the
+    job FAILED without un-verifying a training that genuinely completed
+    (otherwise the resume would retrain). Every write is atomic and every
+    transition is appended to ``history``.
+    """
+
+    def __init__(self, path: Path, *, job: str, name: str) -> None:
+        self.path = Path(path)
+        self.data: dict[str, Any] = {
+            "schema_version": JOB_STATE_VERSION,
+            "job": job,
+            "name": name,
+            "state": None,
+            "reason": "",
+            "history": [],
+        }
+        if self.path.is_file():
+            try:
+                loaded = _read_json(self.path)
+            except (OSError, ValueError):
+                loaded = None
+            if isinstance(loaded, dict) and loaded.get("schema_version") == JOB_STATE_VERSION:
+                self.data.update(loaded)
+
+    @property
+    def state(self) -> str | None:
+        return self.data.get("state")
+
+    @property
+    def reason(self) -> str:
+        return str(self.data.get("reason", ""))
+
+    def exists(self) -> bool:
+        return self.path.is_file()
+
+    def get(self, key: str, default: Any = None) -> Any:
+        return self.data.get(key, default)
+
+    def training_verified(self) -> bool:
+        training = self.data.get("training")
+        return isinstance(training, dict) and bool(training.get("verified"))
+
+    def save(self) -> None:
+        self.data["updated_at"] = _timestamp()
+        _write_json_atomic(self.path, self.data)
+
+    def set(self, state: str, reason: str = "", **fields: Any) -> None:
+        if state not in JOB_STATES:
+            raise ValueError(f"unknown job state {state!r}")
+        if state in TRAINED_STATES and not (self.training_verified() or (fields.get("training") or {}).get("verified")):
+            raise ValueError(f"cannot enter {state} without a verified training record")
+        self.data.update(fields)
+        self.data["state"] = state
+        self.data["reason"] = reason
+        self.data.setdefault("history", []).append({"state": state, "at": _timestamp(), "reason": reason})
+        self.save()
+
+    def update(self, **fields: Any) -> None:
+        self.data.update(fields)
+        self.save()
+
+    def fail(self, reason: str, **fields: Any) -> None:
+        self.set(STATE_FAILED, reason, **fields)
+
+
+# --------------------------------------------------------------------------
+# Training verification (P0-1)
+# --------------------------------------------------------------------------
+
+# Slack for filesystem timestamp granularity when comparing the checkpoint
+# mtime with the job start recorded by time.time().
+MTIME_TOLERANCE_SECONDS = 2.0
+
+
+def declared_target_steps(arm_config: Path) -> int | None:
+    """Steps the arm is declared to run: controlled stop first, else max_steps."""
+    try:
+        payload = _read_json(arm_config)
+    except (OSError, ValueError):
+        return None
+    if not isinstance(payload, dict):
+        return None
+    for key in ("controlled_stop_after_steps", "max_steps"):
+        value = payload.get(key)
+        if isinstance(value, int) and not isinstance(value, bool) and value > 0:
+            return value
+    return None
+
+
+@dataclass
+class TrainingVerdict:
+    """Outcome of :func:`verify_training`; ``state`` is one of three."""
+
+    state: str  # TRAINING_COMPLETE | CONTROLLED_PAUSE | FAILED
+    reason: str
+    completed_steps: int | None
+    target_steps: int | None
+    checkpoint: CheckpointInfo
+    exit: TrainerExit
+    exit_code: int | None
+    job_started_at: float | None
+    checks: dict[str, str] = field(default_factory=dict)
+
+    @property
+    def complete(self) -> bool:
+        return self.state == STATE_TRAINING_COMPLETE
+
+    def record(self) -> dict[str, Any]:
+        return {
+            "verified": self.complete,
+            "verdict": self.state,
+            "reason": self.reason,
+            "completed_steps": self.completed_steps,
+            "target_steps": self.target_steps,
+            "checkpoint": self.checkpoint.record(),
+            "exit": self.exit.record(),
+            "exit_code": self.exit_code,
+            "job_started_at": self.job_started_at,
+            "checks": dict(self.checks),
+            "verified_at": _timestamp(),
+        }
+
+
+def verify_training(
+    *,
+    checkpoint: Path,
+    arm_config: Path,
+    log_tail: str,
+    exit_code: int | None,
+    job_started_at: float | None,
+    inspector: Callable[[Path], CheckpointInfo] = inspect_checkpoint,
+) -> TrainingVerdict:
+    """Decide whether a training is complete from all four kinds of evidence.
+
+    Every check runs so the reason names everything wrong at once; the
+    first failing check decides the state. ``job_started_at`` None means a
+    run adopted from before job states existed, where the leftover check
+    has nothing to compare against and is recorded as not applicable.
+    """
+    info = inspector(Path(checkpoint))
+    exit = classify_trainer_exit(exit_code, log_tail)
+    target = declared_target_steps(Path(arm_config))
+    checks: dict[str, str] = {}
+    failures: list[str] = []
+
+    if not info.exists:
+        failures.append(f"checkpoint missing: {info.path}")
+        checks["checkpoint"] = "missing"
+    elif not info.loadable:
+        failures.append(f"checkpoint not loadable: {info.reason}")
+        checks["checkpoint"] = "not loadable"
+    else:
+        checks["checkpoint"] = f"loadable ({info.method})"
+
+    if target is None:
+        failures.append(f"arm config declares neither controlled_stop_after_steps nor max_steps: {arm_config}")
+        checks["target"] = "undeclared"
+    else:
+        checks["target"] = str(target)
+
+    if exit.kind in ALLOWED_EXIT_KINDS:
+        checks["exit"] = f"{exit.kind}: {exit.detail}"
+    else:
+        failures.append(f"trainer exit is {exit.kind} ({exit.detail}); checkpoint kept for diagnosis")
+        checks["exit"] = f"{exit.kind}: {exit.detail}"
+
+    if job_started_at is None:
+        checks["mtime"] = "not applicable (adopted run without a recorded job start)"
+    elif info.exists and info.mtime + MTIME_TOLERANCE_SECONDS < job_started_at:
+        failures.append(
+            f"checkpoint mtime {time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(info.mtime))} predates job start "
+            f"{time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(job_started_at))}; leftover of a previous job"
+        )
+        checks["mtime"] = "older than job start"
+    elif info.exists:
+        checks["mtime"] = "newer than job start"
+
+    completed: int | None = None
+    if info.step is not None and exit.steps is not None and info.step != exit.steps:
+        failures.append(f"checkpoint step {info.step} disagrees with the trainer log ({exit.steps})")
+        checks["steps"] = "inconsistent"
+    else:
+        completed = info.step if info.step is not None else exit.steps
+        if completed is None:
+            failures.append("completed steps unknown: no step in checkpoint and no marker in the trainer log")
+            checks["steps"] = "unknown"
+        else:
+            checks["steps"] = f"{completed} from {'checkpoint' if info.step is not None else 'log'}"
+
+    if failures:
+        state, reason = STATE_FAILED, "; ".join(failures)
+    elif completed is not None and target is not None and completed >= target:
+        state, reason = STATE_TRAINING_COMPLETE, f"{completed} >= {target} steps, {exit.kind}"
+    elif exit.kind == EXIT_CONTROLLED_STOP:
+        state = STATE_CONTROLLED_PAUSE
+        reason = f"controlled stop at {completed} steps, short of the declared {target}"
+    else:
+        state = STATE_FAILED
+        reason = f"trainer reported {exit.kind} at {completed} steps, short of the declared {target}"
+    return TrainingVerdict(
+        state=state,
+        reason=reason,
+        completed_steps=completed,
+        target_steps=target,
+        checkpoint=info,
+        exit=exit,
+        exit_code=exit_code,
+        job_started_at=job_started_at,
+        checks=checks,
+    )
+
+
+# --------------------------------------------------------------------------
+# Config immutability (P0-2)
+# --------------------------------------------------------------------------
+
+CONFIG_FROZEN_NAME = "config_frozen.json"
+CONFIG_AS_RUN_NAME = "config_as_run.json"
+
+
+def freeze_arm_config(arm_config: Path, frozen: Path, *, legacy_record: Path | None = None) -> str:
+    """Snapshot ``RUN/<arm>.json`` once; refuse if it changed since the snapshot.
+
+    Returns the sha256 of the frozen config. A different sha with the same
+    arm name is refused with :class:`ConfigFrozenError` because every
+    artifact under the arm directory would otherwise be attributed to a
+    config that never produced it. ``legacy_record`` is the pre-P0-2
+    ``config_as_run.json``: for a run that predates freezing it is the only
+    record of what trained, so it is trusted as the snapshot source and an
+    edited ``RUN/<arm>.json`` is refused against it.
+    """
+    if not arm_config.is_file():
+        raise ConfigFrozenError(f"arm config missing: {arm_config}")
+    current = file_sha256(arm_config)
+    if not frozen.is_file() and legacy_record is not None and legacy_record.is_file():
+        recorded = file_sha256(legacy_record)
+        if recorded != current:
+            raise ConfigFrozenError(
+                f"{arm_config.name} differs from the {legacy_record.name} this run trained with "
+                f"(recorded sha256 {recorded[:12]}, current {current[:12]}). "
+                f"Create a new arm name for the new config instead of editing {arm_config}"
+            )
+        _copy_atomic(legacy_record, frozen)
+        return recorded
+    if frozen.is_file():
+        recorded = file_sha256(frozen)
+        if recorded != current:
+            raise ConfigFrozenError(
+                f"{arm_config.name} changed since it was frozen for this run "
+                f"(frozen sha256 {recorded[:12]}, current {current[:12]}). "
+                f"Create a new arm name for the new config instead of editing {arm_config}"
+            )
+        return recorded
+    _copy_atomic(arm_config, frozen)
+    return current
 
 
 # --------------------------------------------------------------------------
@@ -523,8 +1292,9 @@ class PipelineContext:
     """Shared services for one invocation; the two callables are injectable.
 
     ``run_command`` runs an external step and returns its exit code;
-    ``trainer_processes`` returns the live trainer processes. Tests replace
-    both so the resume and guard logic can be exercised without a GPU.
+    ``trainer_processes`` returns the live trainer processes;
+    ``checkpoint_inspector`` judges a checkpoint file. Tests replace them so
+    the resume, guard and verdict logic can be exercised without a GPU.
     """
 
     def __init__(
@@ -533,14 +1303,87 @@ class PipelineContext:
         *,
         run_command: RunCommand | None = None,
         trainer_processes: Callable[[], list[tuple[int, str]]] | None = None,
+        checkpoint_inspector: Callable[[Path], CheckpointInfo] | None = None,
         stream=None,
     ) -> None:
         self.config = config
         self._run_command = run_command or _subprocess_run_command
         self._trainer_processes = trainer_processes
+        self.checkpoint_inspector = checkpoint_inspector or inspect_checkpoint
         self._env: dict[str, str] | None = None
         self.stream = stream or sys.stdout
         self.tee_files: list[Path] = []
+        self.gpu_leases_taken: list[str] = []  # owner names, for tests and status
+
+    # Job state ------------------------------------------------------------
+
+    def arm_job(self, arm: str) -> JobState:
+        return JobState(self.config.arm_dir(arm) / JOB_STATE_NAME, job="arm", name=arm)
+
+    def delivery_job(self, tag: str) -> JobState:
+        return JobState(self.config.delivery_dir(tag) / JOB_STATE_NAME, job="delivery", name=tag)
+
+    def verify_arm_training(self, arm: str, *, exit_code: int | None, job_started_at: float | None) -> TrainingVerdict:
+        cfg = self.config
+        return verify_training(
+            checkpoint=cfg.arm_checkpoint(arm),
+            arm_config=cfg.arm_config(arm),
+            log_tail=read_log_tail(cfg.arm_train_logs(arm)),
+            exit_code=exit_code,
+            job_started_at=job_started_at,
+            inspector=self.checkpoint_inspector,
+        )
+
+    def arm_training_complete(self, arm: str) -> bool:
+        """Verified TRAINING_COMPLETE on disk, with the checkpoint still there.
+
+        An arm trained before job states existed has a checkpoint but no
+        record; it is verified from its logs once and the verdict persisted
+        (``adopted``), so old tile arms stay usable without retraining.
+        """
+        job = self.arm_job(arm)
+        checkpoint = self.config.arm_checkpoint(arm)
+        if job.training_verified():
+            recorded = job.get("training", {}).get("checkpoint", {})
+            return checkpoint.is_file() and checkpoint.stat().st_size == recorded.get("bytes")
+        if job.exists() or not checkpoint.is_file():
+            return False
+        verdict = self.verify_arm_training(arm, exit_code=None, job_started_at=None)
+        job.data["adopted"] = True
+        if verdict.complete:
+            job.set(STATE_TRAINING_COMPLETE, f"adopted: {verdict.reason}", training=verdict.record())
+            return True
+        job.set(verdict.state, f"adopted: {verdict.reason}", training=verdict.record())
+        return False
+
+    def require_arm_training_complete(self, arm: str) -> None:
+        if not self.arm_training_complete(arm):
+            job = self.arm_job(arm)
+            raise StepFailed(f"arm {arm} training is {job.state or 'unrecorded'} ({job.reason or 'no verdict'}); refusing to run on it")
+
+    # GPU lease ------------------------------------------------------------
+
+    @contextmanager
+    def gpu_lease(self, owner: str, command: Sequence[str] | str, *, scan_trainers: bool = False) -> Iterator[GpuLease]:
+        """Hold ``gpu.lock`` for one GPU step; optionally also scan processes.
+
+        The lease is the primary, atomic guard; the process scan (the
+        pre-P0-4 guard) stays as a secondary check for the train step, where
+        a foreign trainer started outside this pipeline would not hold a lease.
+        """
+        try:
+            lease = acquire_gpu_lease(
+                self.config.gpu_lock_file(), command=command, device=self.config.gpu_device, owner=owner
+            )
+        except GpuLeaseBusy as error:
+            raise StepFailed(str(error)) from error
+        self.gpu_leases_taken.append(owner)
+        try:
+            if scan_trainers:
+                self.ensure_gpu_free()
+            yield lease
+        finally:
+            lease.release()
 
     # Environment ----------------------------------------------------------
 
@@ -616,35 +1459,64 @@ class PipelineContext:
 
 def arm_steps(ctx: PipelineContext, arm: str) -> list[Step]:
     cfg = ctx.config
-    run_root = cfg.run_root
     out = cfg.arm_dir(arm)
     arm_config = cfg.arm_config(arm)
     checkpoint = cfg.arm_checkpoint(arm)
-    train_log = run_root / f"{arm}.log"
+    train_log, train_err = cfg.arm_train_logs(arm)
     scores_file = cfg.arm_scores_file()
     identity = cfg.identity_dir / f"{arm}.json"
     morph = out / "morph.txt"
     offtraj_dir = out / "offtraj"
     compare_dir = out / "compare"
     scores = out / "scores.txt"
+    frozen = out / CONFIG_FROZEN_NAME
+    config_as_run = out / CONFIG_AS_RUN_NAME
 
-    def train() -> None:
+    def gate() -> None:
+        # Every consumer of latest.pt refuses anything but a verified
+        # TRAINING_COMPLETE; a 5k leftover must never be scored as a 20k arm.
+        ctx.require_arm_training_complete(arm)
+
+    def ensure_frozen() -> None:
+        # run_arm freezes first; a direct run_steps caller gets the same guarantee.
         if not arm_config.exists():
             raise StepFailed(f"arm config missing: {arm_config}")
-        ctx.ensure_gpu_free()
-        _append_text(scores_file, f"[{arm}] train start {_timestamp()}\n")
-        code = ctx.run(
-            ctx.python_tool("train_gsplat.py", "--config", arm_config),
-            log=train_log,
-            stderr_log=run_root / f"{arm}.log.err",
-        )
+        try:
+            freeze_arm_config(arm_config, frozen, legacy_record=config_as_run)
+        except ConfigFrozenError as error:
+            raise StepFailed(str(error)) from error
+
+    def train() -> None:
+        ensure_frozen()
+        job = ctx.arm_job(arm)
+        holder = job.get("pid")
+        if job.state == STATE_RUNNING and isinstance(holder, int) and holder != os.getpid() and _pid_alive(holder):
+            raise StepFailed(f"arm {arm} is already being trained by pid {holder}")
+        argv = ctx.python_tool("train_gsplat.py", "--config", arm_config)
+        with ctx.gpu_lease(f"train {arm}", argv, scan_trainers=True):
+            started_at = time.time()
+            job.set(
+                STATE_RUNNING,
+                "trainer launched",
+                started_at=started_at,
+                started_at_text=_timestamp(),
+                pid=os.getpid(),
+                config_sha256=file_sha256(frozen),
+                config_frozen=str(frozen),
+                training=None,
+            )
+            _append_text(scores_file, f"[{arm}] train start {_timestamp()}\n")
+            code = ctx.run(argv, log=train_log, stderr_log=train_err)
         _append_text(train_log, f"EXIT {code}\n")
-        # A controlled stop exits non-zero yet leaves latest.pt; the checkpoint
-        # is the success criterion, exactly as in run_arm.cmd.
-        if not checkpoint.exists():
-            _append_text(scores_file, f"[{arm}] TRAIN_FAILED exit {code} {_timestamp()}\n")
-            raise StepFailed(f"trainer exit {code} and no {checkpoint}")
-        _append_text(scores_file, f"[{arm}] train exit {code} done {_timestamp()}\n")
+        verdict = ctx.verify_arm_training(arm, exit_code=code, job_started_at=started_at)
+        if verdict.checkpoint.loadable:
+            job.set(STATE_CHECKPOINTED, f"trainer exit {code}; checkpoint loadable at step {verdict.checkpoint.step}")
+        job.set(verdict.state, verdict.reason, training=verdict.record(), exit_code=code)
+        if not verdict.complete:
+            marker = "TRAIN_PAUSED" if verdict.state == STATE_CONTROLLED_PAUSE else "TRAIN_FAILED"
+            _append_text(scores_file, f"[{arm}] {marker} exit {code} {_timestamp()}: {verdict.reason}\n")
+            raise StepFailed(f"{verdict.state}: {verdict.reason}")
+        _append_text(scores_file, f"[{arm}] train exit {code} done {_timestamp()} ({verdict.reason})\n")
 
     def prune_done() -> bool:
         return not any(checkpoint.parent.glob("step_*.pt"))
@@ -654,41 +1526,47 @@ def arm_steps(ctx: PipelineContext, arm: str) -> list[Step]:
             path.unlink()
 
     def copy_config() -> None:
-        _copy_atomic(arm_config, out / "config_as_run.json")
+        # config_as_run.json is the historical record of what trained; it is
+        # written once from the frozen snapshot and never overwritten.
+        ensure_frozen()
+        if config_as_run.exists() and not _same_content(frozen, config_as_run):
+            raise StepFailed(f"{config_as_run} differs from the frozen config; refusing to overwrite the run record")
+        _copy_atomic(frozen, config_as_run)
 
     def morph_run() -> None:
-        ctx.run_capture_or_fail(
-            ctx.python_tool("checkpoint_morphology.py", checkpoint, "--label", arm),
-            capture=morph,
-            log=out / "morph.log",
-        )
+        gate()
+        argv = ctx.python_tool("checkpoint_morphology.py", checkpoint, "--label", arm)
+        with ctx.gpu_lease(f"morph {arm}", argv):
+            ctx.run_capture_or_fail(argv, capture=morph, log=out / "morph.log")
 
     def offtraj() -> None:
-        ctx.run_or_fail(
-            ctx.python_tool(
-                "build_offtrajectory_compare.py", arm_config, checkpoint, offtraj_dir, cfg.compare_frames,
-                "--reference-ply", cfg.reference_ply, "--reference-alignment", cfg.reference_alignment,
-            ),
-            log=out / "offtraj.log",
+        gate()
+        argv = ctx.python_tool(
+            "build_offtrajectory_compare.py", arm_config, checkpoint, offtraj_dir, cfg.compare_frames,
+            "--reference-ply", cfg.reference_ply, "--reference-alignment", cfg.reference_alignment,
         )
+        with ctx.gpu_lease(f"offtraj {arm}", argv):
+            ctx.run_or_fail(argv, log=out / "offtraj.log")
 
     def compare() -> None:
-        ctx.run_or_fail(
-            ctx.python_tool(
-                "build_three_way_compare.py", "--config", arm_config, "--checkpoint", checkpoint,
-                "--reference-ply", cfg.reference_ply, "--reference-alignment", cfg.reference_alignment,
-                "--output", compare_dir, "--frames", cfg.compare_frames,
-            ),
-            log=out / "compare.log",
+        gate()
+        argv = ctx.python_tool(
+            "build_three_way_compare.py", "--config", arm_config, "--checkpoint", checkpoint,
+            "--reference-ply", cfg.reference_ply, "--reference-alignment", cfg.reference_alignment,
+            "--output", compare_dir, "--frames", cfg.compare_frames,
         )
+        with ctx.gpu_lease(f"compare {arm}", argv):
+            ctx.run_or_fail(argv, log=out / "compare.log")
 
     def freeze() -> None:
+        gate()
         ctx.run_or_fail(
             ctx.python_tool("freeze_run_identity.py", "--run", out, "--output", identity),
             log=out / "identity.log",
         )
 
     def score() -> None:
+        gate()
         log = out / "scores.log"
         ctx.run_capture_or_fail(ctx.python_tool("score_compare_sharpness.py", compare_dir), capture=scores, log=log)
         ctx.run_capture_or_fail(
@@ -696,15 +1574,16 @@ def arm_steps(ctx: PipelineContext, arm: str) -> list[Step]:
         )
         _append_text(scores, morph.read_text(encoding="utf-8"))
         _append_text(scores_file, f"[{arm}] scores {_timestamp()}\n" + scores.read_text(encoding="utf-8"))
+        ctx.arm_job(arm).set(STATE_EVALUATED, "strips scored")
 
     return [
-        Step("train", train, artifacts=(checkpoint,)),
+        Step("train", train, done=lambda: ctx.arm_training_complete(arm)),
         Step("prune_step_checkpoints", prune, done=prune_done, anchor=False),
         Step(
             "config_as_run",
             copy_config,
-            artifacts=(out / "config_as_run.json",),
-            done=lambda: _same_content(arm_config, out / "config_as_run.json"),
+            artifacts=(config_as_run,),
+            done=lambda: _same_content(frozen, config_as_run),
             anchor=False,
         ),
         Step("morph", morph_run, artifacts=(morph,)),
@@ -716,18 +1595,33 @@ def arm_steps(ctx: PipelineContext, arm: str) -> list[Step]:
 
 
 def run_arm(ctx: PipelineContext, arm: str, *, force: bool = False) -> int:
-    """Train and score one arm; returns 0 when every step is done."""
-    status_file = ctx.config.run_root / f"{arm}.pipeline_status.txt"
+    """Train and score one arm; 0 when every step is done, 2 when refused."""
+    cfg = ctx.config
+    out = cfg.arm_dir(arm)
+    status_file = cfg.run_root / f"{arm}.pipeline_status.txt"
 
     def status(line: str) -> None:
         ctx.status(f"[{arm}] {line}", status_file)
 
     status(f"arm start (resume={'off' if force else 'on'})")
+    if cfg.arm_config(arm).exists():
+        try:
+            freeze_arm_config(cfg.arm_config(arm), out / CONFIG_FROZEN_NAME, legacy_record=out / CONFIG_AS_RUN_NAME)
+        except ConfigFrozenError as error:
+            status(f"ARM_REFUSED: {error}")
+            return 2
     reports = run_steps(arm_steps(ctx, arm), force=force, status=status)
     failed = [report for report in reports if report.action == "failed"]
+    job = ctx.arm_job(arm)
     if failed:
+        # The train step writes its own verdict (FAILED / CONTROLLED_PAUSE);
+        # any other failure is recorded without touching the training record.
+        if out.is_dir() and not (failed[0].name == "train" and job.state in (STATE_FAILED, STATE_CONTROLLED_PAUSE)):
+            job.fail(f"{failed[0].name}: {failed[0].detail}")
         status(f"ARM_FAILED at {failed[0].name}")
         return 1
+    if job.training_verified() and job.state not in (STATE_EVALUATED, STATE_QUALITY_ACCEPTED, STATE_PUBLISHED):
+        job.set(STATE_EVALUATED, "every arm step done")
     status("ARM_DONE")
     return 0
 
@@ -737,40 +1631,104 @@ def run_arm(ctx: PipelineContext, arm: str, *, force: bool = False) -> int:
 # --------------------------------------------------------------------------
 
 
-def deliver_steps(ctx: PipelineContext, tag: str, tile0_arm: str) -> list[Step]:
+def _stamp_matches(record: dict[str, Any] | None, path: Path) -> bool:
+    """Does a recorded (bytes, mtime, sha256) still describe ``path``?
+
+    Size and mtime are checked first; only when they moved is the sha256
+    recomputed, so a resume check does not hash gigabytes every time.
+    """
+    if not isinstance(record, dict) or not path.is_file():
+        return False
+    stamp = _file_stamp(path)
+    if record.get("bytes") == stamp["bytes"] and record.get("mtime") == stamp["mtime"]:
+        return True
+    return bool(record.get("sha256")) and file_sha256(path) == record.get("sha256")
+
+
+def _ply_record(path: Path) -> dict[str, Any]:
+    stamp = _file_stamp(path)
+    return {
+        "path": str(path),
+        "sha256": file_sha256(path),
+        "bytes": stamp["bytes"],
+        "mtime": stamp["mtime"],
+        "vertex_count": read_ply_vertex_count(path),
+    }
+
+
+def deliver_steps(
+    ctx: PipelineContext,
+    tag: str,
+    tile0_arm: str,
+    *,
+    publish: bool = False,
+    score_threshold_variants: bool = False,
+) -> list[Step]:
     cfg = ctx.config
     out = cfg.delivery_dir(tag)
     log = out / "deliver_status.txt"
     merged = out / "merged.pt"
     report = out / "merge_report.json"
     body_ply = out / cfg.delivery_ply_name(tag)
-    export_ply = cfg.exports_dir / cfg.delivery_ply_name(tag)
-    export_sky = cfg.exports_dir / cfg.delivery_sky_name(tag)
+    # Pre-export scores (merged.pt) keep the historical names so earlier
+    # deliveries remain comparable as baselines; final scores are suffixed.
     morph = out / "morph.txt"
     battery = out / "battery.json"
     compare_dir = out / "compare_matched"
     offtraj_dir = out / "offtraj_matched"
+    scores_pre = out / "scores_pre_export.txt"
+    reimported = out / "reimported.pt"
+    reimport_record = out / "reimported.json"
+    threshold_dir = out / "threshold_control"
+    threshold_record = threshold_dir / "threshold_control.json"
+    final_morph = out / "morph_final.txt"
+    final_battery = out / "battery_final.json"
+    final_compare_dir = out / "compare_final"
+    final_offtraj_dir = out / "offtraj_final"
     identity = cfg.identity_dir / f"delivery_{tag}_merged.json"
     scores = out / "scores.txt"
+    delivery_report = out / "delivery_report.json"
+    publish_dir = cfg.exports_dir if publish else cfg.candidate_exports_dir(tag)
+    export_ply = publish_dir / cfg.delivery_ply_name(tag)
+    export_sky = publish_dir / cfg.delivery_sky_name(tag)
     tile_arms = {tile: cfg.delivery_tile_arm(tag, tile) for tile in cfg.delivery_tiles}
     steps: list[Step] = []
 
-    def make_tile_step(tile: int, arm: str) -> Step:
-        checkpoint = cfg.arm_checkpoint(arm)
+    def job() -> JobState:
+        return ctx.delivery_job(tag)
 
+    def read_report() -> dict[str, Any]:
+        if delivery_report.is_file():
+            try:
+                payload = _read_json(delivery_report)
+                if isinstance(payload, dict):
+                    return payload
+            except ValueError:
+                pass
+        return {"schema_version": 1, "tag": tag, "tile0_arm": tile0_arm, "tile_arms": {str(t): a for t, a in tile_arms.items()}}
+
+    def make_tile_step(tile: int, arm: str) -> Step:
         def train_tile() -> None:
             _append_text(log, f"[train] tile{tile} {_timestamp()}\n")
-            if run_arm(ctx, arm) != 0 or not checkpoint.exists():
+            code = run_arm(ctx, arm)
+            if code != 0 or not ctx.arm_training_complete(arm):
                 _append_text(log, f"[FAIL] tile{tile} training\n")
-                raise StepFailed(f"tile{tile} arm {arm} did not produce {checkpoint}")
+                verdict = ctx.arm_job(arm)
+                raise StepFailed(f"tile{tile} arm {arm} exit {code}; training is {verdict.state} ({verdict.reason})")
 
-        return Step(f"train_tile{tile}", train_tile, artifacts=(checkpoint,), independent=True)
+        return Step(f"train_tile{tile}", train_tile, done=lambda: ctx.arm_training_complete(arm), independent=True)
 
     for tile, arm in tile_arms.items():
         steps.append(make_tile_step(tile, arm))
 
+    def require_merged() -> None:
+        if not job().training_verified():
+            raise StepFailed(f"delivery {tag} has no verified merge; refusing to score")
+
     def merge() -> None:
         _append_text(log, f"[merge] {_timestamp()}\n")
+        for arm in (tile0_arm, *tile_arms.values()):
+            ctx.require_arm_training_complete(arm)
         argv = ctx.python_tool(
             "merge_v28_tile_checkpoints.py",
             "--tile-inputs", cfg.tile_inputs_manifest,
@@ -787,12 +1745,103 @@ def deliver_steps(ctx: PipelineContext, tag: str, tile0_arm: str) -> list[Step]:
         if cfg.harmonize_exposure:
             argv.append("--harmonize-exposure")
         try:
-            ctx.run_or_fail(argv, log=out / "merge.log")
+            with ctx.gpu_lease(f"merge {tag}", argv):
+                ctx.run_or_fail(argv, log=out / "merge.log")
         except StepFailed:
             _append_text(log, "[FAIL] merge\n")
             raise
+        arms = {"tile0": tile0_arm, **{f"tile{tile}": arm for tile, arm in tile_arms.items()}}
+        job().set(
+            STATE_TRAINING_COMPLETE,
+            "every tile verified TRAINING_COMPLETE and merged",
+            training={
+                "verified": True,
+                "arms": {
+                    name: {
+                        "arm": arm,
+                        "completed_steps": ctx.arm_job(arm).get("training", {}).get("completed_steps"),
+                        "checkpoint": ctx.arm_job(arm).get("training", {}).get("checkpoint", {}).get("path"),
+                    }
+                    for name, arm in arms.items()
+                },
+                "merged": {"path": str(merged), **_file_stamp(merged)},
+            },
+        )
+
+    def render_steps(label: str, checkpoint: Path, *, morph_out: Path, battery_out: Path, compare_out: Path, offtraj_out: Path, gate: Callable[[], None]) -> list[Step]:
+        """morph / battery / three-way / off-trajectory for one checkpoint."""
+
+        def morph_run() -> None:
+            gate()
+            argv = ctx.python_tool("checkpoint_morphology.py", checkpoint, "--label", f"{label}_{tag}")
+            with ctx.gpu_lease(f"{label} morph {tag}", argv):
+                ctx.run_capture_or_fail(argv, capture=morph_out, log=out / f"{morph_out.stem}.log")
+
+        def battery_run() -> None:
+            gate()
+            argv = ctx.python_tool(
+                "evaluate_probe_views.py", "--config", cfg.delivery_eval_config, "--checkpoint", checkpoint,
+                "--views", cfg.battery_views, "--output", battery_out,
+            )
+            with ctx.gpu_lease(f"{label} battery {tag}", argv):
+                ctx.run_or_fail(argv, log=out / f"{battery_out.stem}.log")
+
+        def compare() -> None:
+            gate()
+            argv = ctx.python_tool(
+                "build_three_way_compare.py", "--config", cfg.delivery_eval_config, "--checkpoint", checkpoint,
+                "--reference-ply", cfg.reference_ply, "--reference-alignment", cfg.reference_alignment,
+                "--output", compare_out, "--frames", cfg.compare_frames,
+            )
+            with ctx.gpu_lease(f"{label} compare {tag}", argv):
+                ctx.run_or_fail(argv, log=out / f"{compare_out.name}.log")
+
+        def offtraj() -> None:
+            gate()
+            argv = ctx.python_tool(
+                "build_offtrajectory_compare.py", cfg.delivery_eval_config, checkpoint, offtraj_out, cfg.compare_frames,
+                "--reference-ply", cfg.reference_ply, "--reference-alignment", cfg.reference_alignment,
+            )
+            with ctx.gpu_lease(f"{label} offtraj {tag}", argv):
+                ctx.run_or_fail(argv, log=out / f"{offtraj_out.name}.log")
+
+        prefix = "" if label == "pre_export" else "final_"
+        return [
+            Step(f"{prefix}morph", morph_run, artifacts=(morph_out,)),
+            Step(f"{prefix}battery", battery_run, artifacts=(battery_out,)),
+            Step(f"{prefix}compare_matched", compare, artifacts=(compare_out / "compare_summary.json",)),
+            Step(f"{prefix}offtraj_matched", offtraj, artifacts=(offtraj_out / "offtraj_summary.json",)),
+        ]
+
+    def score_strips(capture: Path, compare_out: Path, offtraj_out: Path, morph_out: Path, score_log: Path) -> None:
+        compare_dirs = [*cfg.delivery_baselines["compare"], compare_out]
+        ctx.run_capture_or_fail(ctx.python_tool("score_compare_sharpness.py", *compare_dirs), capture=capture, log=score_log)
+        pairs = [f"{name}={path}" for name, path in cfg.delivery_baselines["offtraj"].items()]
+        pairs.append(f"{tag}={offtraj_out}")
+        ctx.run_capture_or_fail(
+            ctx.python_tool("score_offtrajectory_strips.py", *pairs), capture=capture, log=score_log, append=True
+        )
+        _append_text(capture, morph_out.read_text(encoding="utf-8"))
+
+    def pre_export_scores() -> None:
+        require_merged()
+        _append_text(log, "[scores pre-export]\n")
+        score_strips(scores_pre, compare_dir, offtraj_dir, morph, out / "scores_pre_export.log")
+        payload = read_report()
+        payload["pre_export"] = {
+            "checkpoint": {"path": str(merged), **_file_stamp(merged)},
+            "morph": str(morph),
+            "battery": str(battery),
+            "compare": str(compare_dir),
+            "offtraj": str(offtraj_dir),
+            "scores": str(scores_pre),
+            "scored_at": _timestamp(),
+        }
+        _write_json_atomic(delivery_report, payload)
+        job().set(STATE_EVALUATED, "merged.pt scored (pre-export record)")
 
     def export() -> None:
+        require_merged()
         ctx.run_or_fail(
             ctx.python_tool(
                 "export_gaussian_ply.py", "--checkpoint", merged, "--output", body_ply,
@@ -801,105 +1850,194 @@ def deliver_steps(ctx: PipelineContext, tag: str, tile0_arm: str) -> list[Step]:
             log=out / "export.log",
         )
 
-    def publish() -> None:
+    def threshold_control() -> None:
+        require_merged()
+        threshold_dir.mkdir(parents=True, exist_ok=True)
+        variants: list[dict[str, Any]] = []
+        for threshold in EXPORT_THRESHOLD_CONTROL:
+            variant = threshold_dir / f"body_min_opacity_{threshold:g}.ply"
+            ctx.run_or_fail(
+                ctx.python_tool(
+                    "export_gaussian_ply.py", "--checkpoint", merged, "--output", variant, "--min-opacity", threshold
+                ),
+                log=threshold_dir / f"export_{threshold:g}.log",
+            )
+            record: dict[str, Any] = {"min_opacity": threshold, "path": str(variant), "vertex_count": read_ply_vertex_count(variant)}
+            if score_threshold_variants:
+                variant_checkpoint = threshold_dir / f"reimported_{threshold:g}.pt"
+                variant_battery = threshold_dir / f"battery_{threshold:g}.json"
+                ctx.run_or_fail(
+                    ctx.python_tool("import_gaussian_ply.py", "--ply", variant, "--output", variant_checkpoint),
+                    log=threshold_dir / f"import_{threshold:g}.log",
+                )
+                argv = ctx.python_tool(
+                    "evaluate_probe_views.py", "--config", cfg.delivery_eval_config, "--checkpoint", variant_checkpoint,
+                    "--views", cfg.battery_views, "--output", variant_battery,
+                )
+                with ctx.gpu_lease(f"threshold battery {tag} {threshold:g}", argv):
+                    ctx.run_or_fail(argv, log=threshold_dir / f"battery_{threshold:g}.log")
+                record["battery"] = str(variant_battery)
+            variants.append(record)
+        baseline = variants[0]["vertex_count"]
+        for record in variants:
+            record["removed_vs_zero"] = baseline - record["vertex_count"]
+        _write_json_atomic(
+            threshold_record,
+            {
+                "checkpoint": {"path": str(merged), **_file_stamp(merged)},
+                "delivery_min_opacity": cfg.export_min_opacity,
+                "variants_scored": score_threshold_variants,
+                "variants": variants,
+                "recorded_at": _timestamp(),
+            },
+        )
+        _append_text(log, "[threshold-control] " + ", ".join(f"{v['min_opacity']:g}: -{v['removed_vs_zero']}" for v in variants) + "\n")
+
+    def reimport_done() -> bool:
+        if not (reimported.is_file() and reimport_record.is_file()):
+            return False
+        try:
+            record = _read_json(reimport_record)
+        except ValueError:
+            return False
+        return _stamp_matches(record.get("source"), body_ply)
+
+    def reimport() -> None:
+        require_merged()
+        # The exported PLY is what the customer opens; scoring merged.pt
+        # would grade a model the export threshold never touched.
+        ctx.run_or_fail(
+            ctx.python_tool("import_gaussian_ply.py", "--ply", body_ply, "--output", reimported),
+            log=out / "reimport.log",
+        )
+        _write_json_atomic(reimport_record, {"source": _ply_record(body_ply), "checkpoint": str(reimported), "imported_at": _timestamp()})
+
+    def require_reimported() -> None:
+        require_merged()
+        if not reimport_done():
+            raise StepFailed(f"{reimported} does not match the current {body_ply.name}; re-import first")
+
+    def final_scores_done() -> bool:
+        if not (scores.is_file() and delivery_report.is_file()):
+            return False
+        final = read_report().get("final")
+        return isinstance(final, dict) and _stamp_matches(final.get("ply"), body_ply)
+
+    def final_scores() -> None:
+        require_reimported()
+        _append_text(log, "[scores]\n")
+        score_strips(scores, final_compare_dir, final_offtraj_dir, final_morph, out / "scores.log")
+        ply = _ply_record(body_ply)
+        source = _read_json(reimport_record).get("source", {})
+        if source.get("sha256") != ply["sha256"]:
+            raise StepFailed(f"{body_ply.name} changed after re-import (sha {source.get('sha256', '?')[:12]} vs {ply['sha256'][:12]})")
+        payload = read_report()
+        payload["final"] = {
+            "bound_to_ply_sha256": ply["sha256"],
+            "ply": ply,
+            "scored_checkpoint": str(reimported),
+            "morph": str(final_morph),
+            "battery": str(final_battery),
+            "compare": str(final_compare_dir),
+            "offtraj": str(final_offtraj_dir),
+            "scores": str(scores),
+            "scores_sha256": file_sha256(scores),
+            "scored_at": _timestamp(),
+        }
+        payload["export"] = {"min_opacity": cfg.export_min_opacity, "threshold_control": str(threshold_record)}
+        _write_json_atomic(delivery_report, payload)
+        _append_text(log, scores.read_text(encoding="utf-8"))
+        _append_text(log, f"[complete] {_timestamp()} ply sha256 {ply['sha256']}\n")
+        job().set(STATE_QUALITY_ACCEPTED, f"final scores bound to PLY sha256 {ply['sha256'][:12]}")
+
+    def publish_run() -> None:
+        if not final_scores_done():
+            raise StepFailed("final scores are not bound to the current PLY; refusing to publish")
         if not cfg.sky_ply.exists():
             raise StepFailed(f"sky PLY missing: {cfg.sky_ply}")
         _copy_atomic(body_ply, export_ply)
         _copy_atomic(cfg.sky_ply, export_sky)
-        _append_text(log, "[export] done\n")
+        payload = read_report()
+        payload["publish"] = {
+            "mode": "published" if publish else "candidate",
+            "dir": str(publish_dir),
+            "body": str(export_ply),
+            "sky": str(export_sky),
+            "ply_sha256": payload["final"]["bound_to_ply_sha256"],
+            "at": _timestamp(),
+        }
+        _write_json_atomic(delivery_report, payload)
+        _append_text(log, f"[export] done -> {publish_dir}\n")
+        if publish:
+            job().set(STATE_PUBLISHED, f"published to {publish_dir}")
+        else:
+            job().update(candidate_dir=str(publish_dir))
 
-    def morph_run() -> None:
-        ctx.run_capture_or_fail(
-            ctx.python_tool("checkpoint_morphology.py", merged, "--label", f"merged_{tag}"),
-            capture=morph,
-            log=out / "morph.log",
-        )
-
-    def battery_run() -> None:
-        ctx.run_or_fail(
-            ctx.python_tool(
-                "evaluate_probe_views.py", "--config", cfg.delivery_eval_config, "--checkpoint", merged,
-                "--views", cfg.battery_views, "--output", battery,
-            ),
-            log=out / "battery.log",
-        )
-
-    def compare() -> None:
-        ctx.run_or_fail(
-            ctx.python_tool(
-                "build_three_way_compare.py", "--config", cfg.delivery_eval_config, "--checkpoint", merged,
-                "--reference-ply", cfg.reference_ply, "--reference-alignment", cfg.reference_alignment,
-                "--output", compare_dir, "--frames", cfg.compare_frames,
-            ),
-            log=out / "compare_matched.log",
-        )
-
-    def offtraj() -> None:
-        ctx.run_or_fail(
-            ctx.python_tool(
-                "build_offtrajectory_compare.py", cfg.delivery_eval_config, merged, offtraj_dir, cfg.compare_frames,
-                "--reference-ply", cfg.reference_ply, "--reference-alignment", cfg.reference_alignment,
-            ),
-            log=out / "offtraj_matched.log",
-        )
+    steps.append(Step("merge", merge, artifacts=(merged, report), done=lambda: merged.is_file() and report.is_file() and job().training_verified()))
+    steps += render_steps("pre_export", merged, morph_out=morph, battery_out=battery, compare_out=compare_dir, offtraj_out=offtraj_dir, gate=require_merged)
+    steps += [
+        Step("pre_export_scores", pre_export_scores, artifacts=(scores_pre,)),
+        Step("export", export, artifacts=(body_ply,)),
+        Step("threshold_control", threshold_control, artifacts=(threshold_record,)),
+        Step("reimport", reimport, artifacts=(reimported, reimport_record), done=reimport_done),
+    ]
+    steps += render_steps("final", reimported, morph_out=final_morph, battery_out=final_battery, compare_out=final_compare_dir, offtraj_out=final_offtraj_dir, gate=require_reimported)
 
     def freeze() -> None:
+        require_reimported()
         ctx.run_or_fail(
             ctx.python_tool(
-                "freeze_run_identity.py", "--checkpoint", merged, "--extra-file", export_ply, "--output", identity
+                "freeze_run_identity.py", "--checkpoint", merged, "--extra-file", body_ply, "--output", identity
             ),
             log=out / "identity.log",
         )
 
-    def score() -> None:
-        _append_text(log, "[scores]\n")
-        score_log = out / "scores.log"
-        compare_dirs = [*cfg.delivery_baselines["compare"], compare_dir]
-        ctx.run_capture_or_fail(
-            ctx.python_tool("score_compare_sharpness.py", *compare_dirs), capture=scores, log=score_log
-        )
-        pairs = [f"{name}={path}" for name, path in cfg.delivery_baselines["offtraj"].items()]
-        pairs.append(f"{tag}={offtraj_dir}")
-        ctx.run_capture_or_fail(
-            ctx.python_tool("score_offtrajectory_strips.py", *pairs), capture=scores, log=score_log, append=True
-        )
-        _append_text(scores, morph.read_text(encoding="utf-8"))
-        _append_text(log, scores.read_text(encoding="utf-8"))
-        _append_text(log, f"[complete] {_timestamp()}\n")
-
     steps += [
-        Step("merge", merge, artifacts=(merged, report)),
-        Step("export", export, artifacts=(body_ply,)),
-        Step("publish", publish, artifacts=(export_ply, export_sky)),
-        Step("morph", morph_run, artifacts=(morph,)),
-        Step("battery", battery_run, artifacts=(battery,)),
-        Step("compare_matched", compare, artifacts=(compare_dir / "compare_summary.json",)),
-        Step("offtraj_matched", offtraj, artifacts=(offtraj_dir / "offtraj_summary.json",)),
         Step("identity", freeze, artifacts=(identity,)),
-        Step("scores", score, artifacts=(scores,)),
+        Step("scores", final_scores, artifacts=(scores, delivery_report), done=final_scores_done),
+        Step("publish", publish_run, artifacts=(export_ply, export_sky)),
     ]
     return steps
 
 
-def run_deliver(ctx: PipelineContext, tag: str, tile0_arm: str, *, force: bool = False) -> int:
+def run_deliver(
+    ctx: PipelineContext,
+    tag: str,
+    tile0_arm: str,
+    *,
+    force: bool = False,
+    publish: bool = False,
+    score_threshold_variants: bool = False,
+) -> int:
     cfg = ctx.config
-    if not cfg.arm_checkpoint(tile0_arm).exists():
-        ctx.status(f"[delivery {tag}] FAILED: tile0 arm checkpoint missing: {cfg.arm_checkpoint(tile0_arm)}")
+    if not ctx.arm_training_complete(tile0_arm):
+        job = ctx.arm_job(tile0_arm)
+        ctx.status(f"[delivery {tag}] FAILED: tile0 arm {tile0_arm} training is {job.state or 'unrecorded'} ({job.reason or 'no checkpoint'})")
         return 1
     out = cfg.delivery_dir(tag)
     out.mkdir(parents=True, exist_ok=True)
     log = out / "deliver_status.txt"
     _append_text(log, f"[start] {tag} delivery {_timestamp()}\n")
+    job = ctx.delivery_job(tag)
+    if job.state is None:
+        job.set(STATE_RUNNING, "delivery started", tile0_arm=tile0_arm, publish=publish)
 
     def status(line: str) -> None:
         ctx.status(f"[delivery {tag}] {line}", out / "pipeline_status.txt")
 
-    reports = run_steps(deliver_steps(ctx, tag, tile0_arm), force=force, status=status)
+    steps = deliver_steps(ctx, tag, tile0_arm, publish=publish, score_threshold_variants=score_threshold_variants)
+    reports = run_steps(steps, force=force, status=status)
     failed = [report for report in reports if report.action == "failed"]
     if failed:
+        ctx.delivery_job(tag).fail(f"{failed[0].name}: {failed[0].detail}")
         status(f"DELIVERY_FAILED at {failed[0].name}")
         return 1
-    status("DELIVERY_DONE")
+    job = ctx.delivery_job(tag)
+    if publish and job.state != STATE_PUBLISHED:
+        job.set(STATE_PUBLISHED, f"published to {cfg.exports_dir}")
+    elif not publish and job.state not in (STATE_QUALITY_ACCEPTED, STATE_PUBLISHED):
+        job.set(STATE_QUALITY_ACCEPTED, "candidate ready; pass --publish to copy into exports")
+    status("DELIVERY_DONE" + ("" if publish else f" (candidate in {cfg.candidate_exports_dir(tag)}; --publish to release)"))
     return 0
 
 
@@ -969,8 +2107,8 @@ def run_queue(
         status(f"delivery {tag} exit {code}")
         exit_code = exit_code or code
     for arm in arms:
-        if not force and cfg.arm_checkpoint(arm).exists():
-            status(f"arm {arm} skip (latest.pt exists; use --force to re-run)")
+        if not force and ctx.arm_training_complete(arm):
+            status(f"arm {arm} skip (training verified complete; use --force to re-run)")
             continue
         running = ctx.trainer_processes()
         if running:
@@ -1061,10 +2199,18 @@ def build_parser() -> argparse.ArgumentParser:
     deliver.add_argument("--tile0", required=True, metavar="ARM", help="Tile_0 arm whose latest.pt is merged")
     deliver.add_argument("--force", action="store_true", help="redo every step even if its artifacts exist")
     deliver.add_argument("--dry-run", action="store_true", help="print which steps would run and exit")
+    deliver.add_argument(
+        "--publish", action="store_true",
+        help="copy the scored PLY into exports_dir; default lands in exports_dir/candidate_<TAG>/",
+    )
+    deliver.add_argument(
+        "--score-threshold-variants", action="store_true",
+        help="also re-import and run the battery on each export-threshold control PLY (GPU time)",
+    )
 
     queue = sub.add_parser("queue", help="run arms one after another, never two trainers at once")
     queue.add_argument("arms", nargs="*", help="arm names in execution order")
-    queue.add_argument("--force", action="store_true", help="run arms even if their latest.pt exists")
+    queue.add_argument("--force", action="store_true", help="run arms even if their training is verified complete")
     queue.add_argument("--after", metavar="ARM", help="wait until ARM records a new successful exit first")
     queue.add_argument("--poll-seconds", type=float, default=120.0, help="polling interval for --after")
     queue.add_argument(
@@ -1074,7 +2220,34 @@ def build_parser() -> argparse.ArgumentParser:
     score = sub.add_parser("score", help="re-score finished run directories")
     score.add_argument("run_dirs", nargs="+", type=Path)
     score.add_argument("--output", type=Path, help="report file (default RUN/score_report.txt)")
+
+    state = sub.add_parser("state", help="print the persisted job state of arms or deliveries")
+    state.add_argument("names", nargs="+", help="arm names or delivery_<tag>")
     return parser
+
+
+def run_state(ctx: PipelineContext, names: Sequence[str]) -> int:
+    """Print state, reason and training verdict of each job; 1 if any is not trained."""
+    worst = 0
+    for name in names:
+        if name.startswith("delivery_"):
+            job = ctx.delivery_job(name[len("delivery_"):])
+        else:
+            job = ctx.arm_job(name)
+        training = job.get("training") or {}
+        print(
+            f"{name}: {job.state or 'UNRECORDED'}"
+            + (f" - {job.reason}" if job.reason else "")
+            + (
+                f" [steps {training.get('completed_steps')}/{training.get('target_steps')}, exit {training.get('exit', {}).get('kind')}]"
+                if training.get("verdict")
+                else ""
+            ),
+            file=ctx.stream,
+        )
+        if not job.training_verified():
+            worst = 1
+    return worst
 
 
 def _print_plan(ctx: PipelineContext, steps: Sequence[Step], *, force: bool) -> None:
@@ -1102,9 +2275,16 @@ def main(argv: Sequence[str] | None = None) -> int:
             return run_arm(ctx, args.name, force=args.force)
         if args.command == "deliver":
             if args.dry_run:
-                _print_plan(ctx, deliver_steps(ctx, args.tag, args.tile0), force=args.force)
+                _print_plan(
+                    ctx,
+                    deliver_steps(ctx, args.tag, args.tile0, publish=args.publish, score_threshold_variants=args.score_threshold_variants),
+                    force=args.force,
+                )
                 return 0
-            return run_deliver(ctx, args.tag, args.tile0, force=args.force)
+            return run_deliver(
+                ctx, args.tag, args.tile0, force=args.force, publish=args.publish,
+                score_threshold_variants=args.score_threshold_variants,
+            )
         if args.command == "queue":
             deliver = None
             if args.deliver:
@@ -1119,6 +2299,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             return run_queue(ctx, args.arms, force=args.force, deliver=deliver)
         if args.command == "score":
             return run_score(ctx, args.run_dirs, output=args.output)
+        if args.command == "state":
+            return run_state(ctx, args.names)
         parser.error(f"unknown command {args.command}")
     except PipelineError as error:
         print(f"pipeline: {error}", file=sys.stderr)
