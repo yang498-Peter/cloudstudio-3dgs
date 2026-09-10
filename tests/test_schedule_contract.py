@@ -29,7 +29,10 @@ from cloudstudio_3dgs.training.schedule_audit import (
     resolved_schedule,
     validate_research_schedule_contract,
 )
-from cloudstudio_3dgs.training.trainer import TrainerConfig
+try:
+    from cloudstudio_3dgs.training.trainer import TrainerConfig
+except ImportError:  # torch is an optional training dependency
+    TrainerConfig = None
 
 ROOT = Path(__file__).resolve().parents[1]
 TRAINER_SOURCE = ROOT / "cloudstudio_3dgs" / "training" / "trainer.py"
@@ -284,6 +287,7 @@ class ContractRejectedTests(unittest.TestCase):
         self.assertEqual(TRAINER_DEFAULTS["means_step_fraction"], 0.0032, "the default the contract must override")
 
 
+@unittest.skipUnless(TrainerConfig is not None, "torch is an optional training dependency")
 class DefaultBehaviourUnchangedTests(unittest.TestCase):
     def test_resolved_schedule_without_contract_keeps_parity_epoch_check(self) -> None:
         config = _contract_config()
@@ -327,6 +331,7 @@ class DefaultBehaviourUnchangedTests(unittest.TestCase):
         self.assertIn('"refine_scale2d_stop_iter": self.mcmc_refine_stop_iter,', source)
 
 
+@unittest.skipUnless(TrainerConfig is not None, "torch is an optional training dependency")
 class TrainerWiringTests(unittest.TestCase):
     def test_validate_resolves_and_signs_the_contract(self) -> None:
         config = TrainerConfig.from_dict(_trainer_dict())
@@ -455,6 +460,7 @@ class GatePolicyTests(unittest.TestCase):
         self.assertEqual(RESEARCH_SCHEDULE_CONTRACT_GATE_POLICY[RESEARCH_SCHEDULE_CONTRACT_V1], "not_applicable_refused_by_adaptive_growth_gate")
 
 
+@unittest.skipUnless(TrainerConfig is not None, "torch is an optional training dependency")
 class GeneratedArmTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
