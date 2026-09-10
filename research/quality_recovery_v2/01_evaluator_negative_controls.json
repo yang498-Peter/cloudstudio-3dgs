@@ -1,0 +1,87 @@
+{
+ "schema_version": 1,
+ "purpose": "An evaluator is only trusted after it has been shown to move when something known is broken and to stay still when nothing is. Each control below perturbs one thing, names the metric that must respond, and states the acceptance rule. Controls apply to protocol A unless stated; the same table must be re-run for protocol B before protocol B numbers are reported.",
+ "noise_floor": {
+  "definition": "repeat render of the identical parameters/view/background; max_abs and mean_abs of the image difference",
+  "source": "tools/roundtrip_checkpoint_ply.py controls.repeat_render",
+  "rule": "every control's mean_abs must exceed max(noise_floor.mean_abs, 1/255) by at least 3x; a control that does not clear this bound is inconclusive, not a pass"
+ },
+ "controls": [
+  {
+   "id": "sh_downgrade",
+   "perturbation": "render the same checkpoint with active_sh_degree=0 (DC only) against the full-degree render",
+   "metrics_that_must_respond": ["image_diff.mean_abs", "psnr_between_renders", "roi:glass_reflection masked PSNR delta", "sharpness.energy (should barely move)"],
+   "acceptance": "mean_abs > 3x noise floor overall; glass_reflection ROIs must show a larger PSNR drop than ground_detail ROIs (view-dependent surfaces are where SH>0 lives); if the two classes move equally the evaluator is not separating SH from texture",
+   "existing_tool": "roundtrip_checkpoint_ply.py controls.dc_only_sh (first view only, whole frame); sensitivity.dc_only_exceeds_roundtrip",
+   "status": "run by the existing tool; the ROI-class split is not"
+  },
+  {
+   "id": "camera_shift",
+   "perturbation": "translate c2w by 0.035 m along the camera x axis (roundtrip default --shift-m), and additionally 0.005 m and 0.10 m",
+   "metrics_that_must_respond": ["image_diff.mean_abs", "masked PSNR vs photo (must DROP)", "edge_spread_px on indoor_wall ROIs (must GROW)", "sharpness.agreement (must drop)", "sharpness.energy (may stay - this is why energy alone is not enough)"],
+   "acceptance": "monotone in shift magnitude; PSNR vs photo lower than the unshifted PSNR by more than the paired-seed noise band (research ledger: +/-0.16 dB p10 on this scene); 0.005 m must still register above the floor at the native face resolution or the metric is too coarse for pose error",
+   "existing_tool": "roundtrip_checkpoint_ply.py controls.camera_shift (0.035 m, first view, render-vs-render only; it does not compare to the photo)",
+   "status": "partially run; the photo-referenced and multi-magnitude form is new"
+  },
+  {
+   "id": "mask_swap",
+   "perturbation": "score view i's render against view i's photo but with view j's renderer mask (same face kind)",
+   "metrics_that_must_respond": ["masked PSNR (must change)", "foreground alpha p05 (must change)", "sharpness.energy/agreement (must change because the mask defines the pixel set)"],
+   "acceptance": "any masked metric that stays within the noise band under a foreign mask is not reading the mask it claims to; fail",
+   "existing_tool": "none",
+   "status": "not run"
+  },
+  {
+   "id": "pose_swap",
+   "perturbation": "render view i with view j's c2w (j the other camera of the same rig instant, then a frame 30 s away) and score against view i's photo",
+   "metrics_that_must_respond": ["masked PSNR (must drop far below any real run)", "sharpness.agreement (must collapse toward 0)", "lidar_range_mae (must grow)"],
+   "acceptance": "same-instant other-camera swap must drop PSNR by more than any arm-to-arm difference ever reported (>1 dB); the 30 s swap must drop agreement below 0.1. This is the control that proves 'held out' views are not interchangeable with their neighbours, and it must be run on the grouped split's validation blocks specifically",
+   "existing_tool": "none",
+   "status": "not run"
+  },
+  {
+   "id": "background_swap",
+   "perturbation": "render with a black constant background instead of the sky-dome/white backdrop",
+   "metrics_that_must_respond": ["image_diff.mean_abs (whole frame)", "sky_leak_fraction in eaves_foliage ROIs", "foreground masked PSNR (must NOT move beyond noise inside LiDAR-supported pixels)"],
+   "acceptance": "whole-frame diff > 3x floor (sky pixels change) AND foreground-masked PSNR within the noise band; if the foreground number moves, alpha is not saturated on real surfaces and the model is faking colour with the backdrop",
+   "existing_tool": "roundtrip_checkpoint_ply.py controls.background_change (whole frame only)",
+   "status": "partially run; the foreground-invariance half is new"
+  },
+  {
+   "id": "blur",
+   "perturbation": "Gaussian blur of the RENDER with sigma 1, 2, 4 px before scoring (photo untouched)",
+   "metrics_that_must_respond": ["sharpness.energy (must fall monotonically)", "edge_spread_px (must grow ~ sigma)", "lpips_local (must grow)", "masked PSNR (may RISE - documenting that PSNR rewards blur is the point)"],
+   "acceptance": "energy at sigma 2 below 0.7x unblurred; edge_spread within 30 percent of the injected sigma on indoor_wall ROIs; any evaluator whose headline metric improves under sigma 2 blur must not be used as a headline metric",
+   "existing_tool": "none",
+   "status": "not run"
+  },
+  {
+   "id": "noise",
+   "perturbation": "add zero-mean Gaussian noise (sigma 2/255, 8/255) to the RENDER",
+   "metrics_that_must_respond": ["sharpness.energy (must RISE - invented detail)", "sharpness.agreement (must FALL)", "masked PSNR (must fall)"],
+   "acceptance": "energy rises while agreement falls at 8/255; an evaluator reporting energy without agreement would call this an improvement, so the pair must be reported together (sharpness_metrics.py docstring case: 0.829 energy / 0.180 agreement)",
+   "existing_tool": "none",
+   "status": "not run"
+  },
+  {
+   "id": "brightness_only",
+   "perturbation": "multiply the RENDER by 0.9 and 1.1 (global gain), and separately add +0.05 offset",
+   "metrics_that_must_respond": ["masked PSNR (must fall)", "sharpness.energy (gain: unchanged within 2 percent - it is a ratio of gradients; offset: unchanged)", "sharpness.agreement (unchanged)", "edge_spread_px (unchanged)"],
+   "acceptance": "structure metrics invariant, intensity metrics not; this separates exposure/gain disagreement (per-tile exposure_gain_applied, learned exposure not applied at eval - see 01_eval_protocol.json) from geometry/blur. A PSNR drop with all structure metrics flat is an exposure problem, not a reconstruction problem",
+   "existing_tool": "none",
+   "status": "not run"
+  },
+  {
+   "id": "tensor_roundtrip",
+   "perturbation": "checkpoint -> PLY -> checkpoint",
+   "metrics_that_must_respond": ["none: max_abs per tensor <= 1e-6, render diff <= noise floor"],
+   "acceptance": "PASS only; this is the positive control that the export carries the model",
+   "existing_tool": "roundtrip_checkpoint_ply.py tensor_roundtrip + render_roundtrip",
+   "status": "run by the existing tool"
+  }
+ ],
+ "already_run_by_roundtrip_tool": ["sh_downgrade (whole frame, first view)", "camera_shift (0.035 m, render-vs-render)", "background_swap (whole frame)", "repeat_render noise floor", "tensor_roundtrip"],
+ "not_yet_run": ["mask_swap", "pose_swap", "blur", "noise", "brightness_only", "ROI-class resolution of any control", "photo-referenced camera_shift", "foreground-invariant background_swap", "any control under protocol B"],
+ "gpu_required": "every control renders through gsplat; none can run on this CPU-only host. The blur/noise/brightness controls can be pre-computed on saved render PNGs from an earlier GPU run, which is the recommended first step.",
+ "reporting_rule": "a control table is attached to every evaluator report; a metric absent from the table is reported as 'uncontrolled' next to its number"
+}
