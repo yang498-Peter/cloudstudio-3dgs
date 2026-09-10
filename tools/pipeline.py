@@ -1656,6 +1656,35 @@ def _ply_record(path: Path) -> dict[str, Any]:
     }
 
 
+def parse_tile_overrides(values: "Sequence[str]") -> dict[int, str]:
+    """`--tile 3=tile3_R1d_cap13m_20k` -> {3: "tile3_R1d_cap13m_20k"}."""
+    overrides: dict[int, str] = {}
+    for value in values:
+        tile_text, sep, arm = value.partition("=")
+        if not sep or not arm or not tile_text.strip().isdigit():
+            raise PipelineError(f"--tile expects TILE=ARM, got {value!r}")
+        tile = int(tile_text)
+        if tile in overrides:
+            raise PipelineError(f"--tile {tile} given twice")
+        overrides[tile] = arm
+    return overrides
+
+
+def resolve_delivery_tile_arms(cfg: PipelineConfig, tag: str, overrides: dict[int, str] | None) -> dict[int, str]:
+    """Tile -> arm name for a delivery.
+
+    A tile retried under a different config (an OOM at one cap, rerun at
+    another) is a new arm by the frozen-config rule, so the delivery names it
+    explicitly instead of trusting the tag pattern.
+    """
+    tile_arms = {tile: cfg.delivery_tile_arm(tag, tile) for tile in cfg.delivery_tiles}
+    for tile, arm in (overrides or {}).items():
+        if tile not in tile_arms:
+            raise PipelineError(f"tile override {tile}={arm}: tile {tile} is not one of the delivery tiles {cfg.delivery_tiles}")
+        tile_arms[tile] = arm
+    return tile_arms
+
+
 def deliver_steps(
     ctx: PipelineContext,
     tag: str,
@@ -1663,6 +1692,7 @@ def deliver_steps(
     *,
     publish: bool = False,
     score_threshold_variants: bool = False,
+    tile_arm_overrides: dict[int, str] | None = None,
 ) -> list[Step]:
     cfg = ctx.config
     out = cfg.delivery_dir(tag)
@@ -1691,7 +1721,7 @@ def deliver_steps(
     publish_dir = cfg.exports_dir if publish else cfg.candidate_exports_dir(tag)
     export_ply = publish_dir / cfg.delivery_ply_name(tag)
     export_sky = publish_dir / cfg.delivery_sky_name(tag)
-    tile_arms = {tile: cfg.delivery_tile_arm(tag, tile) for tile in cfg.delivery_tiles}
+    tile_arms = resolve_delivery_tile_arms(cfg, tag, tile_arm_overrides)
     steps: list[Step] = []
 
     def job() -> JobState:
@@ -2008,6 +2038,7 @@ def run_deliver(
     force: bool = False,
     publish: bool = False,
     score_threshold_variants: bool = False,
+    tile_arm_overrides: dict[int, str] | None = None,
 ) -> int:
     cfg = ctx.config
     if not ctx.arm_training_complete(tile0_arm):
@@ -2025,7 +2056,7 @@ def run_deliver(
     def status(line: str) -> None:
         ctx.status(f"[delivery {tag}] {line}", out / "pipeline_status.txt")
 
-    steps = deliver_steps(ctx, tag, tile0_arm, publish=publish, score_threshold_variants=score_threshold_variants)
+    steps = deliver_steps(ctx, tag, tile0_arm, publish=publish, score_threshold_variants=score_threshold_variants, tile_arm_overrides=tile_arm_overrides)
     reports = run_steps(steps, force=force, status=status)
     failed = [report for report in reports if report.action == "failed"]
     if failed:
@@ -2197,6 +2228,8 @@ def build_parser() -> argparse.ArgumentParser:
     deliver = sub.add_parser("deliver", help="four-tile delivery for a winning Tile_0 arm")
     deliver.add_argument("tag", help="delivery tag; outputs go to RUN/delivery_<tag>")
     deliver.add_argument("--tile0", required=True, metavar="ARM", help="Tile_0 arm whose latest.pt is merged")
+    deliver.add_argument("--tile", action="append", default=[], metavar="TILE=ARM",
+                         help="use ARM for one delivery tile instead of the tag pattern (a retried tile is a new arm)")
     deliver.add_argument("--force", action="store_true", help="redo every step even if its artifacts exist")
     deliver.add_argument("--dry-run", action="store_true", help="print which steps would run and exit")
     deliver.add_argument(
@@ -2277,13 +2310,15 @@ def main(argv: Sequence[str] | None = None) -> int:
             if args.dry_run:
                 _print_plan(
                     ctx,
-                    deliver_steps(ctx, args.tag, args.tile0, publish=args.publish, score_threshold_variants=args.score_threshold_variants),
+                    deliver_steps(ctx, args.tag, args.tile0, publish=args.publish, score_threshold_variants=args.score_threshold_variants,
+                                  tile_arm_overrides=parse_tile_overrides(args.tile)),
                     force=args.force,
                 )
                 return 0
             return run_deliver(
                 ctx, args.tag, args.tile0, force=args.force, publish=args.publish,
                 score_threshold_variants=args.score_threshold_variants,
+                tile_arm_overrides=parse_tile_overrides(args.tile),
             )
         if args.command == "queue":
             deliver = None
