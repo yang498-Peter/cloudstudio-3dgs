@@ -1,0 +1,6248 @@
+{
+  "schema_version": 1,
+  "kind": "cloudstudio_training_schedule_audit_collection",
+  "configs": [
+    {
+      "config_path": "run_configs\\house0305_tiles\\v9\\tile0_R1_range0_20k.json",
+      "config_as_run_path": "C:\\Peter\\3dgs-runs\\house0305_sop\\tile0_R1_range0_20k\\config_as_run.json",
+      "runtime_facts": {
+        "tile_view_count": 2132,
+        "tile_view_count_source": "C:\\Peter\\3dgs-runs\\house0305_sop\\tile_inputs_v9\\tile_inputs_manifest.json tile 0",
+        "training_view_count": 2132,
+        "training_view_count_source": "no holdout_views.json; training views == tile views",
+        "reference_scale_m": 0.007767821662127972,
+        "reference_scale_source": "C:\\Peter\\3dgs-runs\\house0305_sop\\tile0_R1_range0_20k\\surface_initialization_report.json:tangent_scale_median"
+      },
+      "repo": {
+        "schema_version": 1,
+        "kind": "cloudstudio_training_schedule_audit",
+        "run_id": "house0305-t0-R1-range0",
+        "steps": {
+          "max_steps": 42640,
+          "controlled_stop_after_steps": 20000,
+          "stop_step": 20000,
+          "last_executed_step": 19999,
+          "executed_fraction_of_max_steps": 0.46904315196998125,
+          "checkpoint_every": 5000
+        },
+        "views": {
+          "tile_view_count": 2132,
+          "training_view_count": 2132,
+          "holdout_configured": false,
+          "view_sampling_mode": "fisher_yates_without_replacement_per_epoch",
+          "epoch_length": 2132,
+          "configured_epochs": 20.0,
+          "executed_epochs": 9.380863039399625,
+          "average_visits_per_image": 9.380863039399625
+        },
+        "means_lr": {
+          "formula": "base * final_factor ** (step / max_steps); geometry x post_refine_geometry_lr_scale for step >= refine_stop_iter",
+          "denominator_max_steps": 42640,
+          "final_factor": 0.01,
+          "post_refine_geometry_lr_scale": 1.0,
+          "key_steps": {
+            "start": 0,
+            "refine_stop": 14000,
+            "last_executed": 19999,
+            "declared_final": 42640
+          },
+          "nominal": {
+            "base": 1.6e-05,
+            "start": 1.6e-05,
+            "refine_stop": 3.527439468334068e-06,
+            "last_executed": 1.8453577922362628e-06,
+            "declared_final": 1.6e-07
+          },
+          "nominal_last_executed_over_declared_final": 11.533486201476643,
+          "decay_fraction_completed": 0.46901969981238273,
+          "effective": {
+            "base": 2.4857029318809512e-05,
+            "start": 2.4857029318809512e-05,
+            "refine_stop": 5.480104142794111e-06,
+            "last_executed": 2.866882046581899e-06,
+            "declared_final": 2.485702931880951e-07
+          },
+          "effective_note": "optimizer uses reference_scale_m * means_step_fraction (scale_calibration.py), not learning_rates.means",
+          "means_step_fraction": 0.0032,
+          "reference_scale_m": 0.007767821662127972
+        },
+        "sh_degree": {
+          "color_model": "sh",
+          "sh_degree": 1,
+          "sh_degree_interval": 0,
+          "progressive": false,
+          "transitions": [],
+          "active_degree_at_last_executed_step": 1,
+          "full_degree_reached_before_stop": true
+        },
+        "lifecycle": {
+          "exact_mipmap_lifecycle": true,
+          "lifecycle_execution_order": "pre_optimizer_vendor",
+          "refine_start_iter": 500,
+          "refine_stop_iter": 14000,
+          "refine_every": 100,
+          "refine_scale2d_stop_iter": 14000,
+          "reset_every": 300,
+          "reset_opacity_cap": 0.2,
+          "reset_before_cull": true,
+          "prune_opa": 0.1,
+          "prune_opa_late": 0.05,
+          "prune_switch_step": 21320,
+          "post_refine_cull_every": null,
+          "post_refine_cull_until": null,
+          "relaxed_cull_when_no_growth": true,
+          "opacity_cull_policy": "immediate",
+          "cap_max": 15000000,
+          "grow_grad2d": 5e-05,
+          "absgrad": false
+        },
+        "event_summary": {
+          "grow": {
+            "count": 135,
+            "first_step": 500,
+            "last_step": 13900
+          },
+          "cull": {
+            "count": 135,
+            "first_step": 500,
+            "last_step": 13900
+          },
+          "reset": {
+            "count": 45,
+            "first_step": 600,
+            "last_step": 13800
+          },
+          "post_refine_cull": {
+            "count": 0
+          },
+          "late_threshold": {
+            "ever_applied": false,
+            "first_step": null,
+            "event_count": 0
+          }
+        },
+        "events": [
+          {
+            "step": 500,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 600,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": true,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 700,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 800,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 900,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": true,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 1000,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 1100,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 1200,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": true,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 1300,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 1400,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 1500,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": true,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 1600,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 1700,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 1800,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": true,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 1900,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 2000,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 2100,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": true,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 2200,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 2300,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 2400,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": true,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 2500,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 2600,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 2700,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": true,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 2800,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 2900,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 3000,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": true,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 3100,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 3200,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 3300,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": true,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 3400,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 3500,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 3600,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": true,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 3700,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 3800,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 3900,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": true,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 4000,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 4100,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 4200,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": true,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 4300,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 4400,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 4500,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": true,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 4600,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 4700,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 4800,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": true,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 4900,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 5000,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 5100,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": true,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 5200,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 5300,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 5400,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": true,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 5500,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 5600,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 5700,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": true,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 5800,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 5900,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 6000,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": true,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 6100,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 6200,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 6300,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": true,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 6400,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 6500,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 6600,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": true,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 6700,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 6800,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 6900,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": true,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 7000,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 7100,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 7200,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": true,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 7300,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 7400,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 7500,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": true,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 7600,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 7700,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 7800,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": true,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 7900,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 8000,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 8100,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": true,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 8200,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 8300,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 8400,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": true,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 8500,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 8600,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 8700,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": true,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 8800,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 8900,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 9000,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": true,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 9100,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 9200,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 9300,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": true,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 9400,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 9500,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 9600,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": true,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 9700,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 9800,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 9900,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": true,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 10000,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 10100,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 10200,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": true,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 10300,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 10400,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 10500,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": true,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 10600,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 10700,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 10800,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": true,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 10900,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 11000,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 11100,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": true,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 11200,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 11300,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 11400,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": true,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 11500,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 11600,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 11700,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": true,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 11800,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 11900,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 12000,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": true,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 12100,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 12200,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 12300,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": true,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 12400,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 12500,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 12600,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": true,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 12700,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 12800,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 12900,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": true,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 13000,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 13100,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 13200,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": true,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 13300,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 13400,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 13500,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": true,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 13600,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 13700,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 13800,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": true,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 13900,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          }
+        ],
+        "opportunity_after_last_birth": {
+          "last_growth_step": 13900,
+          "last_reset_step": 13800,
+          "optimizer_steps_after_last_growth": 6100,
+          "average_visits_per_image_after_last_growth": 2.8611632270168856,
+          "optimizer_steps_after_last_reset": 6200,
+          "average_visits_per_image_after_last_reset": 2.9080675422138835,
+          "means_lr_at_last_growth_nominal": 3.565742697135856e-06
+        },
+        "supervision_weights": {
+          "rgb_l1_weight": 0.6,
+          "rgb_ssim_weight": 0.4,
+          "rgb_ssim_mode": "local_gaussian",
+          "lidar_range_weight": 0.0,
+          "lidar_range_loss_mode": "robust_log_huber",
+          "lidar_alpha_weight": 0.1,
+          "lidar_alpha_target": 0.95,
+          "surface_alpha_floor_profile": true,
+          "da2_depth_weight": 0.15,
+          "da2_depth_space": "compressed",
+          "mesh_depth_weight": 0.0,
+          "mesh_normal_weight": 0.0,
+          "normal_alignment": {
+            "enabled": true,
+            "weight_align": 0.05,
+            "weight_flatten": 0.05,
+            "weight_tangent_isotropy": 0.1,
+            "weight_point_to_plane": 0.0
+          },
+          "geometry_regularization": {
+            "enabled": true,
+            "opacity_sparsity_weight": 0.0,
+            "scale_upper_weight": 0.0,
+            "anisotropy_weight": 0.01
+          },
+          "competitor_loss_schedule_enabled": false
+        },
+        "consistency_checks": [
+          {
+            "name": "refine_start_iter",
+            "kind": "duplicate_field",
+            "fields": {
+              "mcmc_refine_start_iter": 500,
+              "default_strategy.refine_start_iter": 500
+            },
+            "resolved": 500,
+            "ok": true,
+            "note": null
+          },
+          {
+            "name": "refine_stop_iter",
+            "kind": "duplicate_field",
+            "fields": {
+              "mcmc_refine_stop_iter": 14000,
+              "default_strategy.refine_stop_iter": 14000
+            },
+            "resolved": 14000,
+            "ok": true,
+            "note": null
+          },
+          {
+            "name": "refine_every",
+            "kind": "duplicate_field",
+            "fields": {
+              "mcmc_refine_every": 100,
+              "default_strategy.refine_every": 100
+            },
+            "resolved": 100,
+            "ok": true,
+            "note": null
+          },
+          {
+            "name": "refine_scale2d_stop_iter_matches_refine_stop",
+            "kind": "duplicate_field",
+            "fields": {
+              "default_strategy.refine_scale2d_stop_iter": 14000,
+              "mcmc_refine_stop_iter": 14000
+            },
+            "resolved": 14000,
+            "ok": true,
+            "note": null
+          },
+          {
+            "name": "prune_switch_step_is_half_max_steps",
+            "kind": "duplicate_field",
+            "fields": {
+              "default_strategy.prune_switch_step": 21320,
+              "max_steps // 2": 21320
+            },
+            "resolved": 21320,
+            "ok": true,
+            "note": "trainer enforces prune_switch_step == max_steps // 2 for exact_mipmap_lifecycle"
+          },
+          {
+            "name": "reset_every_matches_vendor_opacity_reset_profile",
+            "kind": "duplicate_field",
+            "fields": {
+              "default_strategy.reset_every": 300,
+              "profile[exact_every300]": 300
+            },
+            "resolved": 300,
+            "ok": true,
+            "note": null
+          },
+          {
+            "name": "opacity_thresholds_match_vendor_cull_warmup_profile",
+            "kind": "duplicate_field",
+            "fields": {
+              "default_strategy.prune_opa": 0.1,
+              "default_strategy.prune_opa_late": 0.05,
+              "profile[exact_0p10_to_0p05]": [
+                0.1,
+                0.05
+              ]
+            },
+            "resolved": [
+              0.1,
+              0.05
+            ],
+            "ok": true,
+            "note": "profile only enforced under lifecycle_execution_order=pre_optimizer_vendor"
+          },
+          {
+            "name": "max_steps_is_20_view_epochs",
+            "kind": "consistency",
+            "fields": {
+              "max_steps": 42640,
+              "20 * tile_view_count": 42640
+            },
+            "resolved": 42640,
+            "ok": true,
+            "note": "trainer pre-flight requirement for fisher_yates sampling with adaptive_growth"
+          },
+          {
+            "name": "controlled_stop_reaches_declared_final_lr",
+            "kind": "consistency",
+            "fields": {
+              "controlled_stop_after_steps": 20000,
+              "max_steps": 42640
+            },
+            "resolved": 20000,
+            "ok": false,
+            "note": "run stops with 11.53x the declared final means LR"
+          },
+          {
+            "name": "learning_rates_means_is_the_optimizer_base",
+            "kind": "consistency",
+            "fields": {
+              "learning_rates.means": 1.6e-05,
+              "metric_scale_calibration.means_step_fraction": 0.0032
+            },
+            "resolved": 2.4857029318809512e-05,
+            "ok": false,
+            "note": "optimizer uses reference_scale_m * means_step_fraction (scale_calibration.py), not learning_rates.means"
+          },
+          {
+            "name": "late_opacity_threshold_reachable",
+            "kind": "consistency",
+            "fields": {
+              "default_strategy.prune_switch_step": 21320,
+              "refine_stop_iter": 14000,
+              "stop_step": 20000,
+              "post_refine_cull_every": null
+            },
+            "resolved": null,
+            "ok": false,
+            "note": "lifecycle returns early for step >= refine_stop_iter, so prune_opa_late never applies"
+          },
+          {
+            "name": "refine_window_ends_before_stop",
+            "kind": "consistency",
+            "fields": {
+              "refine_stop_iter": 14000,
+              "stop_step": 20000
+            },
+            "resolved": 14000,
+            "ok": true,
+            "note": null
+          },
+          {
+            "name": "reset_cadence_aligns_with_refine_cadence",
+            "kind": "consistency",
+            "fields": {
+              "reset_every": 300,
+              "refine_every": 100
+            },
+            "resolved": 300,
+            "ok": true,
+            "note": "resets only fire on refine steps; a cadence that is not a multiple of refine_every silently drops resets"
+          }
+        ],
+        "mismatches": [
+          {
+            "name": "controlled_stop_reaches_declared_final_lr",
+            "kind": "consistency",
+            "fields": {
+              "controlled_stop_after_steps": 20000,
+              "max_steps": 42640
+            },
+            "resolved": 20000,
+            "ok": false,
+            "note": "run stops with 11.53x the declared final means LR"
+          },
+          {
+            "name": "learning_rates_means_is_the_optimizer_base",
+            "kind": "consistency",
+            "fields": {
+              "learning_rates.means": 1.6e-05,
+              "metric_scale_calibration.means_step_fraction": 0.0032
+            },
+            "resolved": 2.4857029318809512e-05,
+            "ok": false,
+            "note": "optimizer uses reference_scale_m * means_step_fraction (scale_calibration.py), not learning_rates.means"
+          },
+          {
+            "name": "late_opacity_threshold_reachable",
+            "kind": "consistency",
+            "fields": {
+              "default_strategy.prune_switch_step": 21320,
+              "refine_stop_iter": 14000,
+              "stop_step": 20000,
+              "post_refine_cull_every": null
+            },
+            "resolved": null,
+            "ok": false,
+            "note": "lifecycle returns early for step >= refine_stop_iter, so prune_opa_late never applies"
+          }
+        ]
+      },
+      "as_run": {
+        "schema_version": 1,
+        "kind": "cloudstudio_training_schedule_audit",
+        "run_id": "house0305-t0-R1-range0",
+        "steps": {
+          "max_steps": 42640,
+          "controlled_stop_after_steps": 20000,
+          "stop_step": 20000,
+          "last_executed_step": 19999,
+          "executed_fraction_of_max_steps": 0.46904315196998125,
+          "checkpoint_every": 5000
+        },
+        "views": {
+          "tile_view_count": 2132,
+          "training_view_count": 2132,
+          "holdout_configured": false,
+          "view_sampling_mode": "fisher_yates_without_replacement_per_epoch",
+          "epoch_length": 2132,
+          "configured_epochs": 20.0,
+          "executed_epochs": 9.380863039399625,
+          "average_visits_per_image": 9.380863039399625
+        },
+        "means_lr": {
+          "formula": "base * final_factor ** (step / max_steps); geometry x post_refine_geometry_lr_scale for step >= refine_stop_iter",
+          "denominator_max_steps": 42640,
+          "final_factor": 0.01,
+          "post_refine_geometry_lr_scale": 1.0,
+          "key_steps": {
+            "start": 0,
+            "refine_stop": 14000,
+            "last_executed": 19999,
+            "declared_final": 42640
+          },
+          "nominal": {
+            "base": 1.6e-05,
+            "start": 1.6e-05,
+            "refine_stop": 3.527439468334068e-06,
+            "last_executed": 1.8453577922362628e-06,
+            "declared_final": 1.6e-07
+          },
+          "nominal_last_executed_over_declared_final": 11.533486201476643,
+          "decay_fraction_completed": 0.46901969981238273,
+          "effective": {
+            "base": 2.4857029318809512e-05,
+            "start": 2.4857029318809512e-05,
+            "refine_stop": 5.480104142794111e-06,
+            "last_executed": 2.866882046581899e-06,
+            "declared_final": 2.485702931880951e-07
+          },
+          "effective_note": "optimizer uses reference_scale_m * means_step_fraction (scale_calibration.py), not learning_rates.means",
+          "means_step_fraction": 0.0032,
+          "reference_scale_m": 0.007767821662127972
+        },
+        "sh_degree": {
+          "color_model": "sh",
+          "sh_degree": 1,
+          "sh_degree_interval": 0,
+          "progressive": false,
+          "transitions": [],
+          "active_degree_at_last_executed_step": 1,
+          "full_degree_reached_before_stop": true
+        },
+        "lifecycle": {
+          "exact_mipmap_lifecycle": true,
+          "lifecycle_execution_order": "pre_optimizer_vendor",
+          "refine_start_iter": 500,
+          "refine_stop_iter": 14000,
+          "refine_every": 100,
+          "refine_scale2d_stop_iter": 14000,
+          "reset_every": 300,
+          "reset_opacity_cap": 0.2,
+          "reset_before_cull": true,
+          "prune_opa": 0.1,
+          "prune_opa_late": 0.05,
+          "prune_switch_step": 21320,
+          "post_refine_cull_every": null,
+          "post_refine_cull_until": null,
+          "relaxed_cull_when_no_growth": true,
+          "opacity_cull_policy": "immediate",
+          "cap_max": 15000000,
+          "grow_grad2d": 5e-05,
+          "absgrad": false
+        },
+        "event_summary": {
+          "grow": {
+            "count": 135,
+            "first_step": 500,
+            "last_step": 13900
+          },
+          "cull": {
+            "count": 135,
+            "first_step": 500,
+            "last_step": 13900
+          },
+          "reset": {
+            "count": 45,
+            "first_step": 600,
+            "last_step": 13800
+          },
+          "post_refine_cull": {
+            "count": 0
+          },
+          "late_threshold": {
+            "ever_applied": false,
+            "first_step": null,
+            "event_count": 0
+          }
+        },
+        "events": [
+          {
+            "step": 500,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 600,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": true,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 700,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 800,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 900,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": true,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 1000,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 1100,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 1200,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": true,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 1300,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 1400,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 1500,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": true,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 1600,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 1700,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 1800,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": true,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 1900,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 2000,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 2100,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": true,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 2200,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 2300,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 2400,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": true,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 2500,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 2600,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 2700,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": true,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 2800,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 2900,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 3000,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": true,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 3100,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 3200,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 3300,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": true,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 3400,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 3500,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 3600,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": true,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 3700,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 3800,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 3900,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": true,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 4000,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 4100,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 4200,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": true,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 4300,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 4400,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 4500,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": true,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 4600,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 4700,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 4800,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": true,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 4900,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 5000,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 5100,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": true,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 5200,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 5300,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 5400,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": true,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 5500,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 5600,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 5700,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": true,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 5800,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 5900,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 6000,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": true,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 6100,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 6200,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 6300,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": true,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 6400,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 6500,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 6600,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": true,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 6700,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 6800,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 6900,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": true,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 7000,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 7100,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 7200,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": true,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 7300,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 7400,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 7500,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": true,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 7600,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 7700,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 7800,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": true,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 7900,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 8000,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 8100,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": true,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 8200,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 8300,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 8400,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": true,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 8500,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 8600,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 8700,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": true,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 8800,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 8900,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 9000,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": true,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 9100,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 9200,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 9300,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": true,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 9400,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 9500,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 9600,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": true,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 9700,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 9800,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 9900,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": true,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 10000,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 10100,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 10200,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": true,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 10300,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 10400,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 10500,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": true,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 10600,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 10700,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 10800,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": true,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 10900,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 11000,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 11100,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": true,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 11200,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 11300,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 11400,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": true,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 11500,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 11600,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 11700,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": true,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 11800,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 11900,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 12000,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": true,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 12100,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 12200,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 12300,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": true,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 12400,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 12500,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 12600,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": true,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 12700,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 12800,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 12900,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": true,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 13000,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 13100,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 13200,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": true,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 13300,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 13400,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 13500,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": true,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 13600,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 13700,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 13800,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": true,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 13900,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          }
+        ],
+        "opportunity_after_last_birth": {
+          "last_growth_step": 13900,
+          "last_reset_step": 13800,
+          "optimizer_steps_after_last_growth": 6100,
+          "average_visits_per_image_after_last_growth": 2.8611632270168856,
+          "optimizer_steps_after_last_reset": 6200,
+          "average_visits_per_image_after_last_reset": 2.9080675422138835,
+          "means_lr_at_last_growth_nominal": 3.565742697135856e-06
+        },
+        "supervision_weights": {
+          "rgb_l1_weight": 0.6,
+          "rgb_ssim_weight": 0.4,
+          "rgb_ssim_mode": "local_gaussian",
+          "lidar_range_weight": 0.0,
+          "lidar_range_loss_mode": "robust_log_huber",
+          "lidar_alpha_weight": 0.1,
+          "lidar_alpha_target": 0.95,
+          "surface_alpha_floor_profile": true,
+          "da2_depth_weight": 0.15,
+          "da2_depth_space": "compressed",
+          "mesh_depth_weight": 0.0,
+          "mesh_normal_weight": 0.0,
+          "normal_alignment": {
+            "enabled": true,
+            "weight_align": 0.05,
+            "weight_flatten": 0.05,
+            "weight_tangent_isotropy": 0.1,
+            "weight_point_to_plane": 0.0
+          },
+          "geometry_regularization": {
+            "enabled": true,
+            "opacity_sparsity_weight": 0.0,
+            "scale_upper_weight": 0.0,
+            "anisotropy_weight": 0.01
+          },
+          "competitor_loss_schedule_enabled": false
+        },
+        "consistency_checks": [
+          {
+            "name": "refine_start_iter",
+            "kind": "duplicate_field",
+            "fields": {
+              "mcmc_refine_start_iter": 500,
+              "default_strategy.refine_start_iter": 500
+            },
+            "resolved": 500,
+            "ok": true,
+            "note": null
+          },
+          {
+            "name": "refine_stop_iter",
+            "kind": "duplicate_field",
+            "fields": {
+              "mcmc_refine_stop_iter": 14000,
+              "default_strategy.refine_stop_iter": 14000
+            },
+            "resolved": 14000,
+            "ok": true,
+            "note": null
+          },
+          {
+            "name": "refine_every",
+            "kind": "duplicate_field",
+            "fields": {
+              "mcmc_refine_every": 100,
+              "default_strategy.refine_every": 100
+            },
+            "resolved": 100,
+            "ok": true,
+            "note": null
+          },
+          {
+            "name": "refine_scale2d_stop_iter_matches_refine_stop",
+            "kind": "duplicate_field",
+            "fields": {
+              "default_strategy.refine_scale2d_stop_iter": 14000,
+              "mcmc_refine_stop_iter": 14000
+            },
+            "resolved": 14000,
+            "ok": true,
+            "note": null
+          },
+          {
+            "name": "prune_switch_step_is_half_max_steps",
+            "kind": "duplicate_field",
+            "fields": {
+              "default_strategy.prune_switch_step": 21320,
+              "max_steps // 2": 21320
+            },
+            "resolved": 21320,
+            "ok": true,
+            "note": "trainer enforces prune_switch_step == max_steps // 2 for exact_mipmap_lifecycle"
+          },
+          {
+            "name": "reset_every_matches_vendor_opacity_reset_profile",
+            "kind": "duplicate_field",
+            "fields": {
+              "default_strategy.reset_every": 300,
+              "profile[exact_every300]": 300
+            },
+            "resolved": 300,
+            "ok": true,
+            "note": null
+          },
+          {
+            "name": "opacity_thresholds_match_vendor_cull_warmup_profile",
+            "kind": "duplicate_field",
+            "fields": {
+              "default_strategy.prune_opa": 0.1,
+              "default_strategy.prune_opa_late": 0.05,
+              "profile[exact_0p10_to_0p05]": [
+                0.1,
+                0.05
+              ]
+            },
+            "resolved": [
+              0.1,
+              0.05
+            ],
+            "ok": true,
+            "note": "profile only enforced under lifecycle_execution_order=pre_optimizer_vendor"
+          },
+          {
+            "name": "max_steps_is_20_view_epochs",
+            "kind": "consistency",
+            "fields": {
+              "max_steps": 42640,
+              "20 * tile_view_count": 42640
+            },
+            "resolved": 42640,
+            "ok": true,
+            "note": "trainer pre-flight requirement for fisher_yates sampling with adaptive_growth"
+          },
+          {
+            "name": "controlled_stop_reaches_declared_final_lr",
+            "kind": "consistency",
+            "fields": {
+              "controlled_stop_after_steps": 20000,
+              "max_steps": 42640
+            },
+            "resolved": 20000,
+            "ok": false,
+            "note": "run stops with 11.53x the declared final means LR"
+          },
+          {
+            "name": "learning_rates_means_is_the_optimizer_base",
+            "kind": "consistency",
+            "fields": {
+              "learning_rates.means": 1.6e-05,
+              "metric_scale_calibration.means_step_fraction": 0.0032
+            },
+            "resolved": 2.4857029318809512e-05,
+            "ok": false,
+            "note": "optimizer uses reference_scale_m * means_step_fraction (scale_calibration.py), not learning_rates.means"
+          },
+          {
+            "name": "late_opacity_threshold_reachable",
+            "kind": "consistency",
+            "fields": {
+              "default_strategy.prune_switch_step": 21320,
+              "refine_stop_iter": 14000,
+              "stop_step": 20000,
+              "post_refine_cull_every": null
+            },
+            "resolved": null,
+            "ok": false,
+            "note": "lifecycle returns early for step >= refine_stop_iter, so prune_opa_late never applies"
+          },
+          {
+            "name": "refine_window_ends_before_stop",
+            "kind": "consistency",
+            "fields": {
+              "refine_stop_iter": 14000,
+              "stop_step": 20000
+            },
+            "resolved": 14000,
+            "ok": true,
+            "note": null
+          },
+          {
+            "name": "reset_cadence_aligns_with_refine_cadence",
+            "kind": "consistency",
+            "fields": {
+              "reset_every": 300,
+              "refine_every": 100
+            },
+            "resolved": 300,
+            "ok": true,
+            "note": "resets only fire on refine steps; a cadence that is not a multiple of refine_every silently drops resets"
+          }
+        ],
+        "mismatches": [
+          {
+            "name": "controlled_stop_reaches_declared_final_lr",
+            "kind": "consistency",
+            "fields": {
+              "controlled_stop_after_steps": 20000,
+              "max_steps": 42640
+            },
+            "resolved": 20000,
+            "ok": false,
+            "note": "run stops with 11.53x the declared final means LR"
+          },
+          {
+            "name": "learning_rates_means_is_the_optimizer_base",
+            "kind": "consistency",
+            "fields": {
+              "learning_rates.means": 1.6e-05,
+              "metric_scale_calibration.means_step_fraction": 0.0032
+            },
+            "resolved": 2.4857029318809512e-05,
+            "ok": false,
+            "note": "optimizer uses reference_scale_m * means_step_fraction (scale_calibration.py), not learning_rates.means"
+          },
+          {
+            "name": "late_opacity_threshold_reachable",
+            "kind": "consistency",
+            "fields": {
+              "default_strategy.prune_switch_step": 21320,
+              "refine_stop_iter": 14000,
+              "stop_step": 20000,
+              "post_refine_cull_every": null
+            },
+            "resolved": null,
+            "ok": false,
+            "note": "lifecycle returns early for step >= refine_stop_iter, so prune_opa_late never applies"
+          }
+        ]
+      },
+      "repo_vs_as_run_differences": []
+    },
+    {
+      "config_path": "run_configs\\house0305_tiles\\v9\\tile1_R1d_20k.json",
+      "config_as_run_path": "C:\\Peter\\3dgs-runs\\house0305_sop\\tile1_R1d_20k\\config_as_run.json",
+      "runtime_facts": {
+        "tile_view_count": 1829,
+        "tile_view_count_source": "C:\\Peter\\3dgs-runs\\house0305_sop\\tile_inputs_v9\\tile_inputs_manifest.json tile 1",
+        "training_view_count": 1829,
+        "training_view_count_source": "no holdout_views.json; training views == tile views",
+        "reference_scale_m": 0.0061790370382368565,
+        "reference_scale_source": "C:\\Peter\\3dgs-runs\\house0305_sop\\tile1_R1d_20k\\surface_initialization_report.json:tangent_scale_median"
+      },
+      "repo": {
+        "schema_version": 1,
+        "kind": "cloudstudio_training_schedule_audit",
+        "run_id": "house0305-t1-R1d",
+        "steps": {
+          "max_steps": 36580,
+          "controlled_stop_after_steps": 20000,
+          "stop_step": 20000,
+          "last_executed_step": 19999,
+          "executed_fraction_of_max_steps": 0.5467468562055768,
+          "checkpoint_every": 5000
+        },
+        "views": {
+          "tile_view_count": 1829,
+          "training_view_count": 1829,
+          "holdout_configured": false,
+          "view_sampling_mode": "fisher_yates_without_replacement_per_epoch",
+          "epoch_length": 1829,
+          "configured_epochs": 20.0,
+          "executed_epochs": 10.934937124111537,
+          "average_visits_per_image": 10.934937124111537
+        },
+        "means_lr": {
+          "formula": "base * final_factor ** (step / max_steps); geometry x post_refine_geometry_lr_scale for step >= refine_stop_iter",
+          "denominator_max_steps": 36580,
+          "final_factor": 0.01,
+          "post_refine_geometry_lr_scale": 1.0,
+          "key_steps": {
+            "start": 0,
+            "refine_stop": 14000,
+            "last_executed": 19999,
+            "declared_final": 36580
+          },
+          "nominal": {
+            "base": 1.6e-05,
+            "start": 1.6e-05,
+            "refine_stop": 2.7458346679262256e-06,
+            "last_executed": 1.2902710258640587e-06,
+            "declared_final": 1.6e-07
+          },
+          "nominal_last_executed_over_declared_final": 8.064193911650367,
+          "decay_fraction_completed": 0.5467195188627665,
+          "effective": {
+            "base": 1.9772918522357942e-05,
+            "start": 1.9772918522357942e-05,
+            "refine_stop": 3.39332282279819e-06,
+            "last_executed": 1.594526491635577e-06,
+            "declared_final": 1.9772918522357942e-07
+          },
+          "effective_note": "optimizer uses reference_scale_m * means_step_fraction (scale_calibration.py), not learning_rates.means",
+          "means_step_fraction": 0.0032,
+          "reference_scale_m": 0.0061790370382368565
+        },
+        "sh_degree": {
+          "color_model": "sh",
+          "sh_degree": 1,
+          "sh_degree_interval": 0,
+          "progressive": false,
+          "transitions": [],
+          "active_degree_at_last_executed_step": 1,
+          "full_degree_reached_before_stop": true
+        },
+        "lifecycle": {
+          "exact_mipmap_lifecycle": true,
+          "lifecycle_execution_order": "pre_optimizer_vendor",
+          "refine_start_iter": 500,
+          "refine_stop_iter": 14000,
+          "refine_every": 100,
+          "refine_scale2d_stop_iter": 14000,
+          "reset_every": 300,
+          "reset_opacity_cap": 0.2,
+          "reset_before_cull": true,
+          "prune_opa": 0.1,
+          "prune_opa_late": 0.05,
+          "prune_switch_step": 18290,
+          "post_refine_cull_every": null,
+          "post_refine_cull_until": null,
+          "relaxed_cull_when_no_growth": true,
+          "opacity_cull_policy": "immediate",
+          "cap_max": 15000000,
+          "grow_grad2d": 5e-05,
+          "absgrad": false
+        },
+        "event_summary": {
+          "grow": {
+            "count": 135,
+            "first_step": 500,
+            "last_step": 13900
+          },
+          "cull": {
+            "count": 135,
+            "first_step": 500,
+            "last_step": 13900
+          },
+          "reset": {
+            "count": 45,
+            "first_step": 600,
+            "last_step": 13800
+          },
+          "post_refine_cull": {
+            "count": 0
+          },
+          "late_threshold": {
+            "ever_applied": false,
+            "first_step": null,
+            "event_count": 0
+          }
+        },
+        "events": [
+          {
+            "step": 500,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 600,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": true,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 700,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 800,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 900,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": true,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 1000,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 1100,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 1200,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": true,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 1300,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 1400,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 1500,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": true,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 1600,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 1700,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 1800,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": true,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 1900,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 2000,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 2100,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": true,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 2200,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 2300,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 2400,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": true,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 2500,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 2600,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 2700,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": true,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 2800,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 2900,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 3000,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": true,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 3100,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 3200,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 3300,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": true,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 3400,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 3500,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 3600,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": true,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 3700,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 3800,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 3900,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": true,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 4000,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 4100,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 4200,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": true,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 4300,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 4400,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 4500,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": true,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 4600,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 4700,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 4800,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": true,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 4900,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 5000,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 5100,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": true,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 5200,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 5300,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 5400,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": true,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 5500,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 5600,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 5700,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": true,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 5800,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 5900,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 6000,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": true,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 6100,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 6200,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 6300,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": true,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 6400,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 6500,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 6600,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": true,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 6700,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 6800,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 6900,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": true,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 7000,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 7100,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 7200,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": true,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 7300,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 7400,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 7500,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": true,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 7600,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 7700,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 7800,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": true,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 7900,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 8000,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 8100,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": true,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 8200,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 8300,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 8400,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": true,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 8500,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 8600,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 8700,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": true,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 8800,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 8900,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 9000,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": true,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 9100,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 9200,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 9300,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": true,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 9400,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 9500,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 9600,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": true,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 9700,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 9800,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 9900,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": true,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 10000,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 10100,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 10200,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": true,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 10300,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 10400,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 10500,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": true,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 10600,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 10700,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 10800,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": true,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 10900,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 11000,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 11100,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": true,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 11200,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 11300,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 11400,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": true,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 11500,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 11600,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 11700,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": true,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 11800,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 11900,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 12000,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": true,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 12100,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 12200,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 12300,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": true,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 12400,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 12500,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 12600,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": true,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 12700,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 12800,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 12900,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": true,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 13000,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 13100,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 13200,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": true,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 13300,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 13400,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 13500,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": true,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 13600,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 13700,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 13800,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": true,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 13900,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          }
+        ],
+        "opportunity_after_last_birth": {
+          "last_growth_step": 13900,
+          "last_reset_step": 13800,
+          "optimizer_steps_after_last_growth": 6100,
+          "average_visits_per_image_after_last_growth": 3.3351558228540186,
+          "optimizer_steps_after_last_reset": 6200,
+          "average_visits_per_image_after_last_reset": 3.389830508474576,
+          "means_lr_at_last_growth_nominal": 2.780621346907831e-06
+        },
+        "supervision_weights": {
+          "rgb_l1_weight": 0.6,
+          "rgb_ssim_weight": 0.4,
+          "rgb_ssim_mode": "local_gaussian",
+          "lidar_range_weight": 0.0,
+          "lidar_range_loss_mode": "robust_log_huber",
+          "lidar_alpha_weight": 0.1,
+          "lidar_alpha_target": 0.95,
+          "surface_alpha_floor_profile": true,
+          "da2_depth_weight": 0.15,
+          "da2_depth_space": "compressed",
+          "mesh_depth_weight": 0.0,
+          "mesh_normal_weight": 0.0,
+          "normal_alignment": {
+            "enabled": true,
+            "weight_align": 0.05,
+            "weight_flatten": 0.05,
+            "weight_tangent_isotropy": 0.1,
+            "weight_point_to_plane": 0.0
+          },
+          "geometry_regularization": {
+            "enabled": true,
+            "opacity_sparsity_weight": 0.0,
+            "scale_upper_weight": 0.0,
+            "anisotropy_weight": 0.01
+          },
+          "competitor_loss_schedule_enabled": false
+        },
+        "consistency_checks": [
+          {
+            "name": "refine_start_iter",
+            "kind": "duplicate_field",
+            "fields": {
+              "mcmc_refine_start_iter": 500,
+              "default_strategy.refine_start_iter": 500
+            },
+            "resolved": 500,
+            "ok": true,
+            "note": null
+          },
+          {
+            "name": "refine_stop_iter",
+            "kind": "duplicate_field",
+            "fields": {
+              "mcmc_refine_stop_iter": 14000,
+              "default_strategy.refine_stop_iter": 14000
+            },
+            "resolved": 14000,
+            "ok": true,
+            "note": null
+          },
+          {
+            "name": "refine_every",
+            "kind": "duplicate_field",
+            "fields": {
+              "mcmc_refine_every": 100,
+              "default_strategy.refine_every": 100
+            },
+            "resolved": 100,
+            "ok": true,
+            "note": null
+          },
+          {
+            "name": "refine_scale2d_stop_iter_matches_refine_stop",
+            "kind": "duplicate_field",
+            "fields": {
+              "default_strategy.refine_scale2d_stop_iter": 14000,
+              "mcmc_refine_stop_iter": 14000
+            },
+            "resolved": 14000,
+            "ok": true,
+            "note": null
+          },
+          {
+            "name": "prune_switch_step_is_half_max_steps",
+            "kind": "duplicate_field",
+            "fields": {
+              "default_strategy.prune_switch_step": 18290,
+              "max_steps // 2": 18290
+            },
+            "resolved": 18290,
+            "ok": true,
+            "note": "trainer enforces prune_switch_step == max_steps // 2 for exact_mipmap_lifecycle"
+          },
+          {
+            "name": "reset_every_matches_vendor_opacity_reset_profile",
+            "kind": "duplicate_field",
+            "fields": {
+              "default_strategy.reset_every": 300,
+              "profile[exact_every300]": 300
+            },
+            "resolved": 300,
+            "ok": true,
+            "note": null
+          },
+          {
+            "name": "opacity_thresholds_match_vendor_cull_warmup_profile",
+            "kind": "duplicate_field",
+            "fields": {
+              "default_strategy.prune_opa": 0.1,
+              "default_strategy.prune_opa_late": 0.05,
+              "profile[exact_0p10_to_0p05]": [
+                0.1,
+                0.05
+              ]
+            },
+            "resolved": [
+              0.1,
+              0.05
+            ],
+            "ok": true,
+            "note": "profile only enforced under lifecycle_execution_order=pre_optimizer_vendor"
+          },
+          {
+            "name": "max_steps_is_20_view_epochs",
+            "kind": "consistency",
+            "fields": {
+              "max_steps": 36580,
+              "20 * tile_view_count": 36580
+            },
+            "resolved": 36580,
+            "ok": true,
+            "note": "trainer pre-flight requirement for fisher_yates sampling with adaptive_growth"
+          },
+          {
+            "name": "controlled_stop_reaches_declared_final_lr",
+            "kind": "consistency",
+            "fields": {
+              "controlled_stop_after_steps": 20000,
+              "max_steps": 36580
+            },
+            "resolved": 20000,
+            "ok": false,
+            "note": "run stops with 8.06x the declared final means LR"
+          },
+          {
+            "name": "learning_rates_means_is_the_optimizer_base",
+            "kind": "consistency",
+            "fields": {
+              "learning_rates.means": 1.6e-05,
+              "metric_scale_calibration.means_step_fraction": 0.0032
+            },
+            "resolved": 1.9772918522357942e-05,
+            "ok": false,
+            "note": "optimizer uses reference_scale_m * means_step_fraction (scale_calibration.py), not learning_rates.means"
+          },
+          {
+            "name": "late_opacity_threshold_reachable",
+            "kind": "consistency",
+            "fields": {
+              "default_strategy.prune_switch_step": 18290,
+              "refine_stop_iter": 14000,
+              "stop_step": 20000,
+              "post_refine_cull_every": null
+            },
+            "resolved": null,
+            "ok": false,
+            "note": "lifecycle returns early for step >= refine_stop_iter, so prune_opa_late never applies"
+          },
+          {
+            "name": "refine_window_ends_before_stop",
+            "kind": "consistency",
+            "fields": {
+              "refine_stop_iter": 14000,
+              "stop_step": 20000
+            },
+            "resolved": 14000,
+            "ok": true,
+            "note": null
+          },
+          {
+            "name": "reset_cadence_aligns_with_refine_cadence",
+            "kind": "consistency",
+            "fields": {
+              "reset_every": 300,
+              "refine_every": 100
+            },
+            "resolved": 300,
+            "ok": true,
+            "note": "resets only fire on refine steps; a cadence that is not a multiple of refine_every silently drops resets"
+          }
+        ],
+        "mismatches": [
+          {
+            "name": "controlled_stop_reaches_declared_final_lr",
+            "kind": "consistency",
+            "fields": {
+              "controlled_stop_after_steps": 20000,
+              "max_steps": 36580
+            },
+            "resolved": 20000,
+            "ok": false,
+            "note": "run stops with 8.06x the declared final means LR"
+          },
+          {
+            "name": "learning_rates_means_is_the_optimizer_base",
+            "kind": "consistency",
+            "fields": {
+              "learning_rates.means": 1.6e-05,
+              "metric_scale_calibration.means_step_fraction": 0.0032
+            },
+            "resolved": 1.9772918522357942e-05,
+            "ok": false,
+            "note": "optimizer uses reference_scale_m * means_step_fraction (scale_calibration.py), not learning_rates.means"
+          },
+          {
+            "name": "late_opacity_threshold_reachable",
+            "kind": "consistency",
+            "fields": {
+              "default_strategy.prune_switch_step": 18290,
+              "refine_stop_iter": 14000,
+              "stop_step": 20000,
+              "post_refine_cull_every": null
+            },
+            "resolved": null,
+            "ok": false,
+            "note": "lifecycle returns early for step >= refine_stop_iter, so prune_opa_late never applies"
+          }
+        ]
+      },
+      "as_run": {
+        "schema_version": 1,
+        "kind": "cloudstudio_training_schedule_audit",
+        "run_id": "house0305-t1-R1d",
+        "steps": {
+          "max_steps": 36580,
+          "controlled_stop_after_steps": 20000,
+          "stop_step": 20000,
+          "last_executed_step": 19999,
+          "executed_fraction_of_max_steps": 0.5467468562055768,
+          "checkpoint_every": 5000
+        },
+        "views": {
+          "tile_view_count": 1829,
+          "training_view_count": 1829,
+          "holdout_configured": false,
+          "view_sampling_mode": "fisher_yates_without_replacement_per_epoch",
+          "epoch_length": 1829,
+          "configured_epochs": 20.0,
+          "executed_epochs": 10.934937124111537,
+          "average_visits_per_image": 10.934937124111537
+        },
+        "means_lr": {
+          "formula": "base * final_factor ** (step / max_steps); geometry x post_refine_geometry_lr_scale for step >= refine_stop_iter",
+          "denominator_max_steps": 36580,
+          "final_factor": 0.01,
+          "post_refine_geometry_lr_scale": 1.0,
+          "key_steps": {
+            "start": 0,
+            "refine_stop": 14000,
+            "last_executed": 19999,
+            "declared_final": 36580
+          },
+          "nominal": {
+            "base": 1.6e-05,
+            "start": 1.6e-05,
+            "refine_stop": 2.7458346679262256e-06,
+            "last_executed": 1.2902710258640587e-06,
+            "declared_final": 1.6e-07
+          },
+          "nominal_last_executed_over_declared_final": 8.064193911650367,
+          "decay_fraction_completed": 0.5467195188627665,
+          "effective": {
+            "base": 1.9772918522357942e-05,
+            "start": 1.9772918522357942e-05,
+            "refine_stop": 3.39332282279819e-06,
+            "last_executed": 1.594526491635577e-06,
+            "declared_final": 1.9772918522357942e-07
+          },
+          "effective_note": "optimizer uses reference_scale_m * means_step_fraction (scale_calibration.py), not learning_rates.means",
+          "means_step_fraction": 0.0032,
+          "reference_scale_m": 0.0061790370382368565
+        },
+        "sh_degree": {
+          "color_model": "sh",
+          "sh_degree": 1,
+          "sh_degree_interval": 0,
+          "progressive": false,
+          "transitions": [],
+          "active_degree_at_last_executed_step": 1,
+          "full_degree_reached_before_stop": true
+        },
+        "lifecycle": {
+          "exact_mipmap_lifecycle": true,
+          "lifecycle_execution_order": "pre_optimizer_vendor",
+          "refine_start_iter": 500,
+          "refine_stop_iter": 14000,
+          "refine_every": 100,
+          "refine_scale2d_stop_iter": 14000,
+          "reset_every": 300,
+          "reset_opacity_cap": 0.2,
+          "reset_before_cull": true,
+          "prune_opa": 0.1,
+          "prune_opa_late": 0.05,
+          "prune_switch_step": 18290,
+          "post_refine_cull_every": null,
+          "post_refine_cull_until": null,
+          "relaxed_cull_when_no_growth": true,
+          "opacity_cull_policy": "immediate",
+          "cap_max": 15000000,
+          "grow_grad2d": 5e-05,
+          "absgrad": false
+        },
+        "event_summary": {
+          "grow": {
+            "count": 135,
+            "first_step": 500,
+            "last_step": 13900
+          },
+          "cull": {
+            "count": 135,
+            "first_step": 500,
+            "last_step": 13900
+          },
+          "reset": {
+            "count": 45,
+            "first_step": 600,
+            "last_step": 13800
+          },
+          "post_refine_cull": {
+            "count": 0
+          },
+          "late_threshold": {
+            "ever_applied": false,
+            "first_step": null,
+            "event_count": 0
+          }
+        },
+        "events": [
+          {
+            "step": 500,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 600,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": true,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 700,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 800,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 900,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": true,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 1000,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 1100,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 1200,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": true,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 1300,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 1400,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 1500,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": true,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 1600,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 1700,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 1800,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": true,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 1900,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 2000,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 2100,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": true,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 2200,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 2300,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 2400,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": true,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 2500,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 2600,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 2700,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": true,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 2800,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 2900,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 3000,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": true,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 3100,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 3200,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 3300,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": true,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 3400,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 3500,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 3600,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": true,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 3700,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 3800,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 3900,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": true,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 4000,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 4100,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 4200,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": true,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 4300,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 4400,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 4500,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": true,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 4600,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 4700,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 4800,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": true,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 4900,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 5000,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 5100,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": true,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 5200,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 5300,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 5400,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": true,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 5500,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 5600,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 5700,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": true,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 5800,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 5900,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 6000,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": true,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 6100,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 6200,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 6300,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": true,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 6400,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 6500,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 6600,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": true,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 6700,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 6800,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 6900,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": true,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 7000,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 7100,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 7200,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": true,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 7300,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 7400,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 7500,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": true,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 7600,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 7700,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 7800,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": true,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 7900,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 8000,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 8100,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": true,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 8200,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 8300,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 8400,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": true,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 8500,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 8600,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 8700,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": true,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 8800,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 8900,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 9000,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": true,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 9100,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 9200,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 9300,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": true,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 9400,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 9500,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 9600,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": true,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 9700,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 9800,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 9900,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": true,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 10000,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 10100,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 10200,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": true,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 10300,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 10400,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 10500,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": true,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 10600,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 10700,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 10800,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": true,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 10900,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 11000,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 11100,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": true,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 11200,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 11300,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 11400,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": true,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 11500,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 11600,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 11700,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": true,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 11800,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 11900,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 12000,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": true,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 12100,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 12200,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 12300,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": true,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 12400,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 12500,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 12600,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": true,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 12700,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 12800,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 12900,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": true,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 13000,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 13100,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 13200,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": true,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 13300,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 13400,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 13500,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": true,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 13600,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 13700,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 13800,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": true,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          },
+          {
+            "step": 13900,
+            "kind": "refine",
+            "grow": true,
+            "cull": true,
+            "reset": false,
+            "cull_opacity_threshold": 0.1,
+            "threshold_phase": "early"
+          }
+        ],
+        "opportunity_after_last_birth": {
+          "last_growth_step": 13900,
+          "last_reset_step": 13800,
+          "optimizer_steps_after_last_growth": 6100,
+          "average_visits_per_image_after_last_growth": 3.3351558228540186,
+          "optimizer_steps_after_last_reset": 6200,
+          "average_visits_per_image_after_last_reset": 3.389830508474576,
+          "means_lr_at_last_growth_nominal": 2.780621346907831e-06
+        },
+        "supervision_weights": {
+          "rgb_l1_weight": 0.6,
+          "rgb_ssim_weight": 0.4,
+          "rgb_ssim_mode": "local_gaussian",
+          "lidar_range_weight": 0.0,
+          "lidar_range_loss_mode": "robust_log_huber",
+          "lidar_alpha_weight": 0.1,
+          "lidar_alpha_target": 0.95,
+          "surface_alpha_floor_profile": true,
+          "da2_depth_weight": 0.15,
+          "da2_depth_space": "compressed",
+          "mesh_depth_weight": 0.0,
+          "mesh_normal_weight": 0.0,
+          "normal_alignment": {
+            "enabled": true,
+            "weight_align": 0.05,
+            "weight_flatten": 0.05,
+            "weight_tangent_isotropy": 0.1,
+            "weight_point_to_plane": 0.0
+          },
+          "geometry_regularization": {
+            "enabled": true,
+            "opacity_sparsity_weight": 0.0,
+            "scale_upper_weight": 0.0,
+            "anisotropy_weight": 0.01
+          },
+          "competitor_loss_schedule_enabled": false
+        },
+        "consistency_checks": [
+          {
+            "name": "refine_start_iter",
+            "kind": "duplicate_field",
+            "fields": {
+              "mcmc_refine_start_iter": 500,
+              "default_strategy.refine_start_iter": 500
+            },
+            "resolved": 500,
+            "ok": true,
+            "note": null
+          },
+          {
+            "name": "refine_stop_iter",
+            "kind": "duplicate_field",
+            "fields": {
+              "mcmc_refine_stop_iter": 14000,
+              "default_strategy.refine_stop_iter": 14000
+            },
+            "resolved": 14000,
+            "ok": true,
+            "note": null
+          },
+          {
+            "name": "refine_every",
+            "kind": "duplicate_field",
+            "fields": {
+              "mcmc_refine_every": 100,
+              "default_strategy.refine_every": 100
+            },
+            "resolved": 100,
+            "ok": true,
+            "note": null
+          },
+          {
+            "name": "refine_scale2d_stop_iter_matches_refine_stop",
+            "kind": "duplicate_field",
+            "fields": {
+              "default_strategy.refine_scale2d_stop_iter": 14000,
+              "mcmc_refine_stop_iter": 14000
+            },
+            "resolved": 14000,
+            "ok": true,
+            "note": null
+          },
+          {
+            "name": "prune_switch_step_is_half_max_steps",
+            "kind": "duplicate_field",
+            "fields": {
+              "default_strategy.prune_switch_step": 18290,
+              "max_steps // 2": 18290
+            },
+            "resolved": 18290,
+            "ok": true,
+            "note": "trainer enforces prune_switch_step == max_steps // 2 for exact_mipmap_lifecycle"
+          },
+          {
+            "name": "reset_every_matches_vendor_opacity_reset_profile",
+            "kind": "duplicate_field",
+            "fields": {
+              "default_strategy.reset_every": 300,
+              "profile[exact_every300]": 300
+            },
+            "resolved": 300,
+            "ok": true,
+            "note": null
+          },
+          {
+            "name": "opacity_thresholds_match_vendor_cull_warmup_profile",
+            "kind": "duplicate_field",
+            "fields": {
+              "default_strategy.prune_opa": 0.1,
+              "default_strategy.prune_opa_late": 0.05,
+              "profile[exact_0p10_to_0p05]": [
+                0.1,
+                0.05
+              ]
+            },
+            "resolved": [
+              0.1,
+              0.05
+            ],
+            "ok": true,
+            "note": "profile only enforced under lifecycle_execution_order=pre_optimizer_vendor"
+          },
+          {
+            "name": "max_steps_is_20_view_epochs",
+            "kind": "consistency",
+            "fields": {
+              "max_steps": 36580,
+              "20 * tile_view_count": 36580
+            },
+            "resolved": 36580,
+            "ok": true,
+            "note": "trainer pre-flight requirement for fisher_yates sampling with adaptive_growth"
+          },
+          {
+            "name": "controlled_stop_reaches_declared_final_lr",
+            "kind": "consistency",
+            "fields": {
+              "controlled_stop_after_steps": 20000,
+              "max_steps": 36580
+            },
+            "resolved": 20000,
+            "ok": false,
+            "note": "run stops with 8.06x the declared final means LR"
+          },
+          {
+            "name": "learning_rates_means_is_the_optimizer_base",
+            "kind": "consistency",
+            "fields": {
+              "learning_rates.means": 1.6e-05,
+              "metric_scale_calibration.means_step_fraction": 0.0032
+            },
+            "resolved": 1.9772918522357942e-05,
+            "ok": false,
+            "note": "optimizer uses reference_scale_m * means_step_fraction (scale_calibration.py), not learning_rates.means"
+          },
+          {
+            "name": "late_opacity_threshold_reachable",
+            "kind": "consistency",
+            "fields": {
+              "default_strategy.prune_switch_step": 18290,
+              "refine_stop_iter": 14000,
+              "stop_step": 20000,
+              "post_refine_cull_every": null
+            },
+            "resolved": null,
+            "ok": false,
+            "note": "lifecycle returns early for step >= refine_stop_iter, so prune_opa_late never applies"
+          },
+          {
+            "name": "refine_window_ends_before_stop",
+            "kind": "consistency",
+            "fields": {
+              "refine_stop_iter": 14000,
+              "stop_step": 20000
+            },
+            "resolved": 14000,
+            "ok": true,
+            "note": null
+          },
+          {
+            "name": "reset_cadence_aligns_with_refine_cadence",
+            "kind": "consistency",
+            "fields": {
+              "reset_every": 300,
+              "refine_every": 100
+            },
+            "resolved": 300,
+            "ok": true,
+            "note": "resets only fire on refine steps; a cadence that is not a multiple of refine_every silently drops resets"
+          }
+        ],
+        "mismatches": [
+          {
+            "name": "controlled_stop_reaches_declared_final_lr",
+            "kind": "consistency",
+            "fields": {
+              "controlled_stop_after_steps": 20000,
+              "max_steps": 36580
+            },
+            "resolved": 20000,
+            "ok": false,
+            "note": "run stops with 8.06x the declared final means LR"
+          },
+          {
+            "name": "learning_rates_means_is_the_optimizer_base",
+            "kind": "consistency",
+            "fields": {
+              "learning_rates.means": 1.6e-05,
+              "metric_scale_calibration.means_step_fraction": 0.0032
+            },
+            "resolved": 1.9772918522357942e-05,
+            "ok": false,
+            "note": "optimizer uses reference_scale_m * means_step_fraction (scale_calibration.py), not learning_rates.means"
+          },
+          {
+            "name": "late_opacity_threshold_reachable",
+            "kind": "consistency",
+            "fields": {
+              "default_strategy.prune_switch_step": 18290,
+              "refine_stop_iter": 14000,
+              "stop_step": 20000,
+              "post_refine_cull_every": null
+            },
+            "resolved": null,
+            "ok": false,
+            "note": "lifecycle returns early for step >= refine_stop_iter, so prune_opa_late never applies"
+          }
+        ]
+      },
+      "repo_vs_as_run_differences": []
+    }
+  ]
+}
