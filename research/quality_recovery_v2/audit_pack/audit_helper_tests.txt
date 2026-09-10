@@ -1,0 +1,13 @@
+test_duplicate_key_disagreement (test_audit_gs_config.AuditTests.test_duplicate_key_disagreement) ... ok
+test_inputs_not_mutated (test_audit_gs_config.AuditTests.test_inputs_not_mutated) ... ok
+test_invalid_horizon (test_audit_gs_config.AuditTests.test_invalid_horizon) ... ok
+test_normal_strategy_does_not_claim_exact_cull_semantics (test_audit_gs_config.AuditTests.test_normal_strategy_does_not_claim_exact_cull_semantics) ... ok
+test_post_refine_window (test_audit_gs_config.AuditTests.test_post_refine_window) ... ok
+test_real_20k_schedule (test_audit_gs_config.AuditTests.test_real_20k_schedule) ... ok
+test_tile0_schedule (test_audit_gs_config.AuditTests.test_tile0_schedule) ... ok
+test_tile1_unreachable_despite_stop_after_switch (test_audit_gs_config.AuditTests.test_tile1_unreachable_despite_stop_after_switch) ... ok
+
+----------------------------------------------------------------------
+Ran 8 tests in 0.000s
+
+OK
