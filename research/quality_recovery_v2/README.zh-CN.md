@@ -14,6 +14,6 @@
 | WP00 CLI 四个 P0（完成状态机、配置冻结、最终 PLY 评分、原子 GPU 租约）+ 故障注入测试 | 子任务进行中（`eng/cli-pipeline`） | — |
 | WP02 日程审计 | 子任务进行中 | `02_schedule_audit.json`、`02_schedule_events.csv` |
 | WP01 评估协议 / WP03 室内诊断 | 待 WP02 出结果后启动 | — |
-| WP10 house0614 子集 | 子集 manifest/masks/split 已生成（`eng` 分支 `eda063b`），运行手册子任务进行中；GPU 全链验证等 house0305 质量门 | — |
+| WP10 house0614 子集 | 子集 manifest/masks/split 已生成（`eng` 分支 `eda063b`）；运行手册已出（`eng` 分支 `docs/2026-09-11_house0614子集运行手册.zh-CN.md`：23 步、8 步需 GPU、磁盘 57–75 GB）。**阻塞**：C: 仅 50 GB 空闲；Mask R-CNN 权重不在本机；时间同步审计需要一个已训练 checkpoint（GPU）且工具无 CPU 渲染路径（`time_sync/BLOCKED.json`）。GPU 全链验证等 house0305 质量门 | — |
 
 台账 `../quality_recovery_v1/01_first_batch_ledger.zh-CN.md` 与 `02_research_loop_plan.zh-CN.md` 中"锐度涨过噪声带即赢、两赢即全场交付"的机械规则自本日起废止，判臂按任务书 §12 的多指标、室内外双控、配对/多 seed 口径执行。
