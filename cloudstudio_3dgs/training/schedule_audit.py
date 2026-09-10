@@ -79,6 +79,38 @@ VENDOR_CULL_THRESHOLDS = {
 # many complete view epochs (trainer.py, train_gsplat pre-flight).
 MIPMAP_EPOCHS_PER_RUN = 20
 
+# Research schedule contracts.  A config that names one opts out of the
+# competitor-parity horizon (``max_steps == 20 * views`` with a controlled stop
+# truncating it) and instead declares ``max_steps`` itself as the horizon H
+# that every linked schedule field is expressed against.  The trainer, the
+# audit CLI and the config generator all resolve the contract through
+# ``research_schedule_contract`` so they cannot disagree.  Absent key = the
+# existing parity behaviour, untouched.
+RESEARCH_SCHEDULE_CONTRACT_V1 = "research_rescaled_horizon_v1"
+RESEARCH_SCHEDULE_CONTRACTS = (RESEARCH_SCHEDULE_CONTRACT_V1,)
+# Growth must end early enough to leave a settling phase: by default the last
+# 30% of H sees no births, culls or resets.  A config may declare a different
+# ceiling under ``schedule_contract_fields.refine_stop_fraction_max``.
+RESEARCH_REFINE_STOP_MAX_FRACTION = 0.7
+# Fields a contract config may pre-declare under
+# ``schedule_contract_fields.resolved``; each declared value must equal the
+# value resolved from the config, so the declaration is verified, not trusted.
+RESEARCH_CONTRACT_DECLARABLE_FIELDS = (
+    "horizon_steps",
+    "refine_start_iter",
+    "refine_stop_iter",
+    "refine_every",
+    "refine_scale2d_stop_iter",
+    "prune_switch_step",
+    "reset_every",
+    "sh_degree",
+    "sh_degree_interval",
+    "means_lr_base",
+    "means_lr_final_factor",
+)
+# resolved_schedule checks the contract replaces with its own horizon rule.
+_RESEARCH_CONTRACT_REPLACED_CHECKS = frozenset({"max_steps_is_20_view_epochs"})
+
 
 def means_lr_for_step(
     base_learning_rate: float,
@@ -460,7 +492,24 @@ def resolved_schedule(
         "executed_epochs": None if not epoch_views else stop_step / epoch_views,
         "average_visits_per_image": None if not epoch_views else stop_step / epoch_views,
     }
-    if view_count:
+    if view_count and config.get("schedule_contract") is not None:
+        # A research contract replaces the 20-epoch rule with H = max_steps;
+        # the epoch count becomes a recorded fact instead of a requirement.
+        checks.append(
+            {
+                "name": "max_steps_is_contract_horizon",
+                "kind": "consistency",
+                "fields": {
+                    "max_steps": max_steps,
+                    "schedule_contract": config.get("schedule_contract"),
+                    "epochs_over_tile_views": max_steps / view_count,
+                },
+                "resolved": max_steps,
+                "ok": True,
+                "note": "schedule_contract declares max_steps as the horizon; the 20-epoch pre-flight rule does not apply",
+            }
+        )
+    elif view_count:
         checks.append(
             {
                 "name": "max_steps_is_20_view_epochs",
@@ -653,6 +702,268 @@ def resolved_schedule(
         "consistency_checks": checks,
         "mismatches": [check for check in checks if not check["ok"]],
     }
+
+
+def research_schedule_contract(
+    config: dict[str, Any],
+    *,
+    training_view_count: int | None = None,
+    holdout_view_count: int | None = None,
+) -> dict[str, Any]:
+    """Resolve a config's research schedule contract and list every violation.
+
+    Pure: the returned record carries the horizon H = ``max_steps``, every
+    linked field both in steps and as a fraction of H (or a multiple of
+    ``refine_every``), the lifecycle event summary, the checks inherited from
+    ``resolved_schedule`` and the contract's own checks.  ``violations`` is the
+    subset of checks that failed; ``validate_research_schedule_contract``
+    raises on any.  View counts are runtime facts the trainer supplies at
+    pre-flight; without them the epoch figures are ``None``.
+    """
+    name = config.get("schedule_contract")
+    if name is None:
+        raise ValueError("config declares no schedule_contract")
+    if name not in RESEARCH_SCHEDULE_CONTRACTS:
+        raise ValueError(
+            f"unknown schedule_contract {name!r}; expected one of {RESEARCH_SCHEDULE_CONTRACTS}"
+        )
+    declared = config.get("schedule_contract_fields")
+    if declared is None:
+        declared = {}
+    if not isinstance(declared, dict):
+        raise ValueError("schedule_contract_fields must be an object")
+    refine_stop_fraction_max = float(
+        _get(declared, "refine_stop_fraction_max", RESEARCH_REFINE_STOP_MAX_FRACTION)
+    )
+    if not 0.0 < refine_stop_fraction_max <= 1.0:
+        raise ValueError("schedule_contract_fields.refine_stop_fraction_max must be in (0, 1]")
+
+    horizon = int(config["max_steps"])
+    if horizon <= 0:
+        raise ValueError("schedule contract horizon (max_steps) must be positive")
+    schedule = resolved_schedule(
+        config,
+        None,
+        training_view_count=training_view_count,
+    )
+    lifecycle = schedule["lifecycle"]
+    strategy = dict(config.get("default_strategy") or {})
+    controlled_stop = config.get("controlled_stop_after_steps")
+    stop_step = schedule["steps"]["stop_step"]
+    refine_start = int(lifecycle["refine_start_iter"])
+    refine_stop = int(lifecycle["refine_stop_iter"])
+    refine_every = int(lifecycle["refine_every"])
+    scale2d_stop = lifecycle["refine_scale2d_stop_iter"]
+    prune_switch = lifecycle["prune_switch_step"]
+    reset_every = int(lifecycle["reset_every"])
+    sh = schedule["sh_degree"]
+    calibration = config.get("metric_scale_calibration")
+    means_lr = schedule["means_lr"]
+    summary = schedule["event_summary"]
+
+    checks: list[dict[str, Any]] = [
+        check
+        for check in schedule["consistency_checks"]
+        if check["name"] not in _RESEARCH_CONTRACT_REPLACED_CHECKS
+    ]
+
+    def contract_check(check_name: str, ok: bool, fields: dict[str, Any], note: str) -> None:
+        checks.append(
+            {
+                "name": check_name,
+                "kind": "research_schedule_contract",
+                "fields": fields,
+                "resolved": None,
+                "ok": bool(ok),
+                "note": note,
+            }
+        )
+
+    contract_check(
+        "stop_step_is_horizon",
+        controlled_stop is None or int(controlled_stop) == horizon,
+        {"max_steps": horizon, "controlled_stop_after_steps": controlled_stop},
+        "H = max_steps; a controlled stop may only restate H, never truncate it",
+    )
+    contract_check(
+        "refine_window_inside_horizon",
+        0 < refine_start < refine_stop <= refine_stop_fraction_max * horizon,
+        {
+            "refine_start_iter": refine_start,
+            "refine_stop_iter": refine_stop,
+            "refine_stop_fraction": refine_stop / horizon,
+            "refine_stop_fraction_max": refine_stop_fraction_max,
+        },
+        "growth window must sit inside (0, refine_stop_fraction_max * H] so a settling phase remains",
+    )
+    contract_check(
+        "refine_window_is_refine_every_aligned",
+        refine_every > 0 and refine_start % refine_every == 0 and refine_stop % refine_every == 0,
+        {"refine_start_iter": refine_start, "refine_stop_iter": refine_stop, "refine_every": refine_every},
+        "window bounds are multiples of refine_every so the event table has no partial interval",
+    )
+    contract_check(
+        "refine_scale2d_stop_declared_and_equal",
+        scale2d_stop is not None and int(scale2d_stop) == refine_stop,
+        {"default_strategy.refine_scale2d_stop_iter": scale2d_stop, "refine_stop_iter": refine_stop},
+        "screen-size split gate stops with the growth window (trainer expects equality)",
+    )
+    contract_check(
+        "late_threshold_declared",
+        prune_switch is not None and lifecycle["prune_opa_late"] is not None and 0 < int(prune_switch) < horizon,
+        {
+            "default_strategy.prune_switch_step": prune_switch,
+            "default_strategy.prune_opa_late": lifecycle["prune_opa_late"],
+            "prune_switch_fraction": None if prune_switch is None else int(prune_switch) / horizon,
+        },
+        "the late opacity threshold and its switch step must be declared as a fraction of H",
+    )
+    contract_check(
+        "reset_fires_inside_refine_window",
+        summary["reset"]["count"] >= 1,
+        {"reset_every": reset_every, "refine_window": [refine_start, refine_stop], "reset_count": summary["reset"]["count"]},
+        "reset_every is a multiple of refine_every (inherited check) and short enough to fire at least once",
+    )
+    contract_check(
+        "sh_full_degree_reached_before_horizon",
+        bool(sh["full_degree_reached_before_stop"]),
+        {
+            "sh_degree": sh["sh_degree"],
+            "sh_degree_interval": sh["sh_degree_interval"],
+            "sh_full_degree_step": sh["sh_degree"] * sh["sh_degree_interval"],
+            "sh_full_degree_fraction": sh["sh_degree"] * sh["sh_degree_interval"] / horizon,
+        },
+        "interval 0 disables the progressive schedule; otherwise the full degree must activate before H",
+    )
+    means_step_fraction_explicit_null = (
+        isinstance(calibration, dict)
+        and "means_step_fraction" in calibration
+        and calibration["means_step_fraction"] is None
+    )
+    contract_check(
+        "means_step_fraction_explicitly_null",
+        means_step_fraction_explicit_null,
+        {
+            "metric_scale_calibration.means_step_fraction": (
+                calibration.get("means_step_fraction", "<absent: trainer default>")
+                if isinstance(calibration, dict)
+                else "<absent: trainer default>"
+            ),
+            "learning_rates.means": means_lr["nominal"]["base"],
+        },
+        "learning_rates.means is the optimizer base only when the scale-calibration override is explicitly null",
+    )
+
+    resolved_fields = {
+        "horizon_steps": horizon,
+        "refine_start_iter": refine_start,
+        "refine_stop_iter": refine_stop,
+        "refine_every": refine_every,
+        "refine_scale2d_stop_iter": None if scale2d_stop is None else int(scale2d_stop),
+        "prune_switch_step": None if prune_switch is None else int(prune_switch),
+        "reset_every": reset_every,
+        "sh_degree": sh["sh_degree"],
+        "sh_degree_interval": sh["sh_degree_interval"],
+        "means_lr_base": means_lr["nominal"]["base"],
+        "means_lr_final_factor": means_lr["final_factor"],
+    }
+    declared_resolved = declared.get("resolved")
+    if declared_resolved is not None:
+        if not isinstance(declared_resolved, dict):
+            raise ValueError("schedule_contract_fields.resolved must be an object")
+        unknown = sorted(set(declared_resolved) - set(RESEARCH_CONTRACT_DECLARABLE_FIELDS))
+        if unknown:
+            raise ValueError(f"schedule_contract_fields.resolved has undeclarable keys: {unknown}")
+        disagreements = {
+            key: {"declared": declared_resolved[key], "resolved": resolved_fields[key]}
+            for key in declared_resolved
+            if declared_resolved[key] != resolved_fields[key]
+        }
+        contract_check(
+            "declared_fields_match_resolved",
+            not disagreements,
+            {"disagreements": disagreements},
+            "every pre-declared field must equal the value the config actually resolves to",
+        )
+
+    views: dict[str, Any] = {
+        "training_view_count": training_view_count,
+        "holdout_view_count": holdout_view_count,
+        "epochs_over_training_views": (
+            None if not training_view_count else horizon / training_view_count
+        ),
+        "epochs_over_tile_views": (
+            None
+            if not training_view_count
+            else horizon / (training_view_count + int(holdout_view_count or 0))
+        ),
+        "parity_20_epoch_max_steps": (
+            None
+            if not training_view_count
+            else MIPMAP_EPOCHS_PER_RUN * (training_view_count + int(holdout_view_count or 0))
+        ),
+    }
+    violations = [check for check in checks if not check["ok"]]
+    return {
+        "schema_version": 1,
+        "kind": "cloudstudio_research_schedule_contract",
+        "name": name,
+        "competitor_parity": False,
+        "horizon_steps": horizon,
+        "stop_step": stop_step,
+        "controlled_stop_after_steps": controlled_stop,
+        "resolved_fields": resolved_fields,
+        "horizon_fractions": {
+            "refine_start": refine_start / horizon,
+            "refine_stop": refine_stop / horizon,
+            "refine_stop_max": refine_stop_fraction_max,
+            "refine_scale2d_stop": None if scale2d_stop is None else int(scale2d_stop) / horizon,
+            "prune_switch": None if prune_switch is None else int(prune_switch) / horizon,
+            "reset_every": reset_every / horizon,
+            "sh_full_degree_step": sh["sh_degree"] * sh["sh_degree_interval"] / horizon,
+        },
+        "multiples_of_refine_every": {
+            "refine_start": refine_start / refine_every if refine_every else None,
+            "refine_stop": refine_stop / refine_every if refine_every else None,
+            "reset_every": reset_every / refine_every if refine_every else None,
+        },
+        "means_lr": {
+            "authoritative_field": "learning_rates.means",
+            "base": means_lr["nominal"]["base"],
+            "final_factor": means_lr["final_factor"],
+            "declared_final": means_lr["nominal"]["declared_final"],
+            "at_last_executed_step": means_lr["nominal"]["last_executed"],
+            "at_refine_stop": means_lr["nominal"]["refine_stop"],
+        },
+        "late_threshold": summary["late_threshold"],
+        "event_summary": summary,
+        "opportunity_after_last_birth": schedule["opportunity_after_last_birth"],
+        "views": views,
+        "checks": checks,
+        "violations": violations,
+    }
+
+
+def validate_research_schedule_contract(
+    config: dict[str, Any],
+    *,
+    training_view_count: int | None = None,
+    holdout_view_count: int | None = None,
+) -> dict[str, Any]:
+    """``research_schedule_contract`` that raises ``ValueError`` on any violation."""
+    record = research_schedule_contract(
+        config,
+        training_view_count=training_view_count,
+        holdout_view_count=holdout_view_count,
+    )
+    if record["violations"]:
+        summary = "; ".join(
+            f"{check['name']}: {check['fields']}" for check in record["violations"]
+        )
+        raise ValueError(
+            f"research schedule contract {record['name']!r} violated: {summary}"
+        )
+    return record
 
 
 def diff_configs(repo: Any, as_run: Any, prefix: str = "") -> list[dict[str, Any]]:

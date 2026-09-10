@@ -10,6 +10,7 @@ from typing import Any
 
 from cloudstudio_3dgs.data.manifest import canonical_json_bytes
 from cloudstudio_3dgs.training.default_strategy_adapter import DETAIL_SPLIT_SCALES_M
+from cloudstudio_3dgs.training.schedule_audit import RESEARCH_SCHEDULE_CONTRACTS
 from cloudstudio_3dgs.data.depth_cache import verify_depth_manifest
 from cloudstudio_3dgs.data.mono_depth import verify_mono_depth_manifest
 from cloudstudio_3dgs.data.renderer_masks import verify_renderer_mask_manifest
@@ -40,6 +41,18 @@ TRAINING_READY_STATUS = TRAINING_IMPLEMENTATION_READY_STATUS
 TRAINING_IMPLEMENTATION_CONTRACT_SCHEMA_VERSION = 1
 TRAINING_IMPLEMENTATION_CONTRACT_KIND = "mipmap_training_implementation_contract"
 MIPMAP_HIGH_TYPE2_PRESET = "lidar_first_face4_snow_v1"
+# Research schedule contracts (schedule_audit.research_schedule_contract) are
+# declared departures from the 20-epoch competitor-parity horizon. No gate
+# profile here describes them: the adaptive-growth gate signs parity arms
+# (its required_strategy fixes prune_switch_step to the parity half-horizon)
+# and refuses a config carrying a contract rather than signing it as parity;
+# the implementation/surface-frozen gates bind data identity, not the
+# schedule, and are unaffected. The trainer records the resolved contract in
+# its trainer contract, run manifest and schedule_contract_as_run.json.
+RESEARCH_SCHEDULE_CONTRACT_GATE_POLICY: dict[str, str] = {
+    name: "not_applicable_refused_by_adaptive_growth_gate"
+    for name in RESEARCH_SCHEDULE_CONTRACTS
+}
 
 
 def _sha256_file(path: Path) -> str:
@@ -1204,6 +1217,12 @@ def advance_adaptive_growth_gate(
         canonical_json_bytes(unsigned_config)
     ).hexdigest() != config_sha:
         raise ValueError("adaptive growth config signature mismatch")
+    if signed_config.get("schedule_contract") is not None:
+        raise ValueError(
+            "adaptive growth gate signs competitor-parity schedules only; "
+            f"schedule_contract {signed_config.get('schedule_contract')!r} is a "
+            "research departure and is recorded by the trainer, not this gate"
+        )
     warm_start_value = signed_config.get("warm_start_checkpoint")
     resume_value = signed_config.get("resume_checkpoint")
     if warm_start_value is not None and resume_value is not None:
