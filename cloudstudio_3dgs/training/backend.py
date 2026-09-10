@@ -9,6 +9,11 @@ import subprocess
 from pathlib import Path
 from typing import Any
 
+from cloudstudio_3dgs.training.densification_gradient import (
+    CriterionGradientSnapshot,
+    restore_criterion_gradients,
+    snapshot_criterion_gradients,
+)
 from cloudstudio_3dgs.training.runtime_evidence import (
     audit_loaded_mcmc_runtime,
     build_mcmc_step_event,
@@ -576,25 +581,13 @@ class GsplatBackend:
         OVERWRITES means2d.absgrad on each, so the only representation that
         survives both is a snapshot taken between the passes.
         """
-        means2d = info["means2d"]
-        self._criterion_grad = (
-            None if means2d.grad is None else means2d.grad.detach().clone()
+        # The fail-closed checks (absgrad strategy fed no absgrad, no gradient
+        # at all) live in the helper so the CPU unit tests pin this exact code.
+        snapshot = snapshot_criterion_gradients(
+            info["means2d"], require_absgrad=self.needs_absgrad
         )
-        absgrad = getattr(means2d, "absgrad", None)
-        self._criterion_absgrad = None if absgrad is None else absgrad.detach().clone()
-        if self.needs_absgrad and self._criterion_absgrad is None:
-            # Fail closed: an absgrad strategy fed no absgrad would silently
-            # score every Gaussian at zero and never densify.
-            raise RuntimeError(
-                "absgrad strategy is active but the photometric backward "
-                "produced no means2d.absgrad"
-            )
-        if self._criterion_grad is None and self._criterion_absgrad is None:
-            # Same silent-death mode for the plain-gradient criterion.
-            raise RuntimeError(
-                "photometric backward left no gradient on means2d; "
-                "was strategy_pre_step skipped?"
-            )
+        self._criterion_grad = snapshot.grad
+        self._criterion_absgrad = snapshot.absgrad
 
     def enforce_capacity(self, params: Any, step: int) -> None:
         """Abort a runaway densification instead of letting it OOM hours in.
@@ -617,10 +610,12 @@ class GsplatBackend:
 
     def strategy_restore_gradient(self, info: dict[str, Any]) -> None:
         """Put the photometric-only gradients back for the strategy to read."""
-        means2d = info["means2d"]
-        means2d.grad = self._criterion_grad
-        if self._criterion_absgrad is not None:
-            means2d.absgrad = self._criterion_absgrad
+        restore_criterion_gradients(
+            info["means2d"],
+            CriterionGradientSnapshot(
+                grad=self._criterion_grad, absgrad=self._criterion_absgrad
+            ),
+        )
         self._criterion_grad = None
         self._criterion_absgrad = None
 

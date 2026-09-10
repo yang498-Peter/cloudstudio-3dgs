@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Any, Mapping
 
 import numpy as np
@@ -86,39 +87,124 @@ def parameter_update_norms(
     return result
 
 
-def component_gradient_audit(
-    params: Mapping[str, Any], components: Mapping[str, Any | None]
-) -> dict[str, Any]:
-    """Measure per-loss geometry gradients and their pairwise cosine."""
+@dataclass(frozen=True)
+class AuditedLossTerm:
+    """One loss term as the optimizer sees it: raw value, weight, stage scale.
 
-    names = tuple(name for name in ("means", "scales", "quats", "opacities") if name in params)
+    ``raw`` is the unweighted differentiable scalar (None when the term is
+    absent this step). ``weight`` is the configured nominal weight and
+    ``stage_multiplier`` the schedule/phase envelope applied on top of it; the
+    gradient is measured on ``raw * weight * stage_multiplier``, i.e. on the
+    tensor that actually reaches the parameters.
+    """
+
+    raw: Any | None
+    weight: float = 1.0
+    stage_multiplier: float = 1.0
+
+    @property
+    def effective_weight(self) -> float:
+        return float(self.weight) * float(self.stage_multiplier)
+
+    @property
+    def present(self) -> bool:
+        return self.raw is not None and bool(getattr(self.raw, "requires_grad", False))
+
+    def weighted(self) -> Any | None:
+        if not self.present:
+            return None
+        return self.raw * self.effective_weight
+
+
+# Parameter-group order for the report: the geometry groups first (they are
+# what densification and the drift audit read), then whatever else the model
+# carries (colors / sh0 / shN / ...), in dictionary order.
+_PRIMARY_GROUPS = ("means", "scales", "quats", "opacities")
+MEANS2D_GROUP = "means2d"
+
+
+def _tensor_norms(gradient: Any) -> dict[str, float]:
+    detached = gradient.detach()
+    return {
+        "l2": float(detached.double().norm().cpu()),
+        "max_abs": 0.0 if detached.numel() == 0 else float(detached.abs().max().cpu()),
+    }
+
+
+def component_gradient_audit(
+    params: Mapping[str, Any],
+    components: Mapping[str, Any | None],
+    *,
+    means2d: Any | None = None,
+) -> dict[str, Any]:
+    """Measure per-loss gradients per parameter group and their pairwise cosine.
+
+    ``components`` maps a term name to either a differentiable scalar (legacy
+    form: already weighted), ``None`` (absent this step), or an
+    :class:`AuditedLossTerm`. When ``means2d`` (the projected-position tensor
+    the densification criterion reads) is given, every component also reports
+    its gradient norm there. A term with no autograd path to ``means2d`` - a
+    direct parameter regulariser, for instance - is reported as
+    ``not_applicable`` rather than as zero or as an error: zero would claim a
+    measurement that was never made.
+
+    A negative pairwise cosine proves the two objectives compete on that
+    group; it does not, on its own, say which supervision is wrong.
+    """
+
+    torch = __import__("torch")
+    names = tuple(name for name in _PRIMARY_GROUPS if name in params) + tuple(
+        name for name in params if name not in _PRIMARY_GROUPS
+    )
     parameters = [params[name] for name in names]
+    probe_means2d = means2d is not None and bool(
+        getattr(means2d, "requires_grad", False)
+    )
+    inputs = parameters + ([means2d] if probe_means2d else [])
+    report_groups = names + ((MEANS2D_GROUP,) if probe_means2d else ())
+
     gradients: dict[str, dict[str, Any | None]] = {}
+    terms: dict[str, dict[str, Any]] = {}
     raw: dict[str, tuple[Any | None, ...] | None] = {}
     for component, value in components.items():
-        if value is None or not getattr(value, "requires_grad", False):
-            gradients[component] = {name: None for name in names}
+        term = (
+            value
+            if isinstance(value, AuditedLossTerm)
+            else AuditedLossTerm(raw=value)
+        )
+        weighted = term.weighted()
+        record: dict[str, Any] = {
+            "present": term.present,
+            "raw_loss": None if term.raw is None else float(term.raw.detach().cpu()),
+            "weight": float(term.weight),
+            "stage_multiplier": float(term.stage_multiplier),
+            "effective_weight": term.effective_weight,
+            "weighted_loss": None if weighted is None else float(weighted.detach().cpu()),
+            "means2d_gradient": "absent" if not probe_means2d else "not_applicable",
+            "means2d_gradient_l2": None,
+        }
+        if weighted is None:
+            gradients[component] = {name: None for name in report_groups}
             raw[component] = None
+            terms[component] = record
             continue
-        values = __import__("torch").autograd.grad(
-            value,
-            parameters,
+        values = torch.autograd.grad(
+            weighted,
+            inputs,
             retain_graph=True,
             allow_unused=True,
         )
         raw[component] = values
-        gradients[component] = {}
-        for name, gradient in zip(names, values):
-            gradients[component][name] = (
-                None
-                if gradient is None
-                else {
-                    "l2": float(gradient.detach().double().norm().cpu()),
-                    "max_abs": 0.0
-                    if gradient.numel() == 0
-                    else float(gradient.detach().abs().max().cpu()),
-                }
-            )
+        gradients[component] = {
+            name: None if gradient is None else _tensor_norms(gradient)
+            for name, gradient in zip(report_groups, values)
+        }
+        if probe_means2d:
+            means2d_gradient = values[-1]
+            if means2d_gradient is not None:
+                record["means2d_gradient"] = "measured"
+                record["means2d_gradient_l2"] = gradients[component][MEANS2D_GROUP]["l2"]
+        terms[component] = record
 
     angles: dict[str, dict[str, float | None]] = {}
     component_names = list(components)
@@ -128,7 +214,7 @@ def component_gradient_audit(
             angles[pair] = {}
             left_values = raw[left]
             right_values = raw[right]
-            for index, name in enumerate(names):
+            for index, name in enumerate(report_groups):
                 if left_values is None or right_values is None:
                     angles[pair][name] = None
                     continue
@@ -147,4 +233,9 @@ def component_gradient_audit(
                     / (left_norm * right_norm)
                 )
                 angles[pair][name] = float(cosine.clamp(-1.0, 1.0).cpu())
-    return {"gradient_norms": gradients, "pairwise_cosine": angles}
+    return {
+        "gradient_norms": gradients,
+        "pairwise_cosine": angles,
+        "terms": terms,
+        "means2d_probed": probe_means2d,
+    }
