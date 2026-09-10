@@ -98,6 +98,10 @@ def main() -> int:
     parser.add_argument("--shift-m", type=float, default=0.035,
                         help="camera translation for the pose control")
     parser.add_argument("--background", type=float, nargs=3, default=(1.0, 1.0, 1.0))
+    from sharpness_metrics import HONOUR_RENDER_MODE_HELP
+
+    parser.add_argument("--honour-render-mode", action="store_true",
+                        help=HONOUR_RENDER_MODE_HELP)
     args = parser.parse_args()
 
     import torch
@@ -106,7 +110,7 @@ def main() -> int:
     from cloudstudio_3dgs.training.face_dataset import FaceCacheDataset
     from export_gaussian_ply import export_checkpoint_ply
     from import_gaussian_ply import import_ply
-    from sharpness_metrics import _load_backend
+    from sharpness_metrics import _load_backend, checkpoint_meta, resolve_render_spec
 
     args.output.mkdir(parents=True, exist_ok=True)
     raw = json.loads(args.config.read_text(encoding="utf-8"))
@@ -125,7 +129,9 @@ def main() -> int:
     # Stage 2: render both through one backend on the same views. The backend
     # takes the model's degree, not the config's: delivery_eval*.json said 0
     # and rendered every SH1 checkpoint DC-only until this control caught it.
-    backend, torch_mod = _load_backend(raw, sh_degree=sh_degree)
+    backend, torch_mod = _load_backend(
+        raw, sh_degree=sh_degree, honour_render_mode=args.honour_render_mode
+    )
     tile_views = None
     if raw.get("tile_inputs_manifest"):
         tile_inputs = json.loads(Path(raw["tile_inputs_manifest"]).read_text(encoding="utf-8"))
@@ -160,6 +166,16 @@ def main() -> int:
 
     ours = to_device(original)
     back = to_device(reimported)
+    render_spec = resolve_render_spec(
+        raw, original, backend,
+        camera_model="pinhole",
+        background_policy=(
+            "view_background_library" if backgrounds is not None else "constant"
+        ),
+        background_rgb=tuple(args.background),
+        tile_crops=tile_views is not None,
+        checkpoint_meta=checkpoint_meta(original_payload),
+    )
 
     def render(params, sample, *, background, degree, c2w=None):
         with torch.no_grad():
@@ -228,6 +244,7 @@ def main() -> int:
         "config": str(args.config),
         "gaussian_count": int(original["means"].shape[0]),
         "sh_degree": sh_degree,
+        "render_spec": render_spec.record(),
         "export": export_report,
         "import": import_report,
         "tensor_roundtrip": tensor_report,

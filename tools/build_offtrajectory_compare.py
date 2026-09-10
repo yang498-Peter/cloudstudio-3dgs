@@ -55,6 +55,14 @@ def build_parser() -> argparse.ArgumentParser:
         required=True,
         help="JSON carrying the rigid 'transform' that brings the reference into our frame",
     )
+    try:
+        from tools.sharpness_metrics import HONOUR_RENDER_MODE_HELP
+    except Exception:  # keep --help usable without the evaluator's dependencies
+        HONOUR_RENDER_MODE_HELP = (
+            "render pinhole faces with the config's pinhole_rasterize_mode / pinhole_with_ut "
+            "as the trainer set them; off by default so scores stay comparable"
+        )
+    parser.add_argument("--honour-render-mode", action="store_true", help=HONOUR_RENDER_MODE_HELP)
     return parser
 
 
@@ -68,13 +76,13 @@ def main(argv: list[str] | None = None) -> int:
     import torch
     from PIL import Image
     from cloudstudio_3dgs.training.face_dataset import FaceCacheDataset
-    from tools.sharpness_metrics import _load_backend
+    from tools.sharpness_metrics import _load_backend, checkpoint_meta, resolve_render_spec
     from tools.build_three_way_compare import _load_ply_gaussians
     from cloudstudio_3dgs.training.view_backgrounds import ViewBackgroundLibrary
 
     cfg = args.config; ckpt = args.checkpoint; out = args.output; frames = args.frames
     raw = json.loads(cfg.read_text(encoding="utf-8"))
-    backend, _ = _load_backend(raw)
+    backend, _ = _load_backend(raw, honour_render_mode=args.honour_render_mode)
     # A Tile config owns only its own views (and its background library only holds
     # those), so restrict the picks the same way the three-way compare does.
     tile_views = None
@@ -90,12 +98,19 @@ def main(argv: list[str] | None = None) -> int:
     device = raw.get("device", "cuda:0")
     backgrounds = ViewBackgroundLibrary(Path(raw["background_image_manifest"]), Path(raw["background_image_root"]), device=device) if raw.get("background_image_manifest") else None
     td = lambda p: {k: (v.to(device) if hasattr(v, "to") else v) for k, v in p.items()}
-    ours = td(torch.load(ckpt, map_location="cpu", weights_only=False)["params"])
+    payload = torch.load(ckpt, map_location="cpu", weights_only=False)
+    ours = td(payload["params"])
     align = json.loads(args.reference_alignment.read_text())
     ref = td(_load_ply_gaussians(args.reference_ply, np.asarray(align["transform"], dtype=np.float64)))
 
     # The eval config's sh_degree caps what render() may use; take the model's.
     backend.sh_degree = max(int(backend.sh_degree), _model_sh_degree(ours))
+    render_spec = resolve_render_spec(
+        raw, ours, backend, camera_model="pinhole",
+        background_policy="view_background_library" if backgrounds else "constant",
+        background_rgb=(1.0, 1.0, 1.0), tile_crops=tile_views is not None,
+        checkpoint_meta=checkpoint_meta(payload),
+    )
 
     def render(params, sample, c2w, bg):
         with torch.no_grad():
@@ -117,7 +132,12 @@ def main(argv: list[str] | None = None) -> int:
             name = f"offtraj_{order:02d}_{kind}_{s.image_id[:12]}.png"; Image.fromarray(strip).save(out / name)
             rows.append({"file": name, "image_id": s.image_id, "kind": kind, "psnr_ours_vs_reference": round(psnr, 2)})
             print(name, "ours-vs-ref PSNR", round(psnr, 2))
-    (out / "offtraj_summary.json").write_text(json.dumps(rows, indent=1), encoding="utf-8")
+    # The summary used to be a bare list of rows; it is now an object so the
+    # render spec can sit beside the scores (no reader depended on the list).
+    (out / "offtraj_summary.json").write_text(json.dumps({
+        "checkpoint": str(ckpt), "step": int(payload.get("step", 0)),
+        "render_spec": render_spec.record(), "frames": rows,
+    }, indent=1), encoding="utf-8")
     return 0
 
 

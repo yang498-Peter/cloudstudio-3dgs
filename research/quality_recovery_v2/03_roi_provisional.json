@@ -1,0 +1,25 @@
+{
+  "schema_version": 1,
+  "note": "PROVISIONAL WP03 regions. research/quality_recovery_v2/01_roi_registry.json did not exist when this was written; replace these boxes with the registry ROIs when it lands. Boxes are in the s1_local world frame of dataset_manifest 33f5f81419dd… (same frame as the tile initialization PLYs).",
+  "derivation_method": "For each region a face window (u0,v0,u1,v1 array indices) was chosen on one Face4 face of one training photo by eye from the R1d/R1 compare strips; every vis6 sparse LiDAR pixel in that window (face4_lidar_train_vis6/depth/<image>_<face>.npz) was unprojected through K_face/R_face and the parent c2w to world coordinates; the box is the 25-75 % (indoor) / 5-95 % (outdoor) range-percentile band of those points, clipped to the owning tile's training box and rounded to 0.1 m. Points for the audit are then drawn from the tile initialization PLY (LAS box crop, cloudstudio_3dgs/training/tile_inputs.py) inside the box.",
+  "regions": [
+    {
+      "label": "indoor_door_leaf_Tile_1",
+      "tile": "Tile_1",
+      "status": "provisional",
+      "world_box": [[6.0, -3.0, 1.6], [7.6, -1.6, 3.2]],
+      "derivation": "img_4e61dfa73359cbec43694b5d (left camera, capture_fraction 0.767, camera at (8.00,-4.81,1.90)) face yaw_minus_35, window u 680-1290 / v 700-1130 = the white door leaf with its 6-pane window seen in tile1_R1d_20k/compare/compare_02. vis6 LiDAR in the window: range p5/50/95 = 2.06/3.64/20.17 m; 25-75 % band gave x 5.14-7.41, y -2.68..0.60, z 1.45-3.15; the door leaf itself occupies x 6-8, y -3..-1.5, z 1.85-3.03 and the box is clipped to Tile_1 (y <= -1.52). 300k Tile_1 PLY points inside.",
+      "feature_for_crops": "door window frame / door edge",
+      "caveat": "a door leaf can move between passes; if the audit shows multi-modal ranges across views treat the region as a moving-object case, not a texture case"
+    },
+    {
+      "label": "outdoor_gravel_Tile_0",
+      "tile": "Tile_0",
+      "status": "provisional",
+      "world_box": [[7.5, -12.0, 0.2], [9.5, -10.0, 0.7]],
+      "derivation": "Gravel yard in front of the shed. img_d14ce879e6a132a7c0aaf3ea (left camera, capture_fraction 0.339, camera at (9.89,-10.97,1.74)) face pitch_down_56 shows this ground patch (tile0_R1_range0_20k/compare/compare_05). The first candidate patch from img_0013434 yaw_minus_35 (x 12.0-13.0, y -11.9..-11.2, z 0.39) lies in Tile_3 (x > 9.52), so the box was moved 3 m west to stay inside Tile_0. Tile_0 PLY inside: 94k points, z p1-p99 = 0.39-0.42 m (flat ground), mean RGB (158,151,148).",
+      "feature_for_crops": "gravel patch texture; shed roof edge (secondary, 30-40 m away)",
+      "caveat": "the operator's shadow crosses this patch in some frames (visible in compare_05); the shadow moves with the rig so it is a photometric-inconsistency source, not scene texture"
+    }
+  ]
+}

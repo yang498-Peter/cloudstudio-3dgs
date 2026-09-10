@@ -1,0 +1,893 @@
+{
+ "schema_version": 1,
+ "selection_basis": "Boxes were read from the original fisheye photos only (PIL downscale with an 8x8 pixel grid, 364 px per cell); no model render was consulted. Corners are rounded to roughly half a grid cell and should be treated as +/- 100 px.",
+ "coordinate_convention": "pixel coordinates in the ORIGINAL 2912x2912 fisheye image, x right, y down, [x0, y0, x1, y1] half-open; to use a box on a Face4 face, warp through the face plan (K_face, R_face) in the face cache manifest rather than cropping the face by these numbers",
+ "photo_root": "C:/Peter/testdata/S1/house0305/",
+ "classes": {
+  "indoor_wall_window_door_edge": {
+   "description": "Interior wall boards, window frames and door edges: long straight high-contrast edges under indoor lighting. A blurred or double edge here is the classic symptom of pose error and of low-opacity floaters in front of a wall.",
+   "metrics_expected_to_respond": [
+    "edge_spread_px",
+    "sharpness_energy",
+    "sharpness_agreement",
+    "masked_psnr"
+   ],
+   "parent_images": 5,
+   "rois": [
+    {
+     "image_id": "img_d83918b5d04a40dd88d821b9",
+     "path": "camera/left/1772726539852460800.jpg",
+     "camera": "left",
+     "rig_frame_id": "rig_0eb3371c1a9cf742253ad85d",
+     "timestamp_ns": 1772726539852460800,
+     "capture_fraction": 0.7217,
+     "environment_lidar_rule": "indoor",
+     "environment_photo": "indoor",
+     "split_v9": "train",
+     "battery_member_delivery_eval": false,
+     "tile_ids_v9": "0|1|3",
+     "box_xyxy": [
+      1900,
+      450,
+      2900,
+      1750
+     ],
+     "box_px": [
+      1000,
+      1300
+     ],
+     "description": "open glass door, its white frame and the door edge against the exterior",
+     "why_valid_probe": "long vertical edges of the door leaf plus the bright/dark boundary to outside; the edge must land in one place"
+    },
+    {
+     "image_id": "img_d4b43c110801599d2031af14",
+     "path": "camera/left/1772726544852805888.jpg",
+     "camera": "left",
+     "rig_frame_id": "rig_f332edb76f172fde248e998e",
+     "timestamp_ns": 1772726544852805888,
+     "capture_fraction": 0.7443,
+     "environment_lidar_rule": "indoor",
+     "environment_photo": "indoor",
+     "split_v9": "train",
+     "battery_member_delivery_eval": false,
+     "tile_ids_v9": "1|2|3",
+     "box_xyxy": [
+      2200,
+      450,
+      2900,
+      1450
+     ],
+     "box_px": [
+      700,
+      1000
+     ],
+     "description": "pine-board wall with a window opening, right side of the room",
+     "why_valid_probe": "horizontal board seams and the window frame give parallel edges at two scales"
+    },
+    {
+     "image_id": "img_1dbea71c3cf92e7aa3fc5df4",
+     "path": "camera/left/1772726549353015808.jpg",
+     "camera": "left",
+     "rig_frame_id": "rig_baf1f86f504d512866abf083",
+     "timestamp_ns": 1772726549353015808,
+     "capture_fraction": 0.7647,
+     "environment_lidar_rule": "indoor",
+     "environment_photo": "indoor",
+     "split_v9": "train",
+     "battery_member_delivery_eval": false,
+     "tile_ids_v9": "0|1|2|3",
+     "box_xyxy": [
+      800,
+      900,
+      1650,
+      1750
+     ],
+     "box_px": [
+      850,
+      850
+     ],
+     "description": "closed white door with the divided-light window grid",
+     "why_valid_probe": "regular grid of muntins: doubling or smearing shows immediately"
+    },
+    {
+     "image_id": "img_1de04bfc85f49dfaa0d0a760",
+     "path": "camera/left/1772726568354146048.jpg",
+     "camera": "left",
+     "rig_frame_id": "rig_9c5420c2dc4237861155c34a",
+     "timestamp_ns": 1772726568354146048,
+     "capture_fraction": 0.8507,
+     "environment_lidar_rule": "indoor",
+     "environment_photo": "indoor",
+     "split_v9": "train",
+     "battery_member_delivery_eval": false,
+     "tile_ids_v9": "0|1|2|3",
+     "box_xyxy": [
+      1100,
+      800,
+      1950,
+      2100
+     ],
+     "box_px": [
+      850,
+      1300
+     ],
+     "description": "door leaf and frame seen from the room side, hinge edge",
+     "why_valid_probe": "the vertical door edge spans 1300 px; blur is measurable along its whole length"
+    },
+    {
+     "image_id": "img_8d2055f12af7808e4abb1128",
+     "path": "camera/left/1772726572854402048.jpg",
+     "camera": "left",
+     "rig_frame_id": "rig_3df5a96cc5f425ee41796945",
+     "timestamp_ns": 1772726572854402048,
+     "capture_fraction": 0.871,
+     "environment_lidar_rule": "indoor",
+     "environment_photo": "indoor",
+     "split_v9": "train",
+     "battery_member_delivery_eval": false,
+     "tile_ids_v9": "0|1|3",
+     "box_xyxy": [
+      400,
+      400,
+      1450,
+      1500
+     ],
+     "box_px": [
+      1050,
+      1100
+     ],
+     "description": "pine-board wall in low light with framed pictures",
+     "why_valid_probe": "same wall class at the dark end of the exposure range; a probe that only works in bright light is not a probe"
+    }
+   ]
+  },
+  "ground_detail": {
+   "description": "Gravel, bare dirt and leaf litter under the camera: dense high-frequency texture with no dominant edge. This is where blur collapses into flat beige (the 2026-08-25 failure) and where invented speckle scores as detail.",
+   "metrics_expected_to_respond": [
+    "sharpness_energy",
+    "sharpness_agreement",
+    "lpips_local"
+   ],
+   "parent_images": 5,
+   "rois": [
+    {
+     "image_id": "img_2d4e13c684e33e7f3276e86f",
+     "path": "camera/left/1772726389343275008.jpg",
+     "camera": "left",
+     "rig_frame_id": "rig_98874fa67831ae4f824c36f3",
+     "timestamp_ns": 1772726389343275008,
+     "capture_fraction": 0.0407,
+     "environment_lidar_rule": "indoor",
+     "environment_photo": "outdoor",
+     "split_v9": "train",
+     "battery_member_delivery_eval": false,
+     "tile_ids_v9": "2|3",
+     "box_xyxy": [
+      900,
+      1700,
+      2000,
+      2500
+     ],
+     "box_px": [
+      1100,
+      800
+     ],
+     "description": "bare dirt with pebbles and twigs, sunlit, no shadow",
+     "why_valid_probe": "isotropic texture; energy ratio vs photo is the direct blur read"
+    },
+    {
+     "image_id": "img_a02ab4c174e113a279d4bed5",
+     "path": "camera/left/1772726441346475776.jpg",
+     "camera": "left",
+     "rig_frame_id": "rig_99601681f6fb3541aef8004d",
+     "timestamp_ns": 1772726441346475776,
+     "capture_fraction": 0.276,
+     "environment_lidar_rule": "outdoor",
+     "environment_photo": "outdoor",
+     "split_v9": "train",
+     "battery_member_delivery_eval": false,
+     "tile_ids_v9": "0|3",
+     "box_xyxy": [
+      800,
+      1900,
+      2100,
+      2700
+     ],
+     "box_px": [
+      1300,
+      800
+     ],
+     "description": "crushed-stone gravel in front of the carport",
+     "why_valid_probe": "uniform gravel; agreement separates resolved stones from speckle"
+    },
+    {
+     "image_id": "img_26f74b29376a0bc5d2f9d8b7",
+     "path": "camera/left/1772726478848760832.jpg",
+     "camera": "left",
+     "rig_frame_id": "rig_1e3881120caef06297f0f25e",
+     "timestamp_ns": 1772726478848760832,
+     "capture_fraction": 0.4457,
+     "environment_lidar_rule": "outdoor",
+     "environment_photo": "outdoor",
+     "split_v9": "train",
+     "battery_member_delivery_eval": false,
+     "tile_ids_v9": "0|1|2",
+     "box_xyxy": [
+      800,
+      1900,
+      2100,
+      2500
+     ],
+     "box_px": [
+      1300,
+      600
+     ],
+     "description": "gravel to dirt transition with fallen leaves",
+     "why_valid_probe": "two texture statistics in one box; the transition must stay where it is"
+    },
+    {
+     "image_id": "img_01a908951bd4dc96cb442bce",
+     "path": "camera/left/1772726586855243008.jpg",
+     "camera": "left",
+     "rig_frame_id": "rig_d14b49b462a068a3c9a4ed3a",
+     "timestamp_ns": 1772726586855243008,
+     "capture_fraction": 0.9344,
+     "environment_lidar_rule": "outdoor",
+     "environment_photo": "outdoor",
+     "split_v9": "train",
+     "battery_member_delivery_eval": false,
+     "tile_ids_v9": "0|1|2",
+     "box_xyxy": [
+      800,
+      1850,
+      1800,
+      2450
+     ],
+     "box_px": [
+      1000,
+      600
+     ],
+     "description": "gravel yard, left of the operator's shadow",
+     "why_valid_probe": "shadow excluded so the box is illumination-uniform"
+    },
+    {
+     "image_id": "img_b6ba74c87f4094b04dbb2f59",
+     "path": "camera/left/1772726601356112128.jpg",
+     "camera": "left",
+     "rig_frame_id": "rig_0deca8a3105fec84911844ac",
+     "timestamp_ns": 1772726601356112128,
+     "capture_fraction": 1.0,
+     "environment_lidar_rule": "stationary_unresolved",
+     "environment_photo": "outdoor",
+     "split_v9": "train",
+     "battery_member_delivery_eval": false,
+     "tile_ids_v9": "0|1|2",
+     "box_xyxy": [
+      300,
+      1850,
+      2500,
+      2700
+     ],
+     "box_px": [
+      2200,
+      850
+     ],
+     "description": "gravel close-up, camera set down near the ground",
+     "why_valid_probe": "largest stones per pixel in the set; a high-resolution reference for the scale at which gravel should resolve"
+    }
+   ]
+  },
+  "eaves_foliage": {
+   "description": "Roof eaves and bare tree branches against sky: thin dark structures on a bright background. Sky bleed, background swap and low alpha all show here first.",
+   "metrics_expected_to_respond": [
+    "edge_spread_px",
+    "sky_leak_fraction",
+    "alpha_p05_in_box",
+    "masked_psnr"
+   ],
+   "parent_images": 5,
+   "rois": [
+    {
+     "image_id": "img_2d4e13c684e33e7f3276e86f",
+     "path": "camera/left/1772726389343275008.jpg",
+     "camera": "left",
+     "rig_frame_id": "rig_98874fa67831ae4f824c36f3",
+     "timestamp_ns": 1772726389343275008,
+     "capture_fraction": 0.0407,
+     "environment_lidar_rule": "indoor",
+     "environment_photo": "outdoor",
+     "split_v9": "train",
+     "battery_member_delivery_eval": false,
+     "tile_ids_v9": "2|3",
+     "box_xyxy": [
+      2184,
+      500,
+      2912,
+      1000
+     ],
+     "box_px": [
+      728,
+      500
+     ],
+     "description": "carport eave and rafter ends against sky",
+     "why_valid_probe": "straight eave line plus rafter tails; a floater cloud around the eave is the known failure"
+    },
+    {
+     "image_id": "img_29d23f4728629b14cbc9d1c0",
+     "path": "camera/left/1772726403844177920.jpg",
+     "camera": "left",
+     "rig_frame_id": "rig_950ebaef281cbcf80c72a826",
+     "timestamp_ns": 1772726403844177920,
+     "capture_fraction": 0.1063,
+     "environment_lidar_rule": "outdoor",
+     "environment_photo": "outdoor",
+     "split_v9": "train",
+     "battery_member_delivery_eval": false,
+     "tile_ids_v9": "2|3",
+     "box_xyxy": [
+      100,
+      400,
+      1700,
+      1500
+     ],
+     "box_px": [
+      1600,
+      1100
+     ],
+     "description": "leafless hardwoods, dense branch network",
+     "why_valid_probe": "thin branches are lost first under blur and first invented under speckle"
+    },
+    {
+     "image_id": "img_9d11a004e9202f7dd1430bdc",
+     "path": "camera/left/1772726422345299968.jpg",
+     "camera": "left",
+     "rig_frame_id": "rig_a269c1f9931fa5f01c0c3525",
+     "timestamp_ns": 1772726422345299968,
+     "capture_fraction": 0.19,
+     "environment_lidar_rule": "outdoor",
+     "environment_photo": "outdoor",
+     "split_v9": "train",
+     "battery_member_delivery_eval": false,
+     "tile_ids_v9": "0|1|3",
+     "box_xyxy": [
+      1820,
+      400,
+      2548,
+      1100
+     ],
+     "box_px": [
+      728,
+      700
+     ],
+     "description": "shed roof edge and gable against sky, sun off-axis",
+     "why_valid_probe": "eave with strong backlight; tests background compositing near saturated sky"
+    },
+    {
+     "image_id": "img_c1e12f0629dd3d406e51c28a",
+     "path": "camera/left/1772726591855539968.jpg",
+     "camera": "left",
+     "rig_frame_id": "rig_ff90e80b9b81ea3540b051b3",
+     "timestamp_ns": 1772726591855539968,
+     "capture_fraction": 0.957,
+     "environment_lidar_rule": "outdoor",
+     "environment_photo": "outdoor",
+     "split_v9": "train",
+     "battery_member_delivery_eval": false,
+     "tile_ids_v9": "0|1|2",
+     "box_xyxy": [
+      1820,
+      750,
+      2900,
+      1350
+     ],
+     "box_px": [
+      1080,
+      600
+     ],
+     "description": "house porch roof and eave with posts",
+     "why_valid_probe": "eave plus vertical posts; posts must stay straight"
+    },
+    {
+     "image_id": "img_1ebc50fda2a6ee2870ef2919",
+     "path": "camera/left/1772726431845929984.jpg",
+     "camera": "left",
+     "rig_frame_id": "rig_9b30bbe8a1c651d62230aada",
+     "timestamp_ns": 1772726431845929984,
+     "capture_fraction": 0.233,
+     "environment_lidar_rule": "outdoor",
+     "environment_photo": "outdoor",
+     "split_v9": "train",
+     "battery_member_delivery_eval": false,
+     "tile_ids_v9": "0|3",
+     "box_xyxy": [
+      1100,
+      100,
+      1700,
+      1500
+     ],
+     "box_px": [
+      600,
+      1400
+     ],
+     "description": "single large oak trunk and crown overhead",
+     "why_valid_probe": "trunk gives a wide edge, crown gives thin ones, in the same box"
+    }
+   ]
+  },
+  "glass_reflection": {
+   "description": "Glass panes with reflections: view-dependent appearance that only SH degree >= 1 can model. SH downgrade must be visible here and nowhere else as strongly.",
+   "metrics_expected_to_respond": [
+    "sh_downgrade_delta_psnr_in_box",
+    "view_consistency_psnr_delta",
+    "masked_psnr"
+   ],
+   "parent_images": 5,
+   "rois": [
+    {
+     "image_id": "img_d83918b5d04a40dd88d821b9",
+     "path": "camera/left/1772726539852460800.jpg",
+     "camera": "left",
+     "rig_frame_id": "rig_0eb3371c1a9cf742253ad85d",
+     "timestamp_ns": 1772726539852460800,
+     "capture_fraction": 0.7217,
+     "environment_lidar_rule": "indoor",
+     "environment_photo": "indoor",
+     "split_v9": "train",
+     "battery_member_delivery_eval": false,
+     "tile_ids_v9": "0|1|3",
+     "box_xyxy": [
+      2200,
+      450,
+      2800,
+      1300
+     ],
+     "box_px": [
+      600,
+      850
+     ],
+     "description": "glass panes of the open door reflecting the room",
+     "why_valid_probe": "reflection content differs between the two cameras of the same rig instant"
+    },
+    {
+     "image_id": "img_d4b43c110801599d2031af14",
+     "path": "camera/left/1772726544852805888.jpg",
+     "camera": "left",
+     "rig_frame_id": "rig_f332edb76f172fde248e998e",
+     "timestamp_ns": 1772726544852805888,
+     "capture_fraction": 0.7443,
+     "environment_lidar_rule": "indoor",
+     "environment_photo": "indoor",
+     "split_v9": "train",
+     "battery_member_delivery_eval": false,
+     "tile_ids_v9": "1|2|3",
+     "box_xyxy": [
+      300,
+      1250,
+      1250,
+      2100
+     ],
+     "box_px": [
+      950,
+      850
+     ],
+     "description": "divided-light glass door with exterior seen through and reflected",
+     "why_valid_probe": "transmission plus reflection in one pane"
+    },
+    {
+     "image_id": "img_e1eba2f46bf75c270241b3a7",
+     "path": "camera/left/1772726525851614976.jpg",
+     "camera": "left",
+     "rig_frame_id": "rig_f78e34acd123753db7989244",
+     "timestamp_ns": 1772726525851614976,
+     "capture_fraction": 0.6584,
+     "environment_lidar_rule": "indoor",
+     "environment_photo": "covered",
+     "split_v9": "train",
+     "battery_member_delivery_eval": false,
+     "tile_ids_v9": "1|2|3",
+     "box_xyxy": [
+      1200,
+      800,
+      2000,
+      1300
+     ],
+     "box_px": [
+      800,
+      500
+     ],
+     "description": "Jeep windshield and side glass under the carport",
+     "why_valid_probe": "curved glass reflecting the roof; strongly view dependent"
+    },
+    {
+     "image_id": "img_2f10fcf8c5f46899fd84dae9",
+     "path": "camera/left/1772726506850470144.jpg",
+     "camera": "left",
+     "rig_frame_id": "rig_c0ac69772678faceae0ef9a2",
+     "timestamp_ns": 1772726506850470144,
+     "capture_fraction": 0.5724,
+     "environment_lidar_rule": "covered",
+     "environment_photo": "outdoor",
+     "split_v9": "train",
+     "battery_member_delivery_eval": false,
+     "tile_ids_v9": "0|1|2|3",
+     "box_xyxy": [
+      2200,
+      1100,
+      2600,
+      1400
+     ],
+     "box_px": [
+      400,
+      300
+     ],
+     "description": "mini-truck windshield in sun",
+     "why_valid_probe": "small, bright specular patch; the box is deliberately tight"
+    },
+    {
+     "image_id": "img_1a265d9e130f6059a7c5e9a6",
+     "path": "camera/left/1772726558853588992.jpg",
+     "camera": "left",
+     "rig_frame_id": "rig_b523206b5c02312cc70e1083",
+     "timestamp_ns": 1772726558853588992,
+     "capture_fraction": 0.8077,
+     "environment_lidar_rule": "indoor",
+     "environment_photo": "indoor",
+     "split_v9": "train",
+     "battery_member_delivery_eval": false,
+     "tile_ids_v9": "1|2|3",
+     "box_xyxy": [
+      2200,
+      750,
+      2900,
+      1350
+     ],
+     "box_px": [
+      700,
+      600
+     ],
+     "description": "computer monitors with a bright screen image",
+     "why_valid_probe": "emissive plus reflective flat panels; DC-only rendering flattens them"
+    }
+   ]
+  },
+  "seams_periodic": {
+   "description": "Periodic seams: corrugated roof ribs, door-mat ribs, floor planks and ceiling panel joins. The scene has no ceramic tile; these are the regular seam structures available. Aliasing, moire and rib doubling are the failure modes.",
+   "metrics_expected_to_respond": [
+    "seam_period_error",
+    "edge_spread_px",
+    "sharpness_agreement"
+   ],
+   "parent_images": 5,
+   "rois": [
+    {
+     "image_id": "img_662459e85d0d8812f926ab99",
+     "path": "camera/left/1772726459847571968.jpg",
+     "camera": "left",
+     "rig_frame_id": "rig_61551f3cbc92909dad638c73",
+     "timestamp_ns": 1772726459847571968,
+     "capture_fraction": 0.3597,
+     "environment_lidar_rule": "covered",
+     "environment_photo": "covered",
+     "split_v9": "train",
+     "battery_member_delivery_eval": false,
+     "tile_ids_v9": "0|1|2|3",
+     "box_xyxy": [
+      100,
+      100,
+      2100,
+      1100
+     ],
+     "box_px": [
+      2000,
+      1000
+     ],
+     "description": "corrugated carport roof underside with purlins",
+     "why_valid_probe": "rib period is constant in the world; a wrong period or doubled ribs is unambiguous"
+    },
+    {
+     "image_id": "img_dbd584d2499ddb3864fbca49",
+     "path": "camera/left/1772726464847891968.jpg",
+     "camera": "left",
+     "rig_frame_id": "rig_683015a639244cc715d9d250",
+     "timestamp_ns": 1772726464847891968,
+     "capture_fraction": 0.3824,
+     "environment_lidar_rule": "indoor",
+     "environment_photo": "covered",
+     "split_v9": "train",
+     "battery_member_delivery_eval": false,
+     "tile_ids_v9": "0|3",
+     "box_xyxy": [
+      100,
+      100,
+      2100,
+      1100
+     ],
+     "box_px": [
+      2000,
+      1000
+     ],
+     "description": "same roof from a second instant, other end of the bay",
+     "why_valid_probe": "independent parent image of the same structure"
+    },
+    {
+     "image_id": "img_09089484c86c6333a69d214c",
+     "path": "camera/left/1772726577354671104.jpg",
+     "camera": "left",
+     "rig_frame_id": "rig_87e502b4ef51672981b834d9",
+     "timestamp_ns": 1772726577354671104,
+     "capture_fraction": 0.8914,
+     "environment_lidar_rule": "indoor",
+     "environment_photo": "indoor",
+     "split_v9": "train",
+     "battery_member_delivery_eval": false,
+     "tile_ids_v9": "0|1|3",
+     "box_xyxy": [
+      1820,
+      1850,
+      2450,
+      2650
+     ],
+     "box_px": [
+      630,
+      800
+     ],
+     "description": "ribbed door mat at the threshold",
+     "why_valid_probe": "fine-period ribs on the floor; the smallest seam period in the set"
+    },
+    {
+     "image_id": "img_1de04bfc85f49dfaa0d0a760",
+     "path": "camera/left/1772726568354146048.jpg",
+     "camera": "left",
+     "rig_frame_id": "rig_9c5420c2dc4237861155c34a",
+     "timestamp_ns": 1772726568354146048,
+     "capture_fraction": 0.8507,
+     "environment_lidar_rule": "indoor",
+     "environment_photo": "indoor",
+     "split_v9": "train",
+     "battery_member_delivery_eval": false,
+     "tile_ids_v9": "0|1|2|3",
+     "box_xyxy": [
+      1500,
+      1950,
+      2450,
+      2450
+     ],
+     "box_px": [
+      950,
+      500
+     ],
+     "description": "wood-plank floor and second door mat",
+     "why_valid_probe": "plank joins at a shallow viewing angle"
+    },
+    {
+     "image_id": "img_1a265d9e130f6059a7c5e9a6",
+     "path": "camera/left/1772726558853588992.jpg",
+     "camera": "left",
+     "rig_frame_id": "rig_b523206b5c02312cc70e1083",
+     "timestamp_ns": 1772726558853588992,
+     "capture_fraction": 0.8077,
+     "environment_lidar_rule": "indoor",
+     "environment_photo": "indoor",
+     "split_v9": "train",
+     "battery_member_delivery_eval": false,
+     "tile_ids_v9": "1|2|3",
+     "box_xyxy": [
+      100,
+      100,
+      1800,
+      1000
+     ],
+     "box_px": [
+      1700,
+      900
+     ],
+     "description": "galvanised ceiling panel joins and ribs",
+     "why_valid_probe": "long ribs converging under the fisheye; straightness is checkable after undistortion"
+    }
+   ]
+  },
+  "signage_thin_structures": {
+   "description": "Lettering and thin man-made members (gantry rails, posts, tripod legs): legibility and straightness are human-readable pass/fail criteria.",
+   "metrics_expected_to_respond": [
+    "text_legibility_score",
+    "edge_spread_px",
+    "sharpness_agreement"
+   ],
+   "parent_images": 5,
+   "rois": [
+    {
+     "image_id": "img_1a265d9e130f6059a7c5e9a6",
+     "path": "camera/left/1772726558853588992.jpg",
+     "camera": "left",
+     "rig_frame_id": "rig_b523206b5c02312cc70e1083",
+     "timestamp_ns": 1772726558853588992,
+     "capture_fraction": 0.8077,
+     "environment_lidar_rule": "indoor",
+     "environment_photo": "indoor",
+     "split_v9": "train",
+     "battery_member_delivery_eval": false,
+     "tile_ids_v9": "1|2|3",
+     "box_xyxy": [
+      2250,
+      1550,
+      2750,
+      2050
+     ],
+     "box_px": [
+      500,
+      500
+     ],
+     "description": "KOBALT stool seat lettering",
+     "why_valid_probe": "printed text on a curved surface"
+    },
+    {
+     "image_id": "img_e1eba2f46bf75c270241b3a7",
+     "path": "camera/left/1772726525851614976.jpg",
+     "camera": "left",
+     "rig_frame_id": "rig_f78e34acd123753db7989244",
+     "timestamp_ns": 1772726525851614976,
+     "capture_fraction": 0.6584,
+     "environment_lidar_rule": "indoor",
+     "environment_photo": "covered",
+     "split_v9": "train",
+     "battery_member_delivery_eval": false,
+     "tile_ids_v9": "1|2|3",
+     "box_xyxy": [
+      800,
+      1450,
+      1450,
+      1900
+     ],
+     "box_px": [
+      650,
+      450
+     ],
+     "description": "RUBICON lettering on the Jeep hood",
+     "why_valid_probe": "letters with known spacing; smearing is visible at a glance"
+    },
+    {
+     "image_id": "img_662459e85d0d8812f926ab99",
+     "path": "camera/left/1772726459847571968.jpg",
+     "camera": "left",
+     "rig_frame_id": "rig_61551f3cbc92909dad638c73",
+     "timestamp_ns": 1772726459847571968,
+     "capture_fraction": 0.3597,
+     "environment_lidar_rule": "covered",
+     "environment_photo": "covered",
+     "split_v9": "train",
+     "battery_member_delivery_eval": false,
+     "tile_ids_v9": "0|1|2|3",
+     "box_xyxy": [
+      2400,
+      1450,
+      2900,
+      1750
+     ],
+     "box_px": [
+      500,
+      300
+     ],
+     "description": "AP Surveying sign on the shed wall",
+     "why_valid_probe": "two-colour sign with thin serif strokes"
+    },
+    {
+     "image_id": "img_6d2459e72635c43c38ab9b72",
+     "path": "camera/left/1772726553853328896.jpg",
+     "camera": "left",
+     "rig_frame_id": "rig_dad6414d3a0780b4bd18caeb",
+     "timestamp_ns": 1772726553853328896,
+     "capture_fraction": 0.7851,
+     "environment_lidar_rule": "indoor",
+     "environment_photo": "indoor",
+     "split_v9": "train",
+     "battery_member_delivery_eval": false,
+     "tile_ids_v9": "1|2|3",
+     "box_xyxy": [
+      1500,
+      500,
+      2450,
+      1300
+     ],
+     "box_px": [
+      950,
+      800
+     ],
+     "description": "yellow gantry rails over the workbench",
+     "why_valid_probe": "thin straight members in front of a cluttered background"
+    },
+    {
+     "image_id": "img_a02ab4c174e113a279d4bed5",
+     "path": "camera/left/1772726441346475776.jpg",
+     "camera": "left",
+     "rig_frame_id": "rig_99601681f6fb3541aef8004d",
+     "timestamp_ns": 1772726441346475776,
+     "capture_fraction": 0.276,
+     "environment_lidar_rule": "outdoor",
+     "environment_photo": "outdoor",
+     "split_v9": "train",
+     "battery_member_delivery_eval": false,
+     "tile_ids_v9": "0|3",
+     "box_xyxy": [
+      1600,
+      1100,
+      1900,
+      2100
+     ],
+     "box_px": [
+      300,
+      1000
+     ],
+     "description": "carport post, full height",
+     "why_valid_probe": "single vertical thin structure against gravel and sky"
+    }
+   ]
+  }
+ },
+ "summary": {
+  "indoor_wall_window_door_edge": {
+   "rois": 5,
+   "parent_images": 5,
+   "environments_photo": [
+    "indoor"
+   ],
+   "lidar_rule_disagreements": []
+  },
+  "ground_detail": {
+   "rois": 5,
+   "parent_images": 5,
+   "environments_photo": [
+    "outdoor"
+   ],
+   "lidar_rule_disagreements": [
+    "img_2d4e13c684e33e7f3276e86f",
+    "img_b6ba74c87f4094b04dbb2f59"
+   ]
+  },
+  "eaves_foliage": {
+   "rois": 5,
+   "parent_images": 5,
+   "environments_photo": [
+    "outdoor"
+   ],
+   "lidar_rule_disagreements": [
+    "img_2d4e13c684e33e7f3276e86f"
+   ]
+  },
+  "glass_reflection": {
+   "rois": 5,
+   "parent_images": 5,
+   "environments_photo": [
+    "covered",
+    "indoor",
+    "outdoor"
+   ],
+   "lidar_rule_disagreements": [
+    "img_e1eba2f46bf75c270241b3a7",
+    "img_2f10fcf8c5f46899fd84dae9"
+   ]
+  },
+  "seams_periodic": {
+   "rois": 5,
+   "parent_images": 5,
+   "environments_photo": [
+    "covered",
+    "indoor"
+   ],
+   "lidar_rule_disagreements": [
+    "img_dbd584d2499ddb3864fbca49"
+   ]
+  },
+  "signage_thin_structures": {
+   "rois": 5,
+   "parent_images": 5,
+   "environments_photo": [
+    "covered",
+    "indoor",
+    "outdoor"
+   ],
+   "lidar_rule_disagreements": [
+    "img_e1eba2f46bf75c270241b3a7"
+   ]
+  }
+ }
+}

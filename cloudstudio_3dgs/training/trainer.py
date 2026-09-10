@@ -73,6 +73,9 @@ from cloudstudio_3dgs.training.scale_calibration import (
     MetricScaleCalibrationConfig,
     build_metric_scale_calibration,
 )
+from cloudstudio_3dgs.training.schedule_audit import (
+    validate_research_schedule_contract,
+)
 from cloudstudio_3dgs.training.surface_initialization import (
     SurfaceInitializationConfig,
     cap_surface_initialization_scales,
@@ -134,7 +137,12 @@ from cloudstudio_3dgs.training.topology_policy import (
     TopologyPolicyConfig,
     topology_count_transition,
 )
+from cloudstudio_3dgs.training.densification_gradient import (
+    photometric_growth_loss,
+    split_backward_for_growth_signal,
+)
 from cloudstudio_3dgs.training.optimization_audit import (
+    AuditedLossTerm,
     component_gradient_audit,
     gradient_norms,
     parameter_update_norms,
@@ -214,6 +222,15 @@ class TrainerConfig:
     mipmap_pipeline_gate: Path | None = None
     config_manifest_sha256: str | None = None
     controlled_stop_after_steps: int | None = None
+    # Research schedule contract (schedule_audit.RESEARCH_SCHEDULE_CONTRACTS).
+    # Absent: the competitor-parity pre-flight (max_steps == 20 view epochs,
+    # controlled stop strictly inside it) applies unchanged. Present: max_steps
+    # is the declared horizon H and every linked schedule field is validated
+    # as a fraction of H by validate_research_schedule_contract; the resolved
+    # record is signed into the trainer contract and the run manifest. This
+    # is an explicit departure from parity, never a parity profile.
+    schedule_contract: str | None = None
+    schedule_contract_fields: dict[str, Any] | None = None
     # Diagnostic: dump per-row opacity logits (and lifecycle counters) on a
     # step window so post-reset fate can be attributed offline. Never part of
     # a delivery profile.
@@ -572,6 +589,8 @@ class TrainerConfig:
                 "implementation_smoke_only",
                 "config_manifest_sha256",
                 "controlled_stop_after_steps",
+                "schedule_contract",
+                "schedule_contract_fields",
                 "opacity_trace",
             )
             if key in value
@@ -606,12 +625,25 @@ class TrainerConfig:
             raise ValueError("3DGUT training requires an explicit CUDA device")
         if self.max_steps <= 0 or self.checkpoint_every <= 0:
             raise ValueError("max_steps and checkpoint_every must be positive")
+        if self.schedule_contract is None and self.schedule_contract_fields is not None:
+            raise ValueError(
+                "schedule_contract_fields requires a named schedule_contract"
+            )
         if self.controlled_stop_after_steps is not None and not (
             0 < int(self.controlled_stop_after_steps) < self.max_steps
+            or (
+                # Under a research contract the controlled stop may restate
+                # the horizon: the run then ends in ControlledTrainingInterruption
+                # at H exactly as the historical arms did at their truncation.
+                self.schedule_contract is not None
+                and int(self.controlled_stop_after_steps) == self.max_steps
+            )
         ):
             raise ValueError(
                 "controlled_stop_after_steps must be between zero and max_steps"
             )
+        if self.schedule_contract is not None:
+            validate_research_schedule_contract(self.schedule_audit_dict())
         if self.opacity_trace is not None:
             trace = dict(self.opacity_trace)
             start = int(trace.get("start_step", 0))
@@ -1786,6 +1818,55 @@ class TrainerConfig:
                             "Face4 LiDAR geometry is bound to a different LiDAR depth gate"
                         )
 
+    def schedule_audit_dict(self) -> dict[str, Any]:
+        """The torch-free view of this config that ``schedule_audit`` consumes.
+
+        Only schedule-bearing fields are exported; ``metric_scale_calibration``
+        goes through ``to_dict`` so an explicit ``means_step_fraction: null``
+        survives as an explicit null, which the research contract requires.
+        """
+        return {
+            "run_id": self.run_id,
+            "max_steps": self.max_steps,
+            "controlled_stop_after_steps": self.controlled_stop_after_steps,
+            "checkpoint_every": self.checkpoint_every,
+            "view_sampling_mode": self.view_sampling_mode,
+            "holdout_spatial_cell_m": self.holdout_spatial_cell_m,
+            "color_model": self.color_model,
+            "sh_degree": self.sh_degree,
+            "sh_degree_interval": self.sh_degree_interval,
+            "learning_rates": dict(self.learning_rates),
+            "means_lr_final_factor": self.means_lr_final_factor,
+            "post_refine_geometry_lr_scale": self.post_refine_geometry_lr_scale,
+            "metric_scale_calibration": self.metric_scale_calibration.to_dict(),
+            "mcmc_refine_start_iter": self.mcmc_refine_start_iter,
+            "mcmc_refine_stop_iter": self.mcmc_refine_stop_iter,
+            "mcmc_refine_every": self.mcmc_refine_every,
+            "default_strategy": json.loads(json.dumps(self.default_strategy)),
+            "cap_max": self.cap_max,
+            "rgb_l1_weight": self.rgb_l1_weight,
+            "rgb_ssim_weight": self.rgb_ssim_weight,
+            "rgb_ssim_mode": self.rgb_ssim_mode,
+            "lidar_range_weight": self.lidar_range_weight,
+            "lidar_range_loss_mode": self.lidar_range_loss_mode,
+            "lidar_alpha_weight": self.lidar_alpha_weight,
+            "lidar_alpha_target": self.lidar_alpha_target,
+            "surface_alpha_floor_profile": self.surface_alpha_floor_profile,
+            "da2_depth_weight": self.da2_depth_weight,
+            "da2_depth_space": self.da2_depth_space,
+            "mesh_depth_weight": self.mesh_depth_weight,
+            "mesh_normal_weight": self.mesh_normal_weight,
+            "lidar_normal_alignment": self.lidar_normal_alignment.to_dict(),
+            "geometry_regularization": self.geometry_regularization.to_dict(),
+            "competitor_loss_schedule_enabled": self.competitor_loss_schedule_enabled,
+            "schedule_contract": self.schedule_contract,
+            "schedule_contract_fields": (
+                None
+                if self.schedule_contract_fields is None
+                else json.loads(json.dumps(self.schedule_contract_fields))
+            ),
+        }
+
     def contract_dict(self) -> dict[str, Any]:
         uses_lidar_linear_aux = self.lidar_linear_aux_weight > 0.0
         uses_lidar_rgb_boost = self.lidar_rgb_l1_weight > 0.0
@@ -2076,6 +2157,13 @@ class TrainerConfig:
                 "status": gate["status"],
                 "gate_manifest_sha256": gate_sha,
             }
+        if self.schedule_contract is not None:
+            # Static resolution (no view counts); the pre-flight re-resolves
+            # with the real counts into schedule_contract_as_run.json and the
+            # run manifest.
+            contract["schedule_contract"] = validate_research_schedule_contract(
+                self.schedule_audit_dict()
+            )
         if not self.final_evaluation_artifacts:
             contract["face_split"]["final_raw_evaluation_artifacts"] = (
                 "deferred_to_separate_3dgut_stage"
@@ -3265,7 +3353,13 @@ def train(
         controlled_stop_after_steps = config.controlled_stop_after_steps
     if controlled_stop_after_steps is not None:
         controlled_stop_after_steps = int(controlled_stop_after_steps)
-        if not 0 < controlled_stop_after_steps < config.max_steps:
+        if not (
+            0 < controlled_stop_after_steps < config.max_steps
+            or (
+                config.schedule_contract is not None
+                and controlled_stop_after_steps == config.max_steps
+            )
+        ):
             raise ValueError(
                 "controlled_stop_after_steps must be between zero and max_steps"
             )
@@ -3402,7 +3496,22 @@ def train(
     train_dataset_sha = getattr(trainset, "dataset_sha256", None)
     if train_dataset_sha is not None and train_dataset_sha != valset.dataset_sha256:
         raise ValueError("train and validation datasets have different identities")
-    if (
+    schedule_contract_record: dict[str, Any] | None = None
+    if config.schedule_contract is not None:
+        # The named research contract replaces the 20-epoch parity rule: H is
+        # max_steps, the linked fields were validated as fractions of H in
+        # validate(), and here the real view counts turn the epoch figure into
+        # a recorded fact. Written before any GPU work so the record exists
+        # even when the run ends in a controlled interruption.
+        schedule_contract_record = validate_research_schedule_contract(
+            config.schedule_audit_dict(),
+            training_view_count=len(trainset),
+            holdout_view_count=holdout_view_count,
+        )
+        _atomic_json(
+            output_dir / "schedule_contract_as_run.json", schedule_contract_record
+        )
+    elif (
         config.view_sampling_mode
         == "fisher_yates_without_replacement_per_epoch"
         and config.topology_policy.mode == "adaptive_growth"
@@ -4200,32 +4309,64 @@ def train(
                 normal_loss_steps_stale += 1
         component_audit = None
         if audit_due:
-            rgb_component = config.rgb_l1_weight * l1 + config.rgb_ssim_weight * ssim
-            if info["cloudstudio_rgb_gradient_l1"] is not None:
-                rgb_component = (
-                    rgb_component
-                    + config.rgb_gradient_weight * info["cloudstudio_rgb_gradient_l1"]
-                )
-            if info["cloudstudio_lidar_rgb_l1"] is not None:
-                rgb_component = (
-                    rgb_component
-                    + config.lidar_rgb_l1_weight * info["cloudstudio_lidar_rgb_l1"]
-                )
+            # Each term is measured with the weight and stage multiplier that
+            # reach the optimizer this step; "rgb" is the very tensor the
+            # rgb_only growth signal differentiates. The geometry regularisers
+            # act on scales/opacities directly and have no path to means2d -
+            # the audit reports that as not_applicable, not as zero.
+            geometry_config = config.geometry_regularization
             component_audit = component_gradient_audit(
                 params,
                 {
-                    "rgb": rgb_component,
-                    "range_config_weighted": None
-                    if range_loss is None
-                    else config.lidar_range_weight * range_loss,
-                    "lidar_alpha_config_weighted": None
-                    if info["cloudstudio_lidar_alpha_loss"] is None
-                    else config.lidar_alpha_weight
-                    * info["cloudstudio_lidar_alpha_loss"],
-                    "normal_config_weighted": None
-                    if normal_terms is None
-                    else normal_terms["total"],
+                    "rgb": photometric_growth_loss(
+                        l1=l1,
+                        ssim=ssim,
+                        rgb_l1_weight=config.rgb_l1_weight,
+                        rgb_ssim_weight=config.rgb_ssim_weight,
+                        rgb_gradient_weight=config.rgb_gradient_weight,
+                        rgb_gradient_l1=info["cloudstudio_rgb_gradient_l1"],
+                        lidar_rgb_l1_weight=config.lidar_rgb_l1_weight,
+                        lidar_rgb_l1=info["cloudstudio_lidar_rgb_l1"],
+                    ),
+                    "lidar_range": AuditedLossTerm(
+                        raw=range_loss,
+                        weight=config.lidar_range_weight,
+                        stage_multiplier=float(phase["range_weight_scale"]),
+                    ),
+                    "lidar_alpha": AuditedLossTerm(
+                        raw=info["cloudstudio_lidar_alpha_loss"],
+                        weight=config.lidar_alpha_weight,
+                    ),
+                    # normal_terms["total"] already carries its config weight.
+                    "lidar_normal": AuditedLossTerm(
+                        raw=None if normal_terms is None else normal_terms["total"],
+                        stage_multiplier=float(phase["normal_weight_scale"]),
+                    ),
+                    # The vendor schedule envelope is normalised at the 0.5
+                    # nominal weight, matching scheduled_da2_weight above.
+                    "da2_depth": AuditedLossTerm(
+                        raw=info["cloudstudio_da2_depth_loss"],
+                        weight=config.da2_depth_weight,
+                        stage_multiplier=(
+                            1.0
+                            if competitor_weights is None
+                            else float(competitor_weights.da2_depth) / 0.5
+                        ),
+                    ),
+                    "geometry_opacity_sparsity": AuditedLossTerm(
+                        raw=regularization["opacity_sparsity"],
+                        weight=geometry_config.opacity_sparsity_weight,
+                    ),
+                    "geometry_scale_upper": AuditedLossTerm(
+                        raw=regularization["scale_upper"],
+                        weight=geometry_config.scale_upper_weight,
+                    ),
+                    "geometry_anisotropy": AuditedLossTerm(
+                        raw=regularization["anisotropy"],
+                        weight=geometry_config.anisotropy_weight,
+                    ),
                 },
+                means2d=info.get("means2d"),
             )
         require_finite_training_tensors(
             params=params,
@@ -4256,31 +4397,26 @@ def train(
             # means2d.grad through the shared rasterization. Implementation
             # smoke runs explicitly forbid densification and use one backward,
             # because eval3d does not expose the classic means2d gradient.
-            # The photometric
-            # pass runs FIRST and its means2d gradients are snapshotted, because
-            # .grad accumulates across passes while gsplat overwrites .absgrad
-            # on each - only a snapshot survives both semantics. The optimizer
-            # still steps on the full total-loss gradient (the two passes sum
-            # in the leaf parameters).
-            rgb_loss = config.rgb_l1_weight * l1 + config.rgb_ssim_weight * ssim
-            if info["cloudstudio_rgb_gradient_l1"] is not None:
-                rgb_loss = (
-                    rgb_loss
-                    + config.rgb_gradient_weight
-                    * info["cloudstudio_rgb_gradient_l1"]
-                )
-            if info["cloudstudio_lidar_rgb_l1"] is not None:
-                rgb_loss = (
-                    rgb_loss
-                    + config.lidar_rgb_l1_weight
-                    * info["cloudstudio_lidar_rgb_l1"]
-                )
-            rest_loss = loss - rgb_loss
-            rgb_loss.backward(retain_graph=True)
-            backend.strategy_isolate_gradient(info)
-            if rest_loss.requires_grad:
-                rest_loss.backward()
-            backend.strategy_restore_gradient(info)
+            # The photometric pass runs FIRST and its means2d gradients are
+            # snapshotted (see densification_gradient.py for why a snapshot is
+            # the only representation that survives both .grad accumulation
+            # and gsplat's .absgrad overwrite). The optimizer still steps on
+            # the full total-loss gradient: the two passes sum in the leaves.
+            split_backward_for_growth_signal(
+                total_loss=loss,
+                growth_loss=photometric_growth_loss(
+                    l1=l1,
+                    ssim=ssim,
+                    rgb_l1_weight=config.rgb_l1_weight,
+                    rgb_ssim_weight=config.rgb_ssim_weight,
+                    rgb_gradient_weight=config.rgb_gradient_weight,
+                    rgb_gradient_l1=info["cloudstudio_rgb_gradient_l1"],
+                    lidar_rgb_l1_weight=config.lidar_rgb_l1_weight,
+                    lidar_rgb_l1=info["cloudstudio_lidar_rgb_l1"],
+                ),
+                isolate=lambda: backend.strategy_isolate_gradient(info),
+                restore=lambda: backend.strategy_restore_gradient(info),
+            )
         else:
             loss.backward()
         audited_gradients = gradient_norms(params) if audit_due else None
@@ -4988,6 +5124,13 @@ def train(
             "coordinate_transform_sha256": coordinate["coordinate_transform_sha256"],
             "trainer_config_sha256": config_sha256,
             "trainer_contract": contract,
+            # Key present only under a research contract so parity manifests
+            # keep their exact shape.
+            **(
+                {"schedule_contract": schedule_contract_record}
+                if schedule_contract_record is not None
+                else {}
+            ),
             "gsplat_runtime": backend.runtime,
             "initialization_ply_sha256": initialization_sha256,
             "metric_scale_calibration": scale_calibration,

@@ -1,0 +1,96 @@
+{
+ "schema_version": 1,
+ "purpose": "Three render protocols with a RenderSpec fingerprint each. A metric is only comparable across runs when every fingerprint field matches; a field marked 'unpropagated' is one the current tools do not carry from training to evaluation (or from evaluation to the record), so two reports can differ on it without either report saying so.",
+ "render_spec_fields": [
+  "camera_model", "intrinsics_K", "distortion", "pixel_centre_convention", "resolution", "sh_degree", "colour_space", "exposure_policy", "background", "rasterize_mode", "with_ut", "with_eval3d", "clipping_near_far", "alpha_rule", "coordinate_frame", "view_set", "pixel_mask"
+ ],
+ "code_anchors": {
+  "backend_render": "cloudstudio_3dgs/training/backend.py :: GsplatBackend.render (lines ~441-556): builds the gsplat rasterization() call; camera_model from sample.camera_model, with_ut/with_eval3d = (fisheye or pinhole_with_ut), rasterize_mode = 'classic' for fisheye else self.pinhole_rasterize_mode, global_z_order = not fisheye, render_mode RGB / RGB+ED (pinhole z-depth) / RGB-Ed (UT euclidean range), composite rgb + (1-alpha)*background when background_rgb is given",
+  "load_backend": "tools/sharpness_metrics.py :: _load_backend (line 148): GsplatBackend(device, cap_max, gsplat_lock, mcmc noise 0); backend.color_model = config.color_model; backend.sh_degree = config.sh_degree unless the caller passes the model's degree. It does NOT set pinhole_rasterize_mode or pinhole_with_ut from the config, so eval renders use the GsplatBackend defaults ('classic', False) regardless of what the training config says.",
+  "model_sh_degree": "tools/sharpness_metrics.py :: model_sh_degree (line 140): sqrt(K0+KN)-1 from the checkpoint tensors; used by evaluate_probe_views, build_three_way_compare (_model_sh_degree) and roundtrip_checkpoint_ply to override the eval config's sh_degree (delivery_eval*.json say 0)",
+  "face_sample": "cloudstudio_3dgs/training/face_dataset.py :: FaceCacheDataset.__getitem__: camera_model='pinhole', K = K_face (minus crop offset), radial_coeffs = zeros, c2w = c2w_base @ R_face, width/height = face (or crop) size",
+  "fisheye_sample": "cloudstudio_3dgs/training/dataset.py :: S1TrainingDataset.__getitem__ (~line 370-447): K from dataset manifest intrinsic / factor, radial_coeffs = OPENCV_FISHEYE k1..k4, camera_model fisheye",
+  "three_way": "tools/build_three_way_compare.py: FaceCacheDataset (tile crops if tile_inputs_manifest), ViewBackgroundLibrary when background_image_manifest present else --background (default white), render with_range=False, active_sh_degree = model degree, stride picks over the dataset",
+  "probe_battery": "tools/evaluate_probe_views.py: face cache path = config.face_cache_manifest.replace('face4','face4_val'); stride = len(dataset)//views; masked PSNR over rgb_mask; foreground = 15 px max-pool of LiDAR depth support; alpha p05; range MAE via rendered_range_to_euclidean",
+  "ply_reader": "tools/build_three_way_compare.py :: _load_ply_gaussians: float32 PLY, f_dc -> sh0, f_rest -> shN (count/3 bands), optional rigid transform from an alignment JSON"
+ },
+ "protocols": {
+  "A_face4_pinhole_classic": {
+   "role": "training camera; the number every existing battery/sharpness/three-way report is computed in",
+   "target": "Face4 face PNG from the face cache (a resampling of the fisheye photo), compared inside the renderer mask",
+   "render_spec": {
+    "camera_model": {"value": "pinhole", "source": "face_dataset.py TrainingSample(camera_model='pinhole')"},
+    "intrinsics_K": {"value": "K_face per (camera, face) from <face cache>/face_manifest.json cameras[*].faces[*].K_face; house0305 v8/v9: yaw faces fx=fy=1039.691749 cx=728 cy=1456 (1456x2912), pitch faces fx=fy=2308.921016 cx=1456 cy=728 (2912x1456); minus tile crop (x,y) when tile_views are given", "source": "face_dataset.py __getitem__ (K[0,2]-=x, K[1,2]-=y)"},
+    "distortion": {"value": "none (radial_coeffs zeros; not passed to gsplat for pinhole)", "source": "backend.py render: radial = None if pinhole"},
+    "pixel_centre_convention": {"value": "face cache declares pixel_convention='pixel_center_plus_half' (face_manifest.json); gsplat rasterization samples pixel centres at +0.5 with K in pixel units", "source": "face manifest field; NOT carried on the sample or in any report", "status": "unpropagated"},
+    "resolution": {"value": "face native size at factor 1 (1456x2912 / 2912x1456); Tile crops = view crop size (e.g. 2157x1456 for a pitch face crop)", "source": "sample.width/height; tile_inputs_manifest views[*].{x,y,width,height}"},
+    "sh_degree": {"value": "model degree (sqrt(K0+KN)-1), forced by the three eval tools; eval configs delivery_eval*.json still say sh_degree=0 and sharpness_metrics.py main() does NOT override (renders DC-only for an SH1 checkpoint)", "source": "sharpness_metrics._load_backend + model_sh_degree; evaluate_probe_views line 'backend.sh_degree = max(...)'", "status": "partially propagated: reports carry gaussian_count and step but not the degree actually rendered (roundtrip report is the exception: it records sh_degree)"},
+    "colour_space": {"value": "8-bit sRGB PNG / 255 compared directly against SH-evaluated RGB clamped to [0,1]; no linearisation or gamma anywhere in the chain (implicit sRGB-as-linear)", "source": "evaluate_probe_views target = image/255; backend returns raw rasterization rgb", "status": "unpropagated (no field; assumed identical everywhere)"},
+    "exposure_policy": {"value": "training learns a per-exposure gain (exposure_compensation.enabled=true, lr 0.005 in delivery_eval.json); NONE of evaluate_probe_views / build_three_way_compare / roundtrip / sharpness_metrics applies it at eval; the tile merge applies one exposure_gain_applied per tile (merge_report.json: 0.899/0.943/0.938/0.963 for G9) so merged.pt colours already carry a per-tile global gain", "source": "trainer.py ExposureCompensationConfig; tools grep shows no 'exposure' in the eval tools", "status": "unpropagated"},
+    "background": {"value": "ViewBackgroundLibrary per-view sky-dome backdrop (view_backgrounds_*/manifest, downsample 4, background_rgb white) when the config has background_image_manifest; otherwise constant white (1,1,1); roundtrip control uses black vs white", "source": "evaluate_probe_views / build_three_way_compare / roundtrip", "status": "propagated only as the manifest path in the config; reports record background_rgb (three-way) or nothing (battery)"},
+    "rasterize_mode": {"value": "'classic' (GsplatBackend default; pinhole_rasterize_mode from the config is NOT applied by _load_backend, so an 'antialiased'-trained checkpoint would be evaluated classic)", "source": "backend.py render getattr(self,'pinhole_rasterize_mode','classic'); sharpness_metrics._load_backend", "status": "unpropagated"},
+    "with_ut": {"value": "false (pinhole_with_ut default False; _load_backend does not read the config's pinhole_with_ut)", "source": "backend.py render pinhole_with_ut = getattr(self,'pinhole_with_ut',False)", "status": "unpropagated"},
+    "with_eval3d": {"value": "false for pinhole (equals with_ut)", "source": "backend.py render"},
+    "clipping_near_far": {"value": "gsplat defaults (near_plane 0.01, far_plane 1e10): render() passes neither", "source": "backend.py render kwargs", "status": "unpropagated"},
+    "alpha_rule": {"value": "rgb = rendered + (1-alpha)*background; alpha returned un-composited; PSNR over rgb_mask pixels; foreground alpha p05 over mask; global_z_order=True", "source": "backend.py render tail; evaluate_probe_views"},
+    "coordinate_frame": {"value": "s1_local (dataset_manifest.coordinate_frame), pose_convention c2w_opencv; face c2w = c2w_base @ [R_face|0]; tile checkpoints use identity coordinate transform (s1_local_identity_v1)", "source": "dataset manifest; face_dataset.py; tile run coordinate_transform_manifest.json"},
+    "view_set": {"value": "evaluate_probe_views default: face4_val cache of the CONFIG's dataset version with stride len//48 (delivery_eval.json -> house0305_sop_v8/face4_val, 360 faces, stride 7, indexes 0,7,...,329); --tile-views: the Tile's own cropped training views", "source": "evaluate_probe_views.py", "status": "propagated as view_set label only ('held_out_faces'), not as the split the checkpoint trained on"},
+    "pixel_mask": {"value": "renderer mask = warped source mask AND fov valid AND face weight > 0.02 (face manifest mask_semantics); person masks folded in upstream; --tile-owned additionally removes foreign-tile pixels", "source": "face manifest; face_dataset.py"}
+   }
+  },
+  "B_original_fisheye_ut": {
+   "role": "the photo the customer took, rendered through the KB4 fisheye with 3DGUT; the only protocol whose target is the untouched original JPEG",
+   "target": "original 2912x2912 fisheye JPEG (recording camera/<side>/<timestamp>.jpg) inside the mask manifest's valid circle and person mask",
+   "render_spec": {
+    "camera_model": {"value": "fisheye", "source": "dataset.py S1TrainingDataset sample camera_model"},
+    "intrinsics_K": {"value": "dataset_manifest cameras[*].intrinsic / factor: left fl 787.6402706 cx 1454.3167 cy 1452.1973 (right differs by <0.3 px / 3.1 px cy); calibration_source accepted_independent_pos_prior_at", "source": "dataset.py __getitem__ K construction (lines ~422-423)"},
+    "distortion": {"value": "OPENCV_FISHEYE k1 0.07691 k2 -0.00680 k3 -0.00538 k4 0.00036 (left); passed as radial_coeffs", "source": "dataset manifest cameras[*].distortion; backend.py radial"},
+    "pixel_centre_convention": {"value": "K in pixel units; gsplat UT projection convention; no field on the sample", "status": "unpropagated"},
+    "resolution": {"value": "2912x2912 / factor (config factor 1)", "source": "config.factor via S1TrainingDataset"},
+    "sh_degree": {"value": "sharpness_metrics.py main() uses config.sh_degree (0 in delivery_eval*.json) -> DC-only for SH1 models unless the config is edited; no model-degree override in that entry point", "source": "sharpness_metrics.py main: _load_backend(config) without sh_degree", "status": "unpropagated (known trap, see eval-config-sh-degree memory)"},
+    "colour_space": {"value": "JPEG sRGB/255 vs raw SH RGB, no linearisation", "status": "unpropagated"},
+    "exposure_policy": {"value": "no per-exposure gain applied at eval (same as A)", "status": "unpropagated"},
+    "background": {"value": "config.background_color constant (white in delivery_eval.json); no sky-dome library on this path; --exclude-sky restricts the mask to LiDAR depth support instead", "source": "sharpness_metrics.py main background = config['background_color']"},
+    "rasterize_mode": {"value": "'classic' forced for fisheye", "source": "backend.py render"},
+    "with_ut": {"value": "true (forced for fisheye)", "source": "backend.py render"},
+    "with_eval3d": {"value": "true (forced for fisheye); range semantics euclidean_ray_range_m", "source": "backend.py render"},
+    "clipping_near_far": {"value": "gsplat defaults", "status": "unpropagated"},
+    "alpha_rule": {"value": "rgb + (1-alpha)*background; global_z_order=False (UT path)", "source": "backend.py render"},
+    "coordinate_frame": {"value": "s1_local, c2w_opencv, no face rotation", "source": "dataset manifest"},
+    "view_set": {"value": "S1TrainingDataset split='val' of the CONFIG's split manifest (delivery_eval.json -> v8 val = 90 images; delivery_eval_v9.json -> v9 val = 2 images) with --views indexes (default 0 40 80)", "source": "sharpness_metrics.py main", "status": "propagated as split name only"},
+    "pixel_mask": {"value": "mask manifest (fisheye valid circle x person mask) [x depth support with --exclude-sky]", "source": "sharpness_metrics.py main"}
+   },
+   "not_yet_run_here": "no report in C:/Peter/3dgs-runs/house0305_sop uses this protocol against a merged delivery; all G9/C1/R1 numbers are protocol A"
+  },
+  "C_final_ply_external_viewer": {
+   "role": "what the customer sees: the exported PLY in a viewer we do not control (SuperSplat / Potree-GS / vendor viewer)",
+   "target": "human inspection and, where possible, viewer screenshots at poses exported from protocol A/B (no ground-truth photo inside the viewer)",
+   "render_spec": {
+    "camera_model": {"value": "viewer pinhole; viewer-defined FOV; no fisheye", "status": "unpropagated (viewer-dependent)"},
+    "intrinsics_K": {"value": "not transferable; only the c2w pose and a vertical FOV can be set", "status": "unpropagated"},
+    "distortion": {"value": "none"},
+    "pixel_centre_convention": {"value": "viewer-defined", "status": "unpropagated"},
+    "resolution": {"value": "viewport size; DPR-dependent", "status": "unpropagated"},
+    "sh_degree": {"value": "what the PLY carries: export_gaussian_ply writes f_dc + f_rest (G9 export: 3 SH rest coeffs = degree 1); viewers may cap (SuperSplat renders up to degree 3, some viewers DC-only)", "source": "tools/export_gaussian_ply.py SH_C0 = 0.28209479; delivery_g9/deliver_status.txt '3 SH rest coeffs'", "status": "PLY carries it; viewer behaviour unpropagated"},
+    "colour_space": {"value": "viewers apply their own tone/gamma (SuperSplat renders in linear then sRGB-encodes; others treat SH RGB as sRGB)", "status": "unpropagated; must be pinned per viewer before any cross-protocol colour comparison"},
+    "exposure_policy": {"value": "PLY carries merged per-tile gains baked into colours; no per-view gain exists in the viewer", "status": "partially propagated"},
+    "background": {"value": "viewer background colour; no sky dome", "status": "unpropagated"},
+    "rasterize_mode": {"value": "viewer's own splatting (typically classic EWA in WebGL); no antialiased/Mip compensation", "status": "unpropagated"},
+    "with_ut": {"value": "false"},
+    "with_eval3d": {"value": "false"},
+    "clipping_near_far": {"value": "viewer near/far planes", "status": "unpropagated"},
+    "alpha_rule": {"value": "viewer compositing; opacity threshold at export (export_checkpoint_ply min_opacity; G9 export kept 13.58M of 19.31M, i.e. an export-time opacity cull)", "source": "delivery_g9/deliver_status.txt", "status": "export threshold propagated in deliver_status only"},
+    "coordinate_frame": {"value": "s1_local unless align_gaussian_ply / a reference alignment transform was applied; reference USAgs.ply lives in its own frame and is aligned by a rigid transform with a recorded median NN residual", "source": "build_three_way_compare --reference-alignment"},
+    "view_set": {"value": "free navigation; for evidence use the ROI registry parent images' poses"},
+    "pixel_mask": {"value": "none"}
+   },
+   "roundtrip_gate": "tools/roundtrip_checkpoint_ply.py proves checkpoint -> PLY -> checkpoint tensor equality (1e-6) and same-backend render equality, with controls; it does not prove the viewer renders the PLY the way protocol A does"
+  }
+ },
+ "cross_protocol_rules": [
+  "Never compare a protocol A number with a protocol B number; the target images differ (resampled face vs original JPEG), the projection differs, and the masks differ.",
+  "A report must state the view set AND the split the checkpoint trained on; 'held_out_faces' from evaluate_probe_views only names the cache it read, not hold-out status (see 01_view_membership_summary.json: 48/48 battery views are in v9 train).",
+  "Before any SH-sensitive comparison, record the rendered degree; delivery_eval*.json declare 0.",
+  "Exposure: G9 merged colours carry per-tile gains; a single-tile checkpoint does not; three-way strips of a tile vs the merge are not colour-comparable without the gain."
+ ]
+}

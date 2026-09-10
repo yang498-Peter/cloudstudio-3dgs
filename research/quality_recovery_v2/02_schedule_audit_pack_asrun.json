@@ -1,0 +1,96 @@
+{
+  "schema_version": 1,
+  "audit_kind": "static_read_only",
+  "configs": [
+    {
+      "run_id": "house0305-t0-R1-range0",
+      "reference_semantics_commit": "1ca1cd453e791bcb2d4ae189078487bf8fa92e7b",
+      "max_steps": 42640,
+      "effective_horizon_steps": 20000,
+      "last_zero_based_step": 19999,
+      "exact_mipmap_lifecycle": true,
+      "regular_refine_event_count": 135,
+      "last_regular_refine_step": 13900,
+      "late_prune_threshold_reachable": false,
+      "nominal_means_lr_at_last_step": 1.8453577922362628e-06,
+      "nominal_means_lr_terminal_target": 1.6e-07,
+      "nominal_lr_multiple_of_terminal_target": 11.533486201476643,
+      "reset_every_steps": 300,
+      "warnings": [
+        {
+          "code": "S002",
+          "message": "prune_switch_step=21320 is unreachable by active cull events; ordinary refinement ends before 14000, horizon=20000, post-refine cull=None."
+        },
+        {
+          "code": "S001",
+          "message": "Controlled stop at 20000 truncates a max_steps=42640 schedule; this is not a fully rescaled 20000-step schedule."
+        },
+        {
+          "code": "G001",
+          "message": "Birth scores use total-loss rendered-position gradients. Test the existing rgb_only path while retaining all optimizer losses; direct parameter regularizers need not contribute to means2d."
+        },
+        {
+          "code": "E001",
+          "message": "No explicit zero-mean/mean-anchor exposure gauge enabled. The default per-image L2 prior still exists; inspect canonical brightness, gains, saturation and cross-tile consistency before changing the model."
+        },
+        {
+          "code": "A001",
+          "message": "SH is fully active from the beginning. This is not intrinsically invalid; retain as a control against staged appearance activation."
+        }
+      ],
+      "limitations": [
+        "Static JSON audit only. Resolve presets and as-run overrides on the actual machine.",
+        "Learning-rate numbers exclude effective initialization scaling and phase/post-refine geometry multipliers.",
+        "View counts, cache contents, image quality, memory demand and live delivery status are not inferred.",
+        "Cull reachability models the inspected exact lifecycle; other strategy implementations need separate checks."
+      ],
+      "config_path": "C:\\Peter\\3dgs-runs\\house0305_sop\\tile0_R1_range0_20k\\config_as_run.json",
+      "config_sha256": "40b4d71adaed653e74c8d733013ae391651d141e22bec9a99d3301ff95ad7728"
+    },
+    {
+      "run_id": "house0305-t1-R1d",
+      "reference_semantics_commit": "1ca1cd453e791bcb2d4ae189078487bf8fa92e7b",
+      "max_steps": 36580,
+      "effective_horizon_steps": 20000,
+      "last_zero_based_step": 19999,
+      "exact_mipmap_lifecycle": true,
+      "regular_refine_event_count": 135,
+      "last_regular_refine_step": 13900,
+      "late_prune_threshold_reachable": false,
+      "nominal_means_lr_at_last_step": 1.2902710258640587e-06,
+      "nominal_means_lr_terminal_target": 1.6e-07,
+      "nominal_lr_multiple_of_terminal_target": 8.064193911650367,
+      "reset_every_steps": 300,
+      "warnings": [
+        {
+          "code": "S002",
+          "message": "prune_switch_step=18290 is unreachable by active cull events; ordinary refinement ends before 14000, horizon=20000, post-refine cull=None."
+        },
+        {
+          "code": "S001",
+          "message": "Controlled stop at 20000 truncates a max_steps=36580 schedule; this is not a fully rescaled 20000-step schedule."
+        },
+        {
+          "code": "G001",
+          "message": "Birth scores use total-loss rendered-position gradients. Test the existing rgb_only path while retaining all optimizer losses; direct parameter regularizers need not contribute to means2d."
+        },
+        {
+          "code": "E001",
+          "message": "No explicit zero-mean/mean-anchor exposure gauge enabled. The default per-image L2 prior still exists; inspect canonical brightness, gains, saturation and cross-tile consistency before changing the model."
+        },
+        {
+          "code": "A001",
+          "message": "SH is fully active from the beginning. This is not intrinsically invalid; retain as a control against staged appearance activation."
+        }
+      ],
+      "limitations": [
+        "Static JSON audit only. Resolve presets and as-run overrides on the actual machine.",
+        "Learning-rate numbers exclude effective initialization scaling and phase/post-refine geometry multipliers.",
+        "View counts, cache contents, image quality, memory demand and live delivery status are not inferred.",
+        "Cull reachability models the inspected exact lifecycle; other strategy implementations need separate checks."
+      ],
+      "config_path": "C:\\Peter\\3dgs-runs\\house0305_sop\\tile1_R1d_20k\\config_as_run.json",
+      "config_sha256": "7728ae57775fdb3b30360ff3453354483c63310397c780732e0d5e20805bca33"
+    }
+  ]
+}
