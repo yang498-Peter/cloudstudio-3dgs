@@ -145,9 +145,31 @@ def model_sh_degree(params) -> int:
     return max(0, int(round(math.sqrt(total))) - 1)
 
 
-def _load_backend(config: dict, sh_degree: int | None = None):
+HONOUR_RENDER_MODE_HELP = (
+    "render pinhole faces with the config's pinhole_rasterize_mode / "
+    "pinhole_with_ut exactly as the trainer set them on the backend. Off by "
+    "default: evaluators have always rendered classic without UT whatever the "
+    "config said, and every historical score is in that mode, so honouring "
+    "the config would silently move the numbers. The render_spec block in the "
+    "output records both the trained and the applied mode either way"
+)
+
+
+def _load_backend(config: dict, sh_degree: int | None = None, *,
+                  honour_render_mode: bool = False):
+    """Build the evaluation backend the way the trainer builds its own.
+
+    Returns ``(backend, torch)`` as before; the resolved render decisions are
+    attached as ``backend.render_spec`` (a RenderSpec without the model's SH
+    degree - call ``resolve_render_spec`` once the params are loaded) and
+    ``backend.honour_render_mode``.
+    """
     import torch
     from cloudstudio_3dgs.training.backend import GsplatBackend
+    from cloudstudio_3dgs.training.render_spec import (
+        RenderSpec,
+        resolve_pinhole_render_mode,
+    )
 
     backend = GsplatBackend(
         device=config.get("device", "cuda:0"),
@@ -162,7 +184,75 @@ def _load_backend(config: dict, sh_degree: int | None = None):
     backend.sh_degree = int(
         config.get("sh_degree", 3) if sh_degree is None else sh_degree
     )
+    # The trainer copies these two straight from the config onto the backend
+    # (trainer.py: backend.pinhole_rasterize_mode = config.pinhole_rasterize_mode;
+    # backend.pinhole_with_ut = config.pinhole_with_ut). Evaluators never did,
+    # so they rendered the backend defaults (classic, no UT). Keep that unless
+    # asked, but say so: a checkpoint trained antialiased and scored classic is
+    # a different render, and the report must be able to tell.
+    mode = resolve_pinhole_render_mode(config, honour_render_mode=honour_render_mode)
+    backend.pinhole_rasterize_mode = mode.applied_rasterize_mode
+    backend.pinhole_with_ut = mode.applied_with_ut
+    backend.honour_render_mode = bool(honour_render_mode)
+    if mode.differs:
+        print(
+            f"render mode: config trained pinhole_rasterize_mode="
+            f"{mode.trained_rasterize_mode!r} pinhole_with_ut={mode.trained_with_ut}; "
+            f"evaluating with {mode.applied_rasterize_mode!r} / "
+            f"with_ut={mode.applied_with_ut} (pass --honour-render-mode to render "
+            f"as trained; scores then stop being comparable with earlier reports)",
+            file=sys.stderr,
+        )
+    backend.render_spec = RenderSpec.from_config_and_params(
+        config,
+        None,
+        applied_sh_degree=int(backend.sh_degree),
+        applied_rasterize_mode=backend.pinhole_rasterize_mode,
+        applied_with_ut=backend.pinhole_with_ut,
+        honour_render_mode=honour_render_mode,
+    )
     return backend, torch
+
+
+def resolve_render_spec(config: dict, params, backend, *, camera_model: str,
+                        background_policy: str | None = None,
+                        background_rgb=None, background_manifest: str | None = None,
+                        intrinsics_manifest: str | None = None,
+                        tile_crops: bool | None = None,
+                        checkpoint_meta: dict | None = None):
+    """The RenderSpec an evaluator actually rendered with.
+
+    Reads the applied mode and SH degree off the backend (after the caller's
+    model-degree override) so the record describes the render that happened,
+    not the one the config asked for.
+    """
+    from cloudstudio_3dgs.training.render_spec import RenderSpec
+
+    return RenderSpec.from_config_and_params(
+        config,
+        params,
+        camera_model=camera_model,
+        applied_sh_degree=int(backend.sh_degree),
+        applied_rasterize_mode=getattr(backend, "pinhole_rasterize_mode", "classic"),
+        applied_with_ut=bool(getattr(backend, "pinhole_with_ut", False)),
+        honour_render_mode=bool(getattr(backend, "honour_render_mode", False)),
+        background_policy=background_policy,
+        background_rgb=background_rgb,
+        background_manifest=background_manifest,
+        intrinsics_manifest=intrinsics_manifest,
+        tile_crops=tile_crops,
+        checkpoint_meta=checkpoint_meta,
+    )
+
+
+def checkpoint_meta(payload: dict) -> dict:
+    """Checkpoint payload minus tensors: what RenderSpec needs (step, identity,
+    merge report) without dragging Gaussian tensors into a JSON record."""
+    return {
+        key: value
+        for key, value in payload.items()
+        if key in ("schema_version", "step", "identity", "merge", "completed_steps")
+    }
 
 
 def main() -> int:
@@ -189,6 +279,10 @@ def main() -> int:
     parser.add_argument("--crops-dir", type=Path, default=None,
                         help="write native-resolution photo|render crops here")
     parser.add_argument("--tag", default="model", help="prefix for crop filenames")
+    parser.add_argument("--honour-render-mode", action="store_true",
+                        help=HONOUR_RENDER_MODE_HELP + " (this entry point renders "
+                             "the raw fisheye, where UT/classic are forced, so the "
+                             "flag only matters for the record)")
     parser.add_argument("--output", type=Path, default=None)
     args = parser.parse_args()
 
@@ -196,12 +290,22 @@ def main() -> int:
     from cloudstudio_3dgs.training.dataset import S1TrainingDataset
 
     config = json.loads(args.config.read_text(encoding="utf-8"))
-    backend, torch = _load_backend(config)
+    backend, torch = _load_backend(config, honour_render_mode=args.honour_render_mode)
     payload = torch.load(args.checkpoint, map_location="cpu", weights_only=False)
     device = config.get("device", "cuda:0")
     params = {k: v.to(device) for k, v in payload["params"].items()}
     # The eval config's sh_degree caps what render() may use; take the model's.
     backend.sh_degree = max(int(backend.sh_degree), model_sh_degree(params))
+    render_spec = resolve_render_spec(
+        config, params, backend,
+        camera_model="fisheye",
+        background_policy="constant",
+        background_rgb=config["background_color"],
+        tile_crops=False,
+        checkpoint_meta=checkpoint_meta(payload),
+    )
+    print(f"render_spec {render_spec.fingerprint()[:16]}  "
+          f"unpropagated={render_spec.unpropagated()}")
 
     dataset = S1TrainingDataset(
         dataset_manifest_path=Path(config["dataset_manifest"]),
@@ -374,6 +478,7 @@ def main() -> int:
             "reading": reading,
             "crop": crop_summary or None,
             "per_view": per_view,
+            "render_spec": render_spec.record(),
         }, indent=1), encoding="utf-8")
         print(f"\nreport written to {args.output}")
     return 0

@@ -102,6 +102,10 @@ def main() -> int:
     parser.add_argument(
         "--background", type=float, nargs=3, default=(1.0, 1.0, 1.0)
     )
+    from tools.sharpness_metrics import HONOUR_RENDER_MODE_HELP
+
+    parser.add_argument("--honour-render-mode", action="store_true",
+                        help=HONOUR_RENDER_MODE_HELP)
     args = parser.parse_args()
 
     import torch
@@ -109,10 +113,14 @@ def main() -> int:
 
     from cloudstudio_3dgs.training.face_dataset import FaceCacheDataset
     from cloudstudio_3dgs.training.trainer import TrainerConfig
-    from tools.sharpness_metrics import _load_backend
+    from tools.sharpness_metrics import (
+        _load_backend,
+        checkpoint_meta,
+        resolve_render_spec,
+    )
 
     raw = json.loads(args.config.read_text(encoding="utf-8"))
-    backend, torch_mod = _load_backend(raw)
+    backend, torch_mod = _load_backend(raw, honour_render_mode=args.honour_render_mode)
 
     # A Tile owns only the pixels its crop covers. Rendering the full face puts
     # background where a neighbouring Tile's content belongs, so the strip
@@ -170,6 +178,16 @@ def main() -> int:
     # The eval config's sh_degree caps what render() may use; take the model's.
     backend.sh_degree = max(int(backend.sh_degree), _model_sh_degree(ours))
     step = int(checkpoint.get("step", 0))
+    render_spec = resolve_render_spec(
+        raw, ours, backend,
+        camera_model="pinhole",
+        background_policy=(
+            "view_background_library" if backgrounds is not None else "constant"
+        ),
+        background_rgb=tuple(args.background),
+        tile_crops=tile_views is not None,
+        checkpoint_meta=checkpoint_meta(checkpoint),
+    )
 
     reference = None
     residual_m = None
@@ -239,6 +257,7 @@ def main() -> int:
         "reference_ply": str(args.reference_ply) if args.reference_ply else None,
         "reference_alignment_median_nn_m": residual_m,
         "background_rgb": list(args.background),
+        "render_spec": render_spec.record(),
         "frames": rows,
     }
     (args.output / "compare_summary.json").write_text(

@@ -68,6 +68,10 @@ def main() -> int:
         "this run directory's holdout_views.json (views the run never trained on)",
     )
     parser.add_argument("--output", type=Path)
+    from tools.sharpness_metrics import HONOUR_RENDER_MODE_HELP
+
+    parser.add_argument("--honour-render-mode", action="store_true",
+                        help=HONOUR_RENDER_MODE_HELP)
     args = parser.parse_args()
     if args.tile_owned and not args.tile_views:
         parser.error("--tile-owned needs --tile-views")
@@ -81,11 +85,21 @@ def main() -> int:
     from cloudstudio_3dgs.training.face_dataset import FaceCacheDataset
     from cloudstudio_3dgs.training.view_backgrounds import ViewBackgroundLibrary
     from cloudstudio_3dgs.training.trainer import rendered_range_to_euclidean
-    from tools.sharpness_metrics import _load_backend, model_sh_degree
+    from tools.sharpness_metrics import (
+        _load_backend,
+        checkpoint_meta,
+        model_sh_degree,
+        resolve_render_spec,
+    )
 
     raw = json.loads(args.config.read_text(encoding="utf-8"))
-    backend, torch_mod = _load_backend(raw)
+    backend, torch_mod = _load_backend(raw, honour_render_mode=args.honour_render_mode)
     device = raw.get("device", "cuda:0")
+    # What the record must say about the views: the battery reads the face
+    # cache of the config's dataset version with "face4" -> "face4_val", so
+    # the intrinsics and backdrop manifests are not the config's own paths.
+    spec_intrinsics_manifest = raw["face_cache_manifest"]
+    spec_background_manifest = raw.get("background_image_manifest")
 
     if args.tile_views:
         if not raw.get("tile_inputs_manifest"):
@@ -138,6 +152,11 @@ def main() -> int:
                 device=device,
             )
     else:
+        spec_intrinsics_manifest = raw["face_cache_manifest"].replace("face4", "face4_val")
+        if raw.get("background_image_manifest"):
+            spec_background_manifest = raw["background_image_manifest"].replace(
+                "_train", "_val"
+            )
         dataset = FaceCacheDataset(
             Path(raw["face_cache_manifest"].replace("face4", "face4_val")),
             Path(raw["face_cache_root"].replace("face4", "face4_val")),
@@ -180,6 +199,9 @@ def main() -> int:
         }
         step = -1
         source = str(args.reference_ply)
+        # A PLY carries no merge report, so whether its colours hold baked
+        # per-tile gains stays unknown; the spec marks exposure unpropagated.
+        spec_checkpoint_meta = None
     else:
         payload = torch.load(args.checkpoint, map_location="cpu", weights_only=False)
         params = {
@@ -192,6 +214,20 @@ def main() -> int:
         # model's, or an SH1 checkpoint is scored DC-only (delivery_eval*.json
         # say 0 and did exactly that to every G9 battery number).
         backend.sh_degree = max(int(backend.sh_degree), model_sh_degree(params))
+        spec_checkpoint_meta = checkpoint_meta(payload)
+
+    render_spec = resolve_render_spec(
+        raw, params, backend,
+        camera_model="pinhole",
+        background_policy=(
+            "view_background_library" if backgrounds is not None else "constant"
+        ),
+        background_rgb=(1.0, 1.0, 1.0),
+        background_manifest=spec_background_manifest,
+        intrinsics_manifest=spec_intrinsics_manifest,
+        tile_crops=bool(args.tile_views),
+        checkpoint_meta=spec_checkpoint_meta,
+    )
 
     stride = max(1, len(dataset) // args.views)
     picks = list(range(0, len(dataset), stride))[: args.views]
@@ -280,6 +316,7 @@ def main() -> int:
             else "held_out_faces"
         ),
         "pixel_scope": "tile_owned" if args.tile_owned else "full_mask",
+        "render_spec": render_spec.record(),
         "psnr_mean": float(np.mean(psnrs)),
         "psnr_p10": float(np.percentile(psnrs, 10)),
         "alpha_mean": float(np.mean(alpha_means)),
