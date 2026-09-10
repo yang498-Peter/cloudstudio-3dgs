@@ -1,0 +1,484 @@
+{
+ "run_id": "diag_indoor_door_leaf_Tile_1_5_R1",
+ "output_dir": "C:\\Peter\\3dgs-runs\\house0305_sop\\diag_v2\\indoor_door_leaf_Tile_1\\runs\\diag_indoor_door_leaf_Tile_1_5_R1",
+ "device": "cuda:0",
+ "seed": 42,
+ "trainer_preset": "custom",
+ "dataset_manifest": "C:\\Peter\\3dgs-datasets\\house0305_sop_v8\\dataset_manifest.json",
+ "split_manifest": "C:\\Peter\\3dgs-datasets\\house0305_sop_v9\\split_manifest.json",
+ "mask_manifest": "C:\\Peter\\3dgs-datasets\\house0305_sop_v8\\masks\\mask_manifest.json",
+ "mask_root": "C:\\Peter\\3dgs-datasets\\house0305_sop_v8\\masks",
+ "person_mask_manifest": "C:\\Peter\\3dgs-datasets\\house0305_sop_v8\\person_mask_manifest.json",
+ "person_mask_root": "C:\\Peter\\3dgs-datasets\\house0305_person_masks",
+ "require_person_masks": true,
+ "recording_root": "C:\\Peter\\testdata\\S1\\house0305",
+ "face_cache_manifest": "C:\\Peter\\3dgs-datasets\\house0305_sop_v9\\face4_train\\face_manifest.json",
+ "face_cache_root": "C:\\Peter\\3dgs-datasets\\house0305_sop_v9\\face4_train",
+ "renderer_mask_manifest": "C:\\Peter\\3dgs-datasets\\house0305_sop_v9\\renderer_mask_train.json",
+ "depth_manifest": "C:\\Peter\\3dgs-datasets\\house0305_sop_v8\\depth\\depth_manifest.json",
+ "depth_root": "C:\\Peter\\3dgs-datasets\\house0305_sop_v8\\depth",
+ "face_lidar_geometry_manifest": "C:\\Peter\\3dgs-datasets\\house0305_sop_v9\\face4_lidar_train_vis6\\face_lidar_geometry_manifest.json",
+ "face_lidar_geometry_root": "C:\\Peter\\3dgs-datasets\\house0305_sop_v9\\face4_lidar_train_vis6",
+ "tile_inputs_manifest": "C:\\Peter\\3dgs-runs\\house0305_sop\\diag_v2\\indoor_door_leaf_Tile_1\\U1_5\\tile_inputs_manifest.json",
+ "tile_inputs_root": "C:\\Peter\\3dgs-runs\\house0305_sop\\tile_inputs_v9",
+ "mipmap_tile_id": 1,
+ "initialization_ply": "C:\\Peter\\3dgs-runs\\house0305_sop\\tile_inputs_v9\\Tile_1\\initialization_full_lidar.ply",
+ "initialization_geometry_manifest": "C:\\Peter\\3dgs-runs\\house0305_sop\\diag_v2\\indoor_door_leaf_Tile_1\\U1_5\\tile_geometry_manifest.json",
+ "initialization_geometry": "C:\\Peter\\3dgs-runs\\house0305_sop\\tile_geometry_v9\\Tile_1\\initialization_geometry_k7_k30.npz",
+ "surface_initialization": {
+  "enabled": true,
+  "mode": "mipmap_k7_k30",
+  "planarity_gate": 0.6,
+  "normal_scale_ratio": 0.5
+ },
+ "metric_scale_calibration": {
+  "mode": "precomputed",
+  "knn_neighbors": 7,
+  "knn_reduction": "arithmetic_mean",
+  "scale_multiplier": 1.0,
+  "means_step_fraction": null
+ },
+ "mipmap_pipeline_gate": "C:\\Peter\\3dgs-runs\\house0305_sop\\gates_v9\\gate_17_training_da2.json",
+ "gsplat_lock": "C:\\Peter\\cloudstudio-3dgs-gate1\\upstream\\gsplat.lock.json",
+ "factor": 1,
+ "max_steps": 3000,
+ "checkpoint_every": 3000,
+ "sh_degree": 1,
+ "sh_degree_interval": 0,
+ "color_model": "sh",
+ "background_color": [
+  1.0,
+  1.0,
+  1.0
+ ],
+ "pinhole_rasterize_mode": "classic",
+ "pinhole_with_ut": false,
+ "view_sampling_mode": "fisher_yates_without_replacement_per_epoch",
+ "rgb_l1_weight": 0.6,
+ "rgb_ssim_weight": 0.4,
+ "rgb_ssim_mode": "local_gaussian",
+ "lidar_range_weight": 0.0,
+ "lidar_range_loss_mode": "robust_log_huber",
+ "lidar_log_range_huber_delta": 0.05,
+ "da2_depth_weight": 0.15,
+ "lidar_normal_alignment": {
+  "enabled": true,
+  "weight_align": 0.05,
+  "weight_flatten": 0.05,
+  "weight_tangent_isotropy": 0.1,
+  "planarity_gate": 0.6,
+  "flatten_mode": "tangent_ratio",
+  "flatten_ratio_target": 0.33,
+  "tangent_isotropy_max_ratio": 60.0
+ },
+ "geometry_regularization": {
+  "enabled": true,
+  "opacity_sparsity_weight": 0.0,
+  "scale_upper_weight": 0.0,
+  "anisotropy_weight": 0.01,
+  "max_world_size_m": 0.2,
+  "world_shrink_factor": 0.8,
+  "max_anisotropy": 80.0
+ },
+ "topology_policy": {
+  "mode": "adaptive_growth"
+ },
+ "densification_strategy": "default_3dgs",
+ "densification_gradient_source": "total_loss",
+ "cap_max": 15000000,
+ "mcmc_noise_lr": 0.0,
+ "mcmc_noise_injection_stop_iter": 0,
+ "learning_rates": {
+  "means": 1.9772918522357942e-05,
+  "scales": 0.005,
+  "quats": 0.001,
+  "opacities": 0.05,
+  "colors": 0.0025
+ },
+ "means_lr_final_factor": 0.01,
+ "exposure_compensation": {
+  "enabled": true,
+  "learning_rate": 0.005
+ },
+ "golden_evaluation": {
+  "enabled": false
+ },
+ "final_evaluation_artifacts": false,
+ "lidar_alpha_weight": 0.1,
+ "lidar_alpha_target": 0.95,
+ "background_image_manifest": "C:\\Peter\\3dgs-runs\\house0305_sop\\tile_backgrounds_v9\\Tile_1\\background_manifest.json",
+ "background_image_root": "C:\\Peter\\3dgs-runs\\house0305_sop\\tile_backgrounds_v9\\Tile_1",
+ "mcmc_refine_start_iter": 500,
+ "mcmc_refine_stop_iter": 2100,
+ "mcmc_refine_every": 100,
+ "default_strategy": {
+  "exact_mipmap_lifecycle": true,
+  "lifecycle_execution_order": "pre_optimizer_vendor",
+  "detail_split_policy": "lidar_surface_screen_detail",
+  "absgrad": false,
+  "grow_grad2d": 5e-05,
+  "split_scale_m": 0.2,
+  "prune_scale_m": 0.2,
+  "prune_opa": 0.1,
+  "prune_opa_late": 0.05,
+  "prune_switch_step": 1500,
+  "prune_scale2d": 0.15,
+  "reset_every": 300,
+  "reset_opacity_cap": 0.2,
+  "refine_scale2d_stop_iter": 2100,
+  "refine_start_iter": 500,
+  "refine_stop_iter": 2100,
+  "refine_every": 100,
+  "capacity_conserving_clone_opacity": false,
+  "relaxed_cull_when_no_growth": true,
+  "revised_opacity": true,
+  "growth_metric": "footprint_weighted",
+  "relaxed_cull_at_capacity": false,
+  "opacity_cull_policy": "immediate",
+  "vendor_cull_warmup_profile": "exact_0p10_to_0p05",
+  "vendor_opacity_reset_profile": "exact_every300",
+  "reset_optimizer_state": "keep",
+  "reset_before_cull": true,
+  "detail_split_scale_m": 0.005,
+  "detail_split_screen_radius": 0.0035
+ },
+ "surface_alpha_floor_profile": true,
+ "lidar_alpha_dilation_radius_px": 6,
+ "mono_depth_manifest": "C:\\Peter\\3dgs-datasets\\house0305_sop_v9\\da2_train\\mono_depth_manifest.json",
+ "mono_depth_root": "C:\\Peter\\3dgs-datasets\\house0305_sop_v9\\da2_train",
+ "checkpoint_keep_every": 1000000,
+ "mono_depth_max_range_m": 30.0,
+ "da2_depth_space": "compressed",
+ "schedule_contract": "research_rescaled_horizon_v1",
+ "schedule_contract_fields": {
+  "arm": "R1",
+  "role": "wp03_diagnostic_short_horizon",
+  "horizon_steps": 3000,
+  "refine_stop_fraction_max": 0.7,
+  "resolved": {
+   "horizon_steps": 3000,
+   "refine_start_iter": 500,
+   "refine_stop_iter": 2100,
+   "refine_every": 100,
+   "refine_scale2d_stop_iter": 2100,
+   "prune_switch_step": 1500,
+   "reset_every": 300,
+   "sh_degree": 1,
+   "sh_degree_interval": 0,
+   "means_lr_base": 1.9772918522357942e-05,
+   "means_lr_final_factor": 0.01
+  },
+  "horizon_fractions": {
+   "refine_start": 0.16666666666666666,
+   "refine_stop": 0.7,
+   "refine_stop_max": 0.7,
+   "refine_scale2d_stop": 0.7,
+   "prune_switch": 0.5,
+   "reset_every": 0.1,
+   "sh_full_degree_step": 0.0
+  },
+  "linked_fields": [
+   "controlled_stop_after_steps",
+   "default_strategy.prune_switch_step",
+   "default_strategy.refine_every",
+   "default_strategy.refine_scale2d_stop_iter",
+   "default_strategy.refine_start_iter",
+   "default_strategy.refine_stop_iter",
+   "default_strategy.reset_every",
+   "learning_rates.means",
+   "max_steps",
+   "mcmc_refine_every",
+   "mcmc_refine_start_iter",
+   "mcmc_refine_stop_iter",
+   "means_lr_final_factor",
+   "metric_scale_calibration.means_step_fraction",
+   "output_dir",
+   "run_id",
+   "sh_degree_interval"
+  ],
+  "changed_fields": [
+   "controlled_stop_after_steps",
+   "default_strategy.prune_switch_step",
+   "default_strategy.refine_scale2d_stop_iter",
+   "default_strategy.refine_stop_iter",
+   "learning_rates.means",
+   "max_steps",
+   "mcmc_refine_stop_iter",
+   "metric_scale_calibration.means_step_fraction",
+   "output_dir",
+   "run_id"
+  ],
+  "moved_from_base": {
+   "run_id": {
+    "base": "house0305-t1-R1d",
+    "s1": "diag_indoor_door_leaf_Tile_1_5_R1",
+    "changed": true
+   },
+   "output_dir": {
+    "base": "C:\\Peter\\3dgs-runs\\house0305_sop\\tile1_R1d_20k",
+    "s1": "C:\\Peter\\3dgs-runs\\house0305_sop\\diag_v2\\indoor_door_leaf_Tile_1\\runs\\diag_indoor_door_leaf_Tile_1_5_R1",
+    "changed": true
+   },
+   "max_steps": {
+    "base": 36580,
+    "s1": 3000,
+    "changed": true
+   },
+   "controlled_stop_after_steps": {
+    "base": 20000,
+    "s1": "<absent>",
+    "changed": true
+   },
+   "mcmc_refine_stop_iter": {
+    "base": 14000,
+    "s1": 2100,
+    "changed": true
+   },
+   "default_strategy.refine_stop_iter": {
+    "base": 14000,
+    "s1": 2100,
+    "changed": true
+   },
+   "default_strategy.refine_scale2d_stop_iter": {
+    "base": 14000,
+    "s1": 2100,
+    "changed": true
+   },
+   "default_strategy.prune_switch_step": {
+    "base": 18290,
+    "s1": 1500,
+    "changed": true
+   },
+   "metric_scale_calibration.means_step_fraction": {
+    "base": "<absent>",
+    "s1": null,
+    "changed": true
+   },
+   "learning_rates.means": {
+    "base": 1.6e-05,
+    "s1": 1.9772918522357942e-05,
+    "changed": true
+   },
+   "mcmc_refine_start_iter": {
+    "base": 500,
+    "s1": 500,
+    "changed": false
+   },
+   "mcmc_refine_every": {
+    "base": 100,
+    "s1": 100,
+    "changed": false
+   },
+   "default_strategy.refine_start_iter": {
+    "base": 500,
+    "s1": 500,
+    "changed": false
+   },
+   "default_strategy.refine_every": {
+    "base": 100,
+    "s1": 100,
+    "changed": false
+   },
+   "default_strategy.reset_every": {
+    "base": 300,
+    "s1": 300,
+    "changed": false
+   },
+   "sh_degree_interval": {
+    "base": 0,
+    "s1": 0,
+    "changed": false
+   },
+   "means_lr_final_factor": {
+    "base": 0.01,
+    "s1": 0.01,
+    "changed": false
+   }
+  },
+  "policy": {
+   "refine_stop": "base refine_stop / base executed stop_step = 0.700000, x H snapped to refine_every=100",
+   "prune_switch_step": "H // 2 (trainer exact-lifecycle rule); reachable because refine_stop > H / 2",
+   "reset_every": "unchanged cadence (multiple of refine_every, vendor profile exact_every300)",
+   "refine_start_iter": "unchanged (trainer exact-lifecycle rule start=500)",
+   "sh_degree_interval": "unchanged (0 = full degree from step 0)",
+   "controlled_stop_after_steps": "removed: the run completes at H and writes run_manifest.json",
+   "means_lr": "frozen to the base arm's effective optimizer base: means_step_fraction 0.0032 x reference_scale_m 0.0061790370382368565 (runtime fact supplied via --reference-scale-m)"
+  },
+  "provenance": {
+   "base_config": "run_configs/house0305_tiles/v9/tile1_R1d_20k.json",
+   "base_config_sha256": "7728ae57775fdb3b30360ff3453354483c63310397c780732e0d5e20805bca33",
+   "base_run_id": "house0305-t1-R1d",
+   "generator": "tools/make_diagnostic_arm_config.py",
+   "reference_scale_m": 0.0061790370382368565,
+   "diagnostic_preset": "U1",
+   "diagnostic_region": "indoor_door_leaf_Tile_1"
+  }
+ },
+ "diag": {
+  "schema_version": 1,
+  "generator": "tools/make_diagnostic_arm_config.py",
+  "region": {
+   "label": "indoor_door_leaf_Tile_1",
+   "tile": "Tile_1",
+   "tile_id": 1,
+   "status": "provisional",
+   "world_box": [
+    [
+     6.0,
+     -3.0,
+     1.6
+    ],
+    [
+     7.6,
+     -1.6,
+     3.2
+    ]
+   ]
+  },
+  "preset": "U1",
+  "count": 5,
+  "variant": "R1",
+  "variant_fields": {
+   "checkpoint_every": {
+    "base": 5000,
+    "diag": 3000
+   }
+  },
+  "horizon_steps": 3000,
+  "base_config": "run_configs/house0305_tiles/v9/tile1_R1d_20k.json",
+  "base_config_sha256": "7728ae57775fdb3b30360ff3453354483c63310397c780732e0d5e20805bca33",
+  "tile_inputs_manifest": "C:\\Peter\\3dgs-runs\\house0305_sop\\diag_v2\\indoor_door_leaf_Tile_1\\U1_5\\tile_inputs_manifest.json",
+  "tile_inputs_manifest_sha256": "0943c7a64efaa416b41765bbfe941d896091b5516e7eec3879148a64ed49d895",
+  "tile_geometry_manifest": "C:\\Peter\\3dgs-runs\\house0305_sop\\diag_v2\\indoor_door_leaf_Tile_1\\U1_5\\tile_geometry_manifest.json",
+  "tile_geometry_manifest_sha256": "9f02c23777779e773d22d8fcfb6d158b60a6cdfffb20aeab27b51e62c5902d2e",
+  "rebound_fields": {
+   "tile_inputs_manifest": {
+    "base": "C:\\Peter\\3dgs-runs\\house0305_sop\\tile_inputs_v9\\tile_inputs_manifest.json",
+    "diag": "C:\\Peter\\3dgs-runs\\house0305_sop\\diag_v2\\indoor_door_leaf_Tile_1\\U1_5\\tile_inputs_manifest.json"
+   },
+   "initialization_geometry_manifest": {
+    "base": "C:\\Peter\\3dgs-runs\\house0305_sop\\tile_geometry_v9\\tile_geometry_manifest.json",
+    "diag": "C:\\Peter\\3dgs-runs\\house0305_sop\\diag_v2\\indoor_door_leaf_Tile_1\\U1_5\\tile_geometry_manifest.json"
+   }
+  },
+  "verbatim_fields": [
+   "tile_inputs_root",
+   "initialization_ply",
+   "initialization_geometry",
+   "background_image_manifest",
+   "background_image_root",
+   "face_cache_manifest",
+   "mipmap_tile_id"
+  ],
+  "parent_image_ids": [
+   "img_d691623e566cde7f444905b2",
+   "img_954f086e75547572ac933571",
+   "img_8a5782154627496067ab070d",
+   "img_dad684e3df7bafd45b805a5d",
+   "img_9f8e6e6735bab2261cf49998"
+  ],
+  "view_sample_ids": [
+   "img_8a5782154627496067ab070d::pitch_up_56",
+   "img_8a5782154627496067ab070d::yaw_minus_35",
+   "img_8a5782154627496067ab070d::yaw_plus_35",
+   "img_954f086e75547572ac933571::pitch_up_56",
+   "img_954f086e75547572ac933571::yaw_plus_35",
+   "img_9f8e6e6735bab2261cf49998::pitch_up_56",
+   "img_9f8e6e6735bab2261cf49998::yaw_minus_35",
+   "img_9f8e6e6735bab2261cf49998::yaw_plus_35",
+   "img_d691623e566cde7f444905b2::pitch_up_56",
+   "img_d691623e566cde7f444905b2::yaw_minus_35",
+   "img_d691623e566cde7f444905b2::yaw_plus_35",
+   "img_dad684e3df7bafd45b805a5d::pitch_up_56",
+   "img_dad684e3df7bafd45b805a5d::yaw_plus_35"
+  ],
+  "view_count": 13,
+  "selection_policy": {
+   "preset": "U1",
+   "min_support_fraction_requested": 0.5,
+   "min_support_fraction_applied": 0.5,
+   "min_support_fraction_floor": 0.2,
+   "threshold_relaxed": false,
+   "candidate_count": 33,
+   "table_rows": 677,
+   "rule": "support_fraction desc, range asc; alternate physical cameras (a stereo pair of one rig frame is allowed)",
+   "selected_count": 5,
+   "short_by": 0,
+   "cameras_represented": [
+    "left",
+    "right"
+   ]
+  },
+  "selected_coverage": [
+   {
+    "image_id": "img_d691623e566cde7f444905b2",
+    "camera_id": "right",
+    "rig_frame_id": "rig_0579fcb345a3734afc890594",
+    "support_fraction": 0.6175,
+    "n_effective": 247,
+    "n_samples": 400,
+    "range_min_m": 6.14599,
+    "range_median_m": 6.78276,
+    "sharpness_lapvar_median": 741.994,
+    "luma_median": 49.1399,
+    "selection_rank": 0
+   },
+   {
+    "image_id": "img_954f086e75547572ac933571",
+    "camera_id": "left",
+    "rig_frame_id": "rig_a1697c621b1dd2f46054211e",
+    "support_fraction": 0.525,
+    "n_effective": 210,
+    "n_samples": 400,
+    "range_min_m": 6.71526,
+    "range_median_m": 7.16512,
+    "sharpness_lapvar_median": 502.382,
+    "luma_median": 37.2561,
+    "selection_rank": 1
+   },
+   {
+    "image_id": "img_8a5782154627496067ab070d",
+    "camera_id": "right",
+    "rig_frame_id": "rig_77f65590b82898143d4b614f",
+    "support_fraction": 0.6175,
+    "n_effective": 247,
+    "n_samples": 400,
+    "range_min_m": 6.32547,
+    "range_median_m": 6.96596,
+    "sharpness_lapvar_median": 907.045,
+    "luma_median": 53.6309,
+    "selection_rank": 2
+   },
+   {
+    "image_id": "img_dad684e3df7bafd45b805a5d",
+    "camera_id": "left",
+    "rig_frame_id": "rig_beb86146e928504f312b06b7",
+    "support_fraction": 0.52,
+    "n_effective": 208,
+    "n_samples": 400,
+    "range_min_m": 6.72513,
+    "range_median_m": 7.17687,
+    "sharpness_lapvar_median": 528.048,
+    "luma_median": 37.1588,
+    "selection_rank": 3
+   },
+   {
+    "image_id": "img_9f8e6e6735bab2261cf49998",
+    "camera_id": "right",
+    "rig_frame_id": "rig_8bde27053478a07cd47f4415",
+    "support_fraction": 0.6075,
+    "n_effective": 243,
+    "n_samples": 400,
+    "range_min_m": 6.13604,
+    "range_median_m": 7.05834,
+    "sharpness_lapvar_median": 179.165,
+    "luma_median": 77.9341,
+    "selection_rank": 4
+   }
+  ],
+  "notes": [
+   "views outside the selection never receive gradients; opacity resets + culls will remove unseen Gaussians of the full-Tile initialization over the run (expected, the arm is a region diagnostic, not a delivery)",
+   "H = max_steps; controlled_stop_after_steps removed so the run completes and writes run_manifest.json"
+  ]
+ }
+}

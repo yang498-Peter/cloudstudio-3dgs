@@ -1,0 +1,2470 @@
+{
+ "run_id": "diag_outdoor_gravel_Tile_0_eval",
+ "output_dir": "C:\\Peter\\3dgs-runs\\house0305_sop\\diag_v2\\outdoor_gravel_Tile_0\\runs\\diag_outdoor_gravel_Tile_0_eval",
+ "device": "cuda:0",
+ "seed": 42,
+ "trainer_preset": "custom",
+ "dataset_manifest": "C:\\Peter\\3dgs-datasets\\house0305_sop_v8\\dataset_manifest.json",
+ "split_manifest": "C:\\Peter\\3dgs-datasets\\house0305_sop_v9\\split_manifest.json",
+ "mask_manifest": "C:\\Peter\\3dgs-datasets\\house0305_sop_v8\\masks\\mask_manifest.json",
+ "mask_root": "C:\\Peter\\3dgs-datasets\\house0305_sop_v8\\masks",
+ "person_mask_manifest": "C:\\Peter\\3dgs-datasets\\house0305_sop_v8\\person_mask_manifest.json",
+ "person_mask_root": "C:\\Peter\\3dgs-datasets\\house0305_person_masks",
+ "require_person_masks": true,
+ "recording_root": "C:\\Peter\\testdata\\S1\\house0305",
+ "face_cache_manifest": "C:\\Peter\\3dgs-datasets\\house0305_sop_v9\\face4_train\\face_manifest.json",
+ "face_cache_root": "C:\\Peter\\3dgs-datasets\\house0305_sop_v9\\face4_train",
+ "renderer_mask_manifest": "C:\\Peter\\3dgs-datasets\\house0305_sop_v9\\renderer_mask_train.json",
+ "depth_manifest": "C:\\Peter\\3dgs-datasets\\house0305_sop_v8\\depth\\depth_manifest.json",
+ "depth_root": "C:\\Peter\\3dgs-datasets\\house0305_sop_v8\\depth",
+ "face_lidar_geometry_manifest": "C:\\Peter\\3dgs-datasets\\house0305_sop_v9\\face4_lidar_train_vis6\\face_lidar_geometry_manifest.json",
+ "face_lidar_geometry_root": "C:\\Peter\\3dgs-datasets\\house0305_sop_v9\\face4_lidar_train_vis6",
+ "tile_inputs_manifest": "C:\\Peter\\3dgs-runs\\house0305_sop\\diag_v2\\outdoor_gravel_Tile_0\\DIAG_40\\tile_inputs_manifest.json",
+ "tile_inputs_root": "C:\\Peter\\3dgs-runs\\house0305_sop\\tile_inputs_v9",
+ "mipmap_tile_id": 0,
+ "initialization_ply": "C:\\Peter\\3dgs-runs\\house0305_sop\\tile_inputs_v9\\Tile_0\\initialization_full_lidar.ply",
+ "initialization_geometry_manifest": "C:\\Peter\\3dgs-runs\\house0305_sop\\diag_v2\\outdoor_gravel_Tile_0\\DIAG_40\\tile_geometry_manifest.json",
+ "initialization_geometry": "C:\\Peter\\3dgs-runs\\house0305_sop\\tile_geometry_v9\\Tile_0\\initialization_geometry_k7_k30.npz",
+ "surface_initialization": {
+  "enabled": true,
+  "mode": "mipmap_k7_k30",
+  "planarity_gate": 0.6,
+  "normal_scale_ratio": 0.5
+ },
+ "metric_scale_calibration": {
+  "mode": "precomputed",
+  "knn_neighbors": 7,
+  "knn_reduction": "arithmetic_mean",
+  "scale_multiplier": 1.0,
+  "means_step_fraction": null
+ },
+ "mipmap_pipeline_gate": "C:\\Peter\\3dgs-runs\\house0305_sop\\gates_v9\\gate_17_training_da2.json",
+ "gsplat_lock": "C:\\Peter\\cloudstudio-3dgs-gate1\\upstream\\gsplat.lock.json",
+ "factor": 1,
+ "max_steps": 3000,
+ "checkpoint_every": 3000,
+ "sh_degree": 1,
+ "sh_degree_interval": 0,
+ "color_model": "sh",
+ "background_color": [
+  1.0,
+  1.0,
+  1.0
+ ],
+ "pinhole_rasterize_mode": "classic",
+ "pinhole_with_ut": false,
+ "view_sampling_mode": "fisher_yates_without_replacement_per_epoch",
+ "rgb_l1_weight": 0.6,
+ "rgb_ssim_weight": 0.4,
+ "rgb_ssim_mode": "local_gaussian",
+ "lidar_range_weight": 0.0,
+ "lidar_range_loss_mode": "robust_log_huber",
+ "lidar_log_range_huber_delta": 0.05,
+ "da2_depth_weight": 0.15,
+ "lidar_normal_alignment": {
+  "enabled": true,
+  "weight_align": 0.05,
+  "weight_flatten": 0.05,
+  "weight_tangent_isotropy": 0.1,
+  "planarity_gate": 0.6,
+  "flatten_mode": "tangent_ratio",
+  "flatten_ratio_target": 0.33,
+  "tangent_isotropy_max_ratio": 60.0
+ },
+ "geometry_regularization": {
+  "enabled": true,
+  "opacity_sparsity_weight": 0.0,
+  "scale_upper_weight": 0.0,
+  "anisotropy_weight": 0.01,
+  "max_world_size_m": 0.2,
+  "world_shrink_factor": 0.8,
+  "max_anisotropy": 80.0
+ },
+ "topology_policy": {
+  "mode": "adaptive_growth"
+ },
+ "densification_strategy": "default_3dgs",
+ "densification_gradient_source": "total_loss",
+ "cap_max": 15000000,
+ "mcmc_noise_lr": 0.0,
+ "mcmc_noise_injection_stop_iter": 0,
+ "learning_rates": {
+  "means": 2.4857029318809512e-05,
+  "scales": 0.005,
+  "quats": 0.001,
+  "opacities": 0.05,
+  "colors": 0.0025
+ },
+ "means_lr_final_factor": 0.01,
+ "exposure_compensation": {
+  "enabled": true,
+  "learning_rate": 0.005
+ },
+ "golden_evaluation": {
+  "enabled": false
+ },
+ "final_evaluation_artifacts": false,
+ "lidar_alpha_weight": 0.1,
+ "lidar_alpha_target": 0.95,
+ "background_image_manifest": "C:\\Peter\\3dgs-runs\\house0305_sop\\tile_backgrounds_v9\\Tile_0\\background_manifest.json",
+ "background_image_root": "C:\\Peter\\3dgs-runs\\house0305_sop\\tile_backgrounds_v9\\Tile_0",
+ "mcmc_refine_start_iter": 500,
+ "mcmc_refine_stop_iter": 2100,
+ "mcmc_refine_every": 100,
+ "default_strategy": {
+  "exact_mipmap_lifecycle": true,
+  "lifecycle_execution_order": "pre_optimizer_vendor",
+  "detail_split_policy": "lidar_surface_screen_detail",
+  "absgrad": false,
+  "grow_grad2d": 5e-05,
+  "split_scale_m": 0.2,
+  "prune_scale_m": 0.2,
+  "prune_opa": 0.1,
+  "prune_opa_late": 0.05,
+  "prune_switch_step": 1500,
+  "prune_scale2d": 0.15,
+  "reset_every": 300,
+  "reset_opacity_cap": 0.2,
+  "refine_scale2d_stop_iter": 2100,
+  "refine_start_iter": 500,
+  "refine_stop_iter": 2100,
+  "refine_every": 100,
+  "capacity_conserving_clone_opacity": false,
+  "relaxed_cull_when_no_growth": true,
+  "revised_opacity": true,
+  "growth_metric": "footprint_weighted",
+  "relaxed_cull_at_capacity": false,
+  "opacity_cull_policy": "immediate",
+  "vendor_cull_warmup_profile": "exact_0p10_to_0p05",
+  "vendor_opacity_reset_profile": "exact_every300",
+  "reset_optimizer_state": "keep",
+  "reset_before_cull": true,
+  "detail_split_scale_m": 0.005,
+  "detail_split_screen_radius": 0.0035
+ },
+ "surface_alpha_floor_profile": true,
+ "lidar_alpha_dilation_radius_px": 6,
+ "mono_depth_manifest": "C:\\Peter\\3dgs-datasets\\house0305_sop_v9\\da2_train\\mono_depth_manifest.json",
+ "mono_depth_root": "C:\\Peter\\3dgs-datasets\\house0305_sop_v9\\da2_train",
+ "checkpoint_keep_every": 1000000,
+ "mono_depth_max_range_m": 30.0,
+ "da2_depth_space": "compressed",
+ "schedule_contract": "research_rescaled_horizon_v1",
+ "schedule_contract_fields": {
+  "arm": "R1",
+  "role": "wp03_diagnostic_short_horizon",
+  "horizon_steps": 3000,
+  "refine_stop_fraction_max": 0.7,
+  "resolved": {
+   "horizon_steps": 3000,
+   "refine_start_iter": 500,
+   "refine_stop_iter": 2100,
+   "refine_every": 100,
+   "refine_scale2d_stop_iter": 2100,
+   "prune_switch_step": 1500,
+   "reset_every": 300,
+   "sh_degree": 1,
+   "sh_degree_interval": 0,
+   "means_lr_base": 2.4857029318809512e-05,
+   "means_lr_final_factor": 0.01
+  },
+  "horizon_fractions": {
+   "refine_start": 0.16666666666666666,
+   "refine_stop": 0.7,
+   "refine_stop_max": 0.7,
+   "refine_scale2d_stop": 0.7,
+   "prune_switch": 0.5,
+   "reset_every": 0.1,
+   "sh_full_degree_step": 0.0
+  },
+  "linked_fields": [
+   "controlled_stop_after_steps",
+   "default_strategy.prune_switch_step",
+   "default_strategy.refine_every",
+   "default_strategy.refine_scale2d_stop_iter",
+   "default_strategy.refine_start_iter",
+   "default_strategy.refine_stop_iter",
+   "default_strategy.reset_every",
+   "learning_rates.means",
+   "max_steps",
+   "mcmc_refine_every",
+   "mcmc_refine_start_iter",
+   "mcmc_refine_stop_iter",
+   "means_lr_final_factor",
+   "metric_scale_calibration.means_step_fraction",
+   "output_dir",
+   "run_id",
+   "sh_degree_interval"
+  ],
+  "changed_fields": [
+   "controlled_stop_after_steps",
+   "default_strategy.prune_switch_step",
+   "default_strategy.refine_scale2d_stop_iter",
+   "default_strategy.refine_stop_iter",
+   "learning_rates.means",
+   "max_steps",
+   "mcmc_refine_stop_iter",
+   "metric_scale_calibration.means_step_fraction",
+   "output_dir",
+   "run_id"
+  ],
+  "moved_from_base": {
+   "run_id": {
+    "base": "house0305-t0-R1-range0",
+    "s1": "diag_outdoor_gravel_Tile_0_40_R1",
+    "changed": true
+   },
+   "output_dir": {
+    "base": "C:\\Peter\\3dgs-runs\\house0305_sop\\tile0_R1_range0_20k",
+    "s1": "C:\\Peter\\3dgs-runs\\house0305_sop\\diag_v2\\outdoor_gravel_Tile_0\\runs\\diag_outdoor_gravel_Tile_0_40_R1",
+    "changed": true
+   },
+   "max_steps": {
+    "base": 42640,
+    "s1": 3000,
+    "changed": true
+   },
+   "controlled_stop_after_steps": {
+    "base": 20000,
+    "s1": "<absent>",
+    "changed": true
+   },
+   "mcmc_refine_stop_iter": {
+    "base": 14000,
+    "s1": 2100,
+    "changed": true
+   },
+   "default_strategy.refine_stop_iter": {
+    "base": 14000,
+    "s1": 2100,
+    "changed": true
+   },
+   "default_strategy.refine_scale2d_stop_iter": {
+    "base": 14000,
+    "s1": 2100,
+    "changed": true
+   },
+   "default_strategy.prune_switch_step": {
+    "base": 21320,
+    "s1": 1500,
+    "changed": true
+   },
+   "metric_scale_calibration.means_step_fraction": {
+    "base": "<absent>",
+    "s1": null,
+    "changed": true
+   },
+   "learning_rates.means": {
+    "base": 1.6e-05,
+    "s1": 2.4857029318809512e-05,
+    "changed": true
+   },
+   "mcmc_refine_start_iter": {
+    "base": 500,
+    "s1": 500,
+    "changed": false
+   },
+   "mcmc_refine_every": {
+    "base": 100,
+    "s1": 100,
+    "changed": false
+   },
+   "default_strategy.refine_start_iter": {
+    "base": 500,
+    "s1": 500,
+    "changed": false
+   },
+   "default_strategy.refine_every": {
+    "base": 100,
+    "s1": 100,
+    "changed": false
+   },
+   "default_strategy.reset_every": {
+    "base": 300,
+    "s1": 300,
+    "changed": false
+   },
+   "sh_degree_interval": {
+    "base": 0,
+    "s1": 0,
+    "changed": false
+   },
+   "means_lr_final_factor": {
+    "base": 0.01,
+    "s1": 0.01,
+    "changed": false
+   }
+  },
+  "policy": {
+   "refine_stop": "base refine_stop / base executed stop_step = 0.700000, x H snapped to refine_every=100",
+   "prune_switch_step": "H // 2 (trainer exact-lifecycle rule); reachable because refine_stop > H / 2",
+   "reset_every": "unchanged cadence (multiple of refine_every, vendor profile exact_every300)",
+   "refine_start_iter": "unchanged (trainer exact-lifecycle rule start=500)",
+   "sh_degree_interval": "unchanged (0 = full degree from step 0)",
+   "controlled_stop_after_steps": "removed: the run completes at H and writes run_manifest.json",
+   "means_lr": "frozen to the base arm's effective optimizer base: means_step_fraction 0.0032 x reference_scale_m 0.007767821662127972 (runtime fact supplied via --reference-scale-m)"
+  },
+  "provenance": {
+   "base_config": "run_configs/house0305_tiles/v9/tile0_R1_range0_20k.json",
+   "base_config_sha256": "40b4d71adaed653e74c8d733013ae391651d141e22bec9a99d3301ff95ad7728",
+   "base_run_id": "house0305-t0-R1-range0",
+   "generator": "tools/make_diagnostic_arm_config.py",
+   "reference_scale_m": 0.007767821662127972,
+   "diagnostic_preset": "DIAG",
+   "diagnostic_region": "outdoor_gravel_Tile_0"
+  }
+ },
+ "diag_eval": {
+  "schema_version": 1,
+  "generator": "tools/make_diagnostic_arm_config.py",
+  "region": {
+   "label": "outdoor_gravel_Tile_0",
+   "tile": "Tile_0",
+   "tile_id": 0,
+   "status": "provisional",
+   "world_box": [
+    [
+     7.5,
+     -12.0,
+     0.2
+    ],
+    [
+     9.5,
+     -10.0,
+     0.7
+    ]
+   ]
+  },
+  "evaluates_arms": [
+   "diag_outdoor_gravel_Tile_0_1_R1",
+   "diag_outdoor_gravel_Tile_0_5_R1",
+   "diag_outdoor_gravel_Tile_0_40_R1",
+   "diag_outdoor_gravel_Tile_0_40_G0",
+   "diag_outdoor_gravel_Tile_0_40_G1"
+  ],
+  "view_set": {
+   "preset": "DIAG",
+   "count": 40,
+   "view_count": 151,
+   "tile_inputs_manifest": "C:\\Peter\\3dgs-runs\\house0305_sop\\diag_v2\\outdoor_gravel_Tile_0\\DIAG_40\\tile_inputs_manifest.json"
+  },
+  "roi_in_crops": {
+   "img_03f32cc827b85f5858eb1527::pitch_down_56": {
+    "sample_id": "img_03f32cc827b85f5858eb1527::pitch_down_56",
+    "image_id": "img_03f32cc827b85f5858eb1527",
+    "camera_id": "left",
+    "roi": null
+   },
+   "img_03f32cc827b85f5858eb1527::pitch_up_56": {
+    "sample_id": "img_03f32cc827b85f5858eb1527::pitch_up_56",
+    "image_id": "img_03f32cc827b85f5858eb1527",
+    "camera_id": "left",
+    "roi": null
+   },
+   "img_03f32cc827b85f5858eb1527::yaw_minus_35": {
+    "sample_id": "img_03f32cc827b85f5858eb1527::yaw_minus_35",
+    "image_id": "img_03f32cc827b85f5858eb1527",
+    "camera_id": "left",
+    "roi": {
+     "face_id": "yaw_minus_35",
+     "crop": {
+      "x": 0,
+      "y": 0,
+      "width": 1456,
+      "height": 2912
+     },
+     "x0": 1181,
+     "y0": 1930,
+     "x1": 1430,
+     "y1": 2282,
+     "samples_in_face": 24,
+     "samples_in_crop": 24,
+     "fraction_of_samples_in_crop": 0.06,
+     "percentiles": [
+      2.0,
+      98.0
+     ]
+    }
+   },
+   "img_03f32cc827b85f5858eb1527::yaw_plus_35": {
+    "sample_id": "img_03f32cc827b85f5858eb1527::yaw_plus_35",
+    "image_id": "img_03f32cc827b85f5858eb1527",
+    "camera_id": "left",
+    "roi": {
+     "face_id": "yaw_plus_35",
+     "crop": {
+      "x": 0,
+      "y": 0,
+      "width": 1456,
+      "height": 2912
+     },
+     "x0": 55,
+     "y0": 1530,
+     "x1": 1000,
+     "y1": 2189,
+     "samples_in_face": 376,
+     "samples_in_crop": 376,
+     "fraction_of_samples_in_crop": 0.94,
+     "percentiles": [
+      2.0,
+      98.0
+     ]
+    }
+   },
+   "img_13691d7391a8be50b061c1b3::pitch_down_56": {
+    "sample_id": "img_13691d7391a8be50b061c1b3::pitch_down_56",
+    "image_id": "img_13691d7391a8be50b061c1b3",
+    "camera_id": "right",
+    "roi": {
+     "face_id": "pitch_down_56",
+     "crop": {
+      "x": 6,
+      "y": 0,
+      "width": 2906,
+      "height": 1456
+     },
+     "x0": 11,
+     "y0": 16,
+     "x1": 310,
+     "y1": 82,
+     "samples_in_face": 3,
+     "samples_in_crop": 3,
+     "fraction_of_samples_in_crop": 0.0075,
+     "percentiles": [
+      2.0,
+      98.0
+     ]
+    }
+   },
+   "img_13691d7391a8be50b061c1b3::pitch_up_56": {
+    "sample_id": "img_13691d7391a8be50b061c1b3::pitch_up_56",
+    "image_id": "img_13691d7391a8be50b061c1b3",
+    "camera_id": "right",
+    "roi": null
+   },
+   "img_13691d7391a8be50b061c1b3::yaw_minus_35": {
+    "sample_id": "img_13691d7391a8be50b061c1b3::yaw_minus_35",
+    "image_id": "img_13691d7391a8be50b061c1b3",
+    "camera_id": "right",
+    "roi": {
+     "face_id": "yaw_minus_35",
+     "crop": {
+      "x": 0,
+      "y": 0,
+      "width": 1456,
+      "height": 2912
+     },
+     "x0": 620,
+     "y0": 1697,
+     "x1": 1410,
+     "y1": 2145,
+     "samples_in_face": 390,
+     "samples_in_crop": 390,
+     "fraction_of_samples_in_crop": 0.975,
+     "percentiles": [
+      2.0,
+      98.0
+     ]
+    }
+   },
+   "img_13691d7391a8be50b061c1b3::yaw_plus_35": {
+    "sample_id": "img_13691d7391a8be50b061c1b3::yaw_plus_35",
+    "image_id": "img_13691d7391a8be50b061c1b3",
+    "camera_id": "right",
+    "roi": {
+     "face_id": "yaw_plus_35",
+     "crop": {
+      "x": 0,
+      "y": 1937,
+      "width": 1456,
+      "height": 975
+     },
+     "x0": 18,
+     "y0": 100,
+     "x1": 116,
+     "y1": 209,
+     "samples_in_face": 10,
+     "samples_in_crop": 10,
+     "fraction_of_samples_in_crop": 0.025,
+     "percentiles": [
+      2.0,
+      98.0
+     ]
+    }
+   },
+   "img_2c48bbf509b38c8a6870501a::pitch_down_56": {
+    "sample_id": "img_2c48bbf509b38c8a6870501a::pitch_down_56",
+    "image_id": "img_2c48bbf509b38c8a6870501a",
+    "camera_id": "left",
+    "roi": null
+   },
+   "img_2c48bbf509b38c8a6870501a::pitch_up_56": {
+    "sample_id": "img_2c48bbf509b38c8a6870501a::pitch_up_56",
+    "image_id": "img_2c48bbf509b38c8a6870501a",
+    "camera_id": "left",
+    "roi": null
+   },
+   "img_2c48bbf509b38c8a6870501a::yaw_minus_35": {
+    "sample_id": "img_2c48bbf509b38c8a6870501a::yaw_minus_35",
+    "image_id": "img_2c48bbf509b38c8a6870501a",
+    "camera_id": "left",
+    "roi": null
+   },
+   "img_2c48bbf509b38c8a6870501a::yaw_plus_35": {
+    "sample_id": "img_2c48bbf509b38c8a6870501a::yaw_plus_35",
+    "image_id": "img_2c48bbf509b38c8a6870501a",
+    "camera_id": "left",
+    "roi": {
+     "face_id": "yaw_plus_35",
+     "crop": {
+      "x": 0,
+      "y": 0,
+      "width": 1456,
+      "height": 2912
+     },
+     "x0": 345,
+     "y0": 1416,
+     "x1": 1237,
+     "y1": 1894,
+     "samples_in_face": 400,
+     "samples_in_crop": 400,
+     "fraction_of_samples_in_crop": 1.0,
+     "percentiles": [
+      2.0,
+      98.0
+     ]
+    }
+   },
+   "img_d1b98043d8de5060ebfdfffe::pitch_down_56": {
+    "sample_id": "img_d1b98043d8de5060ebfdfffe::pitch_down_56",
+    "image_id": "img_d1b98043d8de5060ebfdfffe",
+    "camera_id": "right",
+    "roi": {
+     "face_id": "pitch_down_56",
+     "crop": {
+      "x": 21,
+      "y": 0,
+      "width": 2764,
+      "height": 1456
+     },
+     "x0": 2608,
+     "y0": 5,
+     "x1": 2750,
+     "y1": 352,
+     "samples_in_face": 14,
+     "samples_in_crop": 6,
+     "fraction_of_samples_in_crop": 0.015,
+     "percentiles": [
+      2.0,
+      98.0
+     ]
+    }
+   },
+   "img_d1b98043d8de5060ebfdfffe::pitch_up_56": {
+    "sample_id": "img_d1b98043d8de5060ebfdfffe::pitch_up_56",
+    "image_id": "img_d1b98043d8de5060ebfdfffe",
+    "camera_id": "right",
+    "roi": null
+   },
+   "img_d1b98043d8de5060ebfdfffe::yaw_minus_35": {
+    "sample_id": "img_d1b98043d8de5060ebfdfffe::yaw_minus_35",
+    "image_id": "img_d1b98043d8de5060ebfdfffe",
+    "camera_id": "right",
+    "roi": null
+   },
+   "img_d1b98043d8de5060ebfdfffe::yaw_plus_35": {
+    "sample_id": "img_d1b98043d8de5060ebfdfffe::yaw_plus_35",
+    "image_id": "img_d1b98043d8de5060ebfdfffe",
+    "camera_id": "right",
+    "roi": {
+     "face_id": "yaw_plus_35",
+     "crop": {
+      "x": 0,
+      "y": 0,
+      "width": 1456,
+      "height": 2912
+     },
+     "x0": 420,
+     "y0": 1856,
+     "x1": 1216,
+     "y1": 2486,
+     "samples_in_face": 400,
+     "samples_in_crop": 400,
+     "fraction_of_samples_in_crop": 1.0,
+     "percentiles": [
+      2.0,
+      98.0
+     ]
+    }
+   },
+   "img_0bd606416eabd8fdcf14e062::pitch_down_56": {
+    "sample_id": "img_0bd606416eabd8fdcf14e062::pitch_down_56",
+    "image_id": "img_0bd606416eabd8fdcf14e062",
+    "camera_id": "left",
+    "roi": null
+   },
+   "img_0bd606416eabd8fdcf14e062::pitch_up_56": {
+    "sample_id": "img_0bd606416eabd8fdcf14e062::pitch_up_56",
+    "image_id": "img_0bd606416eabd8fdcf14e062",
+    "camera_id": "left",
+    "roi": null
+   },
+   "img_0bd606416eabd8fdcf14e062::yaw_minus_35": {
+    "sample_id": "img_0bd606416eabd8fdcf14e062::yaw_minus_35",
+    "image_id": "img_0bd606416eabd8fdcf14e062",
+    "camera_id": "left",
+    "roi": null
+   },
+   "img_0bd606416eabd8fdcf14e062::yaw_plus_35": {
+    "sample_id": "img_0bd606416eabd8fdcf14e062::yaw_plus_35",
+    "image_id": "img_0bd606416eabd8fdcf14e062",
+    "camera_id": "left",
+    "roi": {
+     "face_id": "yaw_plus_35",
+     "crop": {
+      "x": 0,
+      "y": 0,
+      "width": 1456,
+      "height": 2907
+     },
+     "x0": 253,
+     "y0": 1528,
+     "x1": 1160,
+     "y1": 2048,
+     "samples_in_face": 400,
+     "samples_in_crop": 400,
+     "fraction_of_samples_in_crop": 1.0,
+     "percentiles": [
+      2.0,
+      98.0
+     ]
+    }
+   },
+   "img_6140eac6fa52c2bec7a4cf37::pitch_down_56": {
+    "sample_id": "img_6140eac6fa52c2bec7a4cf37::pitch_down_56",
+    "image_id": "img_6140eac6fa52c2bec7a4cf37",
+    "camera_id": "right",
+    "roi": null
+   },
+   "img_6140eac6fa52c2bec7a4cf37::pitch_up_56": {
+    "sample_id": "img_6140eac6fa52c2bec7a4cf37::pitch_up_56",
+    "image_id": "img_6140eac6fa52c2bec7a4cf37",
+    "camera_id": "right",
+    "roi": null
+   },
+   "img_6140eac6fa52c2bec7a4cf37::yaw_minus_35": {
+    "sample_id": "img_6140eac6fa52c2bec7a4cf37::yaw_minus_35",
+    "image_id": "img_6140eac6fa52c2bec7a4cf37",
+    "camera_id": "right",
+    "roi": null
+   },
+   "img_6140eac6fa52c2bec7a4cf37::yaw_plus_35": {
+    "sample_id": "img_6140eac6fa52c2bec7a4cf37::yaw_plus_35",
+    "image_id": "img_6140eac6fa52c2bec7a4cf37",
+    "camera_id": "right",
+    "roi": {
+     "face_id": "yaw_plus_35",
+     "crop": {
+      "x": 0,
+      "y": 86,
+      "width": 1456,
+      "height": 2826
+     },
+     "x0": 493,
+     "y0": 1717,
+     "x1": 1213,
+     "y1": 2254,
+     "samples_in_face": 400,
+     "samples_in_crop": 400,
+     "fraction_of_samples_in_crop": 1.0,
+     "percentiles": [
+      2.0,
+      98.0
+     ]
+    }
+   },
+   "img_e1c210b7ccfec82ca9152ea4::pitch_down_56": {
+    "sample_id": "img_e1c210b7ccfec82ca9152ea4::pitch_down_56",
+    "image_id": "img_e1c210b7ccfec82ca9152ea4",
+    "camera_id": "left",
+    "roi": null
+   },
+   "img_e1c210b7ccfec82ca9152ea4::pitch_up_56": {
+    "sample_id": "img_e1c210b7ccfec82ca9152ea4::pitch_up_56",
+    "image_id": "img_e1c210b7ccfec82ca9152ea4",
+    "camera_id": "left",
+    "roi": null
+   },
+   "img_e1c210b7ccfec82ca9152ea4::yaw_minus_35": {
+    "sample_id": "img_e1c210b7ccfec82ca9152ea4::yaw_minus_35",
+    "image_id": "img_e1c210b7ccfec82ca9152ea4",
+    "camera_id": "left",
+    "roi": null
+   },
+   "img_e1c210b7ccfec82ca9152ea4::yaw_plus_35": {
+    "sample_id": "img_e1c210b7ccfec82ca9152ea4::yaw_plus_35",
+    "image_id": "img_e1c210b7ccfec82ca9152ea4",
+    "camera_id": "left",
+    "roi": {
+     "face_id": "yaw_plus_35",
+     "crop": {
+      "x": 0,
+      "y": 0,
+      "width": 1456,
+      "height": 2912
+     },
+     "x0": 273,
+     "y0": 1559,
+     "x1": 1068,
+     "y1": 1985,
+     "samples_in_face": 400,
+     "samples_in_crop": 400,
+     "fraction_of_samples_in_crop": 1.0,
+     "percentiles": [
+      2.0,
+      98.0
+     ]
+    }
+   },
+   "img_86575fe5a65f1c1856691512::pitch_down_56": {
+    "sample_id": "img_86575fe5a65f1c1856691512::pitch_down_56",
+    "image_id": "img_86575fe5a65f1c1856691512",
+    "camera_id": "right",
+    "roi": null
+   },
+   "img_86575fe5a65f1c1856691512::yaw_minus_35": {
+    "sample_id": "img_86575fe5a65f1c1856691512::yaw_minus_35",
+    "image_id": "img_86575fe5a65f1c1856691512",
+    "camera_id": "right",
+    "roi": {
+     "face_id": "yaw_minus_35",
+     "crop": {
+      "x": 0,
+      "y": 42,
+      "width": 1456,
+      "height": 2870
+     },
+     "x0": 417,
+     "y0": 1539,
+     "x1": 1105,
+     "y1": 1816,
+     "samples_in_face": 400,
+     "samples_in_crop": 400,
+     "fraction_of_samples_in_crop": 1.0,
+     "percentiles": [
+      2.0,
+      98.0
+     ]
+    }
+   },
+   "img_86575fe5a65f1c1856691512::yaw_plus_35": {
+    "sample_id": "img_86575fe5a65f1c1856691512::yaw_plus_35",
+    "image_id": "img_86575fe5a65f1c1856691512",
+    "camera_id": "right",
+    "roi": null
+   },
+   "img_fe23bdc2249b367294f2ad0b::pitch_down_56": {
+    "sample_id": "img_fe23bdc2249b367294f2ad0b::pitch_down_56",
+    "image_id": "img_fe23bdc2249b367294f2ad0b",
+    "camera_id": "left",
+    "roi": null
+   },
+   "img_fe23bdc2249b367294f2ad0b::pitch_up_56": {
+    "sample_id": "img_fe23bdc2249b367294f2ad0b::pitch_up_56",
+    "image_id": "img_fe23bdc2249b367294f2ad0b",
+    "camera_id": "left",
+    "roi": null
+   },
+   "img_fe23bdc2249b367294f2ad0b::yaw_minus_35": {
+    "sample_id": "img_fe23bdc2249b367294f2ad0b::yaw_minus_35",
+    "image_id": "img_fe23bdc2249b367294f2ad0b",
+    "camera_id": "left",
+    "roi": null
+   },
+   "img_fe23bdc2249b367294f2ad0b::yaw_plus_35": {
+    "sample_id": "img_fe23bdc2249b367294f2ad0b::yaw_plus_35",
+    "image_id": "img_fe23bdc2249b367294f2ad0b",
+    "camera_id": "left",
+    "roi": {
+     "face_id": "yaw_plus_35",
+     "crop": {
+      "x": 0,
+      "y": 669,
+      "width": 1456,
+      "height": 2243
+     },
+     "x0": 598,
+     "y0": 649,
+     "x1": 1349,
+     "y1": 978,
+     "samples_in_face": 400,
+     "samples_in_crop": 400,
+     "fraction_of_samples_in_crop": 1.0,
+     "percentiles": [
+      2.0,
+      98.0
+     ]
+    }
+   },
+   "img_4ce1f1404af327ce8e242a2e::pitch_down_56": {
+    "sample_id": "img_4ce1f1404af327ce8e242a2e::pitch_down_56",
+    "image_id": "img_4ce1f1404af327ce8e242a2e",
+    "camera_id": "right",
+    "roi": {
+     "face_id": "pitch_down_56",
+     "crop": {
+      "x": 0,
+      "y": 0,
+      "width": 2912,
+      "height": 1456
+     },
+     "x0": 2831,
+     "y0": 5,
+     "x1": 2892,
+     "y1": 42,
+     "samples_in_face": 4,
+     "samples_in_crop": 4,
+     "fraction_of_samples_in_crop": 0.01,
+     "percentiles": [
+      2.0,
+      98.0
+     ]
+    }
+   },
+   "img_4ce1f1404af327ce8e242a2e::pitch_up_56": {
+    "sample_id": "img_4ce1f1404af327ce8e242a2e::pitch_up_56",
+    "image_id": "img_4ce1f1404af327ce8e242a2e",
+    "camera_id": "right",
+    "roi": null
+   },
+   "img_4ce1f1404af327ce8e242a2e::yaw_minus_35": {
+    "sample_id": "img_4ce1f1404af327ce8e242a2e::yaw_minus_35",
+    "image_id": "img_4ce1f1404af327ce8e242a2e",
+    "camera_id": "right",
+    "roi": null
+   },
+   "img_4ce1f1404af327ce8e242a2e::yaw_plus_35": {
+    "sample_id": "img_4ce1f1404af327ce8e242a2e::yaw_plus_35",
+    "image_id": "img_4ce1f1404af327ce8e242a2e",
+    "camera_id": "right",
+    "roi": {
+     "face_id": "yaw_plus_35",
+     "crop": {
+      "x": 0,
+      "y": 0,
+      "width": 1456,
+      "height": 2912
+     },
+     "x0": 537,
+     "y0": 1865,
+     "x1": 1219,
+     "y1": 2391,
+     "samples_in_face": 400,
+     "samples_in_crop": 400,
+     "fraction_of_samples_in_crop": 1.0,
+     "percentiles": [
+      2.0,
+      98.0
+     ]
+    }
+   },
+   "img_6cda7e312f7350eff34e978b::pitch_down_56": {
+    "sample_id": "img_6cda7e312f7350eff34e978b::pitch_down_56",
+    "image_id": "img_6cda7e312f7350eff34e978b",
+    "camera_id": "left",
+    "roi": {
+     "face_id": "pitch_down_56",
+     "crop": {
+      "x": 0,
+      "y": 0,
+      "width": 2515,
+      "height": 1456
+     },
+     "x0": 0,
+     "y0": 15,
+     "x1": 371,
+     "y1": 544,
+     "samples_in_face": 53,
+     "samples_in_crop": 53,
+     "fraction_of_samples_in_crop": 0.1325,
+     "percentiles": [
+      2.0,
+      98.0
+     ]
+    }
+   },
+   "img_6cda7e312f7350eff34e978b::pitch_up_56": {
+    "sample_id": "img_6cda7e312f7350eff34e978b::pitch_up_56",
+    "image_id": "img_6cda7e312f7350eff34e978b",
+    "camera_id": "left",
+    "roi": null
+   },
+   "img_6cda7e312f7350eff34e978b::yaw_minus_35": {
+    "sample_id": "img_6cda7e312f7350eff34e978b::yaw_minus_35",
+    "image_id": "img_6cda7e312f7350eff34e978b",
+    "camera_id": "left",
+    "roi": {
+     "face_id": "yaw_minus_35",
+     "crop": {
+      "x": 0,
+      "y": 0,
+      "width": 1456,
+      "height": 2912
+     },
+     "x0": 516,
+     "y0": 1820,
+     "x1": 1140,
+     "y1": 2373,
+     "samples_in_face": 400,
+     "samples_in_crop": 400,
+     "fraction_of_samples_in_crop": 1.0,
+     "percentiles": [
+      2.0,
+      98.0
+     ]
+    }
+   },
+   "img_6cda7e312f7350eff34e978b::yaw_plus_35": {
+    "sample_id": "img_6cda7e312f7350eff34e978b::yaw_plus_35",
+    "image_id": "img_6cda7e312f7350eff34e978b",
+    "camera_id": "left",
+    "roi": null
+   },
+   "img_5ef19597a38170b745e3d0e8::pitch_down_56": {
+    "sample_id": "img_5ef19597a38170b745e3d0e8::pitch_down_56",
+    "image_id": "img_5ef19597a38170b745e3d0e8",
+    "camera_id": "right",
+    "roi": null
+   },
+   "img_5ef19597a38170b745e3d0e8::yaw_minus_35": {
+    "sample_id": "img_5ef19597a38170b745e3d0e8::yaw_minus_35",
+    "image_id": "img_5ef19597a38170b745e3d0e8",
+    "camera_id": "right",
+    "roi": {
+     "face_id": "yaw_minus_35",
+     "crop": {
+      "x": 0,
+      "y": 97,
+      "width": 1456,
+      "height": 2815
+     },
+     "x0": 201,
+     "y0": 1502,
+     "x1": 842,
+     "y1": 1750,
+     "samples_in_face": 400,
+     "samples_in_crop": 400,
+     "fraction_of_samples_in_crop": 1.0,
+     "percentiles": [
+      2.0,
+      98.0
+     ]
+    }
+   },
+   "img_5ef19597a38170b745e3d0e8::yaw_plus_35": {
+    "sample_id": "img_5ef19597a38170b745e3d0e8::yaw_plus_35",
+    "image_id": "img_5ef19597a38170b745e3d0e8",
+    "camera_id": "right",
+    "roi": null
+   },
+   "img_69e4bef02a10ed141acc261e::pitch_down_56": {
+    "sample_id": "img_69e4bef02a10ed141acc261e::pitch_down_56",
+    "image_id": "img_69e4bef02a10ed141acc261e",
+    "camera_id": "left",
+    "roi": {
+     "face_id": "pitch_down_56",
+     "crop": {
+      "x": 0,
+      "y": 0,
+      "width": 2624,
+      "height": 514
+     },
+     "x0": 9,
+     "y0": 3,
+     "x1": 314,
+     "y1": 323,
+     "samples_in_face": 18,
+     "samples_in_crop": 18,
+     "fraction_of_samples_in_crop": 0.045,
+     "percentiles": [
+      2.0,
+      98.0
+     ]
+    }
+   },
+   "img_69e4bef02a10ed141acc261e::pitch_up_56": {
+    "sample_id": "img_69e4bef02a10ed141acc261e::pitch_up_56",
+    "image_id": "img_69e4bef02a10ed141acc261e",
+    "camera_id": "left",
+    "roi": null
+   },
+   "img_69e4bef02a10ed141acc261e::yaw_minus_35": {
+    "sample_id": "img_69e4bef02a10ed141acc261e::yaw_minus_35",
+    "image_id": "img_69e4bef02a10ed141acc261e",
+    "camera_id": "left",
+    "roi": {
+     "face_id": "yaw_minus_35",
+     "crop": {
+      "x": 0,
+      "y": 0,
+      "width": 1456,
+      "height": 2840
+     },
+     "x0": 368,
+     "y0": 1866,
+     "x1": 1075,
+     "y1": 2218,
+     "samples_in_face": 400,
+     "samples_in_crop": 400,
+     "fraction_of_samples_in_crop": 1.0,
+     "percentiles": [
+      2.0,
+      98.0
+     ]
+    }
+   },
+   "img_69e4bef02a10ed141acc261e::yaw_plus_35": {
+    "sample_id": "img_69e4bef02a10ed141acc261e::yaw_plus_35",
+    "image_id": "img_69e4bef02a10ed141acc261e",
+    "camera_id": "left",
+    "roi": null
+   },
+   "img_06c8139bc95f57cd809da4fb::pitch_down_56": {
+    "sample_id": "img_06c8139bc95f57cd809da4fb::pitch_down_56",
+    "image_id": "img_06c8139bc95f57cd809da4fb",
+    "camera_id": "right",
+    "roi": null
+   },
+   "img_06c8139bc95f57cd809da4fb::pitch_up_56": {
+    "sample_id": "img_06c8139bc95f57cd809da4fb::pitch_up_56",
+    "image_id": "img_06c8139bc95f57cd809da4fb",
+    "camera_id": "right",
+    "roi": null
+   },
+   "img_06c8139bc95f57cd809da4fb::yaw_minus_35": {
+    "sample_id": "img_06c8139bc95f57cd809da4fb::yaw_minus_35",
+    "image_id": "img_06c8139bc95f57cd809da4fb",
+    "camera_id": "right",
+    "roi": null
+   },
+   "img_06c8139bc95f57cd809da4fb::yaw_plus_35": {
+    "sample_id": "img_06c8139bc95f57cd809da4fb::yaw_plus_35",
+    "image_id": "img_06c8139bc95f57cd809da4fb",
+    "camera_id": "right",
+    "roi": {
+     "face_id": "yaw_plus_35",
+     "crop": {
+      "x": 0,
+      "y": 0,
+      "width": 1456,
+      "height": 2912
+     },
+     "x0": 538,
+     "y0": 1811,
+     "x1": 1140,
+     "y1": 2212,
+     "samples_in_face": 400,
+     "samples_in_crop": 400,
+     "fraction_of_samples_in_crop": 1.0,
+     "percentiles": [
+      2.0,
+      98.0
+     ]
+    }
+   },
+   "img_dbd584d2499ddb3864fbca49::pitch_down_56": {
+    "sample_id": "img_dbd584d2499ddb3864fbca49::pitch_down_56",
+    "image_id": "img_dbd584d2499ddb3864fbca49",
+    "camera_id": "left",
+    "roi": {
+     "face_id": "pitch_down_56",
+     "crop": {
+      "x": 0,
+      "y": 0,
+      "width": 2912,
+      "height": 1456
+     },
+     "x0": 19,
+     "y0": 36,
+     "x1": 146,
+     "y1": 166,
+     "samples_in_face": 6,
+     "samples_in_crop": 6,
+     "fraction_of_samples_in_crop": 0.015,
+     "percentiles": [
+      2.0,
+      98.0
+     ]
+    }
+   },
+   "img_dbd584d2499ddb3864fbca49::pitch_up_56": {
+    "sample_id": "img_dbd584d2499ddb3864fbca49::pitch_up_56",
+    "image_id": "img_dbd584d2499ddb3864fbca49",
+    "camera_id": "left",
+    "roi": null
+   },
+   "img_dbd584d2499ddb3864fbca49::yaw_minus_35": {
+    "sample_id": "img_dbd584d2499ddb3864fbca49::yaw_minus_35",
+    "image_id": "img_dbd584d2499ddb3864fbca49",
+    "camera_id": "left",
+    "roi": {
+     "face_id": "yaw_minus_35",
+     "crop": {
+      "x": 0,
+      "y": 0,
+      "width": 1456,
+      "height": 2912
+     },
+     "x0": 622,
+     "y0": 1821,
+     "x1": 1302,
+     "y1": 2167,
+     "samples_in_face": 400,
+     "samples_in_crop": 400,
+     "fraction_of_samples_in_crop": 1.0,
+     "percentiles": [
+      2.0,
+      98.0
+     ]
+    }
+   },
+   "img_dbd584d2499ddb3864fbca49::yaw_plus_35": {
+    "sample_id": "img_dbd584d2499ddb3864fbca49::yaw_plus_35",
+    "image_id": "img_dbd584d2499ddb3864fbca49",
+    "camera_id": "left",
+    "roi": null
+   },
+   "img_c945937fd972cd35ccc3f927::pitch_down_56": {
+    "sample_id": "img_c945937fd972cd35ccc3f927::pitch_down_56",
+    "image_id": "img_c945937fd972cd35ccc3f927",
+    "camera_id": "right",
+    "roi": null
+   },
+   "img_c945937fd972cd35ccc3f927::yaw_minus_35": {
+    "sample_id": "img_c945937fd972cd35ccc3f927::yaw_minus_35",
+    "image_id": "img_c945937fd972cd35ccc3f927",
+    "camera_id": "right",
+    "roi": {
+     "face_id": "yaw_minus_35",
+     "crop": {
+      "x": 0,
+      "y": 372,
+      "width": 1456,
+      "height": 2540
+     },
+     "x0": 229,
+     "y0": 1205,
+     "x1": 819,
+     "y1": 1417,
+     "samples_in_face": 400,
+     "samples_in_crop": 400,
+     "fraction_of_samples_in_crop": 1.0,
+     "percentiles": [
+      2.0,
+      98.0
+     ]
+    }
+   },
+   "img_c945937fd972cd35ccc3f927::yaw_plus_35": {
+    "sample_id": "img_c945937fd972cd35ccc3f927::yaw_plus_35",
+    "image_id": "img_c945937fd972cd35ccc3f927",
+    "camera_id": "right",
+    "roi": null
+   },
+   "img_6a2408035c3724c55335982f::pitch_down_56": {
+    "sample_id": "img_6a2408035c3724c55335982f::pitch_down_56",
+    "image_id": "img_6a2408035c3724c55335982f",
+    "camera_id": "left",
+    "roi": {
+     "face_id": "pitch_down_56",
+     "crop": {
+      "x": 0,
+      "y": 0,
+      "width": 2912,
+      "height": 1456
+     },
+     "x0": 7,
+     "y0": 7,
+     "x1": 309,
+     "y1": 216,
+     "samples_in_face": 22,
+     "samples_in_crop": 22,
+     "fraction_of_samples_in_crop": 0.055,
+     "percentiles": [
+      2.0,
+      98.0
+     ]
+    }
+   },
+   "img_6a2408035c3724c55335982f::pitch_up_56": {
+    "sample_id": "img_6a2408035c3724c55335982f::pitch_up_56",
+    "image_id": "img_6a2408035c3724c55335982f",
+    "camera_id": "left",
+    "roi": null
+   },
+   "img_6a2408035c3724c55335982f::yaw_minus_35": {
+    "sample_id": "img_6a2408035c3724c55335982f::yaw_minus_35",
+    "image_id": "img_6a2408035c3724c55335982f",
+    "camera_id": "left",
+    "roi": {
+     "face_id": "yaw_minus_35",
+     "crop": {
+      "x": 0,
+      "y": 0,
+      "width": 1456,
+      "height": 2912
+     },
+     "x0": 456,
+     "y0": 1873,
+     "x1": 1113,
+     "y1": 2297,
+     "samples_in_face": 400,
+     "samples_in_crop": 400,
+     "fraction_of_samples_in_crop": 1.0,
+     "percentiles": [
+      2.0,
+      98.0
+     ]
+    }
+   },
+   "img_6a2408035c3724c55335982f::yaw_plus_35": {
+    "sample_id": "img_6a2408035c3724c55335982f::yaw_plus_35",
+    "image_id": "img_6a2408035c3724c55335982f",
+    "camera_id": "left",
+    "roi": null
+   },
+   "img_9294bdfdfc421be19feca3a8::pitch_down_56": {
+    "sample_id": "img_9294bdfdfc421be19feca3a8::pitch_down_56",
+    "image_id": "img_9294bdfdfc421be19feca3a8",
+    "camera_id": "right",
+    "roi": null
+   },
+   "img_9294bdfdfc421be19feca3a8::pitch_up_56": {
+    "sample_id": "img_9294bdfdfc421be19feca3a8::pitch_up_56",
+    "image_id": "img_9294bdfdfc421be19feca3a8",
+    "camera_id": "right",
+    "roi": null
+   },
+   "img_9294bdfdfc421be19feca3a8::yaw_minus_35": {
+    "sample_id": "img_9294bdfdfc421be19feca3a8::yaw_minus_35",
+    "image_id": "img_9294bdfdfc421be19feca3a8",
+    "camera_id": "right",
+    "roi": null
+   },
+   "img_9294bdfdfc421be19feca3a8::yaw_plus_35": {
+    "sample_id": "img_9294bdfdfc421be19feca3a8::yaw_plus_35",
+    "image_id": "img_9294bdfdfc421be19feca3a8",
+    "camera_id": "right",
+    "roi": {
+     "face_id": "yaw_plus_35",
+     "crop": {
+      "x": 0,
+      "y": 0,
+      "width": 1456,
+      "height": 2912
+     },
+     "x0": 528,
+     "y0": 1777,
+     "x1": 1056,
+     "y1": 2138,
+     "samples_in_face": 400,
+     "samples_in_crop": 400,
+     "fraction_of_samples_in_crop": 1.0,
+     "percentiles": [
+      2.0,
+      98.0
+     ]
+    }
+   },
+   "img_790005ba0043de4a43aaf92c::pitch_down_56": {
+    "sample_id": "img_790005ba0043de4a43aaf92c::pitch_down_56",
+    "image_id": "img_790005ba0043de4a43aaf92c",
+    "camera_id": "left",
+    "roi": {
+     "face_id": "pitch_down_56",
+     "crop": {
+      "x": 0,
+      "y": 0,
+      "width": 2899,
+      "height": 1456
+     },
+     "x0": 32,
+     "y0": 16,
+     "x1": 303,
+     "y1": 229,
+     "samples_in_face": 13,
+     "samples_in_crop": 13,
+     "fraction_of_samples_in_crop": 0.0325,
+     "percentiles": [
+      2.0,
+      98.0
+     ]
+    }
+   },
+   "img_790005ba0043de4a43aaf92c::pitch_up_56": {
+    "sample_id": "img_790005ba0043de4a43aaf92c::pitch_up_56",
+    "image_id": "img_790005ba0043de4a43aaf92c",
+    "camera_id": "left",
+    "roi": null
+   },
+   "img_790005ba0043de4a43aaf92c::yaw_minus_35": {
+    "sample_id": "img_790005ba0043de4a43aaf92c::yaw_minus_35",
+    "image_id": "img_790005ba0043de4a43aaf92c",
+    "camera_id": "left",
+    "roi": {
+     "face_id": "yaw_minus_35",
+     "crop": {
+      "x": 0,
+      "y": 0,
+      "width": 1456,
+      "height": 2912
+     },
+     "x0": 669,
+     "y0": 1831,
+     "x1": 1350,
+     "y1": 2174,
+     "samples_in_face": 400,
+     "samples_in_crop": 400,
+     "fraction_of_samples_in_crop": 1.0,
+     "percentiles": [
+      2.0,
+      98.0
+     ]
+    }
+   },
+   "img_790005ba0043de4a43aaf92c::yaw_plus_35": {
+    "sample_id": "img_790005ba0043de4a43aaf92c::yaw_plus_35",
+    "image_id": "img_790005ba0043de4a43aaf92c",
+    "camera_id": "left",
+    "roi": null
+   },
+   "img_3ac01cda397a4cc40e9e6616::pitch_down_56": {
+    "sample_id": "img_3ac01cda397a4cc40e9e6616::pitch_down_56",
+    "image_id": "img_3ac01cda397a4cc40e9e6616",
+    "camera_id": "right",
+    "roi": null
+   },
+   "img_3ac01cda397a4cc40e9e6616::yaw_minus_35": {
+    "sample_id": "img_3ac01cda397a4cc40e9e6616::yaw_minus_35",
+    "image_id": "img_3ac01cda397a4cc40e9e6616",
+    "camera_id": "right",
+    "roi": {
+     "face_id": "yaw_minus_35",
+     "crop": {
+      "x": 0,
+      "y": 0,
+      "width": 1456,
+      "height": 2912
+     },
+     "x0": 58,
+     "y0": 1559,
+     "x1": 637,
+     "y1": 1753,
+     "samples_in_face": 400,
+     "samples_in_crop": 400,
+     "fraction_of_samples_in_crop": 1.0,
+     "percentiles": [
+      2.0,
+      98.0
+     ]
+    }
+   },
+   "img_3ac01cda397a4cc40e9e6616::yaw_plus_35": {
+    "sample_id": "img_3ac01cda397a4cc40e9e6616::yaw_plus_35",
+    "image_id": "img_3ac01cda397a4cc40e9e6616",
+    "camera_id": "right",
+    "roi": null
+   },
+   "img_38fa922ad61d7da7aa5839a9::pitch_down_56": {
+    "sample_id": "img_38fa922ad61d7da7aa5839a9::pitch_down_56",
+    "image_id": "img_38fa922ad61d7da7aa5839a9",
+    "camera_id": "left",
+    "roi": {
+     "face_id": "pitch_down_56",
+     "crop": {
+      "x": 0,
+      "y": 0,
+      "width": 2912,
+      "height": 1292
+     },
+     "x0": 49,
+     "y0": 15,
+     "x1": 178,
+     "y1": 124,
+     "samples_in_face": 5,
+     "samples_in_crop": 5,
+     "fraction_of_samples_in_crop": 0.0125,
+     "percentiles": [
+      2.0,
+      98.0
+     ]
+    }
+   },
+   "img_38fa922ad61d7da7aa5839a9::pitch_up_56": {
+    "sample_id": "img_38fa922ad61d7da7aa5839a9::pitch_up_56",
+    "image_id": "img_38fa922ad61d7da7aa5839a9",
+    "camera_id": "left",
+    "roi": null
+   },
+   "img_38fa922ad61d7da7aa5839a9::yaw_minus_35": {
+    "sample_id": "img_38fa922ad61d7da7aa5839a9::yaw_minus_35",
+    "image_id": "img_38fa922ad61d7da7aa5839a9",
+    "camera_id": "left",
+    "roi": {
+     "face_id": "yaw_minus_35",
+     "crop": {
+      "x": 0,
+      "y": 0,
+      "width": 1456,
+      "height": 2912
+     },
+     "x0": 605,
+     "y0": 1811,
+     "x1": 1277,
+     "y1": 2145,
+     "samples_in_face": 400,
+     "samples_in_crop": 400,
+     "fraction_of_samples_in_crop": 1.0,
+     "percentiles": [
+      2.0,
+      98.0
+     ]
+    }
+   },
+   "img_38fa922ad61d7da7aa5839a9::yaw_plus_35": {
+    "sample_id": "img_38fa922ad61d7da7aa5839a9::yaw_plus_35",
+    "image_id": "img_38fa922ad61d7da7aa5839a9",
+    "camera_id": "left",
+    "roi": null
+   },
+   "img_87edfad3f6901cbaccb73eb1::pitch_down_56": {
+    "sample_id": "img_87edfad3f6901cbaccb73eb1::pitch_down_56",
+    "image_id": "img_87edfad3f6901cbaccb73eb1",
+    "camera_id": "right",
+    "roi": {
+     "face_id": "pitch_down_56",
+     "crop": {
+      "x": 0,
+      "y": 0,
+      "width": 2912,
+      "height": 1456
+     },
+     "x0": 1691,
+     "y0": 12,
+     "x1": 2885,
+     "y1": 1391,
+     "samples_in_face": 130,
+     "samples_in_crop": 130,
+     "fraction_of_samples_in_crop": 0.325,
+     "percentiles": [
+      2.0,
+      98.0
+     ]
+    }
+   },
+   "img_87edfad3f6901cbaccb73eb1::pitch_up_56": {
+    "sample_id": "img_87edfad3f6901cbaccb73eb1::pitch_up_56",
+    "image_id": "img_87edfad3f6901cbaccb73eb1",
+    "camera_id": "right",
+    "roi": null
+   },
+   "img_87edfad3f6901cbaccb73eb1::yaw_minus_35": {
+    "sample_id": "img_87edfad3f6901cbaccb73eb1::yaw_minus_35",
+    "image_id": "img_87edfad3f6901cbaccb73eb1",
+    "camera_id": "right",
+    "roi": {
+     "face_id": "yaw_minus_35",
+     "crop": {
+      "x": 0,
+      "y": 0,
+      "width": 1456,
+      "height": 2912
+     },
+     "x0": 1402,
+     "y0": 2065,
+     "x1": 1451,
+     "y1": 2308,
+     "samples_in_face": 12,
+     "samples_in_crop": 12,
+     "fraction_of_samples_in_crop": 0.03,
+     "percentiles": [
+      2.0,
+      98.0
+     ]
+    }
+   },
+   "img_87edfad3f6901cbaccb73eb1::yaw_plus_35": {
+    "sample_id": "img_87edfad3f6901cbaccb73eb1::yaw_plus_35",
+    "image_id": "img_87edfad3f6901cbaccb73eb1",
+    "camera_id": "right",
+    "roi": {
+     "face_id": "yaw_plus_35",
+     "crop": {
+      "x": 0,
+      "y": 412,
+      "width": 1456,
+      "height": 2500
+     },
+     "x0": 86,
+     "y0": 1546,
+     "x1": 1342,
+     "y1": 2406,
+     "samples_in_face": 341,
+     "samples_in_crop": 341,
+     "fraction_of_samples_in_crop": 0.8525,
+     "percentiles": [
+      2.0,
+      98.0
+     ]
+    }
+   },
+   "img_eca6b916bacacf912bf06b66::pitch_down_56": {
+    "sample_id": "img_eca6b916bacacf912bf06b66::pitch_down_56",
+    "image_id": "img_eca6b916bacacf912bf06b66",
+    "camera_id": "left",
+    "roi": {
+     "face_id": "pitch_down_56",
+     "crop": {
+      "x": 0,
+      "y": 0,
+      "width": 2902,
+      "height": 1456
+     },
+     "x0": 134,
+     "y0": 40,
+     "x1": 272,
+     "y1": 170,
+     "samples_in_face": 6,
+     "samples_in_crop": 6,
+     "fraction_of_samples_in_crop": 0.015,
+     "percentiles": [
+      2.0,
+      98.0
+     ]
+    }
+   },
+   "img_eca6b916bacacf912bf06b66::pitch_up_56": {
+    "sample_id": "img_eca6b916bacacf912bf06b66::pitch_up_56",
+    "image_id": "img_eca6b916bacacf912bf06b66",
+    "camera_id": "left",
+    "roi": null
+   },
+   "img_eca6b916bacacf912bf06b66::yaw_minus_35": {
+    "sample_id": "img_eca6b916bacacf912bf06b66::yaw_minus_35",
+    "image_id": "img_eca6b916bacacf912bf06b66",
+    "camera_id": "left",
+    "roi": {
+     "face_id": "yaw_minus_35",
+     "crop": {
+      "x": 0,
+      "y": 0,
+      "width": 1456,
+      "height": 2912
+     },
+     "x0": 660,
+     "y0": 1808,
+     "x1": 1340,
+     "y1": 2147,
+     "samples_in_face": 400,
+     "samples_in_crop": 400,
+     "fraction_of_samples_in_crop": 1.0,
+     "percentiles": [
+      2.0,
+      98.0
+     ]
+    }
+   },
+   "img_eca6b916bacacf912bf06b66::yaw_plus_35": {
+    "sample_id": "img_eca6b916bacacf912bf06b66::yaw_plus_35",
+    "image_id": "img_eca6b916bacacf912bf06b66",
+    "camera_id": "left",
+    "roi": null
+   },
+   "img_fa65b3aa880c9101e305af46::pitch_down_56": {
+    "sample_id": "img_fa65b3aa880c9101e305af46::pitch_down_56",
+    "image_id": "img_fa65b3aa880c9101e305af46",
+    "camera_id": "right",
+    "roi": {
+     "face_id": "pitch_down_56",
+     "crop": {
+      "x": 167,
+      "y": 0,
+      "width": 2745,
+      "height": 1456
+     },
+     "x0": 871,
+     "y0": 7,
+     "x1": 2670,
+     "y1": 830,
+     "samples_in_face": 146,
+     "samples_in_crop": 146,
+     "fraction_of_samples_in_crop": 0.365,
+     "percentiles": [
+      2.0,
+      98.0
+     ]
+    }
+   },
+   "img_fa65b3aa880c9101e305af46::pitch_up_56": {
+    "sample_id": "img_fa65b3aa880c9101e305af46::pitch_up_56",
+    "image_id": "img_fa65b3aa880c9101e305af46",
+    "camera_id": "right",
+    "roi": null
+   },
+   "img_fa65b3aa880c9101e305af46::yaw_minus_35": {
+    "sample_id": "img_fa65b3aa880c9101e305af46::yaw_minus_35",
+    "image_id": "img_fa65b3aa880c9101e305af46",
+    "camera_id": "right",
+    "roi": {
+     "face_id": "yaw_minus_35",
+     "crop": {
+      "x": 0,
+      "y": 0,
+      "width": 1456,
+      "height": 2912
+     },
+     "x0": 1053,
+     "y0": 1840,
+     "x1": 1435,
+     "y1": 2786,
+     "samples_in_face": 114,
+     "samples_in_crop": 114,
+     "fraction_of_samples_in_crop": 0.285,
+     "percentiles": [
+      2.0,
+      98.0
+     ]
+    }
+   },
+   "img_fa65b3aa880c9101e305af46::yaw_plus_35": {
+    "sample_id": "img_fa65b3aa880c9101e305af46::yaw_plus_35",
+    "image_id": "img_fa65b3aa880c9101e305af46",
+    "camera_id": "right",
+    "roi": {
+     "face_id": "yaw_plus_35",
+     "crop": {
+      "x": 0,
+      "y": 3,
+      "width": 1456,
+      "height": 2909
+     },
+     "x0": 10,
+     "y0": 1915,
+     "x1": 881,
+     "y1": 2778,
+     "samples_in_face": 271,
+     "samples_in_crop": 271,
+     "fraction_of_samples_in_crop": 0.6775,
+     "percentiles": [
+      2.0,
+      98.0
+     ]
+    }
+   },
+   "img_51866d14b07dd3ca601a1cde::pitch_down_56": {
+    "sample_id": "img_51866d14b07dd3ca601a1cde::pitch_down_56",
+    "image_id": "img_51866d14b07dd3ca601a1cde",
+    "camera_id": "left",
+    "roi": null
+   },
+   "img_51866d14b07dd3ca601a1cde::pitch_up_56": {
+    "sample_id": "img_51866d14b07dd3ca601a1cde::pitch_up_56",
+    "image_id": "img_51866d14b07dd3ca601a1cde",
+    "camera_id": "left",
+    "roi": null
+   },
+   "img_51866d14b07dd3ca601a1cde::yaw_minus_35": {
+    "sample_id": "img_51866d14b07dd3ca601a1cde::yaw_minus_35",
+    "image_id": "img_51866d14b07dd3ca601a1cde",
+    "camera_id": "left",
+    "roi": null
+   },
+   "img_51866d14b07dd3ca601a1cde::yaw_plus_35": {
+    "sample_id": "img_51866d14b07dd3ca601a1cde::yaw_plus_35",
+    "image_id": "img_51866d14b07dd3ca601a1cde",
+    "camera_id": "left",
+    "roi": {
+     "face_id": "yaw_plus_35",
+     "crop": {
+      "x": 0,
+      "y": 0,
+      "width": 1456,
+      "height": 2912
+     },
+     "x0": 727,
+     "y0": 1218,
+     "x1": 1329,
+     "y1": 1441,
+     "samples_in_face": 400,
+     "samples_in_crop": 400,
+     "fraction_of_samples_in_crop": 1.0,
+     "percentiles": [
+      2.0,
+      98.0
+     ]
+    }
+   },
+   "img_f7140eacb75d560d184fb31f::pitch_down_56": {
+    "sample_id": "img_f7140eacb75d560d184fb31f::pitch_down_56",
+    "image_id": "img_f7140eacb75d560d184fb31f",
+    "camera_id": "right",
+    "roi": {
+     "face_id": "pitch_down_56",
+     "crop": {
+      "x": 0,
+      "y": 0,
+      "width": 2912,
+      "height": 1456
+     },
+     "x0": 1927,
+     "y0": 17,
+     "x1": 2902,
+     "y1": 1376,
+     "samples_in_face": 115,
+     "samples_in_crop": 115,
+     "fraction_of_samples_in_crop": 0.2875,
+     "percentiles": [
+      2.0,
+      98.0
+     ]
+    }
+   },
+   "img_f7140eacb75d560d184fb31f::pitch_up_56": {
+    "sample_id": "img_f7140eacb75d560d184fb31f::pitch_up_56",
+    "image_id": "img_f7140eacb75d560d184fb31f",
+    "camera_id": "right",
+    "roi": null
+   },
+   "img_f7140eacb75d560d184fb31f::yaw_minus_35": {
+    "sample_id": "img_f7140eacb75d560d184fb31f::yaw_minus_35",
+    "image_id": "img_f7140eacb75d560d184fb31f",
+    "camera_id": "right",
+    "roi": null
+   },
+   "img_f7140eacb75d560d184fb31f::yaw_plus_35": {
+    "sample_id": "img_f7140eacb75d560d184fb31f::yaw_plus_35",
+    "image_id": "img_f7140eacb75d560d184fb31f",
+    "camera_id": "right",
+    "roi": {
+     "face_id": "yaw_plus_35",
+     "crop": {
+      "x": 0,
+      "y": 0,
+      "width": 1456,
+      "height": 2912
+     },
+     "x0": 123,
+     "y0": 1931,
+     "x1": 1278,
+     "y1": 2803,
+     "samples_in_face": 378,
+     "samples_in_crop": 378,
+     "fraction_of_samples_in_crop": 0.945,
+     "percentiles": [
+      2.0,
+      98.0
+     ]
+    }
+   },
+   "img_074273e7808b362c2a94f76a::pitch_down_56": {
+    "sample_id": "img_074273e7808b362c2a94f76a::pitch_down_56",
+    "image_id": "img_074273e7808b362c2a94f76a",
+    "camera_id": "left",
+    "roi": {
+     "face_id": "pitch_down_56",
+     "crop": {
+      "x": 0,
+      "y": 0,
+      "width": 2912,
+      "height": 1456
+     },
+     "x0": 8,
+     "y0": 25,
+     "x1": 402,
+     "y1": 327,
+     "samples_in_face": 35,
+     "samples_in_crop": 35,
+     "fraction_of_samples_in_crop": 0.0875,
+     "percentiles": [
+      2.0,
+      98.0
+     ]
+    }
+   },
+   "img_074273e7808b362c2a94f76a::pitch_up_56": {
+    "sample_id": "img_074273e7808b362c2a94f76a::pitch_up_56",
+    "image_id": "img_074273e7808b362c2a94f76a",
+    "camera_id": "left",
+    "roi": null
+   },
+   "img_074273e7808b362c2a94f76a::yaw_minus_35": {
+    "sample_id": "img_074273e7808b362c2a94f76a::yaw_minus_35",
+    "image_id": "img_074273e7808b362c2a94f76a",
+    "camera_id": "left",
+    "roi": {
+     "face_id": "yaw_minus_35",
+     "crop": {
+      "x": 0,
+      "y": 0,
+      "width": 1456,
+      "height": 2912
+     },
+     "x0": 318,
+     "y0": 1952,
+     "x1": 997,
+     "y1": 2426,
+     "samples_in_face": 400,
+     "samples_in_crop": 400,
+     "fraction_of_samples_in_crop": 1.0,
+     "percentiles": [
+      2.0,
+      98.0
+     ]
+    }
+   },
+   "img_074273e7808b362c2a94f76a::yaw_plus_35": {
+    "sample_id": "img_074273e7808b362c2a94f76a::yaw_plus_35",
+    "image_id": "img_074273e7808b362c2a94f76a",
+    "camera_id": "left",
+    "roi": null
+   },
+   "img_4af6cd6dac376ccdcc60db74::pitch_down_56": {
+    "sample_id": "img_4af6cd6dac376ccdcc60db74::pitch_down_56",
+    "image_id": "img_4af6cd6dac376ccdcc60db74",
+    "camera_id": "right",
+    "roi": {
+     "face_id": "pitch_down_56",
+     "crop": {
+      "x": 0,
+      "y": 0,
+      "width": 2912,
+      "height": 1456
+     },
+     "x0": 2280,
+     "y0": 22,
+     "x1": 2887,
+     "y1": 1167,
+     "samples_in_face": 59,
+     "samples_in_crop": 59,
+     "fraction_of_samples_in_crop": 0.1475,
+     "percentiles": [
+      2.0,
+      98.0
+     ]
+    }
+   },
+   "img_4af6cd6dac376ccdcc60db74::pitch_up_56": {
+    "sample_id": "img_4af6cd6dac376ccdcc60db74::pitch_up_56",
+    "image_id": "img_4af6cd6dac376ccdcc60db74",
+    "camera_id": "right",
+    "roi": null
+   },
+   "img_4af6cd6dac376ccdcc60db74::yaw_minus_35": {
+    "sample_id": "img_4af6cd6dac376ccdcc60db74::yaw_minus_35",
+    "image_id": "img_4af6cd6dac376ccdcc60db74",
+    "camera_id": "right",
+    "roi": null
+   },
+   "img_4af6cd6dac376ccdcc60db74::yaw_plus_35": {
+    "sample_id": "img_4af6cd6dac376ccdcc60db74::yaw_plus_35",
+    "image_id": "img_4af6cd6dac376ccdcc60db74",
+    "camera_id": "right",
+    "roi": {
+     "face_id": "yaw_plus_35",
+     "crop": {
+      "x": 0,
+      "y": 0,
+      "width": 1456,
+      "height": 2912
+     },
+     "x0": 329,
+     "y0": 1904,
+     "x1": 1361,
+     "y1": 2771,
+     "samples_in_face": 394,
+     "samples_in_crop": 394,
+     "fraction_of_samples_in_crop": 0.985,
+     "percentiles": [
+      2.0,
+      98.0
+     ]
+    }
+   },
+   "img_662459e85d0d8812f926ab99::pitch_down_56": {
+    "sample_id": "img_662459e85d0d8812f926ab99::pitch_down_56",
+    "image_id": "img_662459e85d0d8812f926ab99",
+    "camera_id": "left",
+    "roi": {
+     "face_id": "pitch_down_56",
+     "crop": {
+      "x": 0,
+      "y": 0,
+      "width": 2877,
+      "height": 576
+     },
+     "x0": 4,
+     "y0": 7,
+     "x1": 392,
+     "y1": 288,
+     "samples_in_face": 21,
+     "samples_in_crop": 21,
+     "fraction_of_samples_in_crop": 0.0525,
+     "percentiles": [
+      2.0,
+      98.0
+     ]
+    }
+   },
+   "img_662459e85d0d8812f926ab99::pitch_up_56": {
+    "sample_id": "img_662459e85d0d8812f926ab99::pitch_up_56",
+    "image_id": "img_662459e85d0d8812f926ab99",
+    "camera_id": "left",
+    "roi": null
+   },
+   "img_662459e85d0d8812f926ab99::yaw_minus_35": {
+    "sample_id": "img_662459e85d0d8812f926ab99::yaw_minus_35",
+    "image_id": "img_662459e85d0d8812f926ab99",
+    "camera_id": "left",
+    "roi": {
+     "face_id": "yaw_minus_35",
+     "crop": {
+      "x": 0,
+      "y": 0,
+      "width": 1456,
+      "height": 2873
+     },
+     "x0": 447,
+     "y0": 1892,
+     "x1": 1129,
+     "y1": 2223,
+     "samples_in_face": 400,
+     "samples_in_crop": 400,
+     "fraction_of_samples_in_crop": 1.0,
+     "percentiles": [
+      2.0,
+      98.0
+     ]
+    }
+   },
+   "img_662459e85d0d8812f926ab99::yaw_plus_35": {
+    "sample_id": "img_662459e85d0d8812f926ab99::yaw_plus_35",
+    "image_id": "img_662459e85d0d8812f926ab99",
+    "camera_id": "left",
+    "roi": null
+   },
+   "img_2fe71151d4c449e1d3233bb5::pitch_down_56": {
+    "sample_id": "img_2fe71151d4c449e1d3233bb5::pitch_down_56",
+    "image_id": "img_2fe71151d4c449e1d3233bb5",
+    "camera_id": "right",
+    "roi": {
+     "face_id": "pitch_down_56",
+     "crop": {
+      "x": 300,
+      "y": 0,
+      "width": 2612,
+      "height": 1456
+     },
+     "x0": 390,
+     "y0": 6,
+     "x1": 1955,
+     "y1": 345,
+     "samples_in_face": 33,
+     "samples_in_crop": 33,
+     "fraction_of_samples_in_crop": 0.0825,
+     "percentiles": [
+      2.0,
+      98.0
+     ]
+    }
+   },
+   "img_2fe71151d4c449e1d3233bb5::pitch_up_56": {
+    "sample_id": "img_2fe71151d4c449e1d3233bb5::pitch_up_56",
+    "image_id": "img_2fe71151d4c449e1d3233bb5",
+    "camera_id": "right",
+    "roi": null
+   },
+   "img_2fe71151d4c449e1d3233bb5::yaw_minus_35": {
+    "sample_id": "img_2fe71151d4c449e1d3233bb5::yaw_minus_35",
+    "image_id": "img_2fe71151d4c449e1d3233bb5",
+    "camera_id": "right",
+    "roi": {
+     "face_id": "yaw_minus_35",
+     "crop": {
+      "x": 0,
+      "y": 0,
+      "width": 1456,
+      "height": 2912
+     },
+     "x0": 912,
+     "y0": 1775,
+     "x1": 1447,
+     "y1": 2548,
+     "samples_in_face": 232,
+     "samples_in_crop": 232,
+     "fraction_of_samples_in_crop": 0.58,
+     "percentiles": [
+      2.0,
+      98.0
+     ]
+    }
+   },
+   "img_2fe71151d4c449e1d3233bb5::yaw_plus_35": {
+    "sample_id": "img_2fe71151d4c449e1d3233bb5::yaw_plus_35",
+    "image_id": "img_2fe71151d4c449e1d3233bb5",
+    "camera_id": "right",
+    "roi": {
+     "face_id": "yaw_plus_35",
+     "crop": {
+      "x": 0,
+      "y": 934,
+      "width": 1456,
+      "height": 1978
+     },
+     "x0": 14,
+     "y0": 948,
+     "x1": 578,
+     "y1": 1457,
+     "samples_in_face": 168,
+     "samples_in_crop": 168,
+     "fraction_of_samples_in_crop": 0.42,
+     "percentiles": [
+      2.0,
+      98.0
+     ]
+    }
+   },
+   "img_730e104f8bd0470783b519ad::pitch_up_56": {
+    "sample_id": "img_730e104f8bd0470783b519ad::pitch_up_56",
+    "image_id": "img_730e104f8bd0470783b519ad",
+    "camera_id": "left",
+    "roi": null
+   },
+   "img_730e104f8bd0470783b519ad::yaw_minus_35": {
+    "sample_id": "img_730e104f8bd0470783b519ad::yaw_minus_35",
+    "image_id": "img_730e104f8bd0470783b519ad",
+    "camera_id": "left",
+    "roi": null
+   },
+   "img_730e104f8bd0470783b519ad::yaw_plus_35": {
+    "sample_id": "img_730e104f8bd0470783b519ad::yaw_plus_35",
+    "image_id": "img_730e104f8bd0470783b519ad",
+    "camera_id": "left",
+    "roi": {
+     "face_id": "yaw_plus_35",
+     "crop": {
+      "x": 0,
+      "y": 0,
+      "width": 1456,
+      "height": 1922
+     },
+     "x0": 668,
+     "y0": 1523,
+     "x1": 1272,
+     "y1": 1729,
+     "samples_in_face": 400,
+     "samples_in_crop": 400,
+     "fraction_of_samples_in_crop": 1.0,
+     "percentiles": [
+      2.0,
+      98.0
+     ]
+    }
+   },
+   "img_ba2f05a90b6e766693a2bd0d::pitch_down_56": {
+    "sample_id": "img_ba2f05a90b6e766693a2bd0d::pitch_down_56",
+    "image_id": "img_ba2f05a90b6e766693a2bd0d",
+    "camera_id": "right",
+    "roi": {
+     "face_id": "pitch_down_56",
+     "crop": {
+      "x": 0,
+      "y": 0,
+      "width": 2912,
+      "height": 1456
+     },
+     "x0": 2474,
+     "y0": 19,
+     "x1": 2885,
+     "y1": 696,
+     "samples_in_face": 22,
+     "samples_in_crop": 22,
+     "fraction_of_samples_in_crop": 0.055,
+     "percentiles": [
+      2.0,
+      98.0
+     ]
+    }
+   },
+   "img_ba2f05a90b6e766693a2bd0d::pitch_up_56": {
+    "sample_id": "img_ba2f05a90b6e766693a2bd0d::pitch_up_56",
+    "image_id": "img_ba2f05a90b6e766693a2bd0d",
+    "camera_id": "right",
+    "roi": null
+   },
+   "img_ba2f05a90b6e766693a2bd0d::yaw_minus_35": {
+    "sample_id": "img_ba2f05a90b6e766693a2bd0d::yaw_minus_35",
+    "image_id": "img_ba2f05a90b6e766693a2bd0d",
+    "camera_id": "right",
+    "roi": null
+   },
+   "img_ba2f05a90b6e766693a2bd0d::yaw_plus_35": {
+    "sample_id": "img_ba2f05a90b6e766693a2bd0d::yaw_plus_35",
+    "image_id": "img_ba2f05a90b6e766693a2bd0d",
+    "camera_id": "right",
+    "roi": {
+     "face_id": "yaw_plus_35",
+     "crop": {
+      "x": 0,
+      "y": 0,
+      "width": 1456,
+      "height": 2912
+     },
+     "x0": 419,
+     "y0": 1885,
+     "x1": 1319,
+     "y1": 2641,
+     "samples_in_face": 400,
+     "samples_in_crop": 400,
+     "fraction_of_samples_in_crop": 1.0,
+     "percentiles": [
+      2.0,
+      98.0
+     ]
+    }
+   },
+   "img_f0ff00b70da5711d5c787073::pitch_down_56": {
+    "sample_id": "img_f0ff00b70da5711d5c787073::pitch_down_56",
+    "image_id": "img_f0ff00b70da5711d5c787073",
+    "camera_id": "left",
+    "roi": null
+   },
+   "img_f0ff00b70da5711d5c787073::pitch_up_56": {
+    "sample_id": "img_f0ff00b70da5711d5c787073::pitch_up_56",
+    "image_id": "img_f0ff00b70da5711d5c787073",
+    "camera_id": "left",
+    "roi": null
+   },
+   "img_f0ff00b70da5711d5c787073::yaw_minus_35": {
+    "sample_id": "img_f0ff00b70da5711d5c787073::yaw_minus_35",
+    "image_id": "img_f0ff00b70da5711d5c787073",
+    "camera_id": "left",
+    "roi": {
+     "face_id": "yaw_minus_35",
+     "crop": {
+      "x": 152,
+      "y": 0,
+      "width": 1304,
+      "height": 2820
+     },
+     "x0": 520,
+     "y0": 1755,
+     "x1": 1170,
+     "y1": 2052,
+     "samples_in_face": 400,
+     "samples_in_crop": 400,
+     "fraction_of_samples_in_crop": 1.0,
+     "percentiles": [
+      2.0,
+      98.0
+     ]
+    }
+   },
+   "img_f0ff00b70da5711d5c787073::yaw_plus_35": {
+    "sample_id": "img_f0ff00b70da5711d5c787073::yaw_plus_35",
+    "image_id": "img_f0ff00b70da5711d5c787073",
+    "camera_id": "left",
+    "roi": null
+   },
+   "img_3dd943e1fbc94dc8c092af49::pitch_up_56": {
+    "sample_id": "img_3dd943e1fbc94dc8c092af49::pitch_up_56",
+    "image_id": "img_3dd943e1fbc94dc8c092af49",
+    "camera_id": "right",
+    "roi": null
+   },
+   "img_3dd943e1fbc94dc8c092af49::yaw_minus_35": {
+    "sample_id": "img_3dd943e1fbc94dc8c092af49::yaw_minus_35",
+    "image_id": "img_3dd943e1fbc94dc8c092af49",
+    "camera_id": "right",
+    "roi": {
+     "face_id": "yaw_minus_35",
+     "crop": {
+      "x": 0,
+      "y": 0,
+      "width": 1362,
+      "height": 2123
+     },
+     "x0": 23,
+     "y0": 1447,
+     "x1": 722,
+     "y1": 1831,
+     "samples_in_face": 367,
+     "samples_in_crop": 367,
+     "fraction_of_samples_in_crop": 0.9175,
+     "percentiles": [
+      2.0,
+      98.0
+     ]
+    }
+   },
+   "img_18576273c5c20fc7e1f342c8::pitch_down_56": {
+    "sample_id": "img_18576273c5c20fc7e1f342c8::pitch_down_56",
+    "image_id": "img_18576273c5c20fc7e1f342c8",
+    "camera_id": "left",
+    "roi": null
+   },
+   "img_18576273c5c20fc7e1f342c8::pitch_up_56": {
+    "sample_id": "img_18576273c5c20fc7e1f342c8::pitch_up_56",
+    "image_id": "img_18576273c5c20fc7e1f342c8",
+    "camera_id": "left",
+    "roi": null
+   },
+   "img_18576273c5c20fc7e1f342c8::yaw_minus_35": {
+    "sample_id": "img_18576273c5c20fc7e1f342c8::yaw_minus_35",
+    "image_id": "img_18576273c5c20fc7e1f342c8",
+    "camera_id": "left",
+    "roi": {
+     "face_id": "yaw_minus_35",
+     "crop": {
+      "x": 163,
+      "y": 0,
+      "width": 1293,
+      "height": 2660
+     },
+     "x0": 549,
+     "y0": 1770,
+     "x1": 1201,
+     "y1": 2056,
+     "samples_in_face": 400,
+     "samples_in_crop": 400,
+     "fraction_of_samples_in_crop": 1.0,
+     "percentiles": [
+      2.0,
+      98.0
+     ]
+    }
+   },
+   "img_18576273c5c20fc7e1f342c8::yaw_plus_35": {
+    "sample_id": "img_18576273c5c20fc7e1f342c8::yaw_plus_35",
+    "image_id": "img_18576273c5c20fc7e1f342c8",
+    "camera_id": "left",
+    "roi": null
+   },
+   "img_c54fcbe99fb2556e3eee453b::pitch_up_56": {
+    "sample_id": "img_c54fcbe99fb2556e3eee453b::pitch_up_56",
+    "image_id": "img_c54fcbe99fb2556e3eee453b",
+    "camera_id": "right",
+    "roi": null
+   },
+   "img_c54fcbe99fb2556e3eee453b::yaw_minus_35": {
+    "sample_id": "img_c54fcbe99fb2556e3eee453b::yaw_minus_35",
+    "image_id": "img_c54fcbe99fb2556e3eee453b",
+    "camera_id": "right",
+    "roi": {
+     "face_id": "yaw_minus_35",
+     "crop": {
+      "x": 0,
+      "y": 0,
+      "width": 1456,
+      "height": 1668
+     },
+     "x0": 14,
+     "y0": 1327,
+     "x1": 565,
+     "y1": 1514,
+     "samples_in_face": 370,
+     "samples_in_crop": 370,
+     "fraction_of_samples_in_crop": 0.925,
+     "percentiles": [
+      2.0,
+      98.0
+     ]
+    }
+   },
+   "img_c54fcbe99fb2556e3eee453b::yaw_plus_35": {
+    "sample_id": "img_c54fcbe99fb2556e3eee453b::yaw_plus_35",
+    "image_id": "img_c54fcbe99fb2556e3eee453b",
+    "camera_id": "right",
+    "roi": null
+   },
+   "img_0466fd896d0aec73619005f8::pitch_up_56": {
+    "sample_id": "img_0466fd896d0aec73619005f8::pitch_up_56",
+    "image_id": "img_0466fd896d0aec73619005f8",
+    "camera_id": "left",
+    "roi": null
+   },
+   "img_0466fd896d0aec73619005f8::yaw_minus_35": {
+    "sample_id": "img_0466fd896d0aec73619005f8::yaw_minus_35",
+    "image_id": "img_0466fd896d0aec73619005f8",
+    "camera_id": "left",
+    "roi": {
+     "face_id": "yaw_minus_35",
+     "crop": {
+      "x": 33,
+      "y": 0,
+      "width": 1423,
+      "height": 2742
+     },
+     "x0": 558,
+     "y0": 1797,
+     "x1": 1194,
+     "y1": 2076,
+     "samples_in_face": 400,
+     "samples_in_crop": 400,
+     "fraction_of_samples_in_crop": 1.0,
+     "percentiles": [
+      2.0,
+      98.0
+     ]
+    }
+   },
+   "img_0466fd896d0aec73619005f8::yaw_plus_35": {
+    "sample_id": "img_0466fd896d0aec73619005f8::yaw_plus_35",
+    "image_id": "img_0466fd896d0aec73619005f8",
+    "camera_id": "left",
+    "roi": null
+   },
+   "img_e08b30473e1f1809ad33265e::pitch_down_56": {
+    "sample_id": "img_e08b30473e1f1809ad33265e::pitch_down_56",
+    "image_id": "img_e08b30473e1f1809ad33265e",
+    "camera_id": "right",
+    "roi": null
+   },
+   "img_e08b30473e1f1809ad33265e::pitch_up_56": {
+    "sample_id": "img_e08b30473e1f1809ad33265e::pitch_up_56",
+    "image_id": "img_e08b30473e1f1809ad33265e",
+    "camera_id": "right",
+    "roi": null
+   },
+   "img_e08b30473e1f1809ad33265e::yaw_minus_35": {
+    "sample_id": "img_e08b30473e1f1809ad33265e::yaw_minus_35",
+    "image_id": "img_e08b30473e1f1809ad33265e",
+    "camera_id": "right",
+    "roi": null
+   },
+   "img_e08b30473e1f1809ad33265e::yaw_plus_35": {
+    "sample_id": "img_e08b30473e1f1809ad33265e::yaw_plus_35",
+    "image_id": "img_e08b30473e1f1809ad33265e",
+    "camera_id": "right",
+    "roi": {
+     "face_id": "yaw_plus_35",
+     "crop": {
+      "x": 0,
+      "y": 0,
+      "width": 1456,
+      "height": 2912
+     },
+     "x0": 500,
+     "y0": 1764,
+     "x1": 988,
+     "y1": 2066,
+     "samples_in_face": 400,
+     "samples_in_crop": 400,
+     "fraction_of_samples_in_crop": 1.0,
+     "percentiles": [
+      2.0,
+      98.0
+     ]
+    }
+   },
+   "img_ba1f9bf2a46929e6fb4e8ac2::pitch_down_56": {
+    "sample_id": "img_ba1f9bf2a46929e6fb4e8ac2::pitch_down_56",
+    "image_id": "img_ba1f9bf2a46929e6fb4e8ac2",
+    "camera_id": "left",
+    "roi": null
+   },
+   "img_ba1f9bf2a46929e6fb4e8ac2::pitch_up_56": {
+    "sample_id": "img_ba1f9bf2a46929e6fb4e8ac2::pitch_up_56",
+    "image_id": "img_ba1f9bf2a46929e6fb4e8ac2",
+    "camera_id": "left",
+    "roi": null
+   },
+   "img_ba1f9bf2a46929e6fb4e8ac2::yaw_minus_35": {
+    "sample_id": "img_ba1f9bf2a46929e6fb4e8ac2::yaw_minus_35",
+    "image_id": "img_ba1f9bf2a46929e6fb4e8ac2",
+    "camera_id": "left",
+    "roi": null
+   },
+   "img_ba1f9bf2a46929e6fb4e8ac2::yaw_plus_35": {
+    "sample_id": "img_ba1f9bf2a46929e6fb4e8ac2::yaw_plus_35",
+    "image_id": "img_ba1f9bf2a46929e6fb4e8ac2",
+    "camera_id": "left",
+    "roi": {
+     "face_id": "yaw_plus_35",
+     "crop": {
+      "x": 0,
+      "y": 0,
+      "width": 1456,
+      "height": 2912
+     },
+     "x0": 681,
+     "y0": 1120,
+     "x1": 1223,
+     "y1": 1351,
+     "samples_in_face": 400,
+     "samples_in_crop": 400,
+     "fraction_of_samples_in_crop": 1.0,
+     "percentiles": [
+      2.0,
+      98.0
+     ]
+    }
+   },
+   "img_7075633227ed0e239cb80bdf::pitch_down_56": {
+    "sample_id": "img_7075633227ed0e239cb80bdf::pitch_down_56",
+    "image_id": "img_7075633227ed0e239cb80bdf",
+    "camera_id": "right",
+    "roi": null
+   },
+   "img_7075633227ed0e239cb80bdf::pitch_up_56": {
+    "sample_id": "img_7075633227ed0e239cb80bdf::pitch_up_56",
+    "image_id": "img_7075633227ed0e239cb80bdf",
+    "camera_id": "right",
+    "roi": null
+   },
+   "img_7075633227ed0e239cb80bdf::yaw_minus_35": {
+    "sample_id": "img_7075633227ed0e239cb80bdf::yaw_minus_35",
+    "image_id": "img_7075633227ed0e239cb80bdf",
+    "camera_id": "right",
+    "roi": null
+   },
+   "img_7075633227ed0e239cb80bdf::yaw_plus_35": {
+    "sample_id": "img_7075633227ed0e239cb80bdf::yaw_plus_35",
+    "image_id": "img_7075633227ed0e239cb80bdf",
+    "camera_id": "right",
+    "roi": {
+     "face_id": "yaw_plus_35",
+     "crop": {
+      "x": 0,
+      "y": 0,
+      "width": 1456,
+      "height": 2912
+     },
+     "x0": 404,
+     "y0": 1711,
+     "x1": 859,
+     "y1": 1973,
+     "samples_in_face": 400,
+     "samples_in_crop": 400,
+     "fraction_of_samples_in_crop": 1.0,
+     "percentiles": [
+      2.0,
+      98.0
+     ]
+    }
+   }
+  },
+  "strip_layout": {
+   "three_way_compare": "tools/build_three_way_compare.py writes compare_<k>_<sample_id[:18]>.png = [photo | ours | reference] at the Tile-crop size of that sample, 8px dark gaps; panel i starts at x = i * (crop.width + 8). Views are picked by stride over the diagnostic manifest's Tile views (face-manifest order), so pass --frames >= view_count to get every view.",
+   "offtrajectory_compare": "tools/build_offtrajectory_compare.py writes offtraj_<k>_<kind>_<image_id[:12]>.png = [ours | reference] at a displaced pose; the ROI box does not apply there (the camera moved) - score those strips whole.",
+   "roi_scoring": "For a compare strip of sample_id S with crop (w, h): ROI in panel i = [x0 + i*(w+8), x1 + i*(w+8)) x [y0, y1) using diag_eval.roi_in_crops[S].roi; crop the same box from photo/ours/reference and score (PSNR after per-channel affine match, Laplacian-variance ratio ours/photo) on the box only; views whose roi is null do not see the region in that face.",
+   "roi_semantics": "roi.x0/y0/x1/y1 are array indices inside the Tile crop = face pixel index (rint(c - 0.5)) minus crop.x/crop.y; box = 2-98 percentile of the projected region samples.",
+   "frames_hint": 151
+  },
+  "usage": [
+   "python tools/build_three_way_compare.py --config <this file> --checkpoint <arm>/checkpoints/latest.pt --output <arm>/compare --frames <view_count> [--reference-ply ... --reference-alignment ...]",
+   "python tools/build_offtrajectory_compare.py <this file> <arm>/checkpoints/latest.pt <arm>/offtraj <frames>",
+   "python tools/score_compare_strips.py <arm>/compare   (whole-panel scores; ROI-only scores use diag_eval.roi_in_crops)"
+  ],
+  "caveat": "the U0/U1 arms trained on a subset of these views; scores on views they did not train on are novel-view scores for them and training-view scores for the DIAG arms (report separately)"
+ }
+}
