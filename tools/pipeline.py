@@ -248,6 +248,16 @@ class PipelineConfig:
     def arm_dir(self, arm: str) -> Path:
         return self.run_root / arm
 
+    def arm_meta_dir(self, arm: str) -> Path:
+        """Pipeline bookkeeping for an arm lives beside, not inside, its run.
+
+        The trainer refuses a non-empty output directory, so job_state.json and
+        the frozen config written before launch must not land in arm_dir.
+        """
+        path = self.run_root / f"{arm}.pipeline"
+        path.mkdir(parents=True, exist_ok=True)
+        return path
+
     def arm_checkpoint(self, arm: str) -> Path:
         return self.arm_dir(arm) / "checkpoints" / "latest.pt"
 
@@ -1318,7 +1328,7 @@ class PipelineContext:
     # Job state ------------------------------------------------------------
 
     def arm_job(self, arm: str) -> JobState:
-        return JobState(self.config.arm_dir(arm) / JOB_STATE_NAME, job="arm", name=arm)
+        return JobState(self.config.arm_meta_dir(arm) / JOB_STATE_NAME, job="arm", name=arm)
 
     def delivery_job(self, tag: str) -> JobState:
         return JobState(self.config.delivery_dir(tag) / JOB_STATE_NAME, job="delivery", name=tag)
@@ -1469,7 +1479,7 @@ def arm_steps(ctx: PipelineContext, arm: str) -> list[Step]:
     offtraj_dir = out / "offtraj"
     compare_dir = out / "compare"
     scores = out / "scores.txt"
-    frozen = out / CONFIG_FROZEN_NAME
+    frozen = cfg.arm_meta_dir(arm) / CONFIG_FROZEN_NAME
     config_as_run = out / CONFIG_AS_RUN_NAME
 
     def gate() -> None:
@@ -1606,7 +1616,7 @@ def run_arm(ctx: PipelineContext, arm: str, *, force: bool = False) -> int:
     status(f"arm start (resume={'off' if force else 'on'})")
     if cfg.arm_config(arm).exists():
         try:
-            freeze_arm_config(cfg.arm_config(arm), out / CONFIG_FROZEN_NAME, legacy_record=out / CONFIG_AS_RUN_NAME)
+            freeze_arm_config(cfg.arm_config(arm), cfg.arm_meta_dir(arm) / CONFIG_FROZEN_NAME, legacy_record=out / CONFIG_AS_RUN_NAME)
         except ConfigFrozenError as error:
             status(f"ARM_REFUSED: {error}")
             return 2

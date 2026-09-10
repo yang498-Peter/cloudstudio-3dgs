@@ -473,7 +473,7 @@ class ConfigImmutabilityTests(PipelineFixture):
         self.assertEqual(run_arm(self.ctx, "armA"), 2)
         self.assertEqual(self.runner.calls, [])
         self.assertEqual((out / CONFIG_AS_RUN_NAME).read_bytes(), original)
-        self.assertEqual((out / CONFIG_FROZEN_NAME).read_bytes(), original)
+        self.assertEqual((self.config.arm_meta_dir("armA") / CONFIG_FROZEN_NAME).read_bytes(), original)
         after = {path.name: path.read_bytes() for path in out.rglob("*") if path.is_file()}
         changed = {name for name in snapshot if snapshot[name] != after.get(name)}
         self.assertEqual(changed - {"armA.pipeline_status.txt"}, set(), "old artifacts are not rewritten")
@@ -507,13 +507,13 @@ class ConfigImmutabilityTests(PipelineFixture):
         legacy = out / CONFIG_AS_RUN_NAME
         legacy.write_bytes(self.config.arm_config("armA").read_bytes())
         self.assertEqual(run_arm(self.ctx, "armA"), 0)
-        self.assertEqual((out / CONFIG_FROZEN_NAME).read_bytes(), legacy.read_bytes())
+        self.assertEqual((self.config.arm_meta_dir("armA") / CONFIG_FROZEN_NAME).read_bytes(), legacy.read_bytes())
         # An edited RUN/<arm>.json against a legacy record is refused too.
         self.write_arm_config("armB")
         self.plant_checkpoint("armB")
         (self.config.arm_dir("armB") / CONFIG_AS_RUN_NAME).write_text('{"arm": "armB", "old": true}', encoding="utf-8")
         with self.assertRaises(ConfigFrozenError):
-            freeze_arm_config(self.config.arm_config("armB"), self.config.arm_dir("armB") / CONFIG_FROZEN_NAME, legacy_record=self.config.arm_dir("armB") / CONFIG_AS_RUN_NAME)
+            freeze_arm_config(self.config.arm_config("armB"), self.config.arm_meta_dir("armB") / CONFIG_FROZEN_NAME, legacy_record=self.config.arm_dir("armB") / CONFIG_AS_RUN_NAME)
         self.assertEqual(run_arm(self.ctx, "armB"), 2)
 
     def test_same_config_rerun_is_not_refused(self) -> None:
