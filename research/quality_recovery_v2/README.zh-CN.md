@@ -12,7 +12,8 @@
 | 队列里与任务书冲突的后续臂（B1 混杂、E1 仅加步数、P2 未做位姿依赖审计、tile1_T1a）已停用 | 已做：配置改名 `*.json.parked`，链在交付后自然结束 | — |
 | WP00 运行身份 | 已出 | `00_runtime_identity.json`（含 gsplat commit/patch/扩展 hash、两个仓库 HEAD、正在运行的训练进程；注意 venv 跳板会让同一训练显示为父子两个 `train_gsplat` 进程） |
 | WP00 CLI 四个 P0（完成状态机、配置冻结、最终 PLY 评分、原子 GPU 租约）+ 故障注入测试 | 子任务进行中（`eng/cli-pipeline`） | — |
-| WP02 日程审计 | 子任务进行中 | `02_schedule_audit.json`、`02_schedule_events.csv` |
+| WP02 日程审计（随附脚本） | 已跑：`audit_pack/` 8 项自测通过；对仓库配置与 as-run 各跑一次，**as-run sha 与仓库配置一致**（tile0 `40b4d71a…`、tile1 `7728ae57…`）。tile0 R1：135 次常规 refine、最后一次 13900、`late_prune_threshold_reachable=false`、末步名义 means LR 1.8454e-6 = 终值 1.6e-7 的 11.53×；告警 S001（20k 截断 42640 日程）、S002（21320 不可达）、G001（试 rgb_only 增殖信号）、E001（曝光无零均值/锚定）、A001（SH 从头全开） | `02_schedule_audit_pack_repo.json`、`02_schedule_audit_pack_asrun.json` |
+| WP02 日程审计（仓库内 `resolved_schedule`） | 子任务进行中，完成后与随附脚本数字交叉核对 | `02_schedule_audit.json`、`02_schedule_events.csv` |
 | WP01 评估协议 / WP03 室内诊断 | 待 WP02 出结果后启动 | — |
 | WP10 house0614 子集 | 子集 manifest/masks/split 已生成（`eng` 分支 `eda063b`）；运行手册已出（`eng` 分支 `docs/2026-09-11_house0614子集运行手册.zh-CN.md`：23 步、8 步需 GPU、磁盘 57–75 GB）。**阻塞**：C: 仅 50 GB 空闲；Mask R-CNN 权重不在本机；时间同步审计需要一个已训练 checkpoint（GPU）且工具无 CPU 渲染路径（`time_sync/BLOCKED.json`）。GPU 全链验证等 house0305 质量门 | — |
 
