@@ -1,37 +1,29 @@
 """Off-trajectory comparison: displace real cameras (lateral / up / yaw) and
 render ours vs the aligned reference at the same novel pose. The reference
-render is the pseudo ground truth (no photo exists there)."""
-import sys, json, math, numpy as np
-from pathlib import Path
-sys.path.insert(0, "C:/Peter/cloudstudio-3dgs-work")
-import torch
-from PIL import Image
-from cloudstudio_3dgs.training.face_dataset import FaceCacheDataset
-from tools.sharpness_metrics import _load_backend
-from tools.build_three_way_compare import _load_ply_gaussians
-from cloudstudio_3dgs.training.view_backgrounds import ViewBackgroundLibrary
+render is the pseudo ground truth (no photo exists there).
 
-cfg = Path(sys.argv[1]); ckpt = Path(sys.argv[2]); out = Path(sys.argv[3]); frames = int(sys.argv[4]) if len(sys.argv) > 4 else 6
-raw = json.loads(cfg.read_text(encoding="utf-8"))
-backend, _ = _load_backend(raw)
-# A Tile config owns only its own views (and its background library only holds
-# those), so restrict the picks the same way the three-way compare does.
-tile_views = None
-if raw.get("tile_inputs_manifest"):
-    tiles = json.loads(Path(raw["tile_inputs_manifest"]).read_text(encoding="utf-8"))["tiles"]
-    selected = [t for t in tiles if int(t["tile_id"]) == int(raw.get("mipmap_tile_id", 0))]
-    if len(selected) != 1:
-        raise ValueError("Tile inputs do not contain a unique selected Tile")
-    tile_views = selected[0]["views"]
-dataset = FaceCacheDataset(Path(raw["face_cache_manifest"]), Path(raw["face_cache_root"]), verify_artifacts=False,
-                           dataset_manifest_path=Path(raw["dataset_manifest"]), renderer_mask_manifest_path=Path(raw["renderer_mask_manifest"]),
-                           tile_views=tile_views)
-device = raw.get("device", "cuda:0")
-backgrounds = ViewBackgroundLibrary(Path(raw["background_image_manifest"]), Path(raw["background_image_root"]), device=device) if raw.get("background_image_manifest") else None
-td = lambda p: {k: (v.to(device) if hasattr(v, "to") else v) for k, v in p.items()}
-ours = td(torch.load(ckpt, map_location="cpu", weights_only=False)["params"])
-align = json.loads(Path("C:/Peter/3dgs-runs/probes/usa_gs_alignment.json").read_text())
-ref = td(_load_ply_gaussians(Path("C:/baidunetdiskdownload/house/USAgs.ply"), np.asarray(align["transform"], dtype=np.float64)))
+    python tools/build_offtrajectory_compare.py CONFIG CHECKPOINT OUT_DIR [FRAMES] \\
+        --reference-ply USAgs.ply --reference-alignment usa_gs_alignment.json
+
+The positional order is the historical one; the reference inputs used to be
+machine paths baked into the script and must now be passed explicitly.
+"""
+from __future__ import annotations
+
+import argparse
+import json
+import math
+import sys
+from pathlib import Path
+
+import numpy as np
+
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+DISPLACEMENTS = ("lateral_1m", "up_0.8m", "yaw_25")
+
 
 def displaced(c2w, kind):
     c2w = np.array(c2w, dtype=np.float64).copy()
@@ -43,32 +35,91 @@ def displaced(c2w, kind):
         c2w[:3, :3] = R @ c2w[:3, :3]
     return c2w
 
+
 def _model_sh_degree(params) -> int:
     """SH degree the params actually carry (a DC-only export carries 0)."""
     coefficients = int(params["sh0"].shape[-2]) + int(params["shN"].shape[-2])
     return max(0, int(round(coefficients ** 0.5)) - 1)
 
-# The eval config's sh_degree caps what render() may use; take the model's.
-backend.sh_degree = max(int(backend.sh_degree), _model_sh_degree(ours))
 
-def render(params, sample, c2w, bg):
-    with torch.no_grad():
-        img, _, _, _ = backend.render(params, sample, with_range=False, background_rgb=bg, c2w_override=c2w, active_sh_degree=_model_sh_degree(params))
-    return (img.detach().clamp(0, 1).cpu().numpy() * 255).astype(np.uint8)
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description=__doc__.split("\n")[0])
+    parser.add_argument("config", type=Path, help="training or evaluation config JSON")
+    parser.add_argument("checkpoint", type=Path, help="our checkpoint (.pt)")
+    parser.add_argument("output", type=Path, help="directory for the strips and offtraj_summary.json")
+    parser.add_argument("frames", type=int, nargs="?", default=6, help="number of camera picks (default 6)")
+    parser.add_argument("--reference-ply", type=Path, required=True, help="reference delivery PLY (pseudo ground truth)")
+    parser.add_argument(
+        "--reference-alignment",
+        type=Path,
+        required=True,
+        help="JSON carrying the rigid 'transform' that brings the reference into our frame",
+    )
+    return parser
 
-out.mkdir(parents=True, exist_ok=True)
-stride = max(1, len(dataset) // frames); picks = list(range(0, len(dataset), stride))[:frames]
-rows = []
-for order, index in enumerate(picks):
-    s = dataset[index]; photo = np.asarray(s.image, dtype=np.uint8)
-    bg = backgrounds.background_for(s.image_id, height=photo.shape[0], width=photo.shape[1], torch=torch) if backgrounds else (1.0, 1.0, 1.0)
-    for kind in ("lateral_1m", "up_0.8m", "yaw_25"):
-        c2w = displaced(s.c2w, kind)
-        a, b = render(ours, s, c2w, bg), render(ref, s, c2w, bg)
-        mse = float(np.mean((a.astype(np.float32) - b.astype(np.float32)) ** 2)) / 255.0 ** 2
-        psnr = 10 * math.log10(1.0 / max(mse, 1e-10))
-        strip = np.full((a.shape[0], a.shape[1] * 2 + 8, 3), 24, np.uint8); strip[:, :a.shape[1]] = a; strip[:, a.shape[1] + 8:] = b
-        name = f"offtraj_{order:02d}_{kind}_{s.image_id[:12]}.png"; Image.fromarray(strip).save(out / name)
-        rows.append({"file": name, "image_id": s.image_id, "kind": kind, "psnr_ours_vs_reference": round(psnr, 2)})
-        print(name, "ours-vs-ref PSNR", round(psnr, 2))
-(out / "offtraj_summary.json").write_text(json.dumps(rows, indent=1), encoding="utf-8")
+
+def main(argv: list[str] | None = None) -> int:
+    args = build_parser().parse_args(argv)
+    for label, path in (("--reference-ply", args.reference_ply), ("--reference-alignment", args.reference_alignment)):
+        if not path.exists():
+            print(f"build_offtrajectory_compare: {label} not found: {path}", file=sys.stderr)
+            return 2
+
+    import torch
+    from PIL import Image
+    from cloudstudio_3dgs.training.face_dataset import FaceCacheDataset
+    from tools.sharpness_metrics import _load_backend
+    from tools.build_three_way_compare import _load_ply_gaussians
+    from cloudstudio_3dgs.training.view_backgrounds import ViewBackgroundLibrary
+
+    cfg = args.config; ckpt = args.checkpoint; out = args.output; frames = args.frames
+    raw = json.loads(cfg.read_text(encoding="utf-8"))
+    backend, _ = _load_backend(raw)
+    # A Tile config owns only its own views (and its background library only holds
+    # those), so restrict the picks the same way the three-way compare does.
+    tile_views = None
+    if raw.get("tile_inputs_manifest"):
+        tiles = json.loads(Path(raw["tile_inputs_manifest"]).read_text(encoding="utf-8"))["tiles"]
+        selected = [t for t in tiles if int(t["tile_id"]) == int(raw.get("mipmap_tile_id", 0))]
+        if len(selected) != 1:
+            raise ValueError("Tile inputs do not contain a unique selected Tile")
+        tile_views = selected[0]["views"]
+    dataset = FaceCacheDataset(Path(raw["face_cache_manifest"]), Path(raw["face_cache_root"]), verify_artifacts=False,
+                               dataset_manifest_path=Path(raw["dataset_manifest"]), renderer_mask_manifest_path=Path(raw["renderer_mask_manifest"]),
+                               tile_views=tile_views)
+    device = raw.get("device", "cuda:0")
+    backgrounds = ViewBackgroundLibrary(Path(raw["background_image_manifest"]), Path(raw["background_image_root"]), device=device) if raw.get("background_image_manifest") else None
+    td = lambda p: {k: (v.to(device) if hasattr(v, "to") else v) for k, v in p.items()}
+    ours = td(torch.load(ckpt, map_location="cpu", weights_only=False)["params"])
+    align = json.loads(args.reference_alignment.read_text())
+    ref = td(_load_ply_gaussians(args.reference_ply, np.asarray(align["transform"], dtype=np.float64)))
+
+    # The eval config's sh_degree caps what render() may use; take the model's.
+    backend.sh_degree = max(int(backend.sh_degree), _model_sh_degree(ours))
+
+    def render(params, sample, c2w, bg):
+        with torch.no_grad():
+            img, _, _, _ = backend.render(params, sample, with_range=False, background_rgb=bg, c2w_override=c2w, active_sh_degree=_model_sh_degree(params))
+        return (img.detach().clamp(0, 1).cpu().numpy() * 255).astype(np.uint8)
+
+    out.mkdir(parents=True, exist_ok=True)
+    stride = max(1, len(dataset) // frames); picks = list(range(0, len(dataset), stride))[:frames]
+    rows = []
+    for order, index in enumerate(picks):
+        s = dataset[index]; photo = np.asarray(s.image, dtype=np.uint8)
+        bg = backgrounds.background_for(s.image_id, height=photo.shape[0], width=photo.shape[1], torch=torch) if backgrounds else (1.0, 1.0, 1.0)
+        for kind in DISPLACEMENTS:
+            c2w = displaced(s.c2w, kind)
+            a, b = render(ours, s, c2w, bg), render(ref, s, c2w, bg)
+            mse = float(np.mean((a.astype(np.float32) - b.astype(np.float32)) ** 2)) / 255.0 ** 2
+            psnr = 10 * math.log10(1.0 / max(mse, 1e-10))
+            strip = np.full((a.shape[0], a.shape[1] * 2 + 8, 3), 24, np.uint8); strip[:, :a.shape[1]] = a; strip[:, a.shape[1] + 8:] = b
+            name = f"offtraj_{order:02d}_{kind}_{s.image_id[:12]}.png"; Image.fromarray(strip).save(out / name)
+            rows.append({"file": name, "image_id": s.image_id, "kind": kind, "psnr_ours_vs_reference": round(psnr, 2)})
+            print(name, "ours-vs-ref PSNR", round(psnr, 2))
+    (out / "offtraj_summary.json").write_text(json.dumps(rows, indent=1), encoding="utf-8")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

@@ -1,0 +1,57 @@
+{
+  "_doc": {
+    "about": "Machine paths for tools/pipeline.py on machine B, house0305 SOP loop. Copy to pipeline.json (or pass --pipeline-config) and edit. Keys starting with '_' are ignored.",
+    "run_root": "RUN in the cmd scripts: holds <arm>.json configs, <arm>/ outputs, arm_scores.txt, queue_status.txt, delivery_<tag>/",
+    "repo_root": "checkout whose tools/ run and that goes first on PYTHONPATH; identity_dir is relative to it. Omit to use the checkout containing pipeline.py",
+    "python": "interpreter with torch + gsplat (the training venv)",
+    "env_script": "cmd file `call`ed once; its variables feed every subprocess (CUDA/JIT cache pins). Omit to inherit the current environment",
+    "reference_ply": "competitor delivery used as pseudo ground truth by the three-way and off-trajectory strips",
+    "reference_alignment": "JSON with the rigid 'transform' bringing reference_ply into our frame",
+    "tile_inputs_manifest": "tile manifest for merge_v28_tile_checkpoints.py",
+    "tile_inputs_root": "root the tile manifest paths resolve against",
+    "exports_dir": "where delivery body/sky PLYs are published",
+    "delivery_eval_config": "evaluation config for the merged model (battery, matched strips)",
+    "sky_ply": "frozen sky layer copied beside every delivery body PLY",
+    "identity_dir": "freeze_run_identity.py outputs, relative to repo_root",
+    "scene_tag": "prefix of exported PLY names: <scene_tag>_<tag>_merged.ply",
+    "delivery_tiles": "tiles trained per delivery; tile arm names follow delivery_tile_arm_pattern",
+    "delivery_baselines": "earlier deliveries scored beside a new one; relative paths resolve against run_root",
+    "trainer_process_pattern": "substring of a live command line that means 'a trainer holds the GPU'",
+    "env": "extra environment variables for every subprocess"
+  },
+  "schema_version": 1,
+  "run_root": "C:/Peter/3dgs-runs/house0305_sop",
+  "repo_root": "C:/Peter/cloudstudio-3dgs-work",
+  "python": "C:/Peter/cloudstudio-3dgs/.venv-train/Scripts/python.exe",
+  "env_script": "C:/Peter/cloudstudio-3dgs-gate1/train/env_machine_b.cmd",
+  "reference_ply": "C:/baidunetdiskdownload/house/USAgs.ply",
+  "reference_alignment": "C:/Peter/3dgs-runs/probes/usa_gs_alignment.json",
+  "tile_inputs_manifest": "C:/Peter/3dgs-runs/house0305_sop/tile_inputs_v9/tile_inputs_manifest.json",
+  "tile_inputs_root": "C:/Peter/3dgs-runs/house0305_sop/tile_inputs_v9",
+  "exports_dir": "C:/Peter/3dgs-runs/exports",
+  "delivery_eval_config": "C:/Peter/3dgs-runs/house0305_sop/delivery_eval.json",
+  "sky_ply": "C:/Peter/3dgs-runs/exports/house0305_f5_sky_20260903.ply",
+  "identity_dir": "research/quality_recovery_v1/identity",
+  "scene_tag": "house0305",
+  "compare_frames": 6,
+  "battery_views": 48,
+  "export_min_opacity": 0.05,
+  "merge_policy": "core_owner_only",
+  "harmonize_exposure": true,
+  "delivery_tiles": [1, 2, 3],
+  "delivery_tile_arm_pattern": "tile{tile}_{tag}_20k",
+  "delivery_baselines": {
+    "compare": [
+      "delivery_f6/compare_matched",
+      "delivery_g9/compare_matched_sh1"
+    ],
+    "offtraj": {
+      "F6": "delivery_f6/offtraj_matched",
+      "G9sh1": "delivery_g9/offtraj_matched_sh1"
+    }
+  },
+  "trainer_process_pattern": "train_gsplat.py",
+  "env": {
+    "PYTHONIOENCODING": "utf-8"
+  }
+}
