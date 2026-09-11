@@ -3,6 +3,11 @@ from __future__ import annotations
 import math
 import sys
 import unittest
+
+try:
+    import torch
+except ImportError:  # torch is an optional training dependency
+    torch = None
 from pathlib import Path
 
 import numpy as np
@@ -43,6 +48,7 @@ def _membership(image_id: str, camera: str, rig: str, t_ns: int, env: str, tiles
     }
 
 
+@unittest.skipUnless(torch is not None, "torch is an optional training dependency")
 class IndexContractTests(unittest.TestCase):
     def test_order_matches_exposure_compensator(self) -> None:
         views = _views("img_b::yaw_plus_35", "img_a::pitch_up_56", "img_b::pitch_down_56", "img_c::yaw_minus_35")
