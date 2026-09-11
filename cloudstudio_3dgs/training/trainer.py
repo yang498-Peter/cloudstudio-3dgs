@@ -321,6 +321,10 @@ class TrainerConfig:
     # Spatial hold-out inside the Tile: whole 2D cells of camera positions
     # are removed from training so the Tile arm has views it never saw.
     holdout_spatial_cell_m: float | None = None
+    # Whole Face4 faces held out of the Tile view set (e.g. ["pitch_up_56"])
+    # while still counted in the 20x-views epoch basis, so the production
+    # step schedule stays byte-identical (research/quality_recovery_v2 F3@20k).
+    holdout_face_ids: tuple[str, ...] = ()
     holdout_fraction: float = 0.1
     holdout_seed: int = 0
     holdout_guard_m: float = 0.0
@@ -529,6 +533,9 @@ class TrainerConfig:
         if not isinstance(proposal_value, dict):
             raise ValueError("tangent_proposal must be an object")
         tangent_proposal = ProposalConfig(**proposal_value)
+        if isinstance(value.get("holdout_face_ids"), list):
+            value = dict(value)
+            value["holdout_face_ids"] = tuple(str(face) for face in value["holdout_face_ids"])
         anchor_prune_value = value.get("surface_anchor_prune", {})
         if not isinstance(anchor_prune_value, dict):
             raise ValueError("surface_anchor_prune must be an object")
@@ -596,6 +603,7 @@ class TrainerConfig:
                 "mono_depth_max_range_m",
                 "da2_depth_space",
                 "holdout_spatial_cell_m",
+                "holdout_face_ids",
                 "holdout_fraction",
                 "holdout_seed",
                 "holdout_guard_m",
@@ -941,6 +949,13 @@ class TrainerConfig:
             raise ValueError("lidar_range_loss_mode must be linear_l1 or robust_log_huber")
         if self.da2_depth_space not in {"linear", "compressed"}:
             raise ValueError("da2_depth_space must be linear or compressed")
+        if self.holdout_face_ids:
+            if self.tile_inputs_manifest is None or self.face_cache_manifest is None:
+                raise ValueError("holdout_face_ids requires Tile inputs and a face cache")
+            if not all(isinstance(face, str) and face for face in self.holdout_face_ids):
+                raise ValueError("holdout_face_ids must be non-empty face id strings")
+            if len(set(self.holdout_face_ids)) != len(self.holdout_face_ids):
+                raise ValueError("holdout_face_ids must not repeat a face id")
         if self.holdout_spatial_cell_m is not None:
             if self.tile_inputs_manifest is None or self.face_cache_manifest is None:
                 raise ValueError("holdout_spatial_cell_m requires Tile inputs and a face cache")
@@ -2033,6 +2048,7 @@ class TrainerConfig:
             "checkpoint_every": self.checkpoint_every,
             "view_sampling_mode": self.view_sampling_mode,
             "holdout_spatial_cell_m": self.holdout_spatial_cell_m,
+            "holdout_face_ids": list(self.holdout_face_ids),
             "color_model": self.color_model,
             "sh_degree": self.sh_degree,
             "sh_degree_interval": self.sh_degree_interval,
@@ -2103,6 +2119,13 @@ class TrainerConfig:
             loss_weights["da2_depth_contract"] = {
                 "max_range_m": self.mono_depth_max_range_m,
                 "space": self.da2_depth_space,
+            }
+        if self.holdout_face_ids:
+            # Key present only when faces are held out: every existing
+            # contract (and trainer_config_sha256) keeps its exact shape.
+            view_sampling_contract["face_holdout"] = {
+                "face_ids": [str(face) for face in self.holdout_face_ids],
+                "epoch_basis": "held_out_views_stay_in_the_20x_views_budget",
             }
         if self.holdout_spatial_cell_m is not None:
             view_sampling_contract["spatial_holdout"] = {
@@ -3763,6 +3786,22 @@ def train(
                 "effective_training_view_epochs": config.max_steps / max(1, len(tile_views)),
             }
             _atomic_json(output_dir / "holdout_views.json", holdout)
+        if config.holdout_face_ids:
+            from cloudstudio_3dgs.training.holdout import select_face_holdout
+
+            kept_views, held_views = select_face_holdout(tile_views, config.holdout_face_ids)
+            holdout_view_count += len(held_views)
+            face_record = {
+                "face_ids": [str(face) for face in config.holdout_face_ids],
+                "held_out_sample_ids": [str(view["sample_id"]) for view in held_views],
+                "held_out_view_count": len(held_views),
+                "actual_train_view_count": len(kept_views),
+                "epoch_basis_view_count": len(kept_views) + holdout_view_count,
+                "configured_steps": int(config.max_steps),
+                "effective_training_view_epochs": config.max_steps / max(1, len(kept_views)),
+            }
+            tile_views = kept_views
+            _atomic_json(output_dir / "holdout_faces.json", face_record)
             near = holdout.get("nearest_training_camera_m") or {}
             print(
                 f"spatial hold-out: {len(holdout['held_out_sample_ids'])} views withheld, "

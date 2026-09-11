@@ -22,6 +22,25 @@ def _cell_key(position: Any, cell_m: float) -> tuple[int, int]:
     return (int(math.floor(p[0] / cell_m)), int(math.floor(p[1] / cell_m)))
 
 
+def select_face_holdout(tile_views, face_ids):
+    """Split ``tile_views`` into (kept, held) by Face4 face id.
+
+    A view's ``sample_id`` is ``<image_id>::<face_id>``; every view whose face
+    is in ``face_ids`` is held out. The caller keeps the held-out count in the
+    epoch basis so the signed step budget does not change (the same accounting
+    the spatial hold-out uses). Refuses to hold out everything.
+    """
+    wanted = {str(face) for face in face_ids}
+    kept, held = [], []
+    for view in tile_views:
+        sample_id = str(view["sample_id"])
+        face = sample_id.split("::", 1)[1] if "::" in sample_id else ""
+        (held if face in wanted else kept).append(view)
+    if not kept:
+        raise ValueError("holdout_face_ids would hold out every Tile view")
+    return kept, held
+
+
 def select_spatial_holdout(
     views: list[dict[str, Any]],
     position_by_image: dict[str, Any],
