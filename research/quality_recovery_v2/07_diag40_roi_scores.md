@@ -39,3 +39,7 @@ Raw Laplacian variance scales with the square of a global gain. Our canonical re
 | outdoor | G1_c134 | U1-ROI(5) | 5 | 0.378 | 0.685 | **0.552** | 0.536 | 0.574 | 0 |
 | outdoor | R1_c134 | ROI-all | 45 | 0.837 | 1.389 | **0.595** | 0.548 | 0.666 | 0 |
 | outdoor | R1_c134 | U1-ROI(5) | 5 | 0.378 | 0.685 | **0.549** | 0.539 | 0.574 | 0 |
+
+## Does the brightness term touch the full-delivery numbers?
+
+Re-scored the delivery compare strips the same way (whole panel, luma matched to the photo): G9 (SH1) 0.211 raw -> 0.219 matched, R1d 0.238 -> 0.232, reference 0.574 -> 0.534; luma ratios 0.95-0.96 (ours, merged with baked per-tile gains) and 1.01 (reference). The delivery-level gap (ours ~0.23 vs reference ~0.53 of the photo) stands; the brightness confound is specific to single-tile canonical checkpoints (no exposure gain applied at render time) and to dark ROIs such as the door leaf.
