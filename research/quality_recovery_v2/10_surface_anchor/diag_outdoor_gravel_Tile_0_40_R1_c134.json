@@ -1,0 +1,80 @@
+{
+ "gaussian_count": 9292725,
+ "anchor_count": 7044777,
+ "opacity_floor": 0.05,
+ "visible_count": 8370776,
+ "distance_quantiles_m": {
+  "p50": 0.004256289581912556,
+  "p90": 0.013170131360260462,
+  "p95": 0.030832599079712596,
+  "p99": 0.21354581120332422
+ },
+ "far_fraction_table": [
+  {
+   "threshold_m": 0.05,
+   "far_count": 329633,
+   "far_fraction": 0.035472156983016284,
+   "far_fraction_visible": 0.035043584967510776
+  },
+  {
+   "threshold_m": 0.1,
+   "far_count": 199546,
+   "far_fraction": 0.021473356846350235,
+   "far_fraction_visible": 0.021344616078604897
+  },
+  {
+   "threshold_m": 0.2,
+   "far_count": 100989,
+   "far_fraction": 0.010867533473765768,
+   "far_fraction_visible": 0.010838302207585056
+  },
+  {
+   "threshold_m": 0.5,
+   "far_count": 17194,
+   "far_fraction": 0.0018502645886970721,
+   "far_fraction_visible": 0.0018556224655874199
+  },
+  {
+   "threshold_m": 1.0,
+   "far_count": 2277,
+   "far_fraction": 0.00024503038667344617,
+   "far_fraction_visible": 0.0002557707911429
+  }
+ ],
+ "z_split_m": 0.2,
+ "z_quantiles_near_m": {
+  "p05": 0.35921256244182587,
+  "p50": 0.40472789108753204,
+  "p95": 7.9052839279174805
+ },
+ "z_quantiles_far_m": {
+  "p05": 0.08591862618923188,
+  "p50": 5.090007305145264,
+  "p95": 19.144668197631827
+ },
+ "outside_box_count": 85750,
+ "outside_box_fraction": 0.009227648509990341,
+ "outside_box_and_far_fraction": 0.0013734399758951223,
+ "checkpoint": "C:\\Peter\\3dgs-runs\\house0305_sop\\diag_v2\\outdoor_gravel_Tile_0\\runs\\diag_outdoor_gravel_Tile_0_40_R1_c134\\checkpoints\\latest.pt",
+ "checkpoint_step": 3000,
+ "initialization_ply": "C:\\Peter\\3dgs-runs\\house0305_sop\\tile_inputs_v9\\Tile_0\\initialization_full_lidar.ply",
+ "box": [
+  [
+   -81.30969759999999,
+   -75.73568952380954,
+   -8.0632724
+  ],
+  [
+   9.70169760000001,
+   -4.9087485714285775,
+   33.9402724
+  ]
+ ],
+ "timing_s": {
+  "tree_build": 2.3033104999922216,
+  "checkpoint_load": 2.737281699999585,
+  "query_all_thresholds": 3.422077700000955
+ },
+ "config": "C:\\Peter\\3dgs-runs\\house0305_sop\\diag_outdoor_gravel_Tile_0_40_R1_c134.json",
+ "box_source": "C:\\Peter\\3dgs-runs\\house0305_sop\\diag_v2\\outdoor_gravel_Tile_0\\DIAG_40\\tile_inputs_manifest.json tile 0"
+}

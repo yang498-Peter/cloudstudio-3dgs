@@ -1,0 +1,80 @@
+{
+ "gaussian_count": 4421950,
+ "anchor_count": 3417320,
+ "opacity_floor": 0.05,
+ "visible_count": 3823843,
+ "distance_quantiles_m": {
+  "p50": 0.00549830706857157,
+  "p90": 0.11206586329544799,
+  "p95": 0.2972918628819525,
+  "p99": 0.8666001903502927
+ },
+ "far_fraction_table": [
+  {
+   "threshold_m": 0.05,
+   "far_count": 628993,
+   "far_fraction": 0.14224335417632492,
+   "far_fraction_visible": 0.1332083979389321
+  },
+  {
+   "threshold_m": 0.1,
+   "far_count": 466985,
+   "far_fraction": 0.10560612399507005,
+   "far_fraction_visible": 0.09904747658311286
+  },
+  {
+   "threshold_m": 0.2,
+   "far_count": 311638,
+   "far_fraction": 0.07047524282273658,
+   "far_fraction_visible": 0.06619414029289382
+  },
+  {
+   "threshold_m": 0.5,
+   "far_count": 117541,
+   "far_fraction": 0.026581259399133868,
+   "far_fraction_visible": 0.025100664436275233
+  },
+  {
+   "threshold_m": 1.0,
+   "far_count": 32270,
+   "far_fraction": 0.007297685410282794,
+   "far_fraction_visible": 0.0070125787068140615
+  }
+ ],
+ "z_split_m": 0.2,
+ "z_quantiles_near_m": {
+  "p05": 0.18483760878443717,
+  "p50": 0.9608513712882996,
+  "p95": 16.187066078186028
+ },
+ "z_quantiles_far_m": {
+  "p05": -0.19346900358796118,
+  "p50": 14.704657077789307,
+  "p95": 22.038220214843747
+ },
+ "outside_box_count": 271945,
+ "outside_box_fraction": 0.061498886237971936,
+ "outside_box_and_far_fraction": 0.03261117832630401,
+ "checkpoint": "C:\\Peter\\3dgs-runs\\house0305_sop\\diag_v2\\indoor_door_leaf_Tile_1\\runs\\diag_indoor_door_leaf_Tile_1_40_R1_c134\\checkpoints\\latest.pt",
+ "checkpoint_step": 3000,
+ "initialization_ply": "C:\\Peter\\3dgs-runs\\house0305_sop\\tile_inputs_v9\\Tile_1\\initialization_full_lidar.ply",
+ "box": [
+  [
+   -81.30969759999999,
+   -5.056892571428578,
+   -8.0632724
+  ],
+  [
+   9.70169760000001,
+   -1.515545523809535,
+   33.9402724
+  ]
+ ],
+ "timing_s": {
+  "tree_build": 1.0877940999926068,
+  "checkpoint_load": 0.5411686000006739,
+  "query_all_thresholds": 3.1653177000116557
+ },
+ "config": "C:\\Peter\\3dgs-runs\\house0305_sop\\diag_indoor_door_leaf_Tile_1_40_R1_c134.json",
+ "box_source": "C:\\Peter\\3dgs-runs\\house0305_sop\\diag_v2\\indoor_door_leaf_Tile_1\\DIAG_40\\tile_inputs_manifest.json tile 1"
+}

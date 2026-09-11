@@ -1231,6 +1231,15 @@ def advance_adaptive_growth_gate(
             f"rgb_supervision_mask {signed_config.get('rgb_supervision_mask')!r} is a "
             "research departure and is recorded by the trainer, not this gate"
         )
+    anchor_prune = signed_config.get("surface_anchor_prune") or {}
+    if isinstance(anchor_prune, dict) and anchor_prune.get("enabled"):
+        # Same policy again: geometry-side pruning against the LiDAR cloud is
+        # a research departure from the recovered lifecycle.
+        raise ValueError(
+            "adaptive growth gate signs the recovered lifecycle only; "
+            "surface_anchor_prune is a research departure and is recorded by "
+            "the trainer, not this gate"
+        )
     warm_start_value = signed_config.get("warm_start_checkpoint")
     resume_value = signed_config.get("resume_checkpoint")
     if warm_start_value is not None and resume_value is not None:
