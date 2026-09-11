@@ -58,3 +58,12 @@ Re-scored the delivery compare strips the same way (whole panel, luma matched to
 | outdoor | X1_c134 | 45 | 0.874 | 1.389 | **0.612** | 0.560 | 0.683 |
 
 Reference rows (same metric): indoor R1 0.881 / G0 0.863 / G1 0.990; outdoor R1 0.595 / G0 0.597 / G1 0.597. Indoor spread across the eight near-identical D/R arms is 0.825-0.906, i.e. the ROI-all noise band indoors is about +-5%; outdoors 0.592-0.598 (+-1%).
+
+## Full Tile_1 20k arms on the 49 indoor ROI views (brightness-matched, appended 23:52)
+
+| arm | n | ours/photo | ref/photo | ours/ref median |
+|---|---|---|---|---|
+| tile1_R1d_20k | 49 | 0.219 | 0.508 | **0.366** |
+| tile1_S1_anchor_20k (hard prune probe) | 49 | 0.224 | 0.508 | **0.390** |
+
+The door ROI itself is unchanged by the hard prune (+6%, inside the indoor +-5% band) while the sky views and walls elsewhere are destroyed (README row "S1 上界探针结果"). K1 / S2 rows follow when they land.

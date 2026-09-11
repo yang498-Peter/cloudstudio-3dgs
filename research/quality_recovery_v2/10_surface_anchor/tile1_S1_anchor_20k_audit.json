@@ -1,0 +1,80 @@
+{
+ "gaussian_count": 2736101,
+ "anchor_count": 3417320,
+ "opacity_floor": 0.05,
+ "visible_count": 1894539,
+ "distance_quantiles_m": {
+  "p50": 0.022492831888762322,
+  "p90": 0.20879753740439624,
+  "p95": 0.25503075037386164,
+  "p99": 0.2911238094385278
+ },
+ "far_fraction_table": [
+  {
+   "threshold_m": 0.05,
+   "far_count": 905938,
+   "far_fraction": 0.33110546723238654,
+   "far_fraction_visible": 0.33449139869910305
+  },
+  {
+   "threshold_m": 0.1,
+   "far_count": 608630,
+   "far_fraction": 0.22244427380421994,
+   "far_fraction_visible": 0.23175769936644217
+  },
+  {
+   "threshold_m": 0.2,
+   "far_count": 300165,
+   "far_fraction": 0.10970538002800335,
+   "far_fraction_visible": 0.11371790182202636
+  },
+  {
+   "threshold_m": 0.5,
+   "far_count": 168,
+   "far_fraction": 6.140124213250899e-05,
+   "far_fraction_visible": 8.7620260126606e-05
+  },
+  {
+   "threshold_m": 1.0,
+   "far_count": 0,
+   "far_fraction": 0.0,
+   "far_fraction_visible": 0.0
+  }
+ ],
+ "z_split_m": 0.2,
+ "z_quantiles_near_m": {
+  "p05": 0.14567362889647484,
+  "p50": 0.3559629023075104,
+  "p95": 6.172082543373108
+ },
+ "z_quantiles_far_m": {
+  "p05": -0.06314202398061752,
+  "p50": 0.8205286860466003,
+  "p95": 19.118320846557612
+ },
+ "outside_box_count": 466202,
+ "outside_box_fraction": 0.1703891778848807,
+ "outside_box_and_far_fraction": 0.06540548028015047,
+ "checkpoint": "C:\\Peter\\3dgs-runs\\house0305_sop\\tile1_S1_anchor_20k\\checkpoints\\latest.pt",
+ "checkpoint_step": 20000,
+ "initialization_ply": "C:\\Peter\\3dgs-runs\\house0305_sop\\tile_inputs_v9\\Tile_1\\initialization_full_lidar.ply",
+ "box": [
+  [
+   -81.30969759999999,
+   -5.056892571428578,
+   -8.0632724
+  ],
+  [
+   9.70169760000001,
+   -1.515545523809535,
+   33.9402724
+  ]
+ ],
+ "timing_s": {
+  "tree_build": 1.132189300013124,
+  "checkpoint_load": 0.31924810000055004,
+  "query_all_thresholds": 1.5263961000018753
+ },
+ "config": "C:\\Peter\\3dgs-runs\\house0305_sop\\tile1_S1_anchor_20k.json",
+ "box_source": "C:\\Peter\\3dgs-runs\\house0305_sop\\tile_inputs_v9\\tile_inputs_manifest.json tile 1"
+}
