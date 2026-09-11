@@ -130,6 +130,10 @@ from cloudstudio_3dgs.training.tangent_proposal import (
     TangentProposal,
     update_proposal_telemetry,
 )
+from cloudstudio_3dgs.training.surface_anchor import (
+    SurfaceAnchorPrune,
+    SurfaceAnchorPruneConfig,
+)
 from cloudstudio_3dgs.training.regularization import (
     GeometryRegularizationConfig,
     clip_oversized_gaussians,
@@ -412,6 +416,13 @@ class TrainerConfig:
     )
     lidar_admission: AdmissionConfig = field(default_factory=AdmissionConfig)
     tangent_proposal: ProposalConfig = field(default_factory=ProposalConfig)
+    # Surface-anchor prune (research/quality_recovery_v2/10_surface_anchor_prune.md):
+    # gaussians farther than max_distance_m from the initialization cloud (and,
+    # optionally, outside the Tile box) die at cull events; unsupported rows may
+    # not become parents. Disabled by default and byte-identical off.
+    surface_anchor_prune: SurfaceAnchorPruneConfig = field(
+        default_factory=SurfaceAnchorPruneConfig
+    )
     learning_rates: dict[str, float] = field(
         default_factory=lambda: {
             "means": 1.6e-4,
@@ -504,6 +515,10 @@ class TrainerConfig:
         if not isinstance(proposal_value, dict):
             raise ValueError("tangent_proposal must be an object")
         tangent_proposal = ProposalConfig(**proposal_value)
+        anchor_prune_value = value.get("surface_anchor_prune", {})
+        if not isinstance(anchor_prune_value, dict):
+            raise ValueError("surface_anchor_prune must be an object")
+        surface_anchor_prune = SurfaceAnchorPruneConfig(**anchor_prune_value)
         scale_value = value.get("metric_scale_calibration", {})
         if not isinstance(scale_value, dict):
             raise ValueError("metric_scale_calibration must be an object")
@@ -641,6 +656,7 @@ class TrainerConfig:
             lidar_normal_alignment=lidar_normal_alignment,
             lidar_admission=lidar_admission,
             tangent_proposal=tangent_proposal,
+            surface_anchor_prune=surface_anchor_prune,
             **paths,
             **options,
         )
@@ -996,6 +1012,35 @@ class TrainerConfig:
             raise ValueError(
                 "reject_unsupported_births requires tangent_proposal.enabled"
             )
+        self.surface_anchor_prune.validate()
+        if self.surface_anchor_prune.enabled:
+            # The hooks live in the recovered classic lifecycle only
+            # (DefaultStrategyAdapter._prune_mipmap / _grow_mipmap); the plain
+            # gsplat DefaultStrategy and the MCMC sampler never call them, so
+            # enabling the knob there would be a silent no-op.
+            if (
+                self.densification_strategy != "default_3dgs"
+                or self.default_strategy.get("exact_mipmap_lifecycle") is not True
+            ):
+                raise ValueError(
+                    "surface_anchor_prune requires densification_strategy='default_3dgs' "
+                    "with default_strategy.exact_mipmap_lifecycle"
+                )
+            if not self.topology_policy.strategy_enabled:
+                raise ValueError(
+                    "surface_anchor_prune requires an active densification strategy"
+                )
+            if int(self.surface_anchor_prune.start_step) >= int(self.max_steps):
+                raise ValueError(
+                    "surface_anchor_prune.start_step must lie before max_steps"
+                )
+            if self.surface_anchor_prune.outside_box == "prune" and (
+                self.tile_inputs_manifest is None or self.mipmap_tile_id is None
+            ):
+                raise ValueError(
+                    "surface_anchor_prune.outside_box='prune' requires "
+                    "tile_inputs_manifest and mipmap_tile_id"
+                )
         if (
             self.tangent_proposal.enabled
             and self.densification_strategy != "default_3dgs"
@@ -2065,6 +2110,11 @@ class TrainerConfig:
             # Same conditional rule and the same reason: an unconditional key
             # would rewrite trainer_config_sha256 for every pre-WP-5 config.
             strategy_contract["tangent_proposal"] = self.tangent_proposal.to_dict()
+        if self.surface_anchor_prune.enabled:
+            # Key present only when enabled, for the same identity reason.
+            strategy_contract["surface_anchor_prune"] = (
+                self.surface_anchor_prune.to_dict()
+            )
         if (
             self.topology_policy.mode != "adaptive_growth"
             or self.fixed_topology_schedule.enabled
@@ -3520,6 +3570,7 @@ def train(
 
     tile_views = None
     tile_ownership_box = None
+    tile_training_box = None
     holdout_view_count = 0
     if config.tile_inputs_manifest is not None:
         tile_inputs = json.loads(
@@ -3533,6 +3584,7 @@ def train(
         if len(selected_tiles) != 1:
             raise ValueError("Tile inputs do not contain a unique selected Tile")
         tile_views = selected_tiles[0]["views"]
+        tile_training_box = selected_tiles[0]["training_and_export_box"]
         if config.holdout_spatial_cell_m is not None:
             from cloudstudio_3dgs.training.holdout import select_spatial_holdout
 
@@ -3707,6 +3759,21 @@ def train(
         # without coupling to torch's global RNG stream.
         proposal = TangentProposal(
             surface_field, config.tangent_proposal, seed=int(config.seed)
+        )
+    surface_anchor_prune = None
+    if config.surface_anchor_prune.enabled:
+        # Anchored to the signed initialization cloud as loaded (before any
+        # subsample stride), the same metric frame the gaussians live in.
+        # cKDTree build is ~1-2 s for 3.4M points; every query goes through
+        # the CPU like LidarNormalAnchors.refresh does.
+        surface_anchor_prune = SurfaceAnchorPrune(
+            config.surface_anchor_prune,
+            np.asarray(xyz, dtype=np.float64),
+            box=(
+                tile_training_box
+                if config.surface_anchor_prune.outside_box == "prune"
+                else None
+            ),
         )
     normal_anchors = None
     if config.lidar_normal_alignment.enabled:
@@ -3885,6 +3952,10 @@ def train(
         # checked by the measured surface field instead of being free 3-D
         # perturbations.
         backend.strategy.surface_birth_proposal = proposal
+    if surface_anchor_prune is not None:
+        # validate() already pinned the classic exact lifecycle, the only
+        # path whose cull/grow hooks read this.
+        backend.strategy.surface_anchor_prune = surface_anchor_prune
     backend.pinhole_rasterize_mode = config.pinhole_rasterize_mode
     backend.pinhole_with_ut = config.pinhole_with_ut
     runtime_contract = {
@@ -4949,6 +5020,18 @@ def train(
             growth = lifecycle_event.get("growth_diagnostics", {})
             cull = lifecycle_event.get("cull_reasons", {})
             quantiles = growth.get("gradient_quantiles", {})
+            anchor = lifecycle_event.get("surface_anchor_prune")
+            if anchor is not None:
+                last_metrics.update(
+                    {
+                        "surface_anchor_pruned_total": anchor.get("pruned_total"),
+                        "surface_anchor_far_fraction": anchor.get("far_fraction"),
+                        "surface_anchor_pruned_event": anchor.get("pruned"),
+                        "surface_anchor_rejected_parents": growth.get(
+                            "surface_anchor_rejected_count"
+                        ),
+                    }
+                )
             last_metrics.update(
                 {
                     "lifecycle_cull_total": lifecycle_event.get("cull_count"),

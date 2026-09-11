@@ -168,6 +168,7 @@ class DefaultStrategyAdapter:
         post_refine_cull_until: int | None = None,
         relaxed_cull_at_capacity: bool = True,
         growth_metric: str = "count_mean",
+        surface_anchor_prune: Any | None = None,
     ) -> None:
         from gsplat.strategy import DefaultStrategy
 
@@ -203,6 +204,11 @@ class DefaultStrategyAdapter:
         if self.capacity_cap is not None and self.capacity_cap <= 4:
             raise ValueError("capacity_cap must be greater than four")
         self.surface_birth_proposal = surface_birth_proposal
+        # Surface-anchor prune (surface_anchor.SurfaceAnchorPrune): rows far
+        # from the initialization cloud die at cull events, unsupported rows
+        # may not become parents. None keeps the recovered lifecycle exact;
+        # the trainer assigns it after construction like the birth guard.
+        self.surface_anchor_prune = surface_anchor_prune
         self.opacity_cull_policy = str(opacity_cull_policy)
         self.opacity_cull_min_observations = int(opacity_cull_min_observations)
         self.opacity_cull_consecutive_events = int(
@@ -286,6 +292,7 @@ class DefaultStrategyAdapter:
         self._last_surface_birth_event: dict[str, Any] | None = None
         self._last_growth_event: dict[str, Any] | None = None
         self._last_cull_event: dict[str, Any] | None = None
+        self._last_surface_anchor_event: dict[str, Any] | None = None
         if self.opacity_cull_policy not in {
             "immediate",
             "observation_aware",
@@ -571,9 +578,12 @@ class DefaultStrategyAdapter:
         """``lr`` is accepted and dropped: only MCMC's noise term consumes it."""
         if self.exact_mipmap_lifecycle:
             preserved_gradients = None
-            if (
-                self.lifecycle_execution_order == "pre_optimizer_vendor"
-                and self.is_refine_step(step)
+            if self.lifecycle_execution_order == "pre_optimizer_vendor" and (
+                self.is_refine_step(step)
+                # The anchor prune's extra cadence replaces parameters on a
+                # non-refine step too, and the vendor order runs before Adam,
+                # so that step's gradient needs the same provenance remap.
+                or self._surface_anchor_extra_due(step)
             ):
                 preserved_gradients = self._preserve_current_step_gradients(
                     params, state
@@ -593,6 +603,28 @@ class DefaultStrategyAdapter:
         self.inner.step_post_backward(
             params=params, optimizers=optimizers, state=state, step=step, info=info
         )
+
+    def _surface_anchor_extra_due(self, step: int) -> bool:
+        """Extra-cadence anchor prune on a step that is not a cull event."""
+        anchor = self.surface_anchor_prune
+        if anchor is None or self.lifecycle_dry_run:
+            return False
+        if not anchor.extra_due(step):
+            return False
+        if self.is_refine_step(step):
+            return False
+        every = self.post_refine_cull_every
+        if (
+            step >= self.refine_stop_iter
+            and every
+            and step % every == 0
+            and (
+                self.post_refine_cull_until is None
+                or step <= self.post_refine_cull_until
+            )
+        ):
+            return False
+        return True
 
     def is_refine_step(self, step: int) -> bool:
         if self.exact_mipmap_lifecycle:
@@ -824,6 +856,23 @@ class DefaultStrategyAdapter:
             eligible &= self.surface_birth_proposal.eligible_parent_mask(
                 params["means"]
             )
+        surface_anchor_rejected_count = 0
+        if (
+            self.surface_anchor_prune is not None
+            and self.surface_anchor_prune.config.reject_unsupported_parents
+            and bool(eligible.any())
+        ):
+            # A pure parent mask: no newborn is moved, so unlike the tangent
+            # birth guard above this has no dependency on the execution
+            # order's newborn layout. Only the candidates are queried - the
+            # whole population is queried once, at the cull of the same event.
+            candidate_indices = torch.where(eligible)[0]
+            unsupported = self.surface_anchor_prune.unsupported_parent_mask(
+                params["means"][candidate_indices]
+            )
+            surface_anchor_rejected_count = int(unsupported.sum().item())
+            if surface_anchor_rejected_count:
+                eligible[candidate_indices[unsupported]] = False
         supported_candidate_count = int(eligible.sum().item())
         capacity_rejected_count = 0
         if self.capacity_cap is not None:
@@ -952,6 +1001,7 @@ class DefaultStrategyAdapter:
                 else max(0, self.capacity_cap - int(observed.numel()))
             ),
             "capacity_rejected_count": capacity_rejected_count,
+            "surface_anchor_rejected_count": surface_anchor_rejected_count,
             "clone_parent_count": duplicate_count,
             "split_parent_count": split_count,
             "split_parent_opacity": self._opacity_summary(opacity[split_mask]),
@@ -1306,6 +1356,19 @@ class DefaultStrategyAdapter:
 
         forced_geometry_mask = world_scale_mask | screen_scale_mask
         remove_mask = opacity_mask | forced_geometry_mask
+        surface_anchor_count = 0
+        if (
+            self.surface_anchor_prune is not None
+            and not self.lifecycle_dry_run
+            and self.surface_anchor_prune.due(step)
+        ):
+            # Same remove call as the opacity/size culls, so a row leaves
+            # with its optimizer moments and lineage in one topology op.
+            anchor_removal = self._surface_anchor_removal(
+                params, state, step=step, already_removed=remove_mask
+            )
+            surface_anchor_count = int(anchor_removal.sum().item())
+            remove_mask = remove_mask | anchor_removal
         prune_count = int(remove_mask.sum().item())
         observation_count = state.get("count")
         raw_candidate_observed_count = None
@@ -1366,6 +1429,7 @@ class DefaultStrategyAdapter:
             "local_competition_protected_count": (
                 local_competition_protected_count
             ),
+            "surface_anchor_count": surface_anchor_count,
             "total_cull_count": prune_count,
             "relaxed_cull_only": relaxed_cull_only,
         }
@@ -1506,12 +1570,14 @@ class DefaultStrategyAdapter:
         self._last_surface_birth_event = None
         self._last_growth_event = None
         self._last_cull_event = None
+        self._last_surface_anchor_event = None
         if step >= self.refine_stop_iter:
             self._post_refine_cull(params, optimizers, state, step)
             return
         self.inner._update_state(params, state, info, packed=False)
         self._accumulate_footprint_weighted_gradient(params, state, info)
         if not self.is_refine_step(step):
+            self._surface_anchor_standalone(params, optimizers, state, step)
             return
         self._ensure_cull_tracking(params, state)
         before = len(params["means"])
@@ -1596,6 +1662,72 @@ class DefaultStrategyAdapter:
             self.last_lifecycle_event["cull_reasons"] = dict(
                 self._last_cull_event
             )
+        if self._last_surface_anchor_event is not None:
+            self.last_lifecycle_event["surface_anchor_prune"] = dict(
+                self._last_surface_anchor_event
+            )
+        if params["means"].is_cuda:
+            torch.cuda.empty_cache()
+
+    def _surface_anchor_removal(
+        self,
+        params: Any,
+        state: dict[str, Any],
+        *,
+        step: int,
+        already_removed: Any | None,
+    ) -> Any:
+        """Anchor-prune mask for this event; telemetry lands in the event."""
+        anchor = self.surface_anchor_prune
+        removal = anchor.removal_mask(
+            params["means"],
+            state.get("_cloudstudio_birth_step"),
+            step=step,
+            already_removed=already_removed,
+        )
+        # The running total lives in strategy state (a plain int, so the
+        # library's remove/duplicate/split leave it alone) and therefore
+        # survives a checkpoint resume; the object counter does not.
+        key = "_cloudstudio_surface_anchor_pruned_total"
+        state[key] = int(state.get(key, 0)) + int(anchor.last_stats["pruned"])
+        self._last_surface_anchor_event = {
+            **anchor.last_stats,
+            "pruned_total": int(state[key]),
+        }
+        return removal
+
+    def _surface_anchor_standalone(
+        self,
+        params: Any,
+        optimizers: dict[str, Any],
+        state: dict[str, Any],
+        step: int,
+    ) -> None:
+        """Extra-cadence anchor prune on a step with no other lifecycle event."""
+        import torch
+        from gsplat.strategy.ops import remove
+
+        if not self._surface_anchor_extra_due(step):
+            return
+        before = len(params["means"])
+        removal = self._surface_anchor_removal(
+            params, state, step=step, already_removed=None
+        )
+        cull_count = int(removal.sum().item())
+        if cull_count:
+            remove(params=params, optimizers=optimizers, state=state, mask=removal)
+        self.last_lifecycle_event = {
+            "kind": "surface_anchor_prune",
+            "before_count": int(before),
+            "clone_count": 0,
+            "split_parent_count": 0,
+            "split_child_count": 0,
+            "cull_count": cull_count,
+            "opacity_reset": False,
+            "after_count": int(len(params["means"])),
+            "cull_opacity_threshold": None,
+            "surface_anchor_prune": dict(self._last_surface_anchor_event),
+        }
         if params["means"].is_cuda:
             torch.cuda.empty_cache()
 
@@ -1618,8 +1750,11 @@ class DefaultStrategyAdapter:
 
         every = self.post_refine_cull_every
         if not every or step % every != 0 or self.lifecycle_dry_run:
+            # No cull this step; the anchor prune's own cadence may still act.
+            self._surface_anchor_standalone(params, optimizers, state, step)
             return
         if self.post_refine_cull_until is not None and step > self.post_refine_cull_until:
+            self._surface_anchor_standalone(params, optimizers, state, step)
             return
         self._ensure_cull_tracking(params, state)
         before = len(params["means"])
@@ -1643,6 +1778,10 @@ class DefaultStrategyAdapter:
         }
         if self._last_cull_event is not None:
             self.last_lifecycle_event["cull_reasons"] = dict(self._last_cull_event)
+        if self._last_surface_anchor_event is not None:
+            self.last_lifecycle_event["surface_anchor_prune"] = dict(
+                self._last_surface_anchor_event
+            )
         if params["means"].is_cuda:
             torch.cuda.empty_cache()
 
@@ -1689,6 +1828,11 @@ class DefaultStrategyAdapter:
                 None
                 if self.surface_birth_proposal is None
                 else self.surface_birth_proposal.config.to_dict()
+            ),
+            "surface_anchor_prune": (
+                None
+                if self.surface_anchor_prune is None
+                else self.surface_anchor_prune.state_dict()
             ),
             "opacity_cull_policy": self.opacity_cull_policy,
             "opacity_cull_min_observations": self.opacity_cull_min_observations,
