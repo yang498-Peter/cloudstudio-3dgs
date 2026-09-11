@@ -19,11 +19,11 @@
  "depth_root": "C:\\Peter\\3dgs-datasets\\house0305_sop_v8\\depth",
  "face_lidar_geometry_manifest": "C:\\Peter\\3dgs-datasets\\house0305_sop_v9\\face4_lidar_train_vis6\\face_lidar_geometry_manifest.json",
  "face_lidar_geometry_root": "C:\\Peter\\3dgs-datasets\\house0305_sop_v9\\face4_lidar_train_vis6",
- "tile_inputs_manifest": "C:\\Peter\\3dgs-runs\\house0305_sop\\tile_inputs_v9_F3\\tile_inputs_manifest.json",
+ "tile_inputs_manifest": "C:\\Peter\\3dgs-runs\\house0305_sop\\tile_inputs_v9\\tile_inputs_manifest.json",
  "tile_inputs_root": "C:\\Peter\\3dgs-runs\\house0305_sop\\tile_inputs_v9",
  "mipmap_tile_id": 1,
  "initialization_ply": "C:\\Peter\\3dgs-runs\\house0305_sop\\tile_inputs_v9\\Tile_1\\initialization_full_lidar.ply",
- "initialization_geometry_manifest": "C:\\Peter\\3dgs-runs\\house0305_sop\\tile_inputs_v9_F3\\tile_geometry_manifest.json",
+ "initialization_geometry_manifest": "C:\\Peter\\3dgs-runs\\house0305_sop\\tile_geometry_v9\\tile_geometry_manifest.json",
  "initialization_geometry": "C:\\Peter\\3dgs-runs\\house0305_sop\\tile_geometry_v9\\Tile_1\\initialization_geometry_k7_k30.npz",
  "surface_initialization": {
   "enabled": true,
@@ -149,101 +149,12 @@
  "checkpoint_keep_every": 1000000,
  "mono_depth_max_range_m": 30.0,
  "da2_depth_space": "compressed",
+ "holdout_face_ids": [
+  "pitch_up_56"
+ ],
  "lineage": {
   "base": "tile1_R1d_20k",
-  "base_run_id": "house0305-t1-R1d",
-  "base_config": "C:\\Peter\\3dgs-runs\\house0305_sop\\tile1_R1d_20k.json",
-  "base_config_sha256": "7728ae57775fdb3b30360ff3453354483c63310397c780732e0d5e20805bca33",
-  "generator": "tools/derive_tile_inputs_variant.py",
-  "single_change": "view set only: every pitch_up_56 face of Tile_1 dropped from the Tile inputs (1829 -> 1278 views, 677 of 677 parent images kept); recipe, schedule, cap and every other field identical to the base",
-  "data_variant": {
-   "kind": "production_tile_face_exclusion_variant_v1",
-   "generator": "tools/derive_tile_inputs_variant.py",
-   "variant": "F3_nopitchup",
-   "tile": "Tile_1",
-   "tile_id": 1,
-   "excluded_face_ids": [
-    "pitch_up_56"
-   ],
-   "view_count_before": 1829,
-   "view_count_after": 1278,
-   "views_removed": 551,
-   "face_counts_before": {
-    "pitch_up_56": 551,
-    "yaw_minus_35": 540,
-    "yaw_plus_35": 516,
-    "pitch_down_56": 222
-   },
-   "face_counts_after": {
-    "yaw_minus_35": 540,
-    "yaw_plus_35": 516,
-    "pitch_down_56": 222
-   },
-   "parent_image_count_before": 677,
-   "parent_image_count_after": 677,
-   "parent_images_dropped": [],
-   "tile_inputs_manifest_sha256": "34f09d2a90bff4fc9532f3f5767b778b14c650083db49771e733a6f322c9f91a",
-   "tile_geometry_manifest_sha256": "fff7342bdd1ca97b8bdffa44141e7435d11ab5fcb1ee19349fa995bcc07a8c40",
-   "derived_from_tile_inputs_manifest_sha256": "7af17f43c5c3884521ddff037ecc756c9ef4a2f8825c4b62480da1a9d8621e03",
-   "derived_from_tile_geometry_manifest_sha256": "745c6fd186b5da8ca923a8a5a259554184dfaf4f2c9f2dc1361e6f0e660a07cf",
-   "initialization_point_count": 3417320,
-   "note": "F3 at production scale: DIAG-40 F3 (README rows DIAG-40 F3 / K2) removed the wall-front smears and lifted the door ROI above the reference when every pitch_up_56 face was dropped; this arm repeats that on the full Tile_1 view set with the R1d recipe",
-   "tile_inputs_manifest": "C:\\Peter\\3dgs-runs\\house0305_sop\\tile_inputs_v9_F3\\tile_inputs_manifest.json",
-   "tile_geometry_manifest": "C:\\Peter\\3dgs-runs\\house0305_sop\\tile_inputs_v9_F3\\tile_geometry_manifest.json",
-   "tile_inputs_root": "C:\\Peter\\3dgs-runs\\house0305_sop\\tile_inputs_v9",
-   "derived_from": {
-    "tile_inputs_manifest": "C:\\Peter\\3dgs-runs\\house0305_sop\\tile_inputs_v9\\tile_inputs_manifest.json",
-    "tile_geometry_manifest": "C:\\Peter\\3dgs-runs\\house0305_sop\\tile_geometry_v9\\tile_geometry_manifest.json",
-    "base_config": "C:\\Peter\\3dgs-runs\\house0305_sop\\tile1_R1d_20k.json",
-    "base_config_sha256": "7728ae57775fdb3b30360ff3453354483c63310397c780732e0d5e20805bca33"
-   },
-   "roi_ids": {
-    "count": 44,
-    "present": 44,
-    "missing": [],
-    "all_present": true,
-    "path": "C:\\Peter\\3dgs-runs\\house0305_sop\\diag_v2\\indoor_door_leaf_Tile_1\\DIAG_40\\roi_compare_ids_f3.json"
-   }
-  },
-  "rebound_fields": {
-   "tile_inputs_manifest": {
-    "base": "C:\\Peter\\3dgs-runs\\house0305_sop\\tile_inputs_v9\\tile_inputs_manifest.json",
-    "variant": "C:\\Peter\\3dgs-runs\\house0305_sop\\tile_inputs_v9_F3\\tile_inputs_manifest.json"
-   },
-   "initialization_geometry_manifest": {
-    "base": "C:\\Peter\\3dgs-runs\\house0305_sop\\tile_geometry_v9\\tile_geometry_manifest.json",
-    "variant": "C:\\Peter\\3dgs-runs\\house0305_sop\\tile_inputs_v9_F3\\tile_geometry_manifest.json"
-   }
-  },
-  "verbatim_fields": [
-   "tile_inputs_root",
-   "initialization_ply",
-   "initialization_geometry",
-   "background_image_manifest",
-   "background_image_root",
-   "face_cache_manifest",
-   "mipmap_tile_id"
-  ],
-  "schedule": {
-   "policy": "schedule kept identical to the base config; not rewritten by the tool",
-   "schedule_contract": null,
-   "rule": "trainer.train: max_steps == 20 x training view count for fisher_yates_without_replacement_per_epoch + adaptive_growth without a schedule_contract; TrainerConfig.validate: prune_switch_step == max_steps // 2 for exact_mipmap_lifecycle",
-   "check": "max_steps_is_20_view_epochs",
-   "ok": false,
-   "max_steps": 36580,
-   "training_view_count": 1278,
-   "configured_epochs": 28.62284820031299,
-   "controlled_stop_after_steps": 20000,
-   "executed_epochs_at_stop": 15.64945226917058,
-   "parity_max_steps": 25560,
-   "parity_prune_switch_step": 12780,
-   "current_prune_switch_step": 18290,
-   "trainer_error": "MipMap epoch-permutation sampling requires exactly 20 complete view epochs",
-   "resolution_options": [
-    "parity: max_steps 36580 -> 25560 and default_strategy.prune_switch_step -> 12780 (changes the means-LR decay denominator and the late-cull switch; controlled stop unchanged)",
-    "contract: declare schedule_contract research_rescaled_horizon_v1 with max_steps as the horizon H (controlled stop may only restate H; linked fields validated as fractions of H)"
-   ]
-  },
-  "note": "F3 at production scale: DIAG-40 F3 (README rows DIAG-40 F3 / K2) removed the wall-front smears and lifted the door ROI above the reference when every pitch_up_56 face was dropped; this arm repeats that on the full Tile_1 view set with the R1d recipe"
+  "single_change": "holdout_face_ids=[pitch_up_56]: the 551 pitch_up views leave the training set but stay in the 20x-views epoch basis, so max_steps/prune_switch/LR schedule are byte-identical to R1d; each remaining view is seen 20000/1278=15.6 times instead of 10.9",
+  "note": "F3 at production scale: does removing the sky-facing faces remove the wall-front floaters as it did on DIAG-40?"
  }
 }
