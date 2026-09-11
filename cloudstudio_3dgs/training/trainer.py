@@ -3786,6 +3786,14 @@ def train(
                 "effective_training_view_epochs": config.max_steps / max(1, len(tile_views)),
             }
             _atomic_json(output_dir / "holdout_views.json", holdout)
+            near = holdout.get("nearest_training_camera_m") or {}
+            print(
+                f"spatial hold-out: {len(holdout['held_out_sample_ids'])} views withheld, "
+                f"{len(holdout['guard_sample_ids'])} guard views, "
+                f"{len(tile_views)} training views; nearest training camera "
+                f"p05 {near.get('p05')} p50 {near.get('p50')} m",
+                flush=True,
+            )
         if config.holdout_face_ids:
             from cloudstudio_3dgs.training.holdout import select_face_holdout
 
@@ -3802,14 +3810,6 @@ def train(
             }
             tile_views = kept_views
             _atomic_json(output_dir / "holdout_faces.json", face_record)
-            near = holdout.get("nearest_training_camera_m") or {}
-            print(
-                f"spatial hold-out: {len(holdout['held_out_sample_ids'])} views withheld, "
-                f"{len(holdout['guard_sample_ids'])} guard views, "
-                f"{len(tile_views)} training views; nearest training camera "
-                f"p05 {near.get('p05')} p50 {near.get('p50')} m",
-                flush=True,
-            )
         if config.tile_ownership_masking:
             tile_ownership_box = selected_tiles[0]["training_and_export_box"]
     tile_ownership_box = tile_ownership_box if config.tile_ownership_masking else None
