@@ -106,10 +106,21 @@ class SurfaceAnchorPruneConfig:
     min_age_steps: int = 0
     outside_box: str = "keep"
     reject_unsupported_parents: bool = False
+    # ``cull: False`` keeps only the growth gate (reject_unsupported_parents)
+    # and never removes rows: the growth-only arm the survey ranks above hard
+    # pruning (research/quality_recovery_v2/11_floater_handling_survey.zh-CN.md 7.3).
+    cull: bool = True
 
     def validate(self) -> None:
         if not isinstance(self.enabled, bool):
             raise ValueError("surface_anchor_prune.enabled must be a boolean")
+        if not isinstance(self.cull, bool):
+            raise ValueError("surface_anchor_prune.cull must be a boolean")
+        if self.enabled and not self.cull and not self.reject_unsupported_parents:
+            raise ValueError(
+                "surface_anchor_prune with cull=false needs reject_unsupported_parents=true, "
+                "otherwise the knob does nothing"
+            )
         if not isinstance(self.reject_unsupported_parents, bool):
             raise ValueError(
                 "surface_anchor_prune.reject_unsupported_parents must be a boolean"
@@ -142,6 +153,7 @@ class SurfaceAnchorPruneConfig:
             "min_age_steps": int(self.min_age_steps),
             "outside_box": str(self.outside_box),
             "reject_unsupported_parents": bool(self.reject_unsupported_parents),
+            "cull": bool(self.cull),
             "distance": "exact_nearest_initialization_point_euclidean_m",
             "box_margin_m": float(self.max_distance_m),
         }
@@ -321,13 +333,16 @@ class SurfaceAnchorPrune:
 
     def due(self, step: int) -> bool:
         """May the prune act at a cull event on this step?"""
+        if not self.config.cull:
+            return False
         return int(step) >= int(self.config.start_step)
 
     def extra_due(self, step: int) -> bool:
         """Does the extra cadence fire on this step (independent of culls)?"""
         every = self.config.every
         return (
-            every is not None
+            self.config.cull
+            and every is not None
             and int(step) >= int(self.config.start_step)
             and int(step) % int(every) == 0
         )
