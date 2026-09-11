@@ -1,0 +1,3745 @@
+{
+ "kind": "rgb_supervision_fraction_estimate_v1",
+ "generator": "tools/estimate_rgb_supervision_fraction.py",
+ "region": "indoor_door_leaf_Tile_1",
+ "tile": "Tile_1",
+ "config": "C:\\Peter\\3dgs-runs\\house0305_sop\\diag_indoor_door_leaf_Tile_1_40_F1_c134.json",
+ "selection": "C:\\Peter\\3dgs-runs\\house0305_sop\\diag_v2\\indoor_door_leaf_Tile_1\\DIAG_40\\selection.json",
+ "rgb_supervision_mask": "lidar_support",
+ "rgb_supervision_dilation_radius_px": 24,
+ "face_lidar_geometry_manifest": "C:\\Peter\\3dgs-datasets\\house0305_sop_v9\\face4_lidar_train_vis6\\face_lidar_geometry_manifest.json",
+ "face_lidar_geometry_manifest_sha256": "98305c46e0a73e3d606ea985469d3467982fc0590073fa8f14ba995ce8917bc7",
+ "tile_ownership": {
+  "training_and_export_box": [
+   [
+    -81.30969759999999,
+    -5.056892571428578,
+    -8.0632724
+   ],
+   [
+    9.70169760000001,
+    -1.515545523809535,
+    33.9402724
+   ]
+  ],
+  "margin_m": 0.5,
+  "dilation_px": 15
+ },
+ "construction": "rgb_mask = renderer mask PNG > 0, cropped to the Tile view; depth_mask = rgb_mask & sparse.valid; support = max_pool(depth_mask & confidence > 0, 2r+1); supervised = rgb_mask & support (cloudstudio_3dgs.training.rgb_supervision.rgb_supervision_mask_numpy)",
+ "summary": {
+  "views": 113,
+  "all_views": {
+   "n": 113,
+   "median": 0.9928201374797563,
+   "min": 0.8906482447336145,
+   "max": 1.0,
+   "q1": 0.9786588449479114,
+   "q3": 0.9999641308120203,
+   "mean": 0.9821320092041711
+  },
+  "pixel_weighted_fraction": 0.9799814998327818,
+  "by_face_type": {
+   "pitch_down": {
+    "n": 7,
+    "median": 0.9944523937915326,
+    "min": 0.986827466425304,
+    "max": 0.9996748941999559,
+    "q1": 0.9891489052578808,
+    "q3": 0.9992778688324079,
+    "mean": 0.9938673978740079
+   },
+   "pitch_up": {
+    "n": 40,
+    "median": 0.9630378645002995,
+    "min": 0.8906482447336145,
+    "max": 1.0,
+    "q1": 0.9428300439656805,
+    "q3": 1.0,
+    "mean": 0.9619645093981886
+   },
+   "yaw": {
+    "n": 66,
+    "median": 0.9978995887095539,
+    "min": 0.9669354965280814,
+    "max": 1.0,
+    "q1": 0.9865840071194255,
+    "q3": 1.0,
+    "mean": 0.9931100739246324
+   }
+  },
+  "views_without_returns": 0,
+  "roi_views": 63,
+  "roi_all": {
+   "n": 63,
+   "median": 1.0,
+   "min": 0.9971862952369108,
+   "max": 1.0,
+   "q1": 1.0,
+   "q3": 1.0,
+   "mean": 0.9999483097354156
+  },
+  "roi_by_face_type": {
+   "pitch_up": {
+    "n": 13,
+    "median": 1.0,
+    "min": 1.0,
+    "max": 1.0,
+    "q1": 1.0,
+    "q3": 1.0,
+    "mean": 1.0
+   },
+   "yaw": {
+    "n": 50,
+    "median": 1.0,
+    "min": 0.9971862952369108,
+    "max": 1.0,
+    "q1": 1.0,
+    "q3": 1.0,
+    "mean": 0.9999348702666236
+   }
+  },
+  "ownership": {
+   "views": 113,
+   "owned_return_fraction": {
+    "n": 113,
+    "median": 0.4493924873791392,
+    "min": 0.12846023884131638,
+    "max": 1.0,
+    "q1": 0.2692000028315978,
+    "q3": 0.6056245232864286,
+    "mean": 0.45931663249896854
+   },
+   "owned_return_fraction_by_face_type": {
+    "pitch_down": {
+     "n": 7,
+     "median": 1.0,
+     "min": 0.9944675493151207,
+     "max": 1.0,
+     "q1": 0.9968938954692289,
+     "q3": 1.0,
+     "mean": 0.9987659206834785
+    },
+    "pitch_up": {
+     "n": 40,
+     "median": 0.3620870327057304,
+     "min": 0.12846023884131638,
+     "max": 0.6959401831856229,
+     "q1": 0.20384899353362596,
+     "q3": 0.4523238179340001,
+     "mean": 0.3573653876019305
+    },
+    "yaw": {
+     "n": 66,
+     "median": 0.5077394086028302,
+     "min": 0.18113415904328076,
+     "max": 0.7578401587880261,
+     "q1": 0.3071292727081983,
+     "q3": 0.6056245232864286,
+     "mean": 0.46389094732608904
+    }
+   },
+   "foreign_region_fraction_of_rgb_mask": {
+    "n": 113,
+    "median": 0.3589782949561712,
+    "min": 0.0,
+    "max": 0.7006745343881072,
+    "q1": 0.19515975202670482,
+    "q3": 0.5102396799862257,
+    "mean": 0.35436832066561896
+   },
+   "foreign_region_fraction_of_rgb_mask_by_face_type": {
+    "pitch_down": {
+     "n": 7,
+     "median": 0.0,
+     "min": 0.0,
+     "max": 0.0032051162649605353,
+     "q1": 0.0,
+     "q3": 0.0016428973311480221,
+     "mean": 0.0006925733708726511
+    },
+    "pitch_up": {
+     "n": 40,
+     "median": 0.4940683038110697,
+     "min": 0.04008439541084664,
+     "max": 0.6967747701567407,
+     "q1": 0.28565084409649216,
+     "q3": 0.6011294307590694,
+     "mean": 0.4334578783354912
+    },
+    "yaw": {
+     "n": 66,
+     "median": 0.3563689423043406,
+     "min": 0.015431395092834952,
+     "max": 0.7006745343881072,
+     "q1": 0.22128969838442164,
+     "q3": 0.48524654733172434,
+     "mean": 0.3439463195181695
+    }
+   },
+   "lidar_support_minus_foreign_fraction_of_rgb_mask": {
+    "n": 113,
+    "median": 0.6050685568699586,
+    "min": 0.24284934709476796,
+    "max": 0.9996748941999559,
+    "q1": 0.4710179074072468,
+    "q3": 0.8048402479732952,
+    "mean": 0.6277636885385521
+   },
+   "lidar_support_minus_foreign_fraction_of_rgb_mask_by_face_type": {
+    "pitch_down": {
+     "n": 7,
+     "median": 0.9944523937915326,
+     "min": 0.9859437889929202,
+     "max": 0.9996748941999559,
+     "q1": 0.986827466425304,
+     "q3": 0.9992778688324079,
+     "mean": 0.9931748245031352
+    },
+    "pitch_up": {
+     "n": 40,
+     "median": 0.48862956755765247,
+     "min": 0.24284934709476796,
+     "max": 0.9599156045891534,
+     "q1": 0.32172403665695326,
+     "q3": 0.6978446145942905,
+     "mean": 0.5285066310626974
+    },
+    "yaw": {
+     "n": 66,
+     "median": 0.6403873174462072,
+     "min": 0.2849082439727291,
+     "max": 0.9793052667628855,
+     "q1": 0.5065061282504123,
+     "q3": 0.7787103016155783,
+     "mean": 0.6491637544064629
+    }
+   },
+   "owned_support_only_fraction_of_rgb_mask": {
+    "n": 113,
+    "median": 0.6391756972500429,
+    "min": 0.22441743564814334,
+    "max": 0.9996748941999559,
+    "q1": 0.511830938030789,
+    "q3": 0.8327008508395453,
+    "mean": 0.6545223731407835
+   },
+   "owned_support_only_fraction_of_rgb_mask_by_face_type": {
+    "pitch_down": {
+     "n": 7,
+     "median": 0.9944523937915326,
+     "min": 0.9868125897073325,
+     "max": 0.9996748941999559,
+     "q1": 0.986827466425304,
+     "q3": 0.9992778688324079,
+     "mean": 0.9933803289165241
+    },
+    "pitch_up": {
+     "n": 40,
+     "median": 0.5225888053247831,
+     "min": 0.22441743564814334,
+     "max": 0.9642099855671616,
+     "q1": 0.32659384118340046,
+     "q3": 0.7263099958008072,
+     "mean": 0.5457068719793077
+    },
+    "yaw": {
+     "n": 66,
+     "median": 0.6891397365167203,
+     "min": 0.31322458161954725,
+     "max": 0.982855745003547,
+     "q1": 0.5670726704915253,
+     "q3": 0.8124501758188409,
+     "mean": 0.6845316815654632
+    }
+   },
+   "roi_lidar_support_minus_foreign_fraction_of_rgb_mask": {
+    "n": 63,
+    "median": 1.0,
+    "min": 0.9077617833602786,
+    "max": 1.0,
+    "q1": 0.9999349836646457,
+    "q3": 1.0,
+    "mean": 0.9969018845119981
+   },
+   "roi_owned_support_only_fraction_of_rgb_mask": {
+    "n": 63,
+    "median": 1.0,
+    "min": 0.9132933300169962,
+    "max": 1.0,
+    "q1": 1.0,
+    "q3": 1.0,
+    "mean": 0.9979141305833876
+   }
+  }
+ },
+ "views": [
+  {
+   "sample_id": "img_02167f65b42e301e9acb4f89::pitch_up_56",
+   "image_id": "img_02167f65b42e301e9acb4f89",
+   "face_id": "pitch_up_56",
+   "face_type": "pitch_up",
+   "crop": {
+    "x": 0,
+    "y": 0,
+    "width": 2912,
+    "height": 1456
+   },
+   "rgb_mask_pixels": 4087900,
+   "lidar_return_pixels": 269695,
+   "supervised_pixels": 4087900,
+   "supervised_fraction_of_rgb_mask": 1.0,
+   "supervised_fraction_of_crop": 0.9641564651008332,
+   "roi": null,
+   "ownership": {
+    "owned_return_fraction": 0.4340087877046293,
+    "foreign_region_fraction_of_rgb_mask": 0.3021553854057095,
+    "lidar_support_minus_foreign_fraction_of_rgb_mask": 0.6978446145942905,
+    "owned_support_only_fraction_of_rgb_mask": 0.7214452408327013
+   }
+  },
+  {
+   "sample_id": "img_02167f65b42e301e9acb4f89::yaw_minus_35",
+   "image_id": "img_02167f65b42e301e9acb4f89",
+   "face_id": "yaw_minus_35",
+   "face_type": "yaw",
+   "crop": {
+    "x": 0,
+    "y": 0,
+    "width": 1456,
+    "height": 1680
+   },
+   "rgb_mask_pixels": 2364718,
+   "lidar_return_pixels": 547626,
+   "supervised_pixels": 2364270,
+   "supervised_fraction_of_rgb_mask": 0.9998105482345041,
+   "supervised_fraction_of_crop": 0.9665546507064364,
+   "roi": {
+    "box": {
+     "x0": 1216,
+     "y0": 618,
+     "x1": 1455,
+     "y1": 1071
+    },
+    "rgb_mask_pixels": 103284,
+    "supervised_pixels": 103284,
+    "supervised_fraction_of_rgb_mask": 1.0,
+    "lidar_support_minus_foreign_fraction_of_rgb_mask": 1.0,
+    "owned_support_only_fraction_of_rgb_mask": 1.0
+   },
+   "ownership": {
+    "owned_return_fraction": 0.5670968872916917,
+    "foreign_region_fraction_of_rgb_mask": 0.22584341980735123,
+    "lidar_support_minus_foreign_fraction_of_rgb_mask": 0.7739671284271529,
+    "owned_support_only_fraction_of_rgb_mask": 0.7997076184136966
+   }
+  },
+  {
+   "sample_id": "img_02167f65b42e301e9acb4f89::yaw_plus_35",
+   "image_id": "img_02167f65b42e301e9acb4f89",
+   "face_id": "yaw_plus_35",
+   "face_type": "yaw",
+   "crop": {
+    "x": 0,
+    "y": 0,
+    "width": 1243,
+    "height": 1864
+   },
+   "rgb_mask_pixels": 2261703,
+   "lidar_return_pixels": 632684,
+   "supervised_pixels": 2261703,
+   "supervised_fraction_of_rgb_mask": 1.0,
+   "supervised_fraction_of_crop": 0.9761544477399619,
+   "roi": {
+    "box": {
+     "x0": 23,
+     "y0": 668,
+     "x1": 288,
+     "y1": 1139
+    },
+    "rgb_mask_pixels": 124815,
+    "supervised_pixels": 124815,
+    "supervised_fraction_of_rgb_mask": 1.0,
+    "lidar_support_minus_foreign_fraction_of_rgb_mask": 1.0,
+    "owned_support_only_fraction_of_rgb_mask": 1.0
+   },
+   "ownership": {
+    "owned_return_fraction": 0.5177434548684652,
+    "foreign_region_fraction_of_rgb_mask": 0.20693389008194268,
+    "lidar_support_minus_foreign_fraction_of_rgb_mask": 0.7930661099180574,
+    "owned_support_only_fraction_of_rgb_mask": 0.8124501758188409
+   }
+  },
+  {
+   "sample_id": "img_05cc6ae9bfec314d854c8837::pitch_up_56",
+   "image_id": "img_05cc6ae9bfec314d854c8837",
+   "face_id": "pitch_up_56",
+   "face_type": "pitch_up",
+   "crop": {
+    "x": 0,
+    "y": 0,
+    "width": 1116,
+    "height": 1116
+   },
+   "rgb_mask_pixels": 1202231,
+   "lidar_return_pixels": 53830,
+   "supervised_pixels": 1168824,
+   "supervised_fraction_of_rgb_mask": 0.9722124949364972,
+   "supervised_fraction_of_crop": 0.9384707287933094,
+   "roi": null,
+   "ownership": {
+    "owned_return_fraction": 0.44581088612297975,
+    "foreign_region_fraction_of_rgb_mask": 0.37995193935275334,
+    "lidar_support_minus_foreign_fraction_of_rgb_mask": 0.5922605555837439,
+    "owned_support_only_fraction_of_rgb_mask": 0.6325240324030906
+   }
+  },
+  {
+   "sample_id": "img_05cc6ae9bfec314d854c8837::yaw_minus_35",
+   "image_id": "img_05cc6ae9bfec314d854c8837",
+   "face_id": "yaw_minus_35",
+   "face_type": "yaw",
+   "crop": {
+    "x": 0,
+    "y": 0,
+    "width": 926,
+    "height": 1389
+   },
+   "rgb_mask_pixels": 1244273,
+   "lidar_return_pixels": 347104,
+   "supervised_pixels": 1243432,
+   "supervised_fraction_of_rgb_mask": 0.999324103311733,
+   "supervised_fraction_of_crop": 0.9667380389266483,
+   "roi": {
+    "box": {
+     "x0": 209,
+     "y0": 594,
+     "x1": 461,
+     "y1": 927
+    },
+    "rgb_mask_pixels": 83916,
+    "supervised_pixels": 83916,
+    "supervised_fraction_of_rgb_mask": 1.0,
+    "lidar_support_minus_foreign_fraction_of_rgb_mask": 1.0,
+    "owned_support_only_fraction_of_rgb_mask": 1.0
+   },
+   "ownership": {
+    "owned_return_fraction": 0.511172443993731,
+    "foreign_region_fraction_of_rgb_mask": 0.3589782949561712,
+    "lidar_support_minus_foreign_fraction_of_rgb_mask": 0.6403458083555619,
+    "owned_support_only_fraction_of_rgb_mask": 0.6989671880688563
+   }
+  },
+  {
+   "sample_id": "img_0cfe3b000d78b3cbe984aa45::pitch_down_56",
+   "image_id": "img_0cfe3b000d78b3cbe984aa45",
+   "face_id": "pitch_down_56",
+   "face_type": "pitch_down",
+   "crop": {
+    "x": 0,
+    "y": 0,
+    "width": 2912,
+    "height": 1456
+   },
+   "rgb_mask_pixels": 4087900,
+   "lidar_return_pixels": 14759,
+   "supervised_pixels": 4086571,
+   "supervised_fraction_of_rgb_mask": 0.9996748941999559,
+   "supervised_fraction_of_crop": 0.963843012241879,
+   "roi": null,
+   "ownership": {
+    "owned_return_fraction": 1.0,
+    "foreign_region_fraction_of_rgb_mask": 0.0,
+    "lidar_support_minus_foreign_fraction_of_rgb_mask": 0.9996748941999559,
+    "owned_support_only_fraction_of_rgb_mask": 0.9996748941999559
+   }
+  },
+  {
+   "sample_id": "img_0cfe3b000d78b3cbe984aa45::pitch_up_56",
+   "image_id": "img_0cfe3b000d78b3cbe984aa45",
+   "face_id": "pitch_up_56",
+   "face_type": "pitch_up",
+   "crop": {
+    "x": 0,
+    "y": 0,
+    "width": 2335,
+    "height": 1456
+   },
+   "rgb_mask_pixels": 3302678,
+   "lidar_return_pixels": 222709,
+   "supervised_pixels": 3267180,
+   "supervised_fraction_of_rgb_mask": 0.989251752668592,
+   "supervised_fraction_of_crop": 0.96100312963268,
+   "roi": {
+    "box": {
+     "x0": 1,
+     "y0": 260,
+     "x1": 401,
+     "y1": 872
+    },
+    "rgb_mask_pixels": 230724,
+    "supervised_pixels": 230724,
+    "supervised_fraction_of_rgb_mask": 1.0,
+    "lidar_support_minus_foreign_fraction_of_rgb_mask": 1.0,
+    "owned_support_only_fraction_of_rgb_mask": 1.0
+   },
+   "ownership": {
+    "owned_return_fraction": 0.626081568324585,
+    "foreign_region_fraction_of_rgb_mask": 0.08469308845730647,
+    "lidar_support_minus_foreign_fraction_of_rgb_mask": 0.9045586642112855,
+    "owned_support_only_fraction_of_rgb_mask": 0.8974044699483268
+   }
+  },
+  {
+   "sample_id": "img_0cfe3b000d78b3cbe984aa45::yaw_minus_35",
+   "image_id": "img_0cfe3b000d78b3cbe984aa45",
+   "face_id": "yaw_minus_35",
+   "face_type": "yaw",
+   "crop": {
+    "x": 0,
+    "y": 0,
+    "width": 1456,
+    "height": 2912
+   },
+   "rgb_mask_pixels": 4087900,
+   "lidar_return_pixels": 613596,
+   "supervised_pixels": 4085523,
+   "supervised_fraction_of_rgb_mask": 0.9994185278504856,
+   "supervised_fraction_of_crop": 0.9635958349686028,
+   "roi": {
+    "box": {
+     "x0": 94,
+     "y0": 64,
+     "x1": 567,
+     "y1": 880
+    },
+    "rgb_mask_pixels": 385968,
+    "supervised_pixels": 384882,
+    "supervised_fraction_of_rgb_mask": 0.9971862952369108,
+    "lidar_support_minus_foreign_fraction_of_rgb_mask": 0.9077617833602786,
+    "owned_support_only_fraction_of_rgb_mask": 0.9132933300169962
+   },
+   "ownership": {
+    "owned_return_fraction": 0.7198645362746824,
+    "foreign_region_fraction_of_rgb_mask": 0.02011326108759999,
+    "lidar_support_minus_foreign_fraction_of_rgb_mask": 0.9793052667628855,
+    "owned_support_only_fraction_of_rgb_mask": 0.9805413537513149
+   }
+  },
+  {
+   "sample_id": "img_0cfe3b000d78b3cbe984aa45::yaw_plus_35",
+   "image_id": "img_0cfe3b000d78b3cbe984aa45",
+   "face_id": "yaw_plus_35",
+   "face_type": "yaw",
+   "crop": {
+    "x": 0,
+    "y": 0,
+    "width": 1456,
+    "height": 2912
+   },
+   "rgb_mask_pixels": 4087900,
+   "lidar_return_pixels": 565052,
+   "supervised_pixels": 4027030,
+   "supervised_fraction_of_rgb_mask": 0.9851097140341006,
+   "supervised_fraction_of_crop": 0.9497998996196112,
+   "roi": null,
+   "ownership": {
+    "owned_return_fraction": 0.2692000028315978,
+    "foreign_region_fraction_of_rgb_mask": 0.4288103916436312,
+    "lidar_support_minus_foreign_fraction_of_rgb_mask": 0.5562993223904694,
+    "owned_support_only_fraction_of_rgb_mask": 0.5516453435749407
+   }
+  },
+  {
+   "sample_id": "img_0fd1829e4d452fc9e06670fe::pitch_up_56",
+   "image_id": "img_0fd1829e4d452fc9e06670fe",
+   "face_id": "pitch_up_56",
+   "face_type": "pitch_up",
+   "crop": {
+    "x": 0,
+    "y": 0,
+    "width": 1131,
+    "height": 1080
+   },
+   "rgb_mask_pixels": 1178939,
+   "lidar_return_pixels": 54537,
+   "supervised_pixels": 1134980,
+   "supervised_fraction_of_rgb_mask": 0.9627130835437626,
+   "supervised_fraction_of_crop": 0.929184268264728,
+   "roi": null,
+   "ownership": {
+    "owned_return_fraction": 0.4110603810257257,
+    "foreign_region_fraction_of_rgb_mask": 0.3797448383673795,
+    "lidar_support_minus_foreign_fraction_of_rgb_mask": 0.5829682451763831,
+    "owned_support_only_fraction_of_rgb_mask": 0.6238439817496919
+   }
+  },
+  {
+   "sample_id": "img_0fd1829e4d452fc9e06670fe::yaw_minus_35",
+   "image_id": "img_0fd1829e4d452fc9e06670fe",
+   "face_id": "yaw_minus_35",
+   "face_type": "yaw",
+   "crop": {
+    "x": 0,
+    "y": 0,
+    "width": 855,
+    "height": 1335
+   },
+   "rgb_mask_pixels": 1101836,
+   "lidar_return_pixels": 307174,
+   "supervised_pixels": 1101431,
+   "supervised_fraction_of_rgb_mask": 0.9996324316867483,
+   "supervised_fraction_of_crop": 0.9649613421819218,
+   "roi": {
+    "box": {
+     "x0": 127,
+     "y0": 499,
+     "x1": 396,
+     "y1": 866
+    },
+    "rgb_mask_pixels": 98723,
+    "supervised_pixels": 98723,
+    "supervised_fraction_of_rgb_mask": 1.0,
+    "lidar_support_minus_foreign_fraction_of_rgb_mask": 1.0,
+    "owned_support_only_fraction_of_rgb_mask": 1.0
+   },
+   "ownership": {
+    "owned_return_fraction": 0.5078945483667238,
+    "foreign_region_fraction_of_rgb_mask": 0.3443888201147902,
+    "lidar_support_minus_foreign_fraction_of_rgb_mask": 0.6552436115719581,
+    "owned_support_only_fraction_of_rgb_mask": 0.7173209080117187
+   }
+  },
+  {
+   "sample_id": "img_1a38b2127348ddbd3e540b2f::pitch_up_56",
+   "image_id": "img_1a38b2127348ddbd3e540b2f",
+   "face_id": "pitch_up_56",
+   "face_type": "pitch_up",
+   "crop": {
+    "x": 0,
+    "y": 128,
+    "width": 2560,
+    "height": 1328
+   },
+   "rgb_mask_pixels": 3334025,
+   "lidar_return_pixels": 136074,
+   "supervised_pixels": 2988994,
+   "supervised_fraction_of_rgb_mask": 0.8965121737239523,
+   "supervised_fraction_of_crop": 0.8791986304593373,
+   "roi": null,
+   "ownership": {
+    "owned_return_fraction": 0.18911033702250246,
+    "foreign_region_fraction_of_rgb_mask": 0.6001214747939803,
+    "lidar_support_minus_foreign_fraction_of_rgb_mask": 0.29639069892997205,
+    "owned_support_only_fraction_of_rgb_mask": 0.29478303252075194
+   }
+  },
+  {
+   "sample_id": "img_1a38b2127348ddbd3e540b2f::yaw_minus_35",
+   "image_id": "img_1a38b2127348ddbd3e540b2f",
+   "face_id": "yaw_minus_35",
+   "face_type": "yaw",
+   "crop": {
+    "x": 475,
+    "y": 500,
+    "width": 981,
+    "height": 985
+   },
+   "rgb_mask_pixels": 954465,
+   "lidar_return_pixels": 333020,
+   "supervised_pixels": 954465,
+   "supervised_fraction_of_rgb_mask": 1.0,
+   "supervised_fraction_of_crop": 0.9877675840978594,
+   "roi": {
+    "box": {
+     "x0": 577,
+     "y0": 322,
+     "x1": 870,
+     "y1": 604
+    },
+    "rgb_mask_pixels": 82626,
+    "supervised_pixels": 82626,
+    "supervised_fraction_of_rgb_mask": 1.0,
+    "lidar_support_minus_foreign_fraction_of_rgb_mask": 1.0,
+    "owned_support_only_fraction_of_rgb_mask": 1.0
+   },
+   "ownership": {
+    "owned_return_fraction": 0.5593537925650112,
+    "foreign_region_fraction_of_rgb_mask": 0.2814739147061443,
+    "lidar_support_minus_foreign_fraction_of_rgb_mask": 0.7185260852938558,
+    "owned_support_only_fraction_of_rgb_mask": 0.7699968044925691
+   }
+  },
+  {
+   "sample_id": "img_1a38b2127348ddbd3e540b2f::yaw_plus_35",
+   "image_id": "img_1a38b2127348ddbd3e540b2f",
+   "face_id": "yaw_plus_35",
+   "face_type": "yaw",
+   "crop": {
+    "x": 0,
+    "y": 7,
+    "width": 751,
+    "height": 1506
+   },
+   "rgb_mask_pixels": 1097034,
+   "lidar_return_pixels": 152182,
+   "supervised_pixels": 1080674,
+   "supervised_fraction_of_rgb_mask": 0.9850870620236019,
+   "supervised_fraction_of_crop": 0.9554980256514997,
+   "roi": null,
+   "ownership": {
+    "owned_return_fraction": 0.1903904535358978,
+    "foreign_region_fraction_of_rgb_mask": 0.47976999801282366,
+    "lidar_support_minus_foreign_fraction_of_rgb_mask": 0.5053170640107781,
+    "owned_support_only_fraction_of_rgb_mask": 0.5670726704915253
+   }
+  },
+  {
+   "sample_id": "img_1fb3a72aca781ca07d397457::pitch_up_56",
+   "image_id": "img_1fb3a72aca781ca07d397457",
+   "face_id": "pitch_up_56",
+   "face_type": "pitch_up",
+   "crop": {
+    "x": 0,
+    "y": 0,
+    "width": 1085,
+    "height": 1085
+   },
+   "rgb_mask_pixels": 1135116,
+   "lidar_return_pixels": 52091,
+   "supervised_pixels": 1110680,
+   "supervised_fraction_of_rgb_mask": 0.9784726847300188,
+   "supervised_fraction_of_crop": 0.9434729979400709,
+   "roi": null,
+   "ownership": {
+    "owned_return_fraction": 0.4523238179340001,
+    "foreign_region_fraction_of_rgb_mask": 0.3734041278600601,
+    "lidar_support_minus_foreign_fraction_of_rgb_mask": 0.6050685568699586,
+    "owned_support_only_fraction_of_rgb_mask": 0.6502022700763622
+   }
+  },
+  {
+   "sample_id": "img_1fb3a72aca781ca07d397457::yaw_minus_35",
+   "image_id": "img_1fb3a72aca781ca07d397457",
+   "face_id": "yaw_minus_35",
+   "face_type": "yaw",
+   "crop": {
+    "x": 0,
+    "y": 0,
+    "width": 915,
+    "height": 1382
+   },
+   "rgb_mask_pixels": 1222937,
+   "lidar_return_pixels": 340945,
+   "supervised_pixels": 1222267,
+   "supervised_fraction_of_rgb_mask": 0.999452138581137,
+   "supervised_fraction_of_crop": 0.966578096209659,
+   "roi": {
+    "box": {
+     "x0": 191,
+     "y0": 576,
+     "x1": 446,
+     "y1": 916
+    },
+    "rgb_mask_pixels": 86700,
+    "supervised_pixels": 86700,
+    "supervised_fraction_of_rgb_mask": 1.0,
+    "lidar_support_minus_foreign_fraction_of_rgb_mask": 1.0,
+    "owned_support_only_fraction_of_rgb_mask": 1.0
+   },
+   "ownership": {
+    "owned_return_fraction": 0.5094399389930927,
+    "foreign_region_fraction_of_rgb_mask": 0.35868323552235315,
+    "lidar_support_minus_foreign_fraction_of_rgb_mask": 0.6407689030587839,
+    "owned_support_only_fraction_of_rgb_mask": 0.6972493268255029
+   }
+  },
+  {
+   "sample_id": "img_26e10d650ada982eed86237e::pitch_down_56",
+   "image_id": "img_26e10d650ada982eed86237e",
+   "face_id": "pitch_down_56",
+   "face_type": "pitch_down",
+   "crop": {
+    "x": 0,
+    "y": 0,
+    "width": 2912,
+    "height": 1456
+   },
+   "rgb_mask_pixels": 4087900,
+   "lidar_return_pixels": 16666,
+   "supervised_pixels": 4081491,
+   "supervised_fraction_of_rgb_mask": 0.9984322023532866,
+   "supervised_fraction_of_crop": 0.9626448628637846,
+   "roi": null,
+   "ownership": {
+    "owned_return_fraction": 1.0,
+    "foreign_region_fraction_of_rgb_mask": 0.0,
+    "lidar_support_minus_foreign_fraction_of_rgb_mask": 0.9984322023532866,
+    "owned_support_only_fraction_of_rgb_mask": 0.9984322023532866
+   }
+  },
+  {
+   "sample_id": "img_26e10d650ada982eed86237e::pitch_up_56",
+   "image_id": "img_26e10d650ada982eed86237e",
+   "face_id": "pitch_up_56",
+   "face_type": "pitch_up",
+   "crop": {
+    "x": 0,
+    "y": 0,
+    "width": 2898,
+    "height": 1456
+   },
+   "rgb_mask_pixels": 4087900,
+   "lidar_return_pixels": 296639,
+   "supervised_pixels": 4041857,
+   "supervised_fraction_of_rgb_mask": 0.9887367597054723,
+   "supervised_fraction_of_crop": 0.9579022383758409,
+   "roi": {
+    "box": {
+     "x0": 42,
+     "y0": 343,
+     "x1": 891,
+     "y1": 1347
+    },
+    "rgb_mask_pixels": 852396,
+    "supervised_pixels": 852396,
+    "supervised_fraction_of_rgb_mask": 1.0,
+    "lidar_support_minus_foreign_fraction_of_rgb_mask": 0.9946667980609951,
+    "owned_support_only_fraction_of_rgb_mask": 0.9969861425910023
+   },
+   "ownership": {
+    "owned_return_fraction": 0.6959401831856229,
+    "foreign_region_fraction_of_rgb_mask": 0.08844369969911202,
+    "lidar_support_minus_foreign_fraction_of_rgb_mask": 0.9002930600063602,
+    "owned_support_only_fraction_of_rgb_mask": 0.8907328946402798
+   }
+  },
+  {
+   "sample_id": "img_26e10d650ada982eed86237e::yaw_minus_35",
+   "image_id": "img_26e10d650ada982eed86237e",
+   "face_id": "yaw_minus_35",
+   "face_type": "yaw",
+   "crop": {
+    "x": 157,
+    "y": 0,
+    "width": 1299,
+    "height": 2912
+   },
+   "rgb_mask_pixels": 3679294,
+   "lidar_return_pixels": 481095,
+   "supervised_pixels": 3670004,
+   "supervised_fraction_of_rgb_mask": 0.9974750590738332,
+   "supervised_fraction_of_crop": 0.9702106015616409,
+   "roi": {
+    "box": {
+     "x0": 395,
+     "y0": 25,
+     "x1": 743,
+     "y1": 750
+    },
+    "rgb_mask_pixels": 252300,
+    "supervised_pixels": 252300,
+    "supervised_fraction_of_rgb_mask": 1.0,
+    "lidar_support_minus_foreign_fraction_of_rgb_mask": 1.0,
+    "owned_support_only_fraction_of_rgb_mask": 1.0
+   },
+   "ownership": {
+    "owned_return_fraction": 0.745757075005976,
+    "foreign_region_fraction_of_rgb_mask": 0.04263888669945919,
+    "lidar_support_minus_foreign_fraction_of_rgb_mask": 0.954836172374374,
+    "owned_support_only_fraction_of_rgb_mask": 0.9580742936008919
+   }
+  },
+  {
+   "sample_id": "img_26e10d650ada982eed86237e::yaw_plus_35",
+   "image_id": "img_26e10d650ada982eed86237e",
+   "face_id": "yaw_plus_35",
+   "face_type": "yaw",
+   "crop": {
+    "x": 0,
+    "y": 0,
+    "width": 1456,
+    "height": 2912
+   },
+   "rgb_mask_pixels": 4087900,
+   "lidar_return_pixels": 632275,
+   "supervised_pixels": 4010736,
+   "supervised_fraction_of_rgb_mask": 0.9811238043983463,
+   "supervised_fraction_of_crop": 0.9459568590749909,
+   "roi": null,
+   "ownership": {
+    "owned_return_fraction": 0.33754458107627217,
+    "foreign_region_fraction_of_rgb_mask": 0.35405464908632794,
+    "lidar_support_minus_foreign_fraction_of_rgb_mask": 0.6270691553120183,
+    "owned_support_only_fraction_of_rgb_mask": 0.6212673989089753
+   }
+  },
+  {
+   "sample_id": "img_28ae3ec748a5e0d8c78031df::pitch_up_56",
+   "image_id": "img_28ae3ec748a5e0d8c78031df",
+   "face_id": "pitch_up_56",
+   "face_type": "pitch_up",
+   "crop": {
+    "x": 0,
+    "y": 133,
+    "width": 1827,
+    "height": 1323
+   },
+   "rgb_mask_pixels": 2360387,
+   "lidar_return_pixels": 123158,
+   "supervised_pixels": 2311824,
+   "supervised_fraction_of_rgb_mask": 0.9794258314420474,
+   "supervised_fraction_of_crop": 0.9564370174269307,
+   "roi": null,
+   "ownership": {
+    "owned_return_fraction": 0.23827928352197988,
+    "foreign_region_fraction_of_rgb_mask": 0.5993733231033724,
+    "lidar_support_minus_foreign_fraction_of_rgb_mask": 0.380052508338675,
+    "owned_support_only_fraction_of_rgb_mask": 0.4061126416981622
+   }
+  },
+  {
+   "sample_id": "img_28ae3ec748a5e0d8c78031df::yaw_minus_35",
+   "image_id": "img_28ae3ec748a5e0d8c78031df",
+   "face_id": "yaw_minus_35",
+   "face_type": "yaw",
+   "crop": {
+    "x": 226,
+    "y": 0,
+    "width": 1230,
+    "height": 1471
+   },
+   "rgb_mask_pixels": 1759109,
+   "lidar_return_pixels": 467480,
+   "supervised_pixels": 1758953,
+   "supervised_fraction_of_rgb_mask": 0.9999113187414765,
+   "supervised_fraction_of_crop": 0.9721570968258969,
+   "roi": {
+    "box": {
+     "x0": 596,
+     "y0": 820,
+     "x1": 838,
+     "y1": 1084
+    },
+    "rgb_mask_pixels": 63888,
+    "supervised_pixels": 63888,
+    "supervised_fraction_of_rgb_mask": 1.0,
+    "lidar_support_minus_foreign_fraction_of_rgb_mask": 1.0,
+    "owned_support_only_fraction_of_rgb_mask": 1.0
+   },
+   "ownership": {
+    "owned_return_fraction": 0.4493924873791392,
+    "foreign_region_fraction_of_rgb_mask": 0.4859948985537565,
+    "lidar_support_minus_foreign_fraction_of_rgb_mask": 0.51391642018772,
+    "owned_support_only_fraction_of_rgb_mask": 0.5761916970466299
+   }
+  },
+  {
+   "sample_id": "img_2b4f13c695909781ea9270a7::pitch_up_56",
+   "image_id": "img_2b4f13c695909781ea9270a7",
+   "face_id": "pitch_up_56",
+   "face_type": "pitch_up",
+   "crop": {
+    "x": 2264,
+    "y": 826,
+    "width": 648,
+    "height": 630
+   },
+   "rgb_mask_pixels": 382295,
+   "lidar_return_pixels": 40600,
+   "supervised_pixels": 382295,
+   "supervised_fraction_of_rgb_mask": 1.0,
+   "supervised_fraction_of_crop": 0.9364466980207721,
+   "roi": null,
+   "ownership": {
+    "owned_return_fraction": 0.40413793103448276,
+    "foreign_region_fraction_of_rgb_mask": 0.2850338089695131,
+    "lidar_support_minus_foreign_fraction_of_rgb_mask": 0.714966191030487,
+    "owned_support_only_fraction_of_rgb_mask": 0.7511607528217737
+   }
+  },
+  {
+   "sample_id": "img_2b4f13c695909781ea9270a7::yaw_plus_35",
+   "image_id": "img_2b4f13c695909781ea9270a7",
+   "face_id": "yaw_plus_35",
+   "face_type": "yaw",
+   "crop": {
+    "x": 449,
+    "y": 72,
+    "width": 1007,
+    "height": 1259
+   },
+   "rgb_mask_pixels": 1251612,
+   "lidar_return_pixels": 387986,
+   "supervised_pixels": 1251612,
+   "supervised_fraction_of_rgb_mask": 1.0,
+   "supervised_fraction_of_crop": 0.9872213015641896,
+   "roi": {
+    "box": {
+     "x0": 702,
+     "y0": 364,
+     "x1": 973,
+     "y1": 765
+    },
+    "rgb_mask_pixels": 108671,
+    "supervised_pixels": 108671,
+    "supervised_fraction_of_rgb_mask": 1.0,
+    "lidar_support_minus_foreign_fraction_of_rgb_mask": 1.0,
+    "owned_support_only_fraction_of_rgb_mask": 1.0
+   },
+   "ownership": {
+    "owned_return_fraction": 0.5739021511085451,
+    "foreign_region_fraction_of_rgb_mask": 0.325449899809206,
+    "lidar_support_minus_foreign_fraction_of_rgb_mask": 0.674550100190794,
+    "owned_support_only_fraction_of_rgb_mask": 0.724431373300991
+   }
+  },
+  {
+   "sample_id": "img_552ccaef249d70922a2b9ae7::pitch_up_56",
+   "image_id": "img_552ccaef249d70922a2b9ae7",
+   "face_id": "pitch_up_56",
+   "face_type": "pitch_up",
+   "crop": {
+    "x": 0,
+    "y": 0,
+    "width": 2912,
+    "height": 1456
+   },
+   "rgb_mask_pixels": 4087900,
+   "lidar_return_pixels": 187419,
+   "supervised_pixels": 3878463,
+   "supervised_fraction_of_rgb_mask": 0.9487666038797427,
+   "supervised_fraction_of_crop": 0.9147594550024152,
+   "roi": {
+    "box": {
+     "x0": 55,
+     "y0": 1243,
+     "x1": 506,
+     "y1": 1453
+    },
+    "rgb_mask_pixels": 89122,
+    "supervised_pixels": 89122,
+    "supervised_fraction_of_rgb_mask": 1.0,
+    "lidar_support_minus_foreign_fraction_of_rgb_mask": 0.9937725814052647,
+    "owned_support_only_fraction_of_rgb_mask": 0.9995287358901281
+   },
+   "ownership": {
+    "owned_return_fraction": 0.15793489454110843,
+    "foreign_region_fraction_of_rgb_mask": 0.6618880109591722,
+    "lidar_support_minus_foreign_fraction_of_rgb_mask": 0.28687859292057044,
+    "owned_support_only_fraction_of_rgb_mask": 0.2898644780938868
+   }
+  },
+  {
+   "sample_id": "img_552ccaef249d70922a2b9ae7::yaw_minus_35",
+   "image_id": "img_552ccaef249d70922a2b9ae7",
+   "face_id": "yaw_minus_35",
+   "face_type": "yaw",
+   "crop": {
+    "x": 293,
+    "y": 341,
+    "width": 1163,
+    "height": 1279
+   },
+   "rgb_mask_pixels": 1472129,
+   "lidar_return_pixels": 446594,
+   "supervised_pixels": 1469677,
+   "supervised_fraction_of_rgb_mask": 0.9983343850980451,
+   "supervised_fraction_of_crop": 0.988033428416036,
+   "roi": {
+    "box": {
+     "x0": 370,
+     "y0": 340,
+     "x1": 608,
+     "y1": 646
+    },
+    "rgb_mask_pixels": 72828,
+    "supervised_pixels": 72828,
+    "supervised_fraction_of_rgb_mask": 1.0,
+    "lidar_support_minus_foreign_fraction_of_rgb_mask": 1.0,
+    "owned_support_only_fraction_of_rgb_mask": 1.0
+   },
+   "ownership": {
+    "owned_return_fraction": 0.5234642650819312,
+    "foreign_region_fraction_of_rgb_mask": 0.4106936280719964,
+    "lidar_support_minus_foreign_fraction_of_rgb_mask": 0.5876407570260487,
+    "owned_support_only_fraction_of_rgb_mask": 0.6252325713303657
+   }
+  },
+  {
+   "sample_id": "img_552ccaef249d70922a2b9ae7::yaw_plus_35",
+   "image_id": "img_552ccaef249d70922a2b9ae7",
+   "face_id": "yaw_plus_35",
+   "face_type": "yaw",
+   "crop": {
+    "x": 0,
+    "y": 17,
+    "width": 1402,
+    "height": 1990
+   },
+   "rgb_mask_pixels": 2707942,
+   "lidar_return_pixels": 398445,
+   "supervised_pixels": 2668901,
+   "supervised_fraction_of_rgb_mask": 0.9855827783608364,
+   "supervised_fraction_of_crop": 0.9566021978652177,
+   "roi": null,
+   "ownership": {
+    "owned_return_fraction": 0.18113415904328076,
+    "foreign_region_fraction_of_rgb_mask": 0.7006745343881072,
+    "lidar_support_minus_foreign_fraction_of_rgb_mask": 0.2849082439727291,
+    "owned_support_only_fraction_of_rgb_mask": 0.31322458161954725
+   }
+  },
+  {
+   "sample_id": "img_5550c6ee126a8a927e97dac2::pitch_up_56",
+   "image_id": "img_5550c6ee126a8a927e97dac2",
+   "face_id": "pitch_up_56",
+   "face_type": "pitch_up",
+   "crop": {
+    "x": 0,
+    "y": 283,
+    "width": 1742,
+    "height": 1173
+   },
+   "rgb_mask_pixels": 1991261,
+   "lidar_return_pixels": 103681,
+   "supervised_pixels": 1953269,
+   "supervised_fraction_of_rgb_mask": 0.9809206327046027,
+   "supervised_fraction_of_crop": 0.9559075564534205,
+   "roi": null,
+   "ownership": {
+    "owned_return_fraction": 0.2709464607787348,
+    "foreign_region_fraction_of_rgb_mask": 0.5575667880805179,
+    "lidar_support_minus_foreign_fraction_of_rgb_mask": 0.42335384462408493,
+    "owned_support_only_fraction_of_rgb_mask": 0.4603545190710811
+   }
+  },
+  {
+   "sample_id": "img_5550c6ee126a8a927e97dac2::yaw_minus_35",
+   "image_id": "img_5550c6ee126a8a927e97dac2",
+   "face_id": "yaw_minus_35",
+   "face_type": "yaw",
+   "crop": {
+    "x": 154,
+    "y": 0,
+    "width": 1302,
+    "height": 1490
+   },
+   "rgb_mask_pixels": 1887803,
+   "lidar_return_pixels": 499023,
+   "supervised_pixels": 1887211,
+   "supervised_fraction_of_rgb_mask": 0.9996864079567624,
+   "supervised_fraction_of_crop": 0.9727992041155064,
+   "roi": {
+    "box": {
+     "x0": 590,
+     "y0": 827,
+     "x1": 825,
+     "y1": 1090
+    },
+    "rgb_mask_pixels": 61805,
+    "supervised_pixels": 61805,
+    "supervised_fraction_of_rgb_mask": 1.0,
+    "lidar_support_minus_foreign_fraction_of_rgb_mask": 1.0,
+    "owned_support_only_fraction_of_rgb_mask": 1.0
+   },
+   "ownership": {
+    "owned_return_fraction": 0.44604156521843685,
+    "foreign_region_fraction_of_rgb_mask": 0.47797148325328437,
+    "lidar_support_minus_foreign_fraction_of_rgb_mask": 0.521714924703478,
+    "owned_support_only_fraction_of_rgb_mask": 0.5808566889659568
+   }
+  },
+  {
+   "sample_id": "img_595254c320c27cdb74e35158::pitch_down_56",
+   "image_id": "img_595254c320c27cdb74e35158",
+   "face_id": "pitch_down_56",
+   "face_type": "pitch_down",
+   "crop": {
+    "x": 0,
+    "y": 0,
+    "width": 2912,
+    "height": 1456
+   },
+   "rgb_mask_pixels": 4087900,
+   "lidar_return_pixels": 21305,
+   "supervised_pixels": 4034052,
+   "supervised_fraction_of_rgb_mask": 0.986827466425304,
+   "supervised_fraction_of_crop": 0.9514560816930322,
+   "roi": null,
+   "ownership": {
+    "owned_return_fraction": 1.0,
+    "foreign_region_fraction_of_rgb_mask": 0.0,
+    "lidar_support_minus_foreign_fraction_of_rgb_mask": 0.986827466425304,
+    "owned_support_only_fraction_of_rgb_mask": 0.986827466425304
+   }
+  },
+  {
+   "sample_id": "img_595254c320c27cdb74e35158::pitch_up_56",
+   "image_id": "img_595254c320c27cdb74e35158",
+   "face_id": "pitch_up_56",
+   "face_type": "pitch_up",
+   "crop": {
+    "x": 0,
+    "y": 0,
+    "width": 2912,
+    "height": 1456
+   },
+   "rgb_mask_pixels": 4087900,
+   "lidar_return_pixels": 283388,
+   "supervised_pixels": 4087900,
+   "supervised_fraction_of_rgb_mask": 1.0,
+   "supervised_fraction_of_crop": 0.9641564651008332,
+   "roi": {
+    "box": {
+     "x0": 2400,
+     "y0": 280,
+     "x1": 2909,
+     "y1": 1313
+    },
+    "rgb_mask_pixels": 504104,
+    "supervised_pixels": 504104,
+    "supervised_fraction_of_rgb_mask": 1.0,
+    "lidar_support_minus_foreign_fraction_of_rgb_mask": 0.9999940488470633,
+    "owned_support_only_fraction_of_rgb_mask": 1.0
+   },
+   "ownership": {
+    "owned_return_fraction": 0.671379874941776,
+    "foreign_region_fraction_of_rgb_mask": 0.04008439541084664,
+    "lidar_support_minus_foreign_fraction_of_rgb_mask": 0.9599156045891534,
+    "owned_support_only_fraction_of_rgb_mask": 0.9642099855671616
+   }
+  },
+  {
+   "sample_id": "img_595254c320c27cdb74e35158::yaw_minus_35",
+   "image_id": "img_595254c320c27cdb74e35158",
+   "face_id": "yaw_minus_35",
+   "face_type": "yaw",
+   "crop": {
+    "x": 0,
+    "y": 0,
+    "width": 1456,
+    "height": 2785
+   },
+   "rgb_mask_pixels": 3946310,
+   "lidar_return_pixels": 575499,
+   "supervised_pixels": 3939550,
+   "supervised_fraction_of_rgb_mask": 0.9982870073562391,
+   "supervised_fraction_of_crop": 0.9715385601830844,
+   "roi": null,
+   "ownership": {
+    "owned_return_fraction": 0.39206323555731637,
+    "foreign_region_fraction_of_rgb_mask": 0.08331327239877252,
+    "lidar_support_minus_foreign_fraction_of_rgb_mask": 0.9149737349574666,
+    "owned_support_only_fraction_of_rgb_mask": 0.9219762258920359
+   }
+  },
+  {
+   "sample_id": "img_595254c320c27cdb74e35158::yaw_plus_35",
+   "image_id": "img_595254c320c27cdb74e35158",
+   "face_id": "yaw_plus_35",
+   "face_type": "yaw",
+   "crop": {
+    "x": 0,
+    "y": 0,
+    "width": 1456,
+    "height": 2912
+   },
+   "rgb_mask_pixels": 4087900,
+   "lidar_return_pixels": 807257,
+   "supervised_pixels": 4060516,
+   "supervised_fraction_of_rgb_mask": 0.9933012059981898,
+   "supervised_fraction_of_crop": 0.9576977795556092,
+   "roi": {
+    "box": {
+     "x0": 405,
+     "y0": 82,
+     "x1": 1380,
+     "y1": 1606
+    },
+    "rgb_mask_pixels": 1485900,
+    "supervised_pixels": 1485812,
+    "supervised_fraction_of_rgb_mask": 0.99994077663369,
+    "lidar_support_minus_foreign_fraction_of_rgb_mask": 0.99994077663369,
+    "owned_support_only_fraction_of_rgb_mask": 0.99994077663369
+   },
+   "ownership": {
+    "owned_return_fraction": 0.6592510191921532,
+    "foreign_region_fraction_of_rgb_mask": 0.015431395092834952,
+    "lidar_support_minus_foreign_fraction_of_rgb_mask": 0.9778698109053549,
+    "owned_support_only_fraction_of_rgb_mask": 0.982855745003547
+   }
+  },
+  {
+   "sample_id": "img_5e8f6477648ca5ac8d8ba881::pitch_up_56",
+   "image_id": "img_5e8f6477648ca5ac8d8ba881",
+   "face_id": "pitch_up_56",
+   "face_type": "pitch_up",
+   "crop": {
+    "x": 0,
+    "y": 236,
+    "width": 1950,
+    "height": 1220
+   },
+   "rgb_mask_pixels": 2323271,
+   "lidar_return_pixels": 110342,
+   "supervised_pixels": 2225977,
+   "supervised_fraction_of_rgb_mask": 0.9581219754389393,
+   "supervised_fraction_of_crop": 0.9356775956284153,
+   "roi": null,
+   "ownership": {
+    "owned_return_fraction": 0.18448097732504395,
+    "foreign_region_fraction_of_rgb_mask": 0.6461183391864316,
+    "lidar_support_minus_foreign_fraction_of_rgb_mask": 0.31200363625250777,
+    "owned_support_only_fraction_of_rgb_mask": 0.32659384118340046
+   }
+  },
+  {
+   "sample_id": "img_5e8f6477648ca5ac8d8ba881::yaw_minus_35",
+   "image_id": "img_5e8f6477648ca5ac8d8ba881",
+   "face_id": "yaw_minus_35",
+   "face_type": "yaw",
+   "crop": {
+    "x": 338,
+    "y": 168,
+    "width": 1118,
+    "height": 1364
+   },
+   "rgb_mask_pixels": 1508424,
+   "lidar_return_pixels": 428790,
+   "supervised_pixels": 1507317,
+   "supervised_fraction_of_rgb_mask": 0.9992661214618701,
+   "supervised_fraction_of_crop": 0.9884357015827383,
+   "roi": {
+    "box": {
+     "x0": 551,
+     "y0": 725,
+     "x1": 793,
+     "y1": 976
+    },
+    "rgb_mask_pixels": 60742,
+    "supervised_pixels": 60742,
+    "supervised_fraction_of_rgb_mask": 1.0,
+    "lidar_support_minus_foreign_fraction_of_rgb_mask": 1.0,
+    "owned_support_only_fraction_of_rgb_mask": 1.0
+   },
+   "ownership": {
+    "owned_return_fraction": 0.4506191842160498,
+    "foreign_region_fraction_of_rgb_mask": 0.4927599932114578,
+    "lidar_support_minus_foreign_fraction_of_rgb_mask": 0.5065061282504123,
+    "owned_support_only_fraction_of_rgb_mask": 0.5708222621756217
+   }
+  },
+  {
+   "sample_id": "img_5e8f6477648ca5ac8d8ba881::yaw_plus_35",
+   "image_id": "img_5e8f6477648ca5ac8d8ba881",
+   "face_id": "yaw_plus_35",
+   "face_type": "yaw",
+   "crop": {
+    "x": 0,
+    "y": 0,
+    "width": 460,
+    "height": 1027
+   },
+   "rgb_mask_pixels": 446007,
+   "lidar_return_pixels": 38429,
+   "supervised_pixels": 431260,
+   "supervised_fraction_of_rgb_mask": 0.9669354965280814,
+   "supervised_fraction_of_crop": 0.9128741374200923,
+   "roi": null,
+   "ownership": {
+    "owned_return_fraction": 0.28246896874756044,
+    "foreign_region_fraction_of_rgb_mask": 0.38321147425937263,
+    "lidar_support_minus_foreign_fraction_of_rgb_mask": 0.5837240222687088,
+    "owned_support_only_fraction_of_rgb_mask": 0.6307614006058201
+   }
+  },
+  {
+   "sample_id": "img_6f0133802dcbba5715db2a6b::pitch_up_56",
+   "image_id": "img_6f0133802dcbba5715db2a6b",
+   "face_id": "pitch_up_56",
+   "face_type": "pitch_up",
+   "crop": {
+    "x": 0,
+    "y": 181,
+    "width": 2370,
+    "height": 1275
+   },
+   "rgb_mask_pixels": 2959661,
+   "lidar_return_pixels": 117816,
+   "supervised_pixels": 2704633,
+   "supervised_fraction_of_rgb_mask": 0.9138320233296989,
+   "supervised_fraction_of_crop": 0.8950551832547365,
+   "roi": null,
+   "ownership": {
+    "owned_return_fraction": 0.1647059822095471,
+    "foreign_region_fraction_of_rgb_mask": 0.6444305614730876,
+    "lidar_support_minus_foreign_fraction_of_rgb_mask": 0.2694014618566113,
+    "owned_support_only_fraction_of_rgb_mask": 0.2666592559080246
+   }
+  },
+  {
+   "sample_id": "img_6f0133802dcbba5715db2a6b::yaw_minus_35",
+   "image_id": "img_6f0133802dcbba5715db2a6b",
+   "face_id": "yaw_minus_35",
+   "face_type": "yaw",
+   "crop": {
+    "x": 486,
+    "y": 494,
+    "width": 970,
+    "height": 1020
+   },
+   "rgb_mask_pixels": 977160,
+   "lidar_return_pixels": 339328,
+   "supervised_pixels": 977160,
+   "supervised_fraction_of_rgb_mask": 1.0,
+   "supervised_fraction_of_crop": 0.9876288659793815,
+   "roi": {
+    "box": {
+     "x0": 581,
+     "y0": 379,
+     "x1": 862,
+     "y1": 648
+    },
+    "rgb_mask_pixels": 75589,
+    "supervised_pixels": 75589,
+    "supervised_fraction_of_rgb_mask": 1.0,
+    "lidar_support_minus_foreign_fraction_of_rgb_mask": 1.0,
+    "owned_support_only_fraction_of_rgb_mask": 1.0
+   },
+   "ownership": {
+    "owned_return_fraction": 0.521819596378725,
+    "foreign_region_fraction_of_rgb_mask": 0.34100863727536945,
+    "lidar_support_minus_foreign_fraction_of_rgb_mask": 0.6589913627246305,
+    "owned_support_only_fraction_of_rgb_mask": 0.7100454377993368
+   }
+  },
+  {
+   "sample_id": "img_6f0133802dcbba5715db2a6b::yaw_plus_35",
+   "image_id": "img_6f0133802dcbba5715db2a6b",
+   "face_id": "yaw_plus_35",
+   "face_type": "yaw",
+   "crop": {
+    "x": 0,
+    "y": 0,
+    "width": 752,
+    "height": 1233
+   },
+   "rgb_mask_pixels": 891323,
+   "lidar_return_pixels": 102368,
+   "supervised_pixels": 876929,
+   "supervised_fraction_of_rgb_mask": 0.9838509720942913,
+   "supervised_fraction_of_crop": 0.9457656036996773,
+   "roi": null,
+   "ownership": {
+    "owned_return_fraction": 0.26818927789934355,
+    "foreign_region_fraction_of_rgb_mask": 0.4149842425248759,
+    "lidar_support_minus_foreign_fraction_of_rgb_mask": 0.5688667295694153,
+    "owned_support_only_fraction_of_rgb_mask": 0.6391756972500429
+   }
+  },
+  {
+   "sample_id": "img_72d329aaeffd9ca5bb751d0f::pitch_up_56",
+   "image_id": "img_72d329aaeffd9ca5bb751d0f",
+   "face_id": "pitch_up_56",
+   "face_type": "pitch_up",
+   "crop": {
+    "x": 0,
+    "y": 22,
+    "width": 2912,
+    "height": 1434
+   },
+   "rgb_mask_pixels": 4062048,
+   "lidar_return_pixels": 167503,
+   "supervised_pixels": 3691614,
+   "supervised_fraction_of_rgb_mask": 0.9088060997802094,
+   "supervised_fraction_of_crop": 0.8840478297852775,
+   "roi": {
+    "box": {
+     "x0": 27,
+     "y0": 1283,
+     "x1": 265,
+     "y1": 1432
+    },
+    "rgb_mask_pixels": 30083,
+    "supervised_pixels": 30083,
+    "supervised_fraction_of_rgb_mask": 1.0,
+    "lidar_support_minus_foreign_fraction_of_rgb_mask": 0.9988697935711199,
+    "owned_support_only_fraction_of_rgb_mask": 1.0
+   },
+   "ownership": {
+    "owned_return_fraction": 0.16382393151167443,
+    "foreign_region_fraction_of_rgb_mask": 0.5947846997376692,
+    "lidar_support_minus_foreign_fraction_of_rgb_mask": 0.31402140004254014,
+    "owned_support_only_fraction_of_rgb_mask": 0.31802898439407906
+   }
+  },
+  {
+   "sample_id": "img_72d329aaeffd9ca5bb751d0f::yaw_minus_35",
+   "image_id": "img_72d329aaeffd9ca5bb751d0f",
+   "face_id": "yaw_minus_35",
+   "face_type": "yaw",
+   "crop": {
+    "x": 201,
+    "y": 312,
+    "width": 1255,
+    "height": 1344
+   },
+   "rgb_mask_pixels": 1670592,
+   "lidar_return_pixels": 480420,
+   "supervised_pixels": 1641590,
+   "supervised_fraction_of_rgb_mask": 0.982639687009156,
+   "supervised_fraction_of_crop": 0.9732439290457219,
+   "roi": {
+    "box": {
+     "x0": 467,
+     "y0": 412,
+     "x1": 727,
+     "y1": 735
+    },
+    "rgb_mask_pixels": 83980,
+    "supervised_pixels": 83980,
+    "supervised_fraction_of_rgb_mask": 1.0,
+    "lidar_support_minus_foreign_fraction_of_rgb_mask": 1.0,
+    "owned_support_only_fraction_of_rgb_mask": 1.0
+   },
+   "ownership": {
+    "owned_return_fraction": 0.44938595395695435,
+    "foreign_region_fraction_of_rgb_mask": 0.48524654733172434,
+    "lidar_support_minus_foreign_fraction_of_rgb_mask": 0.4973931396774317,
+    "owned_support_only_fraction_of_rgb_mask": 0.5375974504846186
+   }
+  },
+  {
+   "sample_id": "img_72d329aaeffd9ca5bb751d0f::yaw_plus_35",
+   "image_id": "img_72d329aaeffd9ca5bb751d0f",
+   "face_id": "yaw_plus_35",
+   "face_type": "yaw",
+   "crop": {
+    "x": 0,
+    "y": 0,
+    "width": 1456,
+    "height": 1913
+   },
+   "rgb_mask_pixels": 2649716,
+   "lidar_return_pixels": 358776,
+   "supervised_pixels": 2593168,
+   "supervised_fraction_of_rgb_mask": 0.9786588449479114,
+   "supervised_fraction_of_crop": 0.9310099205551375,
+   "roi": null,
+   "ownership": {
+    "owned_return_fraction": 0.19781702232033357,
+    "foreign_region_fraction_of_rgb_mask": 0.5558954242643362,
+    "lidar_support_minus_foreign_fraction_of_rgb_mask": 0.42276342068357514,
+    "owned_support_only_fraction_of_rgb_mask": 0.4712406914552352
+   }
+  },
+  {
+   "sample_id": "img_753e568dd0cb0b359ee23e57::pitch_up_56",
+   "image_id": "img_753e568dd0cb0b359ee23e57",
+   "face_id": "pitch_up_56",
+   "face_type": "pitch_up",
+   "crop": {
+    "x": 2163,
+    "y": 0,
+    "width": 749,
+    "height": 1456
+   },
+   "rgb_mask_pixels": 1031526,
+   "lidar_return_pixels": 80689,
+   "supervised_pixels": 1031489,
+   "supervised_fraction_of_rgb_mask": 0.9999641308120203,
+   "supervised_fraction_of_crop": 0.9458481271732273,
+   "roi": null,
+   "ownership": {
+    "owned_return_fraction": 0.3056178661279728,
+    "foreign_region_fraction_of_rgb_mask": 0.5560780823750443,
+    "lidar_support_minus_foreign_fraction_of_rgb_mask": 0.4438860484369759,
+    "owned_support_only_fraction_of_rgb_mask": 0.4877007462729975
+   }
+  },
+  {
+   "sample_id": "img_753e568dd0cb0b359ee23e57::yaw_plus_35",
+   "image_id": "img_753e568dd0cb0b359ee23e57",
+   "face_id": "yaw_plus_35",
+   "face_type": "yaw",
+   "crop": {
+    "x": 360,
+    "y": 44,
+    "width": 1096,
+    "height": 1302
+   },
+   "rgb_mask_pixels": 1409431,
+   "lidar_return_pixels": 416630,
+   "supervised_pixels": 1409431,
+   "supervised_fraction_of_rgb_mask": 1.0,
+   "supervised_fraction_of_crop": 0.9876936941482503,
+   "roi": {
+    "box": {
+     "x0": 678,
+     "y0": 441,
+     "x1": 946,
+     "y1": 818
+    },
+    "rgb_mask_pixels": 101036,
+    "supervised_pixels": 101036,
+    "supervised_fraction_of_rgb_mask": 1.0,
+    "lidar_support_minus_foreign_fraction_of_rgb_mask": 1.0,
+    "owned_support_only_fraction_of_rgb_mask": 1.0
+   },
+   "ownership": {
+    "owned_return_fraction": 0.5766531454768019,
+    "foreign_region_fraction_of_rgb_mask": 0.3718053597515593,
+    "lidar_support_minus_foreign_fraction_of_rgb_mask": 0.6281946402484406,
+    "owned_support_only_fraction_of_rgb_mask": 0.6810301462079378
+   }
+  },
+  {
+   "sample_id": "img_7c4bd9a8b55c8f86fa134466::pitch_down_56",
+   "image_id": "img_7c4bd9a8b55c8f86fa134466",
+   "face_id": "pitch_down_56",
+   "face_type": "pitch_down",
+   "crop": {
+    "x": 327,
+    "y": 0,
+    "width": 2585,
+    "height": 1456
+   },
+   "rgb_mask_pixels": 3660678,
+   "lidar_return_pixels": 24801,
+   "supervised_pixels": 3640370,
+   "supervised_fraction_of_rgb_mask": 0.9944523937915326,
+   "supervised_fraction_of_crop": 0.967216294343954,
+   "roi": null,
+   "ownership": {
+    "owned_return_fraction": 1.0,
+    "foreign_region_fraction_of_rgb_mask": 0.0,
+    "lidar_support_minus_foreign_fraction_of_rgb_mask": 0.9944523937915326,
+    "owned_support_only_fraction_of_rgb_mask": 0.9944523937915326
+   }
+  },
+  {
+   "sample_id": "img_7c4bd9a8b55c8f86fa134466::pitch_up_56",
+   "image_id": "img_7c4bd9a8b55c8f86fa134466",
+   "face_id": "pitch_up_56",
+   "face_type": "pitch_up",
+   "crop": {
+    "x": 0,
+    "y": 0,
+    "width": 2912,
+    "height": 1456
+   },
+   "rgb_mask_pixels": 4087900,
+   "lidar_return_pixels": 266664,
+   "supervised_pixels": 4087900,
+   "supervised_fraction_of_rgb_mask": 1.0,
+   "supervised_fraction_of_crop": 0.9641564651008332,
+   "roi": {
+    "box": {
+     "x0": 2073,
+     "y0": 210,
+     "x1": 2869,
+     "y1": 1419
+    },
+    "rgb_mask_pixels": 962185,
+    "supervised_pixels": 962185,
+    "supervised_fraction_of_rgb_mask": 1.0,
+    "lidar_support_minus_foreign_fraction_of_rgb_mask": 0.9999979213976522,
+    "owned_support_only_fraction_of_rgb_mask": 1.0
+   },
+   "ownership": {
+    "owned_return_fraction": 0.6553228032280323,
+    "foreign_region_fraction_of_rgb_mask": 0.09999584138555248,
+    "lidar_support_minus_foreign_fraction_of_rgb_mask": 0.9000041586144475,
+    "owned_support_only_fraction_of_rgb_mask": 0.9042850852515961
+   }
+  },
+  {
+   "sample_id": "img_7c4bd9a8b55c8f86fa134466::yaw_minus_35",
+   "image_id": "img_7c4bd9a8b55c8f86fa134466",
+   "face_id": "yaw_minus_35",
+   "face_type": "yaw",
+   "crop": {
+    "x": 0,
+    "y": 0,
+    "width": 1456,
+    "height": 2912
+   },
+   "rgb_mask_pixels": 4087900,
+   "lidar_return_pixels": 597969,
+   "supervised_pixels": 4081757,
+   "supervised_fraction_of_rgb_mask": 0.9984972724381712,
+   "supervised_fraction_of_crop": 0.9627076006068108,
+   "roi": null,
+   "ownership": {
+    "owned_return_fraction": 0.39050017643055074,
+    "foreign_region_fraction_of_rgb_mask": 0.09281244648841704,
+    "lidar_support_minus_foreign_fraction_of_rgb_mask": 0.9056848259497542,
+    "owned_support_only_fraction_of_rgb_mask": 0.9168034932361359
+   }
+  },
+  {
+   "sample_id": "img_7c4bd9a8b55c8f86fa134466::yaw_plus_35",
+   "image_id": "img_7c4bd9a8b55c8f86fa134466",
+   "face_id": "yaw_plus_35",
+   "face_type": "yaw",
+   "crop": {
+    "x": 0,
+    "y": 0,
+    "width": 1456,
+    "height": 2912
+   },
+   "rgb_mask_pixels": 4087900,
+   "lidar_return_pixels": 764611,
+   "supervised_pixels": 4070459,
+   "supervised_fraction_of_rgb_mask": 0.995733506201228,
+   "supervised_fraction_of_crop": 0.9600428975214346,
+   "roi": {
+    "box": {
+     "x0": 187,
+     "y0": 96,
+     "x1": 1340,
+     "y1": 1557
+    },
+    "rgb_mask_pixels": 1684533,
+    "supervised_pixels": 1684533,
+    "supervised_fraction_of_rgb_mask": 1.0,
+    "lidar_support_minus_foreign_fraction_of_rgb_mask": 0.9998872090959334,
+    "owned_support_only_fraction_of_rgb_mask": 1.0
+   },
+   "ownership": {
+    "owned_return_fraction": 0.6716330264670531,
+    "foreign_region_fraction_of_rgb_mask": 0.05181658064042662,
+    "lidar_support_minus_foreign_fraction_of_rgb_mask": 0.9439169255608014,
+    "owned_support_only_fraction_of_rgb_mask": 0.9482330781085643
+   }
+  },
+  {
+   "sample_id": "img_864f94111ef95cfcf74e9828::pitch_up_56",
+   "image_id": "img_864f94111ef95cfcf74e9828",
+   "face_id": "pitch_up_56",
+   "face_type": "pitch_up",
+   "crop": {
+    "x": 82,
+    "y": 0,
+    "width": 1251,
+    "height": 1252
+   },
+   "rgb_mask_pixels": 1550336,
+   "lidar_return_pixels": 69880,
+   "supervised_pixels": 1481145,
+   "supervised_fraction_of_rgb_mask": 0.9553703197242405,
+   "supervised_fraction_of_crop": 0.9456620007508371,
+   "roi": null,
+   "ownership": {
+    "owned_return_fraction": 0.3703777904979966,
+    "foreign_region_fraction_of_rgb_mask": 0.4491290920161823,
+    "lidar_support_minus_foreign_fraction_of_rgb_mask": 0.5062412277080581,
+    "owned_support_only_fraction_of_rgb_mask": 0.5394978894897622
+   }
+  },
+  {
+   "sample_id": "img_864f94111ef95cfcf74e9828::yaw_minus_35",
+   "image_id": "img_864f94111ef95cfcf74e9828",
+   "face_id": "yaw_minus_35",
+   "face_type": "yaw",
+   "crop": {
+    "x": 0,
+    "y": 0,
+    "width": 1018,
+    "height": 1371
+   },
+   "rgb_mask_pixels": 1351745,
+   "lidar_return_pixels": 373842,
+   "supervised_pixels": 1350015,
+   "supervised_fraction_of_rgb_mask": 0.9987201728136594,
+   "supervised_fraction_of_crop": 0.9672825680421988,
+   "roi": {
+    "box": {
+     "x0": 300,
+     "y0": 602,
+     "x1": 546,
+     "y1": 924
+    },
+    "rgb_mask_pixels": 79212,
+    "supervised_pixels": 79212,
+    "supervised_fraction_of_rgb_mask": 1.0,
+    "lidar_support_minus_foreign_fraction_of_rgb_mask": 1.0,
+    "owned_support_only_fraction_of_rgb_mask": 1.0
+   },
+   "ownership": {
+    "owned_return_fraction": 0.530090252031607,
+    "foreign_region_fraction_of_rgb_mask": 0.35133179704752004,
+    "lidar_support_minus_foreign_fraction_of_rgb_mask": 0.6473883757661393,
+    "owned_support_only_fraction_of_rgb_mask": 0.7056833944272034
+   }
+  },
+  {
+   "sample_id": "img_88226fd046cc5356cc68c8ec::pitch_up_56",
+   "image_id": "img_88226fd046cc5356cc68c8ec",
+   "face_id": "pitch_up_56",
+   "face_type": "pitch_up",
+   "crop": {
+    "x": 0,
+    "y": 0,
+    "width": 2912,
+    "height": 1456
+   },
+   "rgb_mask_pixels": 4087900,
+   "lidar_return_pixels": 175488,
+   "supervised_pixels": 3922975,
+   "supervised_fraction_of_rgb_mask": 0.9596553242496147,
+   "supervised_fraction_of_crop": 0.9252578851437024,
+   "roi": {
+    "box": {
+     "x0": 113,
+     "y0": 1313,
+     "x1": 517,
+     "y1": 1454
+    },
+    "rgb_mask_pixels": 52420,
+    "supervised_pixels": 52420,
+    "supervised_fraction_of_rgb_mask": 1.0,
+    "lidar_support_minus_foreign_fraction_of_rgb_mask": 0.9995803128576879,
+    "owned_support_only_fraction_of_rgb_mask": 1.0
+   },
+   "ownership": {
+    "owned_return_fraction": 0.14158233041575494,
+    "foreign_region_fraction_of_rgb_mask": 0.6959252917145723,
+    "lidar_support_minus_foreign_fraction_of_rgb_mask": 0.26373003253504246,
+    "owned_support_only_fraction_of_rgb_mask": 0.260480686905257
+   }
+  },
+  {
+   "sample_id": "img_88226fd046cc5356cc68c8ec::yaw_minus_35",
+   "image_id": "img_88226fd046cc5356cc68c8ec",
+   "face_id": "yaw_minus_35",
+   "face_type": "yaw",
+   "crop": {
+    "x": 357,
+    "y": 239,
+    "width": 1099,
+    "height": 1396
+   },
+   "rgb_mask_pixels": 1517435,
+   "lidar_return_pixels": 436774,
+   "supervised_pixels": 1508910,
+   "supervised_fraction_of_rgb_mask": 0.9943819669376283,
+   "supervised_fraction_of_crop": 0.9835132746362283,
+   "roi": {
+    "box": {
+     "x0": 364,
+     "y0": 463,
+     "x1": 586,
+     "y1": 765
+    },
+    "rgb_mask_pixels": 67044,
+    "supervised_pixels": 67044,
+    "supervised_fraction_of_rgb_mask": 1.0,
+    "lidar_support_minus_foreign_fraction_of_rgb_mask": 1.0,
+    "owned_support_only_fraction_of_rgb_mask": 1.0
+   },
+   "ownership": {
+    "owned_return_fraction": 0.535546987686996,
+    "foreign_region_fraction_of_rgb_mask": 0.4302207343312893,
+    "lidar_support_minus_foreign_fraction_of_rgb_mask": 0.564161232606339,
+    "owned_support_only_fraction_of_rgb_mask": 0.5943325414268157
+   }
+  },
+  {
+   "sample_id": "img_88226fd046cc5356cc68c8ec::yaw_plus_35",
+   "image_id": "img_88226fd046cc5356cc68c8ec",
+   "face_id": "yaw_plus_35",
+   "face_type": "yaw",
+   "crop": {
+    "x": 0,
+    "y": 0,
+    "width": 1456,
+    "height": 2128
+   },
+   "rgb_mask_pixels": 2979076,
+   "lidar_return_pixels": 430881,
+   "supervised_pixels": 2924064,
+   "supervised_fraction_of_rgb_mask": 0.9815338715762875,
+   "supervised_fraction_of_crop": 0.9437432867883996,
+   "roi": null,
+   "ownership": {
+    "owned_return_fraction": 0.20893935912699793,
+    "foreign_region_fraction_of_rgb_mask": 0.6622701132834476,
+    "lidar_support_minus_foreign_fraction_of_rgb_mask": 0.3192637582928398,
+    "owned_support_only_fraction_of_rgb_mask": 0.34671958687861604
+   }
+  },
+  {
+   "sample_id": "img_8a5782154627496067ab070d::pitch_up_56",
+   "image_id": "img_8a5782154627496067ab070d",
+   "face_id": "pitch_up_56",
+   "face_type": "pitch_up",
+   "crop": {
+    "x": 45,
+    "y": 301,
+    "width": 2732,
+    "height": 1155
+   },
+   "rgb_mask_pixels": 3120455,
+   "lidar_return_pixels": 136650,
+   "supervised_pixels": 2943373,
+   "supervised_fraction_of_rgb_mask": 0.9432512245810306,
+   "supervised_fraction_of_crop": 0.9327872956716295,
+   "roi": null,
+   "ownership": {
+    "owned_return_fraction": 0.21604098060739116,
+    "foreign_region_fraction_of_rgb_mask": 0.6200685476957687,
+    "lidar_support_minus_foreign_fraction_of_rgb_mask": 0.3231826768852619,
+    "owned_support_only_fraction_of_rgb_mask": 0.3291427051503707
+   }
+  },
+  {
+   "sample_id": "img_8a5782154627496067ab070d::yaw_minus_35",
+   "image_id": "img_8a5782154627496067ab070d",
+   "face_id": "yaw_minus_35",
+   "face_type": "yaw",
+   "crop": {
+    "x": 481,
+    "y": 537,
+    "width": 975,
+    "height": 994
+   },
+   "rgb_mask_pixels": 957222,
+   "lidar_return_pixels": 325338,
+   "supervised_pixels": 957222,
+   "supervised_fraction_of_rgb_mask": 1.0,
+   "supervised_fraction_of_crop": 0.9876923076923076,
+   "roi": {
+    "box": {
+     "x0": 610,
+     "y0": 269,
+     "x1": 937,
+     "y1": 578
+    },
+    "rgb_mask_pixels": 101043,
+    "supervised_pixels": 101043,
+    "supervised_fraction_of_rgb_mask": 1.0,
+    "lidar_support_minus_foreign_fraction_of_rgb_mask": 1.0,
+    "owned_support_only_fraction_of_rgb_mask": 1.0
+   },
+   "ownership": {
+    "owned_return_fraction": 0.62028106154215,
+    "foreign_region_fraction_of_rgb_mask": 0.2436529874992426,
+    "lidar_support_minus_foreign_fraction_of_rgb_mask": 0.7563470125007574,
+    "owned_support_only_fraction_of_rgb_mask": 0.7925538694263191
+   }
+  },
+  {
+   "sample_id": "img_8a5782154627496067ab070d::yaw_plus_35",
+   "image_id": "img_8a5782154627496067ab070d",
+   "face_id": "yaw_plus_35",
+   "face_type": "yaw",
+   "crop": {
+    "x": 0,
+    "y": 0,
+    "width": 900,
+    "height": 1570
+   },
+   "rgb_mask_pixels": 1358658,
+   "lidar_return_pixels": 196447,
+   "supervised_pixels": 1340444,
+   "supervised_fraction_of_rgb_mask": 0.9865941244963781,
+   "supervised_fraction_of_crop": 0.9486510969568295,
+   "roi": {
+    "box": {
+     "x0": 7,
+     "y0": 892,
+     "x1": 35,
+     "y1": 924
+    },
+    "rgb_mask_pixels": 736,
+    "supervised_pixels": 736,
+    "supervised_fraction_of_rgb_mask": 1.0,
+    "lidar_support_minus_foreign_fraction_of_rgb_mask": 1.0,
+    "owned_support_only_fraction_of_rgb_mask": 1.0
+   },
+   "ownership": {
+    "owned_return_fraction": 0.19820104150228815,
+    "foreign_region_fraction_of_rgb_mask": 0.5093739557710624,
+    "lidar_support_minus_foreign_fraction_of_rgb_mask": 0.4772201687253157,
+    "owned_support_only_fraction_of_rgb_mask": 0.5216080868033015
+   }
+  },
+  {
+   "sample_id": "img_8c80111aab308428694788f4::pitch_up_56",
+   "image_id": "img_8c80111aab308428694788f4",
+   "face_id": "pitch_up_56",
+   "face_type": "pitch_up",
+   "crop": {
+    "x": 0,
+    "y": 0,
+    "width": 2912,
+    "height": 1456
+   },
+   "rgb_mask_pixels": 4087900,
+   "lidar_return_pixels": 168302,
+   "supervised_pixels": 3785304,
+   "supervised_fraction_of_rgb_mask": 0.9259776413317351,
+   "supervised_fraction_of_crop": 0.8927873294288129,
+   "roi": {
+    "box": {
+     "x0": 1,
+     "y0": 1398,
+     "x1": 115,
+     "y1": 1449
+    },
+    "rgb_mask_pixels": 1816,
+    "supervised_pixels": 1816,
+    "supervised_fraction_of_rgb_mask": 1.0,
+    "lidar_support_minus_foreign_fraction_of_rgb_mask": 1.0,
+    "owned_support_only_fraction_of_rgb_mask": 1.0
+   },
+   "ownership": {
+    "owned_return_fraction": 0.1650485436893204,
+    "foreign_region_fraction_of_rgb_mask": 0.6011294307590694,
+    "lidar_support_minus_foreign_fraction_of_rgb_mask": 0.32484821057266566,
+    "owned_support_only_fraction_of_rgb_mask": 0.3313158345360699
+   }
+  },
+  {
+   "sample_id": "img_8c80111aab308428694788f4::yaw_minus_35",
+   "image_id": "img_8c80111aab308428694788f4",
+   "face_id": "yaw_minus_35",
+   "face_type": "yaw",
+   "crop": {
+    "x": 177,
+    "y": 488,
+    "width": 1279,
+    "height": 1156
+   },
+   "rgb_mask_pixels": 1464652,
+   "lidar_return_pixels": 475162,
+   "supervised_pixels": 1454136,
+   "supervised_fraction_of_rgb_mask": 0.9928201374797563,
+   "supervised_fraction_of_crop": 0.9835051713736132,
+   "roi": {
+    "box": {
+     "x0": 442,
+     "y0": 281,
+     "x1": 689,
+     "y1": 579
+    },
+    "rgb_mask_pixels": 73606,
+    "supervised_pixels": 73606,
+    "supervised_fraction_of_rgb_mask": 1.0,
+    "lidar_support_minus_foreign_fraction_of_rgb_mask": 1.0,
+    "owned_support_only_fraction_of_rgb_mask": 1.0
+   },
+   "ownership": {
+    "owned_return_fraction": 0.4646520555094894,
+    "foreign_region_fraction_of_rgb_mask": 0.45012535400900694,
+    "lidar_support_minus_foreign_fraction_of_rgb_mask": 0.5426947834707494,
+    "owned_support_only_fraction_of_rgb_mask": 0.5846399008092025
+   }
+  },
+  {
+   "sample_id": "img_8c80111aab308428694788f4::yaw_plus_35",
+   "image_id": "img_8c80111aab308428694788f4",
+   "face_id": "yaw_plus_35",
+   "face_type": "yaw",
+   "crop": {
+    "x": 0,
+    "y": 0,
+    "width": 1456,
+    "height": 1909
+   },
+   "rgb_mask_pixels": 2639247,
+   "lidar_return_pixels": 358211,
+   "supervised_pixels": 2576121,
+   "supervised_fraction_of_rgb_mask": 0.9760818142447448,
+   "supervised_fraction_of_crop": 0.9268275922610653,
+   "roi": null,
+   "ownership": {
+    "owned_return_fraction": 0.19278581618096596,
+    "foreign_region_fraction_of_rgb_mask": 0.5919684667634367,
+    "lidar_support_minus_foreign_fraction_of_rgb_mask": 0.3841133474813081,
+    "owned_support_only_fraction_of_rgb_mask": 0.43091343856789455
+   }
+  },
+  {
+   "sample_id": "img_93526b49c3d4ea71e085b123::pitch_up_56",
+   "image_id": "img_93526b49c3d4ea71e085b123",
+   "face_id": "pitch_up_56",
+   "face_type": "pitch_up",
+   "crop": {
+    "x": 2481,
+    "y": 412,
+    "width": 431,
+    "height": 1029
+   },
+   "rgb_mask_pixels": 416054,
+   "lidar_return_pixels": 36880,
+   "supervised_pixels": 416054,
+   "supervised_fraction_of_rgb_mask": 1.0,
+   "supervised_fraction_of_crop": 0.9381171096214422,
+   "roi": null,
+   "ownership": {
+    "owned_return_fraction": 0.2448752711496746,
+    "foreign_region_fraction_of_rgb_mask": 0.5583578093228283,
+    "lidar_support_minus_foreign_fraction_of_rgb_mask": 0.4416421906771717,
+    "owned_support_only_fraction_of_rgb_mask": 0.4825046748739346
+   }
+  },
+  {
+   "sample_id": "img_93526b49c3d4ea71e085b123::yaw_plus_35",
+   "image_id": "img_93526b49c3d4ea71e085b123",
+   "face_id": "yaw_plus_35",
+   "face_type": "yaw",
+   "crop": {
+    "x": 565,
+    "y": 95,
+    "width": 891,
+    "height": 1285
+   },
+   "rgb_mask_pixels": 1128807,
+   "lidar_return_pixels": 355559,
+   "supervised_pixels": 1128782,
+   "supervised_fraction_of_rgb_mask": 0.9999778527241592,
+   "supervised_fraction_of_crop": 0.9858917755156407,
+   "roi": {
+    "box": {
+     "x0": 670,
+     "y0": 417,
+     "x1": 872,
+     "y1": 792
+    },
+    "rgb_mask_pixels": 75750,
+    "supervised_pixels": 75750,
+    "supervised_fraction_of_rgb_mask": 1.0,
+    "lidar_support_minus_foreign_fraction_of_rgb_mask": 1.0,
+    "owned_support_only_fraction_of_rgb_mask": 1.0
+   },
+   "ownership": {
+    "owned_return_fraction": 0.5463565821706102,
+    "foreign_region_fraction_of_rgb_mask": 0.34407564800714385,
+    "lidar_support_minus_foreign_fraction_of_rgb_mask": 0.6559022047170154,
+    "owned_support_only_fraction_of_rgb_mask": 0.7038200507261206
+   }
+  },
+  {
+   "sample_id": "img_954f086e75547572ac933571::pitch_up_56",
+   "image_id": "img_954f086e75547572ac933571",
+   "face_id": "pitch_up_56",
+   "face_type": "pitch_up",
+   "crop": {
+    "x": 2137,
+    "y": 615,
+    "width": 775,
+    "height": 841
+   },
+   "rgb_mask_pixels": 619242,
+   "lidar_return_pixels": 65060,
+   "supervised_pixels": 619242,
+   "supervised_fraction_of_rgb_mask": 1.0,
+   "supervised_fraction_of_crop": 0.9500855356526409,
+   "roi": null,
+   "ownership": {
+    "owned_return_fraction": 0.4335690132185675,
+    "foreign_region_fraction_of_rgb_mask": 0.28565084409649216,
+    "lidar_support_minus_foreign_fraction_of_rgb_mask": 0.7143491559035078,
+    "owned_support_only_fraction_of_rgb_mask": 0.755283071884659
+   }
+  },
+  {
+   "sample_id": "img_954f086e75547572ac933571::yaw_plus_35",
+   "image_id": "img_954f086e75547572ac933571",
+   "face_id": "yaw_plus_35",
+   "face_type": "yaw",
+   "crop": {
+    "x": 391,
+    "y": 153,
+    "width": 1065,
+    "height": 1131
+   },
+   "rgb_mask_pixels": 1190718,
+   "lidar_return_pixels": 383760,
+   "supervised_pixels": 1190718,
+   "supervised_fraction_of_rgb_mask": 1.0,
+   "supervised_fraction_of_crop": 0.9885455971905704,
+   "roi": {
+    "box": {
+     "x0": 699,
+     "y0": 206,
+     "x1": 984,
+     "y1": 627
+    },
+    "rgb_mask_pixels": 119985,
+    "supervised_pixels": 119985,
+    "supervised_fraction_of_rgb_mask": 1.0,
+    "lidar_support_minus_foreign_fraction_of_rgb_mask": 1.0,
+    "owned_support_only_fraction_of_rgb_mask": 1.0
+   },
+   "ownership": {
+    "owned_return_fraction": 0.615585261621847,
+    "foreign_region_fraction_of_rgb_mask": 0.242513340690239,
+    "lidar_support_minus_foreign_fraction_of_rgb_mask": 0.757486659309761,
+    "owned_support_only_fraction_of_rgb_mask": 0.7981721952636981
+   }
+  },
+  {
+   "sample_id": "img_9cc72b24cfc01e68bb74537b::pitch_up_56",
+   "image_id": "img_9cc72b24cfc01e68bb74537b",
+   "face_id": "pitch_up_56",
+   "face_type": "pitch_up",
+   "crop": {
+    "x": 2316,
+    "y": 137,
+    "width": 596,
+    "height": 1319
+   },
+   "rgb_mask_pixels": 744262,
+   "lidar_return_pixels": 21001,
+   "supervised_pixels": 676460,
+   "supervised_fraction_of_rgb_mask": 0.9089003603569711,
+   "supervised_fraction_of_crop": 0.8605003790750568,
+   "roi": null,
+   "ownership": {
+    "owned_return_fraction": 0.5072139421932289,
+    "foreign_region_fraction_of_rgb_mask": 0.2662301716331077,
+    "lidar_support_minus_foreign_fraction_of_rgb_mask": 0.6426701887238634,
+    "owned_support_only_fraction_of_rgb_mask": 0.670914274811827
+   }
+  },
+  {
+   "sample_id": "img_9cc72b24cfc01e68bb74537b::yaw_minus_35",
+   "image_id": "img_9cc72b24cfc01e68bb74537b",
+   "face_id": "yaw_minus_35",
+   "face_type": "yaw",
+   "crop": {
+    "x": 760,
+    "y": 450,
+    "width": 696,
+    "height": 1165
+   },
+   "rgb_mask_pixels": 796860,
+   "lidar_return_pixels": 222586,
+   "supervised_pixels": 796860,
+   "supervised_fraction_of_rgb_mask": 1.0,
+   "supervised_fraction_of_crop": 0.9827586206896551,
+   "roi": {
+    "box": {
+     "x0": 590,
+     "y0": 414,
+     "x1": 695,
+     "y1": 694
+    },
+    "rgb_mask_pixels": 26320,
+    "supervised_pixels": 26320,
+    "supervised_fraction_of_rgb_mask": 1.0,
+    "lidar_support_minus_foreign_fraction_of_rgb_mask": 1.0,
+    "owned_support_only_fraction_of_rgb_mask": 1.0
+   },
+   "ownership": {
+    "owned_return_fraction": 0.7177136028321638,
+    "foreign_region_fraction_of_rgb_mask": 0.19515975202670482,
+    "lidar_support_minus_foreign_fraction_of_rgb_mask": 0.8048402479732952,
+    "owned_support_only_fraction_of_rgb_mask": 0.8327008508395453
+   }
+  },
+  {
+   "sample_id": "img_9cc72b24cfc01e68bb74537b::yaw_plus_35",
+   "image_id": "img_9cc72b24cfc01e68bb74537b",
+   "face_id": "yaw_plus_35",
+   "face_type": "yaw",
+   "crop": {
+    "x": 0,
+    "y": 0,
+    "width": 1221,
+    "height": 1701
+   },
+   "rgb_mask_pixels": 2006344,
+   "lidar_return_pixels": 377712,
+   "supervised_pixels": 1982866,
+   "supervised_fraction_of_rgb_mask": 0.988298118368535,
+   "supervised_fraction_of_crop": 0.9547142139734732,
+   "roi": {
+    "box": {
+     "x0": 7,
+     "y0": 816,
+     "x1": 326,
+     "y1": 1198
+    },
+    "rgb_mask_pixels": 119948,
+    "supervised_pixels": 119948,
+    "supervised_fraction_of_rgb_mask": 1.0,
+    "lidar_support_minus_foreign_fraction_of_rgb_mask": 0.9910627938773469,
+    "owned_support_only_fraction_of_rgb_mask": 0.999466435455364
+   },
+   "ownership": {
+    "owned_return_fraction": 0.31234379633159653,
+    "foreign_region_fraction_of_rgb_mask": 0.4960161368140259,
+    "lidar_support_minus_foreign_fraction_of_rgb_mask": 0.4922819815545091,
+    "owned_support_only_fraction_of_rgb_mask": 0.5264685417854565
+   }
+  },
+  {
+   "sample_id": "img_9f8e6e6735bab2261cf49998::pitch_up_56",
+   "image_id": "img_9f8e6e6735bab2261cf49998",
+   "face_id": "pitch_up_56",
+   "face_type": "pitch_up",
+   "crop": {
+    "x": 0,
+    "y": 0,
+    "width": 2912,
+    "height": 1456
+   },
+   "rgb_mask_pixels": 4087900,
+   "lidar_return_pixels": 185664,
+   "supervised_pixels": 3906356,
+   "supervised_fraction_of_rgb_mask": 0.955589911690599,
+   "supervised_fraction_of_crop": 0.9213381913416254,
+   "roi": {
+    "box": {
+     "x0": 129,
+     "y0": 1284,
+     "x1": 551,
+     "y1": 1455
+    },
+    "rgb_mask_pixels": 67151,
+    "supervised_pixels": 67151,
+    "supervised_fraction_of_rgb_mask": 1.0,
+    "lidar_support_minus_foreign_fraction_of_rgb_mask": 1.0,
+    "owned_support_only_fraction_of_rgb_mask": 1.0
+   },
+   "ownership": {
+    "owned_return_fraction": 0.14971130644605307,
+    "foreign_region_fraction_of_rgb_mask": 0.6871364270163165,
+    "lidar_support_minus_foreign_fraction_of_rgb_mask": 0.26845348467428265,
+    "owned_support_only_fraction_of_rgb_mask": 0.2700146774627559
+   }
+  },
+  {
+   "sample_id": "img_9f8e6e6735bab2261cf49998::yaw_minus_35",
+   "image_id": "img_9f8e6e6735bab2261cf49998",
+   "face_id": "yaw_minus_35",
+   "face_type": "yaw",
+   "crop": {
+    "x": 319,
+    "y": 197,
+    "width": 1137,
+    "height": 1416
+   },
+   "rgb_mask_pixels": 1592924,
+   "lidar_return_pixels": 447869,
+   "supervised_pixels": 1576993,
+   "supervised_fraction_of_rgb_mask": 0.98999889511364,
+   "supervised_fraction_of_crop": 0.9795036248627322,
+   "roi": {
+    "box": {
+     "x0": 386,
+     "y0": 487,
+     "x1": 622,
+     "y1": 795
+    },
+    "rgb_mask_pixels": 72688,
+    "supervised_pixels": 72688,
+    "supervised_fraction_of_rgb_mask": 1.0,
+    "lidar_support_minus_foreign_fraction_of_rgb_mask": 1.0,
+    "owned_support_only_fraction_of_rgb_mask": 1.0
+   },
+   "ownership": {
+    "owned_return_fraction": 0.5102541144843693,
+    "foreign_region_fraction_of_rgb_mask": 0.44389562841667274,
+    "lidar_support_minus_foreign_fraction_of_rgb_mask": 0.5461032666969673,
+    "owned_support_only_fraction_of_rgb_mask": 0.5709104765826869
+   }
+  },
+  {
+   "sample_id": "img_9f8e6e6735bab2261cf49998::yaw_plus_35",
+   "image_id": "img_9f8e6e6735bab2261cf49998",
+   "face_id": "yaw_plus_35",
+   "face_type": "yaw",
+   "crop": {
+    "x": 0,
+    "y": 0,
+    "width": 1456,
+    "height": 2012
+   },
+   "rgb_mask_pixels": 2800459,
+   "lidar_return_pixels": 419251,
+   "supervised_pixels": 2746178,
+   "supervised_fraction_of_rgb_mask": 0.9806171059815552,
+   "supervised_fraction_of_crop": 0.9374310455945645,
+   "roi": null,
+   "ownership": {
+    "owned_return_fraction": 0.20243720348907934,
+    "foreign_region_fraction_of_rgb_mask": 0.6756699526756149,
+    "lidar_support_minus_foreign_fraction_of_rgb_mask": 0.3049471533059402,
+    "owned_support_only_fraction_of_rgb_mask": 0.33456944022390617
+   }
+  },
+  {
+   "sample_id": "img_a2ef0a0058461539f6d32279::pitch_up_56",
+   "image_id": "img_a2ef0a0058461539f6d32279",
+   "face_id": "pitch_up_56",
+   "face_type": "pitch_up",
+   "crop": {
+    "x": 0,
+    "y": 334,
+    "width": 2447,
+    "height": 1122
+   },
+   "rgb_mask_pixels": 2686193,
+   "lidar_return_pixels": 126366,
+   "supervised_pixels": 2542822,
+   "supervised_fraction_of_rgb_mask": 0.9466266943588938,
+   "supervised_fraction_of_crop": 0.9261666400780322,
+   "roi": null,
+   "ownership": {
+    "owned_return_fraction": 0.182105946219711,
+    "foreign_region_fraction_of_rgb_mask": 0.6378104626138181,
+    "lidar_support_minus_foreign_fraction_of_rgb_mask": 0.30881623174507566,
+    "owned_support_only_fraction_of_rgb_mask": 0.32017505815851655
+   }
+  },
+  {
+   "sample_id": "img_a2ef0a0058461539f6d32279::yaw_minus_35",
+   "image_id": "img_a2ef0a0058461539f6d32279",
+   "face_id": "yaw_minus_35",
+   "face_type": "yaw",
+   "crop": {
+    "x": 513,
+    "y": 321,
+    "width": 943,
+    "height": 1167
+   },
+   "rgb_mask_pixels": 1086477,
+   "lidar_return_pixels": 340903,
+   "supervised_pixels": 1086477,
+   "supervised_fraction_of_rgb_mask": 1.0,
+   "supervised_fraction_of_crop": 0.9872746553552492,
+   "roi": {
+    "box": {
+     "x0": 522,
+     "y0": 525,
+     "x1": 794,
+     "y1": 792
+    },
+    "rgb_mask_pixels": 72624,
+    "supervised_pixels": 72624,
+    "supervised_fraction_of_rgb_mask": 1.0,
+    "lidar_support_minus_foreign_fraction_of_rgb_mask": 1.0,
+    "owned_support_only_fraction_of_rgb_mask": 1.0
+   },
+   "ownership": {
+    "owned_return_fraction": 0.5075842688389366,
+    "foreign_region_fraction_of_rgb_mask": 0.4178146431079535,
+    "lidar_support_minus_foreign_fraction_of_rgb_mask": 0.5821853568920465,
+    "owned_support_only_fraction_of_rgb_mask": 0.6343613348464808
+   }
+  },
+  {
+   "sample_id": "img_a2ef0a0058461539f6d32279::yaw_plus_35",
+   "image_id": "img_a2ef0a0058461539f6d32279",
+   "face_id": "yaw_plus_35",
+   "face_type": "yaw",
+   "crop": {
+    "x": 0,
+    "y": 0,
+    "width": 725,
+    "height": 1156
+   },
+   "rgb_mask_pixels": 803779,
+   "lidar_return_pixels": 86632,
+   "supervised_pixels": 789454,
+   "supervised_fraction_of_rgb_mask": 0.9821779369702368,
+   "supervised_fraction_of_crop": 0.9419568070635962,
+   "roi": null,
+   "ownership": {
+    "owned_return_fraction": 0.2896966478899252,
+    "foreign_region_fraction_of_rgb_mask": 0.37745574343196325,
+    "lidar_support_minus_foreign_fraction_of_rgb_mask": 0.6047221935382736,
+    "owned_support_only_fraction_of_rgb_mask": 0.678141628482456
+   }
+  },
+  {
+   "sample_id": "img_a4bc513964ab0170b07c28bc::pitch_up_56",
+   "image_id": "img_a4bc513964ab0170b07c28bc",
+   "face_id": "pitch_up_56",
+   "face_type": "pitch_up",
+   "crop": {
+    "x": 2240,
+    "y": 216,
+    "width": 672,
+    "height": 1240
+   },
+   "rgb_mask_pixels": 792407,
+   "lidar_return_pixels": 22511,
+   "supervised_pixels": 729629,
+   "supervised_fraction_of_rgb_mask": 0.9207755610437566,
+   "supervised_fraction_of_crop": 0.875610839093702,
+   "roi": null,
+   "ownership": {
+    "owned_return_fraction": 0.45182355292967885,
+    "foreign_region_fraction_of_rgb_mask": 0.3227280930128078,
+    "lidar_support_minus_foreign_fraction_of_rgb_mask": 0.5980474680309488,
+    "owned_support_only_fraction_of_rgb_mask": 0.6159372645622767
+   }
+  },
+  {
+   "sample_id": "img_a4bc513964ab0170b07c28bc::yaw_minus_35",
+   "image_id": "img_a4bc513964ab0170b07c28bc",
+   "face_id": "yaw_minus_35",
+   "face_type": "yaw",
+   "crop": {
+    "x": 689,
+    "y": 589,
+    "width": 767,
+    "height": 1079
+   },
+   "rgb_mask_pixels": 814645,
+   "lidar_return_pixels": 247278,
+   "supervised_pixels": 814645,
+   "supervised_fraction_of_rgb_mask": 1.0,
+   "supervised_fraction_of_crop": 0.984354628422425,
+   "roi": {
+    "box": {
+     "x0": 594,
+     "y0": 247,
+     "x1": 766,
+     "y1": 606
+    },
+    "rgb_mask_pixels": 57799,
+    "supervised_pixels": 57799,
+    "supervised_fraction_of_rgb_mask": 1.0,
+    "lidar_support_minus_foreign_fraction_of_rgb_mask": 1.0,
+    "owned_support_only_fraction_of_rgb_mask": 1.0
+   },
+   "ownership": {
+    "owned_return_fraction": 0.728677844369495,
+    "foreign_region_fraction_of_rgb_mask": 0.16849425209753943,
+    "lidar_support_minus_foreign_fraction_of_rgb_mask": 0.8315057479024606,
+    "owned_support_only_fraction_of_rgb_mask": 0.855553032302414
+   }
+  },
+  {
+   "sample_id": "img_a4bc513964ab0170b07c28bc::yaw_plus_35",
+   "image_id": "img_a4bc513964ab0170b07c28bc",
+   "face_id": "yaw_plus_35",
+   "face_type": "yaw",
+   "crop": {
+    "x": 0,
+    "y": 0,
+    "width": 1229,
+    "height": 1725
+   },
+   "rgb_mask_pixels": 2046809,
+   "lidar_return_pixels": 381604,
+   "supervised_pixels": 2025573,
+   "supervised_fraction_of_rgb_mask": 0.9896248257653742,
+   "supervised_fraction_of_crop": 0.9554476951922737,
+   "roi": {
+    "box": {
+     "x0": 4,
+     "y0": 835,
+     "x1": 294,
+     "y1": 1246
+    },
+    "rgb_mask_pixels": 115902,
+    "supervised_pixels": 115902,
+    "supervised_fraction_of_rgb_mask": 1.0,
+    "lidar_support_minus_foreign_fraction_of_rgb_mask": 0.9805611637417818,
+    "owned_support_only_fraction_of_rgb_mask": 0.9957032665527773
+   },
+   "ownership": {
+    "owned_return_fraction": 0.3065691135313047,
+    "foreign_region_fraction_of_rgb_mask": 0.48976333404826733,
+    "lidar_support_minus_foreign_fraction_of_rgb_mask": 0.499861491717107,
+    "owned_support_only_fraction_of_rgb_mask": 0.5338055480506486
+   }
+  },
+  {
+   "sample_id": "img_b4812019b4dfa216489f95df::pitch_up_56",
+   "image_id": "img_b4812019b4dfa216489f95df",
+   "face_id": "pitch_up_56",
+   "face_type": "pitch_up",
+   "crop": {
+    "x": 0,
+    "y": 0,
+    "width": 977,
+    "height": 865
+   },
+   "rgb_mask_pixels": 809572,
+   "lidar_return_pixels": 30934,
+   "supervised_pixels": 764597,
+   "supervised_fraction_of_rgb_mask": 0.9444459541584936,
+   "supervised_fraction_of_crop": 0.9047360978813284,
+   "roi": null,
+   "ownership": {
+    "owned_return_fraction": 0.5132540246977436,
+    "foreign_region_fraction_of_rgb_mask": 0.3536560058895318,
+    "lidar_support_minus_foreign_fraction_of_rgb_mask": 0.5907899482689619,
+    "owned_support_only_fraction_of_rgb_mask": 0.6153893662330219
+   }
+  },
+  {
+   "sample_id": "img_b4812019b4dfa216489f95df::yaw_minus_35",
+   "image_id": "img_b4812019b4dfa216489f95df",
+   "face_id": "yaw_minus_35",
+   "face_type": "yaw",
+   "crop": {
+    "x": 0,
+    "y": 0,
+    "width": 712,
+    "height": 1394
+   },
+   "rgb_mask_pixels": 955663,
+   "lidar_return_pixels": 261157,
+   "supervised_pixels": 955255,
+   "supervised_fraction_of_rgb_mask": 0.9995730712604757,
+   "supervised_fraction_of_crop": 0.9624463994970419,
+   "roi": {
+    "box": {
+     "x0": 83,
+     "y0": 554,
+     "x1": 340,
+     "y1": 909
+    },
+    "rgb_mask_pixels": 91235,
+    "supervised_pixels": 91235,
+    "supervised_fraction_of_rgb_mask": 1.0,
+    "lidar_support_minus_foreign_fraction_of_rgb_mask": 1.0,
+    "owned_support_only_fraction_of_rgb_mask": 1.0
+   },
+   "ownership": {
+    "owned_return_fraction": 0.5449748618647021,
+    "foreign_region_fraction_of_rgb_mask": 0.30782713153067554,
+    "lidar_support_minus_foreign_fraction_of_rgb_mask": 0.6917459397298001,
+    "owned_support_only_fraction_of_rgb_mask": 0.750305285440579
+   }
+  },
+  {
+   "sample_id": "img_b7f55877796392d83c722aba::pitch_up_56",
+   "image_id": "img_b7f55877796392d83c722aba",
+   "face_id": "pitch_up_56",
+   "face_type": "pitch_up",
+   "crop": {
+    "x": 0,
+    "y": 0,
+    "width": 1478,
+    "height": 1456
+   },
+   "rgb_mask_pixels": 2075454,
+   "lidar_return_pixels": 100656,
+   "supervised_pixels": 2016876,
+   "supervised_fraction_of_rgb_mask": 0.9717758138701219,
+   "supervised_fraction_of_crop": 0.9372239735906853,
+   "roi": {
+    "box": {
+     "x0": 0,
+     "y0": 1284,
+     "x1": 151,
+     "y1": 1442
+    },
+    "rgb_mask_pixels": 17218,
+    "supervised_pixels": 17218,
+    "supervised_fraction_of_rgb_mask": 1.0,
+    "lidar_support_minus_foreign_fraction_of_rgb_mask": 1.0,
+    "owned_support_only_fraction_of_rgb_mask": 1.0
+   },
+   "ownership": {
+    "owned_return_fraction": 0.3552197583849944,
+    "foreign_region_fraction_of_rgb_mask": 0.5007579064628751,
+    "lidar_support_minus_foreign_fraction_of_rgb_mask": 0.4710179074072468,
+    "owned_support_only_fraction_of_rgb_mask": 0.5056797211598041
+   }
+  },
+  {
+   "sample_id": "img_b7f55877796392d83c722aba::yaw_minus_35",
+   "image_id": "img_b7f55877796392d83c722aba",
+   "face_id": "yaw_minus_35",
+   "face_type": "yaw",
+   "crop": {
+    "x": 0,
+    "y": 0,
+    "width": 1273,
+    "height": 1414
+   },
+   "rgb_mask_pixels": 1749453,
+   "lidar_return_pixels": 463126,
+   "supervised_pixels": 1746588,
+   "supervised_fraction_of_rgb_mask": 0.9983623452587752,
+   "supervised_fraction_of_crop": 0.9703148072634667,
+   "roi": {
+    "box": {
+     "x0": 504,
+     "y0": 703,
+     "x1": 738,
+     "y1": 991
+    },
+    "rgb_mask_pixels": 67392,
+    "supervised_pixels": 67392,
+    "supervised_fraction_of_rgb_mask": 1.0,
+    "lidar_support_minus_foreign_fraction_of_rgb_mask": 1.0,
+    "owned_support_only_fraction_of_rgb_mask": 1.0
+   },
+   "ownership": {
+    "owned_return_fraction": 0.4851012467449463,
+    "foreign_region_fraction_of_rgb_mask": 0.43041625010789086,
+    "lidar_support_minus_foreign_fraction_of_rgb_mask": 0.5679460951508843,
+    "owned_support_only_fraction_of_rgb_mask": 0.6232588128975171
+   }
+  },
+  {
+   "sample_id": "img_c1d98062a4244b5006970c32::pitch_down_56",
+   "image_id": "img_c1d98062a4244b5006970c32",
+   "face_id": "pitch_down_56",
+   "face_type": "pitch_down",
+   "crop": {
+    "x": 4,
+    "y": 0,
+    "width": 2908,
+    "height": 1456
+   },
+   "rgb_mask_pixels": 4087900,
+   "lidar_return_pixels": 14702,
+   "supervised_pixels": 4084948,
+   "supervised_fraction_of_rgb_mask": 0.9992778688324079,
+   "supervised_fraction_of_crop": 0.9647854724367791,
+   "roi": null,
+   "ownership": {
+    "owned_return_fraction": 1.0,
+    "foreign_region_fraction_of_rgb_mask": 0.0,
+    "lidar_support_minus_foreign_fraction_of_rgb_mask": 0.9992778688324079,
+    "owned_support_only_fraction_of_rgb_mask": 0.9992778688324079
+   }
+  },
+  {
+   "sample_id": "img_c1d98062a4244b5006970c32::pitch_up_56",
+   "image_id": "img_c1d98062a4244b5006970c32",
+   "face_id": "pitch_up_56",
+   "face_type": "pitch_up",
+   "crop": {
+    "x": 0,
+    "y": 0,
+    "width": 2912,
+    "height": 1456
+   },
+   "rgb_mask_pixels": 4087900,
+   "lidar_return_pixels": 268003,
+   "supervised_pixels": 4018345,
+   "supervised_fraction_of_rgb_mask": 0.9829851513001786,
+   "supervised_fraction_of_crop": 0.9477514887241879,
+   "roi": {
+    "box": {
+     "x0": 32,
+     "y0": 487,
+     "x1": 834,
+     "y1": 1428
+    },
+    "rgb_mask_pixels": 753790,
+    "supervised_pixels": 753790,
+    "supervised_fraction_of_rgb_mask": 1.0,
+    "lidar_support_minus_foreign_fraction_of_rgb_mask": 1.0,
+    "owned_support_only_fraction_of_rgb_mask": 1.0
+   },
+   "ownership": {
+    "owned_return_fraction": 0.6632089939291724,
+    "foreign_region_fraction_of_rgb_mask": 0.1201423713887326,
+    "lidar_support_minus_foreign_fraction_of_rgb_mask": 0.862842779911446,
+    "owned_support_only_fraction_of_rgb_mask": 0.8515059076787592
+   }
+  },
+  {
+   "sample_id": "img_c1d98062a4244b5006970c32::yaw_minus_35",
+   "image_id": "img_c1d98062a4244b5006970c32",
+   "face_id": "yaw_minus_35",
+   "face_type": "yaw",
+   "crop": {
+    "x": 203,
+    "y": 0,
+    "width": 1253,
+    "height": 2912
+   },
+   "rgb_mask_pixels": 3547550,
+   "lidar_return_pixels": 493740,
+   "supervised_pixels": 3543557,
+   "supervised_fraction_of_rgb_mask": 0.9988744344688588,
+   "supervised_fraction_of_crop": 0.9711738530822729,
+   "roi": {
+    "box": {
+     "x0": 320,
+     "y0": 70,
+     "x1": 730,
+     "y1": 849
+    },
+    "rgb_mask_pixels": 319390,
+    "supervised_pixels": 319390,
+    "supervised_fraction_of_rgb_mask": 1.0,
+    "lidar_support_minus_foreign_fraction_of_rgb_mask": 0.9865305739065093,
+    "owned_support_only_fraction_of_rgb_mask": 0.9936691818779548
+   },
+   "ownership": {
+    "owned_return_fraction": 0.7578401587880261,
+    "foreign_region_fraction_of_rgb_mask": 0.03555101408013982,
+    "lidar_support_minus_foreign_fraction_of_rgb_mask": 0.963323420388719,
+    "owned_support_only_fraction_of_rgb_mask": 0.9666397936604135
+   }
+  },
+  {
+   "sample_id": "img_c1d98062a4244b5006970c32::yaw_plus_35",
+   "image_id": "img_c1d98062a4244b5006970c32",
+   "face_id": "yaw_plus_35",
+   "face_type": "yaw",
+   "crop": {
+    "x": 0,
+    "y": 0,
+    "width": 1456,
+    "height": 2912
+   },
+   "rgb_mask_pixels": 4087900,
+   "lidar_return_pixels": 625352,
+   "supervised_pixels": 4015704,
+   "supervised_fraction_of_rgb_mask": 0.982339098314538,
+   "supervised_fraction_of_crop": 0.9471285925612849,
+   "roi": null,
+   "ownership": {
+    "owned_return_fraction": 0.3470669319039517,
+    "foreign_region_fraction_of_rgb_mask": 0.34191027177768535,
+    "lidar_support_minus_foreign_fraction_of_rgb_mask": 0.6404288265368526,
+    "owned_support_only_fraction_of_rgb_mask": 0.6345727635216125
+   }
+  },
+  {
+   "sample_id": "img_d0d851b2ccfa742fa1bd8d68::pitch_down_56",
+   "image_id": "img_d0d851b2ccfa742fa1bd8d68",
+   "face_id": "pitch_down_56",
+   "face_type": "pitch_down",
+   "crop": {
+    "x": 0,
+    "y": 0,
+    "width": 2891,
+    "height": 1456
+   },
+   "rgb_mask_pixels": 4087900,
+   "lidar_return_pixels": 24146,
+   "supervised_pixels": 4043988,
+   "supervised_fraction_of_rgb_mask": 0.9892580542576873,
+   "supervised_fraction_of_crop": 0.960727874684983,
+   "roi": null,
+   "ownership": {
+    "owned_return_fraction": 0.9968938954692289,
+    "foreign_region_fraction_of_rgb_mask": 0.0016428973311480221,
+    "lidar_support_minus_foreign_fraction_of_rgb_mask": 0.9876151569265393,
+    "owned_support_only_fraction_of_rgb_mask": 0.988184887105849
+   }
+  },
+  {
+   "sample_id": "img_d0d851b2ccfa742fa1bd8d68::pitch_up_56",
+   "image_id": "img_d0d851b2ccfa742fa1bd8d68",
+   "face_id": "pitch_up_56",
+   "face_type": "pitch_up",
+   "crop": {
+    "x": 0,
+    "y": 0,
+    "width": 2912,
+    "height": 1456
+   },
+   "rgb_mask_pixels": 4087900,
+   "lidar_return_pixels": 273924,
+   "supervised_pixels": 4087900,
+   "supervised_fraction_of_rgb_mask": 1.0,
+   "supervised_fraction_of_crop": 0.9641564651008332,
+   "roi": {
+    "box": {
+     "x0": 1745,
+     "y0": 44,
+     "x1": 2838,
+     "y1": 1393
+    },
+    "rgb_mask_pixels": 1474457,
+    "supervised_pixels": 1474457,
+    "supervised_fraction_of_rgb_mask": 1.0,
+    "lidar_support_minus_foreign_fraction_of_rgb_mask": 1.0,
+    "owned_support_only_fraction_of_rgb_mask": 1.0
+   },
+   "ownership": {
+    "owned_return_fraction": 0.5804456710620464,
+    "foreign_region_fraction_of_rgb_mask": 0.12920937400621346,
+    "lidar_support_minus_foreign_fraction_of_rgb_mask": 0.8707906259937865,
+    "owned_support_only_fraction_of_rgb_mask": 0.8772323197729885
+   }
+  },
+  {
+   "sample_id": "img_d0d851b2ccfa742fa1bd8d68::yaw_minus_35",
+   "image_id": "img_d0d851b2ccfa742fa1bd8d68",
+   "face_id": "yaw_minus_35",
+   "face_type": "yaw",
+   "crop": {
+    "x": 0,
+    "y": 0,
+    "width": 1456,
+    "height": 2912
+   },
+   "rgb_mask_pixels": 4087900,
+   "lidar_return_pixels": 577020,
+   "supervised_pixels": 4077730,
+   "supervised_fraction_of_rgb_mask": 0.9975121700628685,
+   "supervised_fraction_of_crop": 0.9617578077828765,
+   "roi": {
+    "box": {
+     "x0": 1270,
+     "y0": 702,
+     "x1": 1449,
+     "y1": 1090
+    },
+    "rgb_mask_pixels": 67512,
+    "supervised_pixels": 67512,
+    "supervised_fraction_of_rgb_mask": 1.0,
+    "lidar_support_minus_foreign_fraction_of_rgb_mask": 0.9999259390923095,
+    "owned_support_only_fraction_of_rgb_mask": 1.0
+   },
+   "ownership": {
+    "owned_return_fraction": 0.34606599424629997,
+    "foreign_region_fraction_of_rgb_mask": 0.12329484576432888,
+    "lidar_support_minus_foreign_fraction_of_rgb_mask": 0.8742173242985396,
+    "owned_support_only_fraction_of_rgb_mask": 0.8889500721641919
+   }
+  },
+  {
+   "sample_id": "img_d0d851b2ccfa742fa1bd8d68::yaw_plus_35",
+   "image_id": "img_d0d851b2ccfa742fa1bd8d68",
+   "face_id": "yaw_plus_35",
+   "face_type": "yaw",
+   "crop": {
+    "x": 0,
+    "y": 0,
+    "width": 1456,
+    "height": 2912
+   },
+   "rgb_mask_pixels": 4087900,
+   "lidar_return_pixels": 713769,
+   "supervised_pixels": 4055136,
+   "supervised_fraction_of_rgb_mask": 0.9919851268377406,
+   "supervised_fraction_of_crop": 0.9564288733244777,
+   "roi": {
+    "box": {
+     "x0": 132,
+     "y0": 23,
+     "x1": 1371,
+     "y1": 1474
+    },
+    "rgb_mask_pixels": 1796380,
+    "supervised_pixels": 1796380,
+    "supervised_fraction_of_rgb_mask": 1.0,
+    "lidar_support_minus_foreign_fraction_of_rgb_mask": 0.9925806343869337,
+    "owned_support_only_fraction_of_rgb_mask": 0.9944176621872878
+   },
+   "ownership": {
+    "owned_return_fraction": 0.6647556842619952,
+    "foreign_region_fraction_of_rgb_mask": 0.10416570855451454,
+    "lidar_support_minus_foreign_fraction_of_rgb_mask": 0.8878194182832261,
+    "owned_support_only_fraction_of_rgb_mask": 0.8936123682086157
+   }
+  },
+  {
+   "sample_id": "img_d691623e566cde7f444905b2::pitch_up_56",
+   "image_id": "img_d691623e566cde7f444905b2",
+   "face_id": "pitch_up_56",
+   "face_type": "pitch_up",
+   "crop": {
+    "x": 134,
+    "y": 10,
+    "width": 2621,
+    "height": 1446
+   },
+   "rgb_mask_pixels": 3752194,
+   "lidar_return_pixels": 149698,
+   "supervised_pixels": 3341885,
+   "supervised_fraction_of_rgb_mask": 0.8906482447336145,
+   "supervised_fraction_of_crop": 0.8817717625962871,
+   "roi": null,
+   "ownership": {
+    "owned_return_fraction": 0.24642279789977153,
+    "foreign_region_fraction_of_rgb_mask": 0.5689242080766613,
+    "lidar_support_minus_foreign_fraction_of_rgb_mask": 0.32172403665695326,
+    "owned_support_only_fraction_of_rgb_mask": 0.3201484251613856
+   }
+  },
+  {
+   "sample_id": "img_d691623e566cde7f444905b2::yaw_minus_35",
+   "image_id": "img_d691623e566cde7f444905b2",
+   "face_id": "yaw_minus_35",
+   "face_type": "yaw",
+   "crop": {
+    "x": 545,
+    "y": 394,
+    "width": 911,
+    "height": 1109
+   },
+   "rgb_mask_pixels": 996991,
+   "lidar_return_pixels": 316847,
+   "supervised_pixels": 996991,
+   "supervised_fraction_of_rgb_mask": 1.0,
+   "supervised_fraction_of_crop": 0.986827661909989,
+   "roi": {
+    "box": {
+     "x0": 534,
+     "y0": 358,
+     "x1": 875,
+     "y1": 687
+    },
+    "rgb_mask_pixels": 112189,
+    "supervised_pixels": 112189,
+    "supervised_fraction_of_rgb_mask": 1.0,
+    "lidar_support_minus_foreign_fraction_of_rgb_mask": 1.0,
+    "owned_support_only_fraction_of_rgb_mask": 1.0
+   },
+   "ownership": {
+    "owned_return_fraction": 0.6660943610007354,
+    "foreign_region_fraction_of_rgb_mask": 0.22934309336794415,
+    "lidar_support_minus_foreign_fraction_of_rgb_mask": 0.7706569066320559,
+    "owned_support_only_fraction_of_rgb_mask": 0.8071005656018961
+   }
+  },
+  {
+   "sample_id": "img_d691623e566cde7f444905b2::yaw_plus_35",
+   "image_id": "img_d691623e566cde7f444905b2",
+   "face_id": "yaw_plus_35",
+   "face_type": "yaw",
+   "crop": {
+    "x": 0,
+    "y": 0,
+    "width": 965,
+    "height": 1557
+   },
+   "rgb_mask_pixels": 1447138,
+   "lidar_return_pixels": 209471,
+   "supervised_pixels": 1431897,
+   "supervised_fraction_of_rgb_mask": 0.9894681778793729,
+   "supervised_fraction_of_crop": 0.9530064791797698,
+   "roi": {
+    "box": {
+     "x0": 4,
+     "y0": 837,
+     "x1": 42,
+     "y1": 881
+    },
+    "rgb_mask_pixels": 1320,
+    "supervised_pixels": 1320,
+    "supervised_fraction_of_rgb_mask": 1.0,
+    "lidar_support_minus_foreign_fraction_of_rgb_mask": 1.0,
+    "owned_support_only_fraction_of_rgb_mask": 1.0
+   },
+   "ownership": {
+    "owned_return_fraction": 0.19619899651980466,
+    "foreign_region_fraction_of_rgb_mask": 0.521118234750245,
+    "lidar_support_minus_foreign_fraction_of_rgb_mask": 0.468349943129128,
+    "owned_support_only_fraction_of_rgb_mask": 0.511830938030789
+   }
+  },
+  {
+   "sample_id": "img_dad684e3df7bafd45b805a5d::pitch_up_56",
+   "image_id": "img_dad684e3df7bafd45b805a5d",
+   "face_id": "pitch_up_56",
+   "face_type": "pitch_up",
+   "crop": {
+    "x": 2030,
+    "y": 0,
+    "width": 882,
+    "height": 1456
+   },
+   "rgb_mask_pixels": 1221982,
+   "lidar_return_pixels": 100278,
+   "supervised_pixels": 1221982,
+   "supervised_fraction_of_rgb_mask": 1.0,
+   "supervised_fraction_of_crop": 0.9515570880366798,
+   "roi": null,
+   "ownership": {
+    "owned_return_fraction": 0.3689543070264664,
+    "foreign_region_fraction_of_rgb_mask": 0.48737870115926424,
+    "lidar_support_minus_foreign_fraction_of_rgb_mask": 0.5126212988407358,
+    "owned_support_only_fraction_of_rgb_mask": 0.5534173171126907
+   }
+  },
+  {
+   "sample_id": "img_dad684e3df7bafd45b805a5d::yaw_plus_35",
+   "image_id": "img_dad684e3df7bafd45b805a5d",
+   "face_id": "yaw_plus_35",
+   "face_type": "yaw",
+   "crop": {
+    "x": 284,
+    "y": 64,
+    "width": 1172,
+    "height": 1243
+   },
+   "rgb_mask_pixels": 1440603,
+   "lidar_return_pixels": 425017,
+   "supervised_pixels": 1440603,
+   "supervised_fraction_of_rgb_mask": 1.0,
+   "supervised_fraction_of_crop": 0.9888845109404474,
+   "roi": {
+    "box": {
+     "x0": 719,
+     "y0": 356,
+     "x1": 984,
+     "y1": 750
+    },
+    "rgb_mask_pixels": 104410,
+    "supervised_pixels": 104410,
+    "supervised_fraction_of_rgb_mask": 1.0,
+    "lidar_support_minus_foreign_fraction_of_rgb_mask": 1.0,
+    "owned_support_only_fraction_of_rgb_mask": 1.0
+   },
+   "ownership": {
+    "owned_return_fraction": 0.5710171593136275,
+    "foreign_region_fraction_of_rgb_mask": 0.35147087712575914,
+    "lidar_support_minus_foreign_fraction_of_rgb_mask": 0.6485291228742408,
+    "owned_support_only_fraction_of_rgb_mask": 0.6980951726464543
+   }
+  },
+  {
+   "sample_id": "img_df46b1666c566e3ae900c93b::pitch_up_56",
+   "image_id": "img_df46b1666c566e3ae900c93b",
+   "face_id": "pitch_up_56",
+   "face_type": "pitch_up",
+   "crop": {
+    "x": 1829,
+    "y": 0,
+    "width": 1083,
+    "height": 1456
+   },
+   "rgb_mask_pixels": 1509814,
+   "lidar_return_pixels": 58855,
+   "supervised_pixels": 1423498,
+   "supervised_fraction_of_rgb_mask": 0.9428300439656805,
+   "supervised_fraction_of_crop": 0.9027490284415493,
+   "roi": null,
+   "ownership": {
+    "owned_return_fraction": 0.38095319004332684,
+    "foreign_region_fraction_of_rgb_mask": 0.26976303041301775,
+    "lidar_support_minus_foreign_fraction_of_rgb_mask": 0.6730670135526627,
+    "owned_support_only_fraction_of_rgb_mask": 0.7263099958008072
+   }
+  },
+  {
+   "sample_id": "img_df46b1666c566e3ae900c93b::yaw_minus_35",
+   "image_id": "img_df46b1666c566e3ae900c93b",
+   "face_id": "yaw_minus_35",
+   "face_type": "yaw",
+   "crop": {
+    "x": 259,
+    "y": 528,
+    "width": 1197,
+    "height": 1118
+   },
+   "rgb_mask_pixels": 1324830,
+   "lidar_return_pixels": 442175,
+   "supervised_pixels": 1321439,
+   "supervised_fraction_of_rgb_mask": 0.9974404263188484,
+   "supervised_fraction_of_crop": 0.9874410235487346,
+   "roi": {
+    "box": {
+     "x0": 449,
+     "y0": 258,
+     "x1": 700,
+     "y1": 559
+    },
+    "rgb_mask_pixels": 75551,
+    "supervised_pixels": 75551,
+    "supervised_fraction_of_rgb_mask": 1.0,
+    "lidar_support_minus_foreign_fraction_of_rgb_mask": 1.0,
+    "owned_support_only_fraction_of_rgb_mask": 1.0
+   },
+   "ownership": {
+    "owned_return_fraction": 0.47268615367218864,
+    "foreign_region_fraction_of_rgb_mask": 0.4041137353471766,
+    "lidar_support_minus_foreign_fraction_of_rgb_mask": 0.5933266909716718,
+    "owned_support_only_fraction_of_rgb_mask": 0.6436659797860858
+   }
+  },
+  {
+   "sample_id": "img_df46b1666c566e3ae900c93b::yaw_plus_35",
+   "image_id": "img_df46b1666c566e3ae900c93b",
+   "face_id": "yaw_plus_35",
+   "face_type": "yaw",
+   "crop": {
+    "x": 0,
+    "y": 0,
+    "width": 1456,
+    "height": 1932
+   },
+   "rgb_mask_pixels": 2676050,
+   "lidar_return_pixels": 378085,
+   "supervised_pixels": 2611423,
+   "supervised_fraction_of_rgb_mask": 0.9758498533286,
+   "supervised_fraction_of_crop": 0.9283435573225945,
+   "roi": null,
+   "ownership": {
+    "owned_return_fraction": 0.1958263353478715,
+    "foreign_region_fraction_of_rgb_mask": 0.5882072457540031,
+    "lidar_support_minus_foreign_fraction_of_rgb_mask": 0.3876426075745969,
+    "owned_support_only_fraction_of_rgb_mask": 0.4335629005437118
+   }
+  },
+  {
+   "sample_id": "img_e0bbacc0010098c4844951ac::pitch_up_56",
+   "image_id": "img_e0bbacc0010098c4844951ac",
+   "face_id": "pitch_up_56",
+   "face_type": "pitch_up",
+   "crop": {
+    "x": 2099,
+    "y": 0,
+    "width": 813,
+    "height": 1456
+   },
+   "rgb_mask_pixels": 1123174,
+   "lidar_return_pixels": 87674,
+   "supervised_pixels": 1123174,
+   "supervised_fraction_of_rgb_mask": 1.0,
+   "supervised_fraction_of_crop": 0.9488446670180988,
+   "roi": null,
+   "ownership": {
+    "owned_return_fraction": 0.29645048703150306,
+    "foreign_region_fraction_of_rgb_mask": 0.549973557080203,
+    "lidar_support_minus_foreign_fraction_of_rgb_mask": 0.45002644291979693,
+    "owned_support_only_fraction_of_rgb_mask": 0.4951325440225646
+   }
+  },
+  {
+   "sample_id": "img_e0bbacc0010098c4844951ac::yaw_plus_35",
+   "image_id": "img_e0bbacc0010098c4844951ac",
+   "face_id": "yaw_plus_35",
+   "face_type": "yaw",
+   "crop": {
+    "x": 356,
+    "y": 244,
+    "width": 1100,
+    "height": 1088
+   },
+   "rgb_mask_pixels": 1183732,
+   "lidar_return_pixels": 394629,
+   "supervised_pixels": 1183732,
+   "supervised_fraction_of_rgb_mask": 1.0,
+   "supervised_fraction_of_crop": 0.9890808823529412,
+   "roi": {
+    "box": {
+     "x0": 687,
+     "y0": 230,
+     "x1": 949,
+     "y1": 611
+    },
+    "rgb_mask_pixels": 99822,
+    "supervised_pixels": 99822,
+    "supervised_fraction_of_rgb_mask": 1.0,
+    "lidar_support_minus_foreign_fraction_of_rgb_mask": 1.0,
+    "owned_support_only_fraction_of_rgb_mask": 1.0
+   },
+   "ownership": {
+    "owned_return_fraction": 0.6056245232864286,
+    "foreign_region_fraction_of_rgb_mask": 0.2605513748044321,
+    "lidar_support_minus_foreign_fraction_of_rgb_mask": 0.7394486251955679,
+    "owned_support_only_fraction_of_rgb_mask": 0.7874763882365265
+   }
+  },
+  {
+   "sample_id": "img_e1287e860ec48f842b16e821::pitch_up_56",
+   "image_id": "img_e1287e860ec48f842b16e821",
+   "face_id": "pitch_up_56",
+   "face_type": "pitch_up",
+   "crop": {
+    "x": 332,
+    "y": 170,
+    "width": 2580,
+    "height": 1286
+   },
+   "rgb_mask_pixels": 3253007,
+   "lidar_return_pixels": 123253,
+   "supervised_pixels": 3002047,
+   "supervised_fraction_of_rgb_mask": 0.9228529173161939,
+   "supervised_fraction_of_crop": 0.9048087935669765,
+   "roi": null,
+   "ownership": {
+    "owned_return_fraction": 0.20384899353362596,
+    "foreign_region_fraction_of_rgb_mask": 0.616998672305347,
+    "lidar_support_minus_foreign_fraction_of_rgb_mask": 0.3058542450108469,
+    "owned_support_only_fraction_of_rgb_mask": 0.2958966888174541
+   }
+  },
+  {
+   "sample_id": "img_e1287e860ec48f842b16e821::yaw_minus_35",
+   "image_id": "img_e1287e860ec48f842b16e821",
+   "face_id": "yaw_minus_35",
+   "face_type": "yaw",
+   "crop": {
+    "x": 671,
+    "y": 524,
+    "width": 785,
+    "height": 1010
+   },
+   "rgb_mask_pixels": 780730,
+   "lidar_return_pixels": 248685,
+   "supervised_pixels": 780730,
+   "supervised_fraction_of_rgb_mask": 1.0,
+   "supervised_fraction_of_crop": 0.9847133757961783,
+   "roi": {
+    "box": {
+     "x0": 554,
+     "y0": 246,
+     "x1": 783,
+     "y1": 595
+    },
+    "rgb_mask_pixels": 76431,
+    "supervised_pixels": 76431,
+    "supervised_fraction_of_rgb_mask": 1.0,
+    "lidar_support_minus_foreign_fraction_of_rgb_mask": 1.0,
+    "owned_support_only_fraction_of_rgb_mask": 1.0
+   },
+   "ownership": {
+    "owned_return_fraction": 0.7373544845889378,
+    "foreign_region_fraction_of_rgb_mask": 0.13849346124780654,
+    "lidar_support_minus_foreign_fraction_of_rgb_mask": 0.8615065387521934,
+    "owned_support_only_fraction_of_rgb_mask": 0.887655143263356
+   }
+  },
+  {
+   "sample_id": "img_e1287e860ec48f842b16e821::yaw_plus_35",
+   "image_id": "img_e1287e860ec48f842b16e821",
+   "face_id": "yaw_plus_35",
+   "face_type": "yaw",
+   "crop": {
+    "x": 0,
+    "y": 0,
+    "width": 1201,
+    "height": 1602
+   },
+   "rgb_mask_pixels": 1855698,
+   "lidar_return_pixels": 291810,
+   "supervised_pixels": 1814753,
+   "supervised_fraction_of_rgb_mask": 0.9779355261470347,
+   "supervised_fraction_of_crop": 0.9432178344928955,
+   "roi": {
+    "box": {
+     "x0": 1,
+     "y0": 797,
+     "x1": 206,
+     "y1": 1129
+    },
+    "rgb_mask_pixels": 64408,
+    "supervised_pixels": 64408,
+    "supervised_fraction_of_rgb_mask": 1.0,
+    "lidar_support_minus_foreign_fraction_of_rgb_mask": 0.996708483418209,
+    "owned_support_only_fraction_of_rgb_mask": 1.0
+   },
+   "ownership": {
+    "owned_return_fraction": 0.24545423391933108,
+    "foreign_region_fraction_of_rgb_mask": 0.5310567775575552,
+    "lidar_support_minus_foreign_fraction_of_rgb_mask": 0.4468787485894795,
+    "owned_support_only_fraction_of_rgb_mask": 0.4739612803376411
+   }
+  },
+  {
+   "sample_id": "img_e59222a5e5b43cad84439894::pitch_up_56",
+   "image_id": "img_e59222a5e5b43cad84439894",
+   "face_id": "pitch_up_56",
+   "face_type": "pitch_up",
+   "crop": {
+    "x": 985,
+    "y": 331,
+    "width": 1927,
+    "height": 1125
+   },
+   "rgb_mask_pixels": 2114702,
+   "lidar_return_pixels": 69251,
+   "supervised_pixels": 1987025,
+   "supervised_fraction_of_rgb_mask": 0.9396241172515087,
+   "supervised_fraction_of_crop": 0.9165772934325088,
+   "roi": null,
+   "ownership": {
+    "owned_return_fraction": 0.12846023884131638,
+    "foreign_region_fraction_of_rgb_mask": 0.6967747701567407,
+    "lidar_support_minus_foreign_fraction_of_rgb_mask": 0.24284934709476796,
+    "owned_support_only_fraction_of_rgb_mask": 0.22441743564814334
+   }
+  },
+  {
+   "sample_id": "img_e59222a5e5b43cad84439894::yaw_minus_35",
+   "image_id": "img_e59222a5e5b43cad84439894",
+   "face_id": "yaw_minus_35",
+   "face_type": "yaw",
+   "crop": {
+    "x": 774,
+    "y": 418,
+    "width": 682,
+    "height": 1213
+   },
+   "rgb_mask_pixels": 812710,
+   "lidar_return_pixels": 222030,
+   "supervised_pixels": 812710,
+   "supervised_fraction_of_rgb_mask": 1.0,
+   "supervised_fraction_of_crop": 0.9824046920821115,
+   "roi": {
+    "box": {
+     "x0": 590,
+     "y0": 549,
+     "x1": 682,
+     "y1": 755
+    },
+    "rgb_mask_pixels": 16480,
+    "supervised_pixels": 16480,
+    "supervised_fraction_of_rgb_mask": 1.0,
+    "lidar_support_minus_foreign_fraction_of_rgb_mask": 1.0,
+    "owned_support_only_fraction_of_rgb_mask": 1.0
+   },
+   "ownership": {
+    "owned_return_fraction": 0.6871638967707067,
+    "foreign_region_fraction_of_rgb_mask": 0.24286892003297608,
+    "lidar_support_minus_foreign_fraction_of_rgb_mask": 0.7571310799670239,
+    "owned_support_only_fraction_of_rgb_mask": 0.7874543194989603
+   }
+  },
+  {
+   "sample_id": "img_e59222a5e5b43cad84439894::yaw_plus_35",
+   "image_id": "img_e59222a5e5b43cad84439894",
+   "face_id": "yaw_plus_35",
+   "face_type": "yaw",
+   "crop": {
+    "x": 0,
+    "y": 0,
+    "width": 1190,
+    "height": 1731
+   },
+   "rgb_mask_pixels": 1997914,
+   "lidar_return_pixels": 371749,
+   "supervised_pixels": 1971110,
+   "supervised_fraction_of_rgb_mask": 0.9865840071194255,
+   "supervised_fraction_of_crop": 0.9569006111976853,
+   "roi": {
+    "box": {
+     "x0": 4,
+     "y0": 873,
+     "x1": 323,
+     "y1": 1227
+    },
+    "rgb_mask_pixels": 110094,
+    "supervised_pixels": 110094,
+    "supervised_fraction_of_rgb_mask": 1.0,
+    "lidar_support_minus_foreign_fraction_of_rgb_mask": 0.9988191908732538,
+    "owned_support_only_fraction_of_rgb_mask": 1.0
+   },
+   "ownership": {
+    "owned_return_fraction": 0.3071292727081983,
+    "foreign_region_fraction_of_rgb_mask": 0.5102396799862257,
+    "lidar_support_minus_foreign_fraction_of_rgb_mask": 0.4763443271331999,
+    "owned_support_only_fraction_of_rgb_mask": 0.5068141071137197
+   }
+  },
+  {
+   "sample_id": "img_e6dc6c821682e92c7098c3fc::pitch_up_56",
+   "image_id": "img_e6dc6c821682e92c7098c3fc",
+   "face_id": "pitch_up_56",
+   "face_type": "pitch_up",
+   "crop": {
+    "x": 2252,
+    "y": 222,
+    "width": 660,
+    "height": 1234
+   },
+   "rgb_mask_pixels": 773855,
+   "lidar_return_pixels": 23930,
+   "supervised_pixels": 745503,
+   "supervised_fraction_of_rgb_mask": 0.9633626454568363,
+   "supervised_fraction_of_crop": 0.915356564019449,
+   "roi": null,
+   "ownership": {
+    "owned_return_fraction": 0.4393648140409528,
+    "foreign_region_fraction_of_rgb_mask": 0.3554257580554497,
+    "lidar_support_minus_foreign_fraction_of_rgb_mask": 0.6079368874013865,
+    "owned_support_only_fraction_of_rgb_mask": 0.6308029281971429
+   }
+  },
+  {
+   "sample_id": "img_e6dc6c821682e92c7098c3fc::yaw_minus_35",
+   "image_id": "img_e6dc6c821682e92c7098c3fc",
+   "face_id": "yaw_minus_35",
+   "face_type": "yaw",
+   "crop": {
+    "x": 721,
+    "y": 503,
+    "width": 735,
+    "height": 1118
+   },
+   "rgb_mask_pixels": 808314,
+   "lidar_return_pixels": 233547,
+   "supervised_pixels": 808314,
+   "supervised_fraction_of_rgb_mask": 1.0,
+   "supervised_fraction_of_crop": 0.9836734693877551,
+   "roi": {
+    "box": {
+     "x0": 621,
+     "y0": 300,
+     "x1": 734,
+     "y1": 655
+    },
+    "rgb_mask_pixels": 36210,
+    "supervised_pixels": 36210,
+    "supervised_fraction_of_rgb_mask": 1.0,
+    "lidar_support_minus_foreign_fraction_of_rgb_mask": 1.0,
+    "owned_support_only_fraction_of_rgb_mask": 1.0
+   },
+   "ownership": {
+    "owned_return_fraction": 0.7005741884931085,
+    "foreign_region_fraction_of_rgb_mask": 0.19162107794743133,
+    "lidar_support_minus_foreign_fraction_of_rgb_mask": 0.8083789220525687,
+    "owned_support_only_fraction_of_rgb_mask": 0.8394448197111518
+   }
+  },
+  {
+   "sample_id": "img_e6dc6c821682e92c7098c3fc::yaw_plus_35",
+   "image_id": "img_e6dc6c821682e92c7098c3fc",
+   "face_id": "yaw_plus_35",
+   "face_type": "yaw",
+   "crop": {
+    "x": 0,
+    "y": 0,
+    "width": 1265,
+    "height": 1693
+   },
+   "rgb_mask_pixels": 2078647,
+   "lidar_return_pixels": 389784,
+   "supervised_pixels": 2050912,
+   "supervised_fraction_of_rgb_mask": 0.9866571861407926,
+   "supervised_fraction_of_crop": 0.9576339682813911,
+   "roi": {
+    "box": {
+     "x0": 11,
+     "y0": 819,
+     "x1": 330,
+     "y1": 1210
+    },
+    "rgb_mask_pixels": 124338,
+    "supervised_pixels": 124338,
+    "supervised_fraction_of_rgb_mask": 1.0,
+    "lidar_support_minus_foreign_fraction_of_rgb_mask": 0.9907108044202094,
+    "owned_support_only_fraction_of_rgb_mask": 0.9993324647332271
+   },
+   "ownership": {
+    "owned_return_fraction": 0.3161545881821727,
+    "foreign_region_fraction_of_rgb_mask": 0.49087603619084913,
+    "lidar_support_minus_foreign_fraction_of_rgb_mask": 0.4957811499499434,
+    "owned_support_only_fraction_of_rgb_mask": 0.5275431566783586
+   }
+  },
+  {
+   "sample_id": "img_f1799d46a7022022561e4cd1::pitch_down_56",
+   "image_id": "img_f1799d46a7022022561e4cd1",
+   "face_id": "pitch_down_56",
+   "face_type": "pitch_down",
+   "crop": {
+    "x": 259,
+    "y": 0,
+    "width": 2653,
+    "height": 1456
+   },
+   "rgb_mask_pixels": 3758054,
+   "lidar_return_pixels": 26209,
+   "supervised_pixels": 3717275,
+   "supervised_fraction_of_rgb_mask": 0.9891489052578808,
+   "supervised_fraction_of_crop": 0.9623345228085145,
+   "roi": null,
+   "ownership": {
+    "owned_return_fraction": 0.9944675493151207,
+    "foreign_region_fraction_of_rgb_mask": 0.0032051162649605353,
+    "lidar_support_minus_foreign_fraction_of_rgb_mask": 0.9859437889929202,
+    "owned_support_only_fraction_of_rgb_mask": 0.9868125897073325
+   }
+  },
+  {
+   "sample_id": "img_f1799d46a7022022561e4cd1::pitch_up_56",
+   "image_id": "img_f1799d46a7022022561e4cd1",
+   "face_id": "pitch_up_56",
+   "face_type": "pitch_up",
+   "crop": {
+    "x": 0,
+    "y": 0,
+    "width": 2912,
+    "height": 1456
+   },
+   "rgb_mask_pixels": 4087900,
+   "lidar_return_pixels": 259136,
+   "supervised_pixels": 4087900,
+   "supervised_fraction_of_rgb_mask": 1.0,
+   "supervised_fraction_of_crop": 0.9641564651008332,
+   "roi": {
+    "box": {
+     "x0": 1505,
+     "y0": 41,
+     "x1": 2883,
+     "y1": 1353
+    },
+    "rgb_mask_pixels": 1807394,
+    "supervised_pixels": 1807394,
+    "supervised_fraction_of_rgb_mask": 1.0,
+    "lidar_support_minus_foreign_fraction_of_rgb_mask": 1.0,
+    "owned_support_only_fraction_of_rgb_mask": 1.0
+   },
+   "ownership": {
+    "owned_return_fraction": 0.5451037293158805,
+    "foreign_region_fraction_of_rgb_mask": 0.08954132928887693,
+    "lidar_support_minus_foreign_fraction_of_rgb_mask": 0.9104586707111231,
+    "owned_support_only_fraction_of_rgb_mask": 0.9194219525917953
+   }
+  },
+  {
+   "sample_id": "img_f1799d46a7022022561e4cd1::yaw_minus_35",
+   "image_id": "img_f1799d46a7022022561e4cd1",
+   "face_id": "yaw_minus_35",
+   "face_type": "yaw",
+   "crop": {
+    "x": 0,
+    "y": 0,
+    "width": 1456,
+    "height": 2897
+   },
+   "rgb_mask_pixels": 4087900,
+   "lidar_return_pixels": 596047,
+   "supervised_pixels": 4076986,
+   "supervised_fraction_of_rgb_mask": 0.9973301695246948,
+   "supervised_fraction_of_crop": 0.9665611830351216,
+   "roi": {
+    "box": {
+     "x0": 1120,
+     "y0": 416,
+     "x1": 1428,
+     "y1": 1215
+    },
+    "rgb_mask_pixels": 246092,
+    "supervised_pixels": 246092,
+    "supervised_fraction_of_rgb_mask": 1.0,
+    "lidar_support_minus_foreign_fraction_of_rgb_mask": 0.9999349836646457,
+    "owned_support_only_fraction_of_rgb_mask": 1.0
+   },
+   "ownership": {
+    "owned_return_fraction": 0.3186862780955193,
+    "foreign_region_fraction_of_rgb_mask": 0.14436948066244282,
+    "lidar_support_minus_foreign_fraction_of_rgb_mask": 0.852960688862252,
+    "owned_support_only_fraction_of_rgb_mask": 0.866687541280364
+   }
+  },
+  {
+   "sample_id": "img_f1799d46a7022022561e4cd1::yaw_plus_35",
+   "image_id": "img_f1799d46a7022022561e4cd1",
+   "face_id": "yaw_plus_35",
+   "face_type": "yaw",
+   "crop": {
+    "x": 0,
+    "y": 0,
+    "width": 1456,
+    "height": 2912
+   },
+   "rgb_mask_pixels": 4077333,
+   "lidar_return_pixels": 671280,
+   "supervised_pixels": 4057827,
+   "supervised_fraction_of_rgb_mask": 0.9952159904525826,
+   "supervised_fraction_of_crop": 0.9570635622962202,
+   "roi": {
+    "box": {
+     "x0": 139,
+     "y0": 78,
+     "x1": 1369,
+     "y1": 1513
+    },
+    "rgb_mask_pixels": 1765050,
+    "supervised_pixels": 1764373,
+    "supervised_fraction_of_rgb_mask": 0.9996164414605818,
+    "lidar_support_minus_foreign_fraction_of_rgb_mask": 0.9735129316449959,
+    "owned_support_only_fraction_of_rgb_mask": 0.9762522308149911
+   },
+   "ownership": {
+    "owned_return_fraction": 0.6576704206888333,
+    "foreign_region_fraction_of_rgb_mask": 0.1343172117656321,
+    "lidar_support_minus_foreign_fraction_of_rgb_mask": 0.8608987786869505,
+    "owned_support_only_fraction_of_rgb_mask": 0.8676244986612572
+   }
+  },
+  {
+   "sample_id": "img_f5f133cabb2d110c4de5284e::pitch_up_56",
+   "image_id": "img_f5f133cabb2d110c4de5284e",
+   "face_id": "pitch_up_56",
+   "face_type": "pitch_up",
+   "crop": {
+    "x": 38,
+    "y": 151,
+    "width": 2689,
+    "height": 1305
+   },
+   "rgb_mask_pixels": 3474545,
+   "lidar_return_pixels": 162115,
+   "supervised_pixels": 3218027,
+   "supervised_fraction_of_rgb_mask": 0.9261722038425175,
+   "supervised_fraction_of_crop": 0.9170401907017236,
+   "roi": null,
+   "ownership": {
+    "owned_return_fraction": 0.2396138543626438,
+    "foreign_region_fraction_of_rgb_mask": 0.581734874638262,
+    "lidar_support_minus_foreign_fraction_of_rgb_mask": 0.3444373292042555,
+    "owned_support_only_fraction_of_rgb_mask": 0.3517479267069501
+   }
+  },
+  {
+   "sample_id": "img_f5f133cabb2d110c4de5284e::yaw_minus_35",
+   "image_id": "img_f5f133cabb2d110c4de5284e",
+   "face_id": "yaw_minus_35",
+   "face_type": "yaw",
+   "crop": {
+    "x": 552,
+    "y": 427,
+    "width": 904,
+    "height": 1022
+   },
+   "rgb_mask_pixels": 911624,
+   "lidar_return_pixels": 302582,
+   "supervised_pixels": 911624,
+   "supervised_fraction_of_rgb_mask": 1.0,
+   "supervised_fraction_of_crop": 0.9867256637168141,
+   "roi": {
+    "box": {
+     "x0": 479,
+     "y0": 323,
+     "x1": 788,
+     "y1": 625
+    },
+    "rgb_mask_pixels": 93318,
+    "supervised_pixels": 93318,
+    "supervised_fraction_of_rgb_mask": 1.0,
+    "lidar_support_minus_foreign_fraction_of_rgb_mask": 1.0,
+    "owned_support_only_fraction_of_rgb_mask": 1.0
+   },
+   "ownership": {
+    "owned_return_fraction": 0.6534823618060559,
+    "foreign_region_fraction_of_rgb_mask": 0.22128969838442164,
+    "lidar_support_minus_foreign_fraction_of_rgb_mask": 0.7787103016155783,
+    "owned_support_only_fraction_of_rgb_mask": 0.818856238975718
+   }
+  },
+  {
+   "sample_id": "img_f5f133cabb2d110c4de5284e::yaw_plus_35",
+   "image_id": "img_f5f133cabb2d110c4de5284e",
+   "face_id": "yaw_plus_35",
+   "face_type": "yaw",
+   "crop": {
+    "x": 0,
+    "y": 0,
+    "width": 882,
+    "height": 1487
+   },
+   "rgb_mask_pixels": 1249781,
+   "lidar_return_pixels": 160249,
+   "supervised_pixels": 1227525,
+   "supervised_fraction_of_rgb_mask": 0.9821920800524252,
+   "supervised_fraction_of_crop": 0.9359459991124897,
+   "roi": null,
+   "ownership": {
+    "owned_return_fraction": 0.18237243290129734,
+    "foreign_region_fraction_of_rgb_mask": 0.5167945424038292,
+    "lidar_support_minus_foreign_fraction_of_rgb_mask": 0.46539753764859604,
+    "owned_support_only_fraction_of_rgb_mask": 0.5142532971776655
+   }
+  }
+ ]
+}

@@ -1223,6 +1223,14 @@ def advance_adaptive_growth_gate(
             f"schedule_contract {signed_config.get('schedule_contract')!r} is a "
             "research departure and is recorded by the trainer, not this gate"
         )
+    if signed_config.get("rgb_supervision_mask", "all") != "all":
+        # Same policy as the schedule contracts: the photometric ownership
+        # mask is a research departure from full-frame parity supervision.
+        raise ValueError(
+            "adaptive growth gate signs full-frame photometric supervision only; "
+            f"rgb_supervision_mask {signed_config.get('rgb_supervision_mask')!r} is a "
+            "research departure and is recorded by the trainer, not this gate"
+        )
     warm_start_value = signed_config.get("warm_start_checkpoint")
     resume_value = signed_config.get("resume_checkpoint")
     if warm_start_value is not None and resume_value is not None:

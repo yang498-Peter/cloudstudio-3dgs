@@ -81,8 +81,13 @@ def masked_rgb_ssim_loss(
     sigma: float = 1.5,
     min_valid_fraction: float = 0.8,
     luminance_gain: Any | None = None,
+    allow_empty: bool = False,
 ) -> Any:
     """Mask-aware local Gaussian-window SSIM.
+
+    ``allow_empty`` returns a graph-connected zero instead of raising when no
+    window reaches the coverage threshold (a sparse ownership mask can leave a
+    view with valid pixels but no fully covered window).
 
     Invalid fisheye/person pixels are zeroed before convolution and local
     moments are divided by the valid kernel support. A window contributes only
@@ -154,6 +159,8 @@ def masked_rgb_ssim_loss(
     ssim = (luminance * contrast_structure).mean(dim=1)[0]
     valid_windows = mask & (support[0, 0] >= min_valid_fraction)
     if not bool(valid_windows.any().item()):
+        if allow_empty:
+            return prediction.sum() * 0.0
         raise ValueError("SSIM mask has no valid local windows at the configured coverage")
     return 1.0 - ssim[valid_windows].mean()
 

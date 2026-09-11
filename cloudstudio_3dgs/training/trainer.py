@@ -31,6 +31,11 @@ from cloudstudio_3dgs.training.alpha_support import (
     lidar_alpha_support,
     strict_visibility_contract,
 )
+from cloudstudio_3dgs.training.rgb_supervision import (
+    RGB_SUPERVISION_MASK_MODES,
+    rgb_supervision_mask,
+    rgb_supervision_mask_contract,
+)
 from cloudstudio_3dgs.training.backend import (
     GsplatBackend,
     rendered_range_to_euclidean,
@@ -271,6 +276,14 @@ class TrainerConfig:
     rgb_gradient_weight: float = 0.0
     lidar_rgb_l1_weight: float = 0.0
     lidar_rgb_dilation_radius_px: int = 0
+    # Photometric ownership mask. "all" supervises every renderer-mask pixel
+    # (the historical behaviour, byte-identical). "lidar_support" restricts
+    # the photo-derived terms to the dilated signed-LiDAR support so photo
+    # content the Tile has no geometry for (trees and sky beyond the crop's
+    # own surfaces) gets no RGB gradient and is left to the per-view backdrop
+    # (research/quality_recovery_v2/09_rgb_supervision_mask.md).
+    rgb_supervision_mask: str = "all"
+    rgb_supervision_dilation_radius_px: int = 24
     rgb_ssim_mode: str = "local_gaussian"
     lidar_range_weight: float = 0.05
     lidar_alpha_weight: float = 0.0
@@ -541,6 +554,8 @@ class TrainerConfig:
                 "rgb_gradient_weight",
                 "lidar_rgb_l1_weight",
                 "lidar_rgb_dilation_radius_px",
+                "rgb_supervision_mask",
+                "rgb_supervision_dilation_radius_px",
                 "rgb_ssim_mode",
                 "lidar_range_weight",
                 "lidar_alpha_weight",
@@ -862,6 +877,27 @@ class TrainerConfig:
         if self.lidar_rgb_dilation_radius_px > 0 and self.lidar_rgb_l1_weight <= 0.0:
             raise ValueError(
                 "lidar_rgb_dilation_radius_px requires positive lidar_rgb_l1_weight"
+            )
+        if self.rgb_supervision_mask not in RGB_SUPERVISION_MASK_MODES:
+            raise ValueError(
+                "rgb_supervision_mask must be one of "
+                + ", ".join(RGB_SUPERVISION_MASK_MODES)
+            )
+        if (
+            not isinstance(self.rgb_supervision_dilation_radius_px, int)
+            or isinstance(self.rgb_supervision_dilation_radius_px, bool)
+            or not 0 <= self.rgb_supervision_dilation_radius_px <= 64
+        ):
+            raise ValueError(
+                "rgb_supervision_dilation_radius_px must be an integer within [0, 64]"
+            )
+        if (
+            self.rgb_supervision_mask != "all"
+            and self.rgb_supervision_dilation_radius_px <= 0
+        ):
+            raise ValueError(
+                "rgb_supervision_mask != 'all' requires a positive "
+                "rgb_supervision_dilation_radius_px"
             )
         if self.rgb_ssim_mode not in {"local_gaussian", "global_moments"}:
             raise ValueError("rgb_ssim_mode must be local_gaussian or global_moments")
@@ -1703,6 +1739,15 @@ class TrainerConfig:
             raise ValueError(
                 "positive LiDAR-supported RGB weight requires depth_manifest and depth_root"
             )
+        if (
+            self.rgb_supervision_mask != "all"
+            and self.depth_manifest is None
+            and self.face_lidar_geometry_manifest is None
+        ):
+            raise ValueError(
+                "rgb_supervision_mask='lidar_support' requires LiDAR depth inputs "
+                "(depth_manifest/depth_root or face_lidar_geometry_manifest/root)"
+            )
         required_paths = {
             "dataset_manifest": self.dataset_manifest,
             "recording_root": self.recording_root,
@@ -2240,6 +2285,15 @@ class TrainerConfig:
                 "source": "depth_mask",
                 "dilation_radius_px": self.lidar_rgb_dilation_radius_px,
             }
+        if self.rgb_supervision_mask != "all":
+            # Key present only off the default so every existing contract
+            # (and its trainer_config_sha256) keeps its exact shape.
+            contract["loss_contract"]["rgb_supervision_mask"] = (
+                rgb_supervision_mask_contract(
+                    mode=self.rgb_supervision_mask,
+                    dilation_radius_px=self.rgb_supervision_dilation_radius_px,
+                )
+            )
         if uses_rgb_gradient:
             contract["loss_contract"]["rgb_gradient"] = {
                 "mode": "masked_forward_difference_l1",
@@ -2933,26 +2987,54 @@ def _render_supervision_loss(
         # frame's brightness for the photometric losses only. Geometry (range)
         # and validation renders stay at gain 1.0.
         rendered = rendered * rgb_gain
-    l1 = masked_rgb_l1(rendered, tensors["rgb"], tensors["rgb_mask"])
+    # Photometric ownership: in "all" mode this IS tensors["rgb_mask"] (same
+    # object), so the default path below is unchanged. In "lidar_support"
+    # the photo-derived terms see only the dilated LiDAR support; a view with
+    # no supervised pixel contributes a graph-connected zero (no gradient)
+    # instead of tripping the empty-mask guards of the loss functions.
+    supervision = rgb_supervision_mask(
+        backend.torch,
+        rgb_mask=tensors["rgb_mask"],
+        depth_mask=tensors.get("depth_mask"),
+        confidence=tensors.get("confidence"),
+        mode=config.rgb_supervision_mask,
+        dilation_radius_px=config.rgb_supervision_dilation_radius_px,
+    )
+    rgb_mask = supervision.mask
+    masked_supervision = config.rgb_supervision_mask != "all"
+    # "all" keeps the loss functions' own empty-mask guards (fail closed).
+    has_supervised_pixels = (
+        supervision.supervised_pixels > 0 or not masked_supervision
+    )
+    if has_supervised_pixels:
+        l1 = masked_rgb_l1(rendered, tensors["rgb"], rgb_mask)
+    else:
+        l1 = rendered.sum() * 0.0
     with backend.torch.no_grad():
         # Masked train-view PSNR, on the same pixels the L1 sees. One view is
         # noisy; the dashboard reads the trend, and it is the unit every
         # published comparison speaks in.
-        masked_mse = (
-            ((rendered - tensors["rgb"]) ** 2)
-            .mean(dim=-1)[tensors["rgb_mask"]]
-            .mean()
-        )
-        rgb_psnr = float(
-            (-10.0 * backend.torch.log10(masked_mse.clamp_min(1e-10)))
-            .detach()
-            .cpu()
-        )
+        if has_supervised_pixels:
+            masked_mse = (
+                ((rendered - tensors["rgb"]) ** 2)
+                .mean(dim=-1)[rgb_mask]
+                .mean()
+            )
+            rgb_psnr = float(
+                (-10.0 * backend.torch.log10(masked_mse.clamp_min(1e-10)))
+                .detach()
+                .cpu()
+            )
+        else:
+            rgb_psnr = None
     rgb_gradient_l1 = None
     if config.rgb_gradient_weight > 0.0:
-        rgb_gradient_l1 = masked_rgb_gradient_l1(
-            rendered, tensors["rgb"], tensors["rgb_mask"]
-        )
+        if has_supervised_pixels:
+            rgb_gradient_l1 = masked_rgb_gradient_l1(
+                rendered, tensors["rgb"], rgb_mask
+            )
+        else:
+            rgb_gradient_l1 = rendered.sum() * 0.0
     lidar_rgb_l1 = None
     if config.lidar_rgb_l1_weight > 0.0:
         if "depth_mask" not in tensors:
@@ -2966,7 +3048,7 @@ def _render_supervision_loss(
                 stride=1,
                 padding=radius,
             )[0, 0].to(dtype=backend.torch.bool)
-        lidar_rgb_mask = tensors["rgb_mask"] & lidar_rgb_mask
+        lidar_rgb_mask = rgb_mask & lidar_rgb_mask
         if bool(lidar_rgb_mask.any()):
             lidar_rgb_l1 = masked_rgb_l1(
                 rendered, tensors["rgb"], lidar_rgb_mask
@@ -2975,6 +3057,8 @@ def _render_supervision_loss(
             lidar_rgb_l1 = rendered.new_zeros(())
     if config.rgb_ssim_weight <= 0.0:
         ssim = rendered.new_zeros(())
+    elif not has_supervised_pixels:
+        ssim = rendered.sum() * 0.0
     elif config.rgb_ssim_mode == "local_gaussian":
         decouple = config.decoupled_ssim and rgb_gain is not None
         ssim = masked_rgb_ssim_loss(
@@ -2982,15 +3066,16 @@ def _render_supervision_loss(
             # exposure gain can move brightness but never mask structure.
             raw_rendered if decouple else rendered,
             tensors["rgb"],
-            tensors["rgb_mask"],
+            rgb_mask,
             window_size=config.ssim_window_size,
             sigma=config.ssim_sigma,
             min_valid_fraction=config.ssim_min_valid_fraction,
             luminance_gain=rgb_gain if decouple else None,
+            allow_empty=masked_supervision,
         )
     else:
         ssim = global_masked_rgb_ssim_loss(
-            rendered, tensors["rgb"], tensors["rgb_mask"]
+            rendered, tensors["rgb"], rgb_mask
         )
     loss = config.rgb_l1_weight * l1 + config.rgb_ssim_weight * ssim
     if rgb_gradient_l1 is not None:
@@ -3092,6 +3177,10 @@ def _render_supervision_loss(
             & backend.torch.isfinite(tensors["da2_range_m"])
             & (tensors["da2_range_m"] > 0.0)
         )
+        if masked_supervision:
+            # Photo-predicted depth outside the LiDAR support is content the
+            # Tile cannot own (see rgb_supervision.py); silence it with RGB.
+            da2_valid = da2_valid & rgb_mask
         if bool(da2_valid.any()):
             if config.da2_depth_space == "compressed":
                 da2_prediction = _mipmap_compress_depth(backend.torch, rendered_range)
@@ -3172,6 +3261,8 @@ def _render_supervision_loss(
     )
     info["cloudstudio_rgb_gradient_l1"] = rgb_gradient_l1
     info["cloudstudio_rgb_psnr"] = rgb_psnr
+    info["cloudstudio_rgb_supervised_fraction"] = supervision.fraction
+    info["cloudstudio_rgb_supervised_pixels"] = supervision.supervised_pixels
     info["cloudstudio_lidar_rgb_support_fraction"] = (
         None
         if lidar_rgb_l1 is None
@@ -4753,6 +4844,10 @@ def train(
             "rgb_mask_valid_fraction": float(
                 tensors["rgb_mask"].float().mean().detach().cpu()
             ),
+            # Share of rgb_mask pixels the photometric terms actually saw
+            # (1.0 under rgb_supervision_mask = "all").
+            "rgb_supervised_fraction": info.get("cloudstudio_rgb_supervised_fraction"),
+            "rgb_supervised_pixels": info.get("cloudstudio_rgb_supervised_pixels"),
             "depth_mask_true_pixels": None
             if "depth_mask" not in tensors
             else int(tensors["depth_mask"].sum().detach().cpu()),
