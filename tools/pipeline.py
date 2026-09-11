@@ -246,6 +246,20 @@ class PipelineConfig:
         return self.run_root / f"{arm}.json"
 
     def arm_dir(self, arm: str) -> Path:
+        """The trainer's output directory for an arm.
+
+        Arm configs may place their run elsewhere than RUN/<arm> (the WP03
+        diagnostic arms live under RUN/diag_v2/<region>/runs/); the config's
+        own output_dir is the truth, RUN/<arm> only the fallback.
+        """
+        config = self.arm_config(arm)
+        if config.exists():
+            try:
+                value = json.loads(config.read_text(encoding="utf-8")).get("output_dir")
+            except (OSError, ValueError):
+                value = None
+            if value:
+                return Path(value)
         return self.run_root / arm
 
     def arm_meta_dir(self, arm: str) -> Path:
