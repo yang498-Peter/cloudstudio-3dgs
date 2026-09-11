@@ -20,3 +20,22 @@ Laplacian variance of the region-of-interest box only (`tools/score_compare_roi.
 Paired whole-panel check (40-view checkpoint rendered on the U1 five-view arm's own six compare frames, `compare_on_U1_5/`): indoor 0.316 vs the five-view arm's 0.968 on the same frames (ref 0.919); outdoor 0.265 vs 0.557 (ref 0.876). The five-view arms' checkpoints were already deleted, so their ROI-only rows are not available; the indoor five-view arm's two ROI frames from its own compare set scored ours/ref 1.015 / 0.931.
 
 Source files (local, not committed): `diag_v2/<region>/runs/<arm>/compare_roi_compare_ids{,_u1}/`, `.roi.json`, `.roi.txt`.
+
+## Brightness-matched (`--match-brightness`): each ROI crop's luma scaled to the photo's mean before the Laplacian
+
+Raw Laplacian variance scales with the square of a global gain. Our canonical renders are brighter than the photos (whole-panel luma ratio 1.16 for indoor R1) and the reference is much brighter than the photo inside the dark door ROI (raw ref/photo 2.2 vs matched 0.73), so the raw table above carries a brightness term in both numerator and denominator. This table removes it and is the one to judge by.
+
+| region | arm | view set | n | ours/photo | ref/photo | ours/ref median | ours/ref Q1 | Q3 | frames ours>=ref |
+|---|---|---|---|---|---|---|---|---|---|
+| indoor | G0_c134 | ROI-all | 49 | 0.452 | 0.508 | **0.863** | 0.716 | 1.041 | 15 |
+| indoor | G0_c134 | U1-ROI(5) | 5 | 0.498 | 0.526 | **0.863** | 0.742 | 0.958 | 0 |
+| indoor | G1_c134 | ROI-all | 49 | 0.529 | 0.508 | **0.990** | 0.771 | 1.152 | 20 |
+| indoor | G1_c134 | U1-ROI(5) | 5 | 0.478 | 0.526 | **0.910** | 0.789 | 0.998 | 1 |
+| indoor | R1_c134 | ROI-all | 49 | 0.477 | 0.508 | **0.881** | 0.777 | 1.199 | 18 |
+| indoor | R1_c134 | U1-ROI(5) | 5 | 0.636 | 0.526 | **0.813** | 0.777 | 1.199 | 2 |
+| outdoor | G0_c134 | ROI-all | 45 | 0.852 | 1.389 | **0.597** | 0.555 | 0.673 | 0 |
+| outdoor | G0_c134 | U1-ROI(5) | 5 | 0.382 | 0.685 | **0.551** | 0.545 | 0.578 | 0 |
+| outdoor | G1_c134 | ROI-all | 45 | 0.843 | 1.389 | **0.597** | 0.550 | 0.649 | 0 |
+| outdoor | G1_c134 | U1-ROI(5) | 5 | 0.378 | 0.685 | **0.552** | 0.536 | 0.574 | 0 |
+| outdoor | R1_c134 | ROI-all | 45 | 0.837 | 1.389 | **0.595** | 0.548 | 0.666 | 0 |
+| outdoor | R1_c134 | U1-ROI(5) | 5 | 0.378 | 0.685 | **0.549** | 0.539 | 0.574 | 0 |
