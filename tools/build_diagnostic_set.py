@@ -44,9 +44,22 @@ Example::
         --recording-root "C:/baidunetdiskdownload/house/2026-03-05_10-58-54 - house" \
         --out-root C:/Peter/3dgs-runs/house0305_sop/diag_v2 --count 1 --count 5 --count 40
 
-The pure parts (``select_views``, ``derive_tile_inputs_manifest``,
-``derive_tile_geometry_manifest``, ``roi_bbox_in_crop``) are unit tested in
-``tests/test_diagnostic_set.py`` without any dataset.
+A face-set variant of an existing preset (F3: the same 40 parent images
+without their ``pitch_up_56`` faces) reuses the parents verbatim and only
+changes the derived views, so the arm differs from the original by the face
+set alone::
+
+    python tools/build_diagnostic_set.py ... --count 40 --preset-name DIAG_40_F3 \
+        --reuse-selection <out-root>/<region>/DIAG_40/selection.json --exclude-faces pitch_up_56
+
+Without ``--exclude-faces`` the output is byte-identical to before the option
+existed; with it, ``selection.json`` records ``excluded_faces`` and the
+per-face counts, and the run refuses if a parent image would keep no face.
+
+The pure parts (``select_views``, ``reuse_selection``,
+``derive_tile_inputs_manifest``, ``derive_tile_geometry_manifest``,
+``roi_bbox_in_crop``) are unit tested in ``tests/test_diagnostic_set.py``
+without any dataset.
 """
 
 from __future__ import annotations
@@ -517,6 +530,50 @@ def sign_tile_inputs_manifest(payload: Mapping[str, Any]) -> dict[str, Any]:
     return signed
 
 
+def face_counts(views: Sequence[Mapping[str, Any]]) -> dict[str, int]:
+    """face_id -> number of Tile views with that face, in first-seen order."""
+    counts: dict[str, int] = {}
+    for view in views:
+        _image, face_id = split_sample_id(view["sample_id"])
+        counts[face_id] = counts.get(face_id, 0) + 1
+    return counts
+
+
+def parse_face_list(spec: str | None) -> list[str]:
+    """``--exclude-faces`` value: comma-separated face ids; empty -> none."""
+    if not spec:
+        return []
+    faces: list[str] = []
+    for item in str(spec).split(","):
+        face = item.strip()
+        if face and face not in faces:
+            faces.append(face)
+    return faces
+
+
+def reuse_selection(payload: Mapping[str, Any], *, region_label: str, count: int) -> dict[str, Any]:
+    """The parent-image selection of an existing ``selection.json`` (same ids,
+    same order, same coverage rows and policy) in the shape ``select_views``
+    returns, so a derived preset differs from the original only by what is
+    done to the faces afterwards."""
+    if payload.get("kind") != "wp03_diagnostic_view_selection_v1":
+        raise ValueError("reused selection is not a wp03_diagnostic_view_selection_v1 file")
+    found_label = (payload.get("region") or {}).get("label")
+    if str(found_label) != str(region_label):
+        raise ValueError(f"reused selection is for region {found_label!r}, not {region_label!r}")
+    if int(payload.get("count", -1)) != int(count):
+        raise ValueError(f"reused selection has count {payload.get('count')}, not {count}")
+    selected = [dict(row) for row in payload.get("selected") or []]
+    if not selected:
+        raise ValueError("reused selection has no selected images")
+    ids = [str(r["image_id"]) for r in selected]
+    if len(set(ids)) != len(ids):
+        raise ValueError("reused selection contains duplicate image ids")
+    policy = dict(payload.get("policy") or {})
+    policy["reused_selection"] = True
+    return {"preset": str(payload["preset"]), "count": int(count), "selected": selected, "policy": policy}
+
+
 def derive_tile_inputs_manifest(
     base: Mapping[str, Any],
     *,
@@ -524,10 +581,14 @@ def derive_tile_inputs_manifest(
     image_ids: Sequence[str],
     provenance: Mapping[str, Any],
     face_ids_by_image: Mapping[str, Sequence[str]] | None = None,
+    exclude_face_ids: Sequence[str] | None = None,
 ) -> dict[str, Any]:
     """A one-Tile inputs manifest whose ``views`` are only the Tile faces of
-    ``image_ids`` (optionally only ``face_ids_by_image[image]``), everything
-    else (initialization artefact path/sha, boxes, plan binding) verbatim."""
+    ``image_ids`` (optionally only ``face_ids_by_image[image]``, minus every
+    face in ``exclude_face_ids``), everything else (initialization artefact
+    path/sha, boxes, plan binding) verbatim.  Without exclusions the output is
+    byte-identical to what it was before the option existed: the exclusion
+    bookkeeping only enters the signed ``diagnostic`` block when used."""
     if base.get("kind") != TILE_INPUT_KIND or base.get("schema_version") != TILE_INPUT_SCHEMA_VERSION:
         raise ValueError("base Tile inputs manifest has an unsupported schema")
     base_sha = verify_tile_inputs_manifest(dict(base))
@@ -539,19 +600,34 @@ def derive_tile_inputs_manifest(
     wanted_set = set(wanted)
     if len(wanted_set) != len(wanted):
         raise ValueError("image_ids contain duplicates")
+    excluded = [str(f) for f in (exclude_face_ids or [])]
+    excluded_set = set(excluded)
     views = []
+    removed: list[dict[str, Any]] = []
     seen: set[str] = set()
+    seen_before_exclusion: set[str] = set()
     for view in tile["views"]:
         image_id, face_id = split_sample_id(view["sample_id"])
         if image_id not in wanted_set:
             continue
         if face_ids_by_image is not None and face_id not in set(face_ids_by_image.get(image_id, ())):
             continue
+        seen_before_exclusion.add(image_id)
+        if face_id in excluded_set:
+            removed.append(view)
+            continue
         views.append(copy.deepcopy(view))
         seen.add(image_id)
-    missing = sorted(wanted_set - seen)
+    missing = sorted(wanted_set - seen_before_exclusion)
     if missing:
         raise ValueError(f"selected images have no Tile views in {tile_name}: {missing}")
+    emptied = sorted(seen_before_exclusion - seen)
+    if emptied:
+        # Losing a parent image changes the image set, not just the face set;
+        # refuse so the derived arm keeps exactly the same parents.
+        raise ValueError(
+            f"excluding faces {excluded} would leave {len(emptied)} selected image(s) with zero Tile views: {emptied}"
+        )
     if not views:
         raise ValueError("derived Tile inputs would have no views")
     tile["views"] = views
@@ -574,6 +650,12 @@ def derive_tile_inputs_manifest(
         "faces_restricted": face_ids_by_image is not None,
         **dict(provenance),
     }
+    if excluded:
+        payload["diagnostic"]["excluded_face_ids"] = excluded
+        payload["diagnostic"]["view_count_before_exclusion"] = len(views) + len(removed)
+        payload["diagnostic"]["views_removed_by_exclusion"] = len(removed)
+        payload["diagnostic"]["face_counts_before_exclusion"] = face_counts(views + removed)
+        payload["diagnostic"]["face_counts"] = face_counts(views)
     return sign_tile_inputs_manifest(payload)
 
 
@@ -700,6 +782,18 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--support-floor", type=float, default=MIN_SUPPORT_FLOOR, help="relaxation never goes below this support fraction")
     parser.add_argument("--per-image-table", type=Path, default=None, help="reuse a previously written per_image_coverage.csv")
     parser.add_argument("--restrict-faces", action="store_true", help="keep only the Tile faces in which the region is strictly supported")
+    parser.add_argument(
+        "--exclude-faces", default=None, metavar="FACE[,FACE]",
+        help="drop these face ids from every selected image (default none: output byte-identical); refuses if an image would keep no face",
+    )
+    parser.add_argument(
+        "--preset-name", default=None,
+        help="output directory name under <out-root>/<region> instead of <PRESET>_<count> (single --count only)",
+    )
+    parser.add_argument(
+        "--reuse-selection", type=Path, default=None,
+        help="take the parent images (ids and order) from this selection.json instead of re-selecting; the per-image table is then not needed",
+    )
     parser.add_argument("--max-views", type=int, default=None, help="debug: only walk the first N training views")
     args = parser.parse_args(argv)
 
@@ -707,6 +801,13 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(message, file=sys.stderr, flush=True)
 
     counts = args.count or [1, 5, 40]
+    excluded_faces = parse_face_list(args.exclude_faces)
+    if (args.preset_name is not None or args.reuse_selection is not None) and len(counts) != 1:
+        raise SystemExit("--preset-name / --reuse-selection apply to exactly one --count")
+    reused_payload = None
+    if args.reuse_selection is not None:
+        reused_payload = json.loads(args.reuse_selection.read_text(encoding="utf-8"))
+        # Validated for real (region/count/ids) once the region is loaded.
     regions = {r.label: r for r in load_regions(args.region_file)}
     if args.region not in regions:
         raise SystemExit(f"region {args.region!r} not in {args.region_file}: {sorted(regions)}")
@@ -760,6 +861,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.per_image_table is not None:
         table = read_table(args.per_image_table)
         log(f"[{region.label}] reusing per-image table {args.per_image_table} ({len(table)} rows)")
+    elif reused_payload is not None:
+        # The reused selection carries its coverage rows; the (7 min) table
+        # walk is only needed to select, not to derive.
+        table = []
+        table_path = Path(str((reused_payload.get("inputs") or {}).get("per_image_table") or table_path))
+        log(f"[{region.label}] reusing selection {args.reuse_selection}; per-image table not recomputed")
     else:
         loaders = ManifestLoaders(
             face_manifest, args.face_manifest.parent, geometry_manifest, args.lidar_geometry_manifest.parent,
@@ -792,8 +899,16 @@ def main(argv: Sequence[str] | None = None) -> int:
     }
 
     for count in counts:
-        selection = select_views(table, count, min_support_fraction=args.min_support_fraction, support_floor=args.support_floor)
-        preset_dir = region_dir / preset_dir_name(count)
+        if reused_payload is not None:
+            selection = reuse_selection(reused_payload, region_label=region.label, count=count)
+            if (reused_payload.get("inputs") or {}).get("tile_inputs_manifest_sha256") != tile_inputs_sha:
+                raise SystemExit("reused selection was built from different Tile inputs than the manifest given")
+            missing_views = [i for i in (str(r["image_id"]) for r in selection["selected"]) if i not in views_by_image]
+            if missing_views:
+                raise SystemExit(f"reused selection images are not training views: {missing_views}")
+        else:
+            selection = select_views(table, count, min_support_fraction=args.min_support_fraction, support_floor=args.support_floor)
+        preset_dir = region_dir / (args.preset_name or preset_dir_name(count))
         preset_dir.mkdir(parents=True, exist_ok=True)
         image_ids = [str(r["image_id"]) for r in selection["selected"]]
         faces_restriction = None
@@ -809,8 +924,11 @@ def main(argv: Sequence[str] | None = None) -> int:
             "count": int(count),
             "selection_file": "selection.json",
         }
+        if args.preset_name:
+            provenance["preset_dir"] = str(args.preset_name)
         diag_inputs = derive_tile_inputs_manifest(
-            tile_inputs, tile_name=region.tile, image_ids=image_ids, provenance=provenance, face_ids_by_image=faces_restriction,
+            tile_inputs, tile_name=region.tile, image_ids=image_ids, provenance=provenance,
+            face_ids_by_image=faces_restriction, exclude_face_ids=excluded_faces or None,
         )
         inputs_path = preset_dir / "tile_inputs_manifest.json"
         _json_dump(inputs_path, diag_inputs)
@@ -863,8 +981,32 @@ def main(argv: Sequence[str] | None = None) -> int:
                 "i.e. the coordinates of a compare-strip panel for that sample_id; see make_diagnostic_arm_config.py --eval"
             ),
         }
+        if args.preset_name:
+            selection_payload["preset_dir"] = str(args.preset_name)
+        if reused_payload is not None:
+            selection_payload["reused_selection"] = {
+                "path": str(args.reuse_selection),
+                "sha256": _sha256_file(args.reuse_selection),
+                "tile_inputs_manifest_sha256": reused_payload.get("tile_inputs_manifest_sha256"),
+                "view_count": reused_payload.get("view_count"),
+                "parent_image_ids_identical": [str(r["image_id"]) for r in reused_payload.get("selected", [])] == image_ids,
+            }
+        if excluded_faces:
+            diagnostic = diag_inputs["diagnostic"]
+            selection_payload["excluded_faces"] = list(excluded_faces)
+            selection_payload["face_exclusion"] = {
+                "view_count_before": diagnostic["view_count_before_exclusion"],
+                "view_count_after": len(selected_views),
+                "views_removed": diagnostic["views_removed_by_exclusion"],
+                "face_counts_before": diagnostic["face_counts_before_exclusion"],
+                "face_counts_after": diagnostic["face_counts"],
+                "parent_images_kept": len(image_ids),
+            }
         _json_dump(preset_dir / "selection.json", selection_payload)
-        log(f"[{region.label}] {preset_dir_name(count)}: {len(image_ids)} images / {len(selected_views)} Tile views -> {preset_dir}")
+        log(f"[{region.label}] {preset_dir.name}: {len(image_ids)} images / {len(selected_views)} Tile views -> {preset_dir}")
+        if excluded_faces:
+            log(f"    excluded faces {excluded_faces}: {selection_payload['face_exclusion']['view_count_before']} -> {len(selected_views)} views, "
+                f"faces {selection_payload['face_exclusion']['face_counts_before']} -> {selection_payload['face_exclusion']['face_counts_after']}")
         for row in selection["selected"]:
             log(
                 f"    {row['image_id']} {row['camera_id']:5s} support {row['support_fraction']:.3f} "

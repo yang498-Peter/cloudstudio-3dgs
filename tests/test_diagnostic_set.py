@@ -20,18 +20,24 @@ sys.path.insert(0, str(ROOT / "tools"))
 from build_diagnostic_set import (  # noqa: E402
     derive_tile_geometry_manifest,
     derive_tile_inputs_manifest,
+    face_counts,
+    parse_face_list,
     preset_dir_name,
+    reuse_selection,
     roi_bbox_in_crop,
     select_views,
     sign_tile_inputs_manifest,
 )
 from make_diagnostic_arm_config import (  # noqa: E402
+    CAP_INIT_MULTIPLIER_C134,
     DEFAULT_PLAN,
     VARIANTS,
     build_diagnostic_arm,
     build_eval_config,
     diag_run_id,
+    tile_initialization_point_count,
 )
+from cloudstudio_3dgs.data.manifest import canonical_json_bytes  # noqa: E402
 from cloudstudio_3dgs.geometry.fisheye_faces import FaceSpec  # noqa: E402
 from cloudstudio_3dgs.training.mipmap_tile_geometry import (  # noqa: E402
     sign_tile_geometry_manifest,
@@ -334,6 +340,90 @@ class DerivedManifestTests(unittest.TestCase):
         self.assertEqual([v["sample_id"] for v in derived["tiles"][0]["views"]], ["img_b::pitch_up_56"])
         self.assertTrue(derived["diagnostic"]["faces_restricted"])
 
+    def test_face_exclusion_drops_the_faces_and_is_signed(self):
+        kwargs = dict(tile_name="Tile_1", image_ids=["img_c", "img_a"], provenance={"preset": "DIAG", "preset_dir": "DIAG_40_F3"})
+        full = derive_tile_inputs_manifest(self.base_inputs, **kwargs)
+        derived = derive_tile_inputs_manifest(self.base_inputs, exclude_face_ids=["pitch_up_56"], **kwargs)
+        sha = verify_tile_inputs_manifest(derived, root=self.inputs_root, verify_artifacts=True)
+        self.assertEqual(sha, derived["tile_inputs_manifest_sha256"])
+        self.assertNotEqual(sha, full["tile_inputs_manifest_sha256"])
+        ids = [v["sample_id"] for v in derived["tiles"][0]["views"]]
+        self.assertEqual(ids, [s for s in [v["sample_id"] for v in full["tiles"][0]["views"]] if not s.endswith("::pitch_up_56")])
+        self.assertEqual(len(ids), 4)
+        self.assertEqual(derived["tiles"][0]["view_count"], 4)
+        self.assertEqual(derived["tiles"][0]["recommended_training"]["steps"], 80)
+        self.assertEqual(derived["diagnostic"]["parent_image_ids"], ["img_c", "img_a"])  # same parents, same order
+        self.assertEqual(derived["diagnostic"]["excluded_face_ids"], ["pitch_up_56"])
+        self.assertEqual(derived["diagnostic"]["view_count_before_exclusion"], 6)
+        self.assertEqual(derived["diagnostic"]["views_removed_by_exclusion"], 2)
+        self.assertEqual(derived["diagnostic"]["face_counts_before_exclusion"], {"yaw_minus_35": 2, "yaw_plus_35": 2, "pitch_up_56": 2})
+        self.assertEqual(derived["diagnostic"]["face_counts"], {"yaw_minus_35": 2, "yaw_plus_35": 2})
+        self.assertFalse(derived["diagnostic"]["faces_restricted"])
+        self.assertEqual(derived["diagnostic"]["preset_dir"], "DIAG_40_F3")
+        # everything but the views and the bookkeeping is verbatim
+        self.assertEqual(derived["tiles"][0]["initialization"], full["tiles"][0]["initialization"])
+        self.assertEqual(derived["tile_plan_manifest_sha256"], full["tile_plan_manifest_sha256"])
+        # excluding a face nobody has is a no-op on the views but is still recorded
+        none = derive_tile_inputs_manifest(self.base_inputs, exclude_face_ids=["pitch_down_56"], **kwargs)
+        self.assertEqual([v["sample_id"] for v in none["tiles"][0]["views"]], [v["sample_id"] for v in full["tiles"][0]["views"]])
+        self.assertEqual(none["diagnostic"]["views_removed_by_exclusion"], 0)
+
+    def test_no_exclusion_is_byte_identical(self):
+        kwargs = dict(tile_name="Tile_1", image_ids=["img_a", "img_b"], provenance={"preset": "DIAG"})
+        reference = derive_tile_inputs_manifest(self.base_inputs, **kwargs)
+        for value in (None, [], ()):
+            derived = derive_tile_inputs_manifest(self.base_inputs, exclude_face_ids=value, **kwargs)
+            self.assertEqual(canonical_json_bytes(derived), canonical_json_bytes(reference))
+            self.assertEqual(json.dumps(derived, indent=2, ensure_ascii=False), json.dumps(reference, indent=2, ensure_ascii=False))
+        for key in ("excluded_face_ids", "view_count_before_exclusion", "views_removed_by_exclusion", "face_counts_before_exclusion", "face_counts"):
+            self.assertNotIn(key, reference["diagnostic"])
+
+    def test_face_exclusion_refuses_images_left_with_zero_faces(self):
+        with self.assertRaises(ValueError) as ctx:
+            derive_tile_inputs_manifest(
+                self.base_inputs, tile_name="Tile_1", image_ids=["img_a", "img_b"], provenance={},
+                face_ids_by_image={"img_a": ["yaw_minus_35", "pitch_up_56"], "img_b": ["pitch_up_56"]},
+                exclude_face_ids=["pitch_up_56"],
+            )
+        self.assertIn("img_b", str(ctx.exception))
+        self.assertNotIn("img_a", str(ctx.exception).split("zero Tile views")[-1])
+        with self.assertRaises(ValueError):
+            derive_tile_inputs_manifest(
+                self.base_inputs, tile_name="Tile_1", image_ids=["img_a"], provenance={},
+                exclude_face_ids=["yaw_minus_35", "yaw_plus_35", "pitch_up_56"],
+            )
+
+    def test_face_counts_and_face_list_parsing(self):
+        self.assertEqual(face_counts(self.base_inputs["tiles"][0]["views"]), {"yaw_minus_35": 2, "yaw_plus_35": 2, "pitch_up_56": 2})
+        self.assertEqual(parse_face_list(None), [])
+        self.assertEqual(parse_face_list(""), [])
+        self.assertEqual(parse_face_list("pitch_up_56"), ["pitch_up_56"])
+        self.assertEqual(parse_face_list(" pitch_up_56, yaw_plus_35 ,pitch_up_56,"), ["pitch_up_56", "yaw_plus_35"])
+
+    def test_reuse_selection_keeps_ids_and_order(self):
+        original = _selection(count=40)
+        original["kind"] = "wp03_diagnostic_view_selection_v1"
+        original["selected"] = list(reversed(original["selected"]))  # any order must survive verbatim
+        reused = reuse_selection(original, region_label="indoor_door_leaf_Tile_1", count=40)
+        self.assertEqual([r["image_id"] for r in reused["selected"]], [r["image_id"] for r in original["selected"]])
+        self.assertEqual([r["selection_rank"] for r in reused["selected"]], [r["selection_rank"] for r in original["selected"]])
+        self.assertEqual(reused["preset"], "DIAG")
+        self.assertEqual(reused["count"], 40)
+        self.assertTrue(reused["policy"]["reused_selection"])
+        self.assertEqual({k: v for k, v in reused["policy"].items() if k != "reused_selection"}, original["policy"])
+        self.assertNotIn("reused_selection", original["policy"])  # input not mutated
+        with self.assertRaises(ValueError):
+            reuse_selection(original, region_label="outdoor_gravel_Tile_0", count=40)
+        with self.assertRaises(ValueError):
+            reuse_selection(original, region_label="indoor_door_leaf_Tile_1", count=5)
+        with self.assertRaises(ValueError):
+            reuse_selection({**original, "kind": "something_else"}, region_label="indoor_door_leaf_Tile_1", count=40)
+        duplicated = {**original, "selected": original["selected"] + original["selected"][:1]}
+        with self.assertRaises(ValueError):
+            reuse_selection(duplicated, region_label="indoor_door_leaf_Tile_1", count=40)
+        with self.assertRaises(ValueError):
+            reuse_selection({**original, "selected": []}, region_label="indoor_door_leaf_Tile_1", count=40)
+
     def test_tile_inputs_rejects_unknown_image_duplicates_and_tampering(self):
         with self.assertRaises(ValueError):
             derive_tile_inputs_manifest(self.base_inputs, tile_name="Tile_1", image_ids=["img_zz"], provenance={})
@@ -485,8 +575,65 @@ class DiagnosticArmTests(unittest.TestCase):
         for key in ("max_steps", "mcmc_refine_stop_iter", "learning_rates"):
             self.assertEqual(g0[key], g1[key])
         self.assertEqual({k: v for k, v in g0["default_strategy"].items()}, g1["default_strategy"])
-        self.assertEqual(sorted(VARIANTS), ["G0", "G1", "R1"])
+        self.assertEqual(sorted(VARIANTS), ["F3", "G0", "G1", "R1"])
+        self.assertEqual(VARIANTS["F3"], {})  # data-side variant: recipe is R1
         self.assertEqual(DEFAULT_PLAN["DIAG"], ("R1", "G0", "G1"))
+
+    def test_f3_c134_cap_rule_label_suffix_and_data_variant(self):
+        selection = _selection(count=40)
+        selection["preset_dir"] = "DIAG_40_F3"
+        selection["excluded_faces"] = ["pitch_up_56"]
+        selection["face_exclusion"] = {"view_count_before": 113, "view_count_after": 73, "views_removed": 40}
+        selection["reused_selection"] = {"path": "x/DIAG_40/selection.json", "parent_image_ids_identical": True}
+        selection["view_count"] = 73
+        arm = build_diagnostic_arm(
+            _base_arm(), selection=selection,
+            diag_tile_inputs_manifest="C:\\runs\\diag_v2\\indoor\\DIAG_40_F3\\tile_inputs_manifest.json",
+            diag_tile_geometry_manifest="C:\\runs\\diag_v2\\indoor\\DIAG_40_F3\\tile_geometry_manifest.json",
+            horizon=3000, label="F3", output_dir="C:\\runs\\diag_v2\\indoor\\runs\\diag_indoor_door_leaf_Tile_1_40_F3_c134",
+            reference_scale_m=0.0061790370382368565, base_config_path="run_configs/x.json", base_config_sha256="b" * 64,
+            checkpoint_every=3000, label_suffix="c134", cap_init_multiplier=CAP_INIT_MULTIPLIER_C134,
+            initialization_point_count=3417320, note="F3: pitch_up faces dropped",
+        )
+        self.assertEqual(arm["run_id"], "diag_indoor_door_leaf_Tile_1_40_F3_c134")
+        self.assertEqual(arm["diag"]["variant"], "F3_c134")
+        self.assertEqual(arm["cap_max"], 4579208)  # floor(1.34 x 3417320), the R1_c134 value
+        self.assertEqual(arm["diag"]["variant_fields"]["cap_max"], {"base": 1_000_000 if "cap_max" in _base_arm() else "<absent>", "diag": 4579208})
+        self.assertEqual(arm["diag"]["cap_rule"], {"multiplier": 1.34, "initialization_point_count": 3417320, "cap_max": 4579208})
+        self.assertIn("1.34 x tile initialization count (4579208)", arm["diag"]["cap_policy"])
+        self.assertEqual(arm["diag"]["data_variant"]["excluded_faces"], ["pitch_up_56"])
+        self.assertEqual(arm["diag"]["data_variant"]["preset_dir"], "DIAG_40_F3")
+        self.assertEqual(arm["diag"]["data_variant"]["face_exclusion"]["view_count_after"], 73)
+        self.assertTrue(arm["diag"]["data_variant"]["reused_selection"]["parent_image_ids_identical"])
+        self.assertEqual(arm["diag"]["notes"][-1], "F3: pitch_up faces dropped")
+        self.assertEqual(arm["diag"]["view_count"], 73)
+        # recipe untouched: same schedule as the R1 arm on the same horizon
+        r1 = self._arm(count=40)
+        for key in ("max_steps", "mcmc_refine_stop_iter", "learning_rates", "default_strategy", "densification_gradient_source"):
+            self.assertEqual(arm[key], r1[key], key)
+        self.assertEqual(arm["schedule_contract_fields"]["resolved"], r1["schedule_contract_fields"]["resolved"])
+        self.assertNotIn("data_variant", r1["diag"])
+        self.assertNotIn("cap_rule", r1["diag"])
+        # outdoor Tile_0 count reproduces the outdoor R1_c134 cap
+        self.assertEqual(int(1.34 * 7044777), 9440001)
+        with self.assertRaises(ValueError):
+            self._arm(count=40, cap_init_multiplier=1.34)  # no point count
+        with self.assertRaises(ValueError):
+            self._arm(count=40, cap_init_multiplier=1.0, initialization_point_count=100)  # cap would not exceed init
+
+    def test_tile_initialization_point_count_cross_checks_ply_header(self):
+        manifest = {"tiles": [{"initialization": {"point_count": 123}}]}
+        self.assertEqual(tile_initialization_point_count(manifest, initialization_ply=None), 123)
+        with tempfile.TemporaryDirectory() as tmp:
+            ply = Path(tmp) / "init.ply"
+            ply.write_bytes(b"ply\nformat binary_little_endian 1.0\nelement vertex 123\nproperty float x\nend_header\n")
+            self.assertEqual(tile_initialization_point_count(manifest, initialization_ply=ply), 123)
+            ply.write_bytes(b"ply\nformat binary_little_endian 1.0\nelement vertex 124\nproperty float x\nend_header\n")
+            with self.assertRaises(ValueError):
+                tile_initialization_point_count(manifest, initialization_ply=ply)
+            self.assertEqual(tile_initialization_point_count(manifest, initialization_ply=Path(tmp) / "missing.ply"), 123)
+        with self.assertRaises(ValueError):
+            tile_initialization_point_count({"tiles": []}, initialization_ply=None)
 
     def test_rejects_wrong_tile_or_variant(self):
         with self.assertRaises(ValueError):

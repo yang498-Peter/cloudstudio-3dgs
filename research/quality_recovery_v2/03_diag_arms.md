@@ -108,3 +108,42 @@ python tools/build_offtrajectory_compare.py run_configs/house0305_tiles/diag_v2/
 * **背景库 / DA2 / vis6 缓存**：按 sample_id 查表，子集不需要重建；未在 GPU 上跑通任何一个臂（CPU-only），训练侧行为未验证。
 * `03_roi_provisional.json` 仍是临时 ROI；`01_roi_registry.json` 落地后应重跑 `build_diagnostic_set.py`（每区约 7 分钟）并重新生成配置。
 * 未提交任何文件；`research/quality_recovery_v2/README.zh-CN.md` 有其它任务的未提交改动，本任务未触碰。
+
+## 8. F3：数据侧去掉 pitch_up 面（DIAG_40_F3，2026-09-11，CPU-only、未训练、未提交）
+
+**动机**：DIAG-40 室内 R1 的树色/天空色悬浮烟雾集中在 `pitch_up_56` 面（README "悬浮体成因线索" / "DIAG-40 室内 F2"）；F2 把树/天空像素从光度监督里遮掉后悬浮体原样存在。F3 是同一假设的数据侧版本：**40 张父图不变，直接去掉它们的全部 `pitch_up_56` 面视角**，其余面、配方、日程合同、cap 规则、LiDAR 缓存与 R1_c134 完全相同。若悬浮体随天空视角一起消失，即是"悬浮体来自被 pitch_up 视角放到错误深度/无人管的高斯"的数据侧证据。
+
+**工具改动**（`tools/build_diagnostic_set.py`、`tools/make_diagnostic_arm_config.py`，`tests/test_diagnostic_set.py` +7 项）：
+
+* `--exclude-faces FACE[,FACE]`：在签名前从派生 `views` 里删掉这些 face_id；缺省不给时输出**字节相同**（排除信息只在启用时才进入签名的 `diagnostic` 块）；任一父图会剩零个面则拒绝（错误信息列出图 id）。`selection.json` 记 `excluded_faces` 与 `face_exclusion{view_count_before/after, views_removed, face_counts_before/after, parent_images_kept}`。
+* `--preset-name DIAG_40_F3`：输出目录名，不碰 `DIAG_40`。
+* `--reuse-selection <DIAG_40/selection.json>`：父图 id 与顺序、覆盖行、policy 原样复用（校验 region / count / Tile 输入 sha 一致），不重算 7 分钟的逐图表；`selection.json` 记 `reused_selection{path, sha256, parent_image_ids_identical}`。
+* `make_diagnostic_arm_config.py`：变体 `F3`（配方 = R1，差别全在 preset），`--label-suffix c134`（run_id / `diag.variant` = `F3_c134`），`--cap-init-multiplier 1.34`（`cap_max = floor(1.34 × Tile 初始化点数)`，点数取派生 manifest 的签名值并与 PLY 头 `element vertex` 交叉核对；记 `diag.cap_rule` / `diag.cap_policy`），`--note`；`diag.data_variant` 带出 preset 的排除/复用记录。
+
+**视角数（父图 40 / 40 不变）**：
+
+| 区域 | R1_c134 面视角 | F3 面视角 | 去掉 | 剩余面构成 | 含 ROI 框的面视角 |
+|---|---|---|---|---|---|
+| 室内 `indoor_door_leaf_Tile_1` | 113 | **73** | 40 × pitch_up | yaw−35 34 / yaw+35 32 / pitch_down 7 | 63 → 50 |
+| 室外 `outdoor_gravel_Tile_0` | 151 | **115** | 36 × pitch_up | yaw−35 40 / yaw+35 39 / pitch_down 36 | 63 → 63 |
+
+每图访问次数：室内 41.1 epoch（R1 26.5）、室外 26.1（19.9）——H=3000 不变，视角少了 epoch 自然变多，判读时要记住这一点。
+
+**核对**（脚本逐项比对，全部为真）：父图 id 与顺序、`selected` 行、region 框、inputs 记录与 DIAG_40 相同；F3 的 `views` = R1 的 `views` 去掉 pitch_up 后原顺序、裁剪 x/y/w/h 逐字段相同；保留视角的 ROI 框与 DIAG_40 逐项相同；派生输入 manifest 按 `tile_inputs_v9` 根校验 PLY 哈希通过，几何 manifest 绑定到 F3 输入 sha 且 npz 哈希通过；`DIAG_40/` 三个文件 mtime 未变、sha 仍与 `R1_c134` 配置里记录的绑定一致。两份配置 `TrainerConfig.from_dict(...).validate()` 通过（`.venv-train`，CPU，含 PLY/npz 哈希）；与 `R1_c134` 逐字段比对，差异仅：`run_id`、`output_dir`、`tile_inputs_manifest`、`initialization_geometry_manifest`、`schedule_contract_fields.arm/moved_from_base`、`diag` 块（variant、manifest sha、view_count/sample_ids、cap_rule、data_variant、note）；`schedule_contract_fields.resolved`、`cap_max`（室内 4579208 / 室外 9440001）、`face_lidar_geometry_manifest`（vis6）相同。
+
+**ROI compare 视角**：`DIAG_40/roi_compare_ids.json` 室外 45 个全在 F3 里；**室内 49 个里有 5 个是 pitch_up 面、不在 F3 数据集里**：`img_552ccaef…::pitch_up_56`、`img_f1799d46…::pitch_up_56`、`img_d0d851b2…::pitch_up_56`、`img_26e10d65…::pitch_up_56`、`img_c1d98062…::pitch_up_56`。对 F3 而言它们是**新视角**，评分时要么剔除、要么单列（`roi_compare_ids_u1.json` 的 5 个 yaw 面两区都完整）。
+
+**文件**：
+
+| 文件 | sha256 |
+|---|---|
+| `diag_v2/indoor_door_leaf_Tile_1/DIAG_40_F3/tile_inputs_manifest.json` | `059b3210c151e4b35b214d7bfcda13f9d94b27fe3c3fc85a79b24029f298e995` |
+| `diag_v2/indoor_door_leaf_Tile_1/DIAG_40_F3/tile_geometry_manifest.json` | `75fc600cced956a2c1946cf3bbd6dda2679375490d2762e7d7886653947b49da` |
+| `diag_v2/outdoor_gravel_Tile_0/DIAG_40_F3/tile_inputs_manifest.json` | `806c687c21716f6effc7526ee8c010bb3887cb335cb233a487c8e5f2b1b4a276` |
+| `diag_v2/outdoor_gravel_Tile_0/DIAG_40_F3/tile_geometry_manifest.json` | `2839f286f76f44de5a6949f875cbef5a7978597efec4402954b220244de80c5b` |
+| `diag_indoor_door_leaf_Tile_1_40_F3_c134.json`（runs 根目录；副本在 `run_configs/house0305_tiles/diag_v2/`） | `d6ac4c2ffd7b617ee2936783f201c5395b4ea38087eca8d92d43182d78ef55dc` |
+| `diag_outdoor_gravel_Tile_0_40_F3_c134.json`（同上） | `02ba3faf4e4059199dd283ccf25545ce3a9438a91a4c823945a8c6208797c6ef` |
+
+`tests/test_diagnostic_set.py`：改动前 21 通过 / 9 失败，改动后 28 通过 / 同样 9 失败——失败全是 `GeneratedConfigsOnDiskTests` 对既有 `*_ci.json` / `*_X1_c134.json` 的 `run_id`（带 `-` 而非 `_`）≠ 文件名 stem 的子测试，本任务未动它们；两份 F3 配置的 stem / run_id / output_dir 叶名一致，通过该回归。
+
+**残留**：未在 GPU 上跑；室内 F3 的 ROI compare 只剩 44 个视角（5 个 pitch_up 为新视角）；`pitch_down_56` 面保留（室内仅 7 个）。
