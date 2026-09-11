@@ -26,6 +26,11 @@ from cloudstudio_3dgs.data.face_lidar_geometry import (
 from cloudstudio_3dgs.data.renderer_masks import verify_renderer_mask_manifest
 from cloudstudio_3dgs.geometry.lidar_projection import SparseDepthMap
 from cloudstudio_3dgs.evaluation.quality_report import sign_run_manifest
+from cloudstudio_3dgs.training.alpha_support import (
+    ALPHA_SUPPORT_MODES,
+    lidar_alpha_support,
+    strict_visibility_contract,
+)
 from cloudstudio_3dgs.training.backend import (
     GsplatBackend,
     rendered_range_to_euclidean,
@@ -270,6 +275,11 @@ class TrainerConfig:
     lidar_alpha_weight: float = 0.0
     lidar_alpha_target: float = 0.95
     lidar_alpha_dilation_radius_px: int = 0
+    # "dilated" grows every signed LiDAR return by the dilation radius (the
+    # historical construction); "strict_visibility" supports a pixel only
+    # where the returns in its window agree on one surface, so silhouettes
+    # are not pushed across depth discontinuities. See alpha_support.py.
+    lidar_alpha_support_mode: str = "dilated"
     da2_depth_weight: float = 0.0
     # Monocular depth supervision: pixels whose aligned target is at or beyond
     # this range are excluded (sky and far background saturate the relative
@@ -535,6 +545,7 @@ class TrainerConfig:
                 "lidar_alpha_weight",
                 "lidar_alpha_target",
                 "lidar_alpha_dilation_radius_px",
+                "lidar_alpha_support_mode",
                 "da2_depth_weight",
                 "mono_depth_max_range_m",
                 "da2_depth_space",
@@ -892,6 +903,18 @@ class TrainerConfig:
         if self.lidar_alpha_dilation_radius_px > 0 and self.lidar_alpha_weight <= 0.0:
             raise ValueError(
                 "lidar_alpha_dilation_radius_px requires positive lidar_alpha_weight"
+            )
+        if self.lidar_alpha_support_mode not in ALPHA_SUPPORT_MODES:
+            raise ValueError(
+                "lidar_alpha_support_mode must be one of "
+                + ", ".join(ALPHA_SUPPORT_MODES)
+            )
+        if (
+            self.lidar_alpha_support_mode != "dilated"
+            and self.lidar_alpha_weight <= 0.0
+        ):
+            raise ValueError(
+                "lidar_alpha_support_mode requires positive lidar_alpha_weight"
             )
         if (
             self.lidar_linear_aux_weight > 0.0
@@ -1366,6 +1389,16 @@ class TrainerConfig:
                     raise ValueError(
                         "pre-optimizer vendor lifecycle permits only the signed "
                         "surface-alpha dilation profile"
+                    )
+                if (
+                    self.lidar_alpha_support_mode != "dilated"
+                    and not self.surface_alpha_floor_profile
+                ):
+                    # The support-mode knob is a research variation of the
+                    # enhanced-surface profile, never of a parity arm.
+                    raise ValueError(
+                        "pre-optimizer vendor lifecycle permits a non-dilated "
+                        "alpha support mode only under surface_alpha_floor_profile"
                     )
                 cull_defaults = {
                     "opacity_cull_min_observations": 0,
@@ -2077,13 +2110,28 @@ class TrainerConfig:
                 "lidar_alpha_coverage": {
                     "enabled": uses_lidar_alpha,
                     "source": (
-                        "signed_lidar_depth_mask"
+                        "signed_lidar_depth_mask_strict_visibility"
+                        if self.lidar_alpha_support_mode == "strict_visibility"
+                        else "signed_lidar_depth_mask"
                         if self.lidar_alpha_dilation_radius_px == 0
                         else "signed_lidar_depth_mask_confidence_max_dilated"
                     ),
                     "target": self.lidar_alpha_target,
                     "dilation_radius_px": self.lidar_alpha_dilation_radius_px,
                     "loss": "confidence_weighted_squared_deficit",
+                    # Keys present only off the default so every existing
+                    # contract (and its trainer_config_sha256) keeps its
+                    # exact shape; the strict mode changes the identity.
+                    **(
+                        {
+                            "support_mode": self.lidar_alpha_support_mode,
+                            "strict_visibility": strict_visibility_contract(
+                                self.lidar_alpha_dilation_radius_px
+                            ),
+                        }
+                        if self.lidar_alpha_support_mode != "dilated"
+                        else {}
+                    ),
                 },
             },
             "dynamic_person_mask": {
@@ -2942,25 +2990,19 @@ def _render_supervision_loss(
             raise ValueError("LiDAR alpha coverage requires depth supervision")
         if rendered_alpha is None:
             raise RuntimeError("rasterizer did not return alpha coverage")
-        lidar_alpha_valid = (
-            tensors["depth_mask"]
-            & backend.torch.isfinite(tensors["confidence"])
-            & (tensors["confidence"] > 0.0)
+        # Mask + pooled-confidence weights; "dilated" is the historical
+        # inline construction op for op, "strict_visibility" rejects windows
+        # whose returns disagree on one surface (alpha_support.py).
+        alpha_support = lidar_alpha_support(
+            backend.torch,
+            depth_mask=tensors["depth_mask"],
+            confidence=tensors["confidence"],
+            range_m=tensors.get("range_m"),
+            mode=config.lidar_alpha_support_mode,
+            dilation_radius_px=config.lidar_alpha_dilation_radius_px,
         )
-        lidar_alpha_confidence = backend.torch.where(
-            lidar_alpha_valid,
-            tensors["confidence"],
-            backend.torch.zeros_like(tensors["confidence"]),
-        )
-        if config.lidar_alpha_dilation_radius_px > 0:
-            radius = config.lidar_alpha_dilation_radius_px
-            lidar_alpha_confidence = backend.torch.nn.functional.max_pool2d(
-                lidar_alpha_confidence[None, None],
-                kernel_size=2 * radius + 1,
-                stride=1,
-                padding=radius,
-            )[0, 0]
-            lidar_alpha_valid = lidar_alpha_confidence > 0.0
+        lidar_alpha_valid = alpha_support.support
+        lidar_alpha_confidence = alpha_support.weights
         lidar_alpha_mask = tensors["rgb_mask"] & lidar_alpha_valid
         lidar_alpha_support_fraction = lidar_alpha_mask.to(
             dtype=rendered.dtype
