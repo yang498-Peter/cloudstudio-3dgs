@@ -2190,9 +2190,14 @@ def run_queue(
         status(f"delivery {tag} exit {code}")
         exit_code = exit_code or code
     for arm in arms:
-        if not force and ctx.arm_training_complete(arm):
-            status(f"arm {arm} skip (training verified complete; use --force to re-run)")
-            continue
+        if not force and cfg.arm_config(arm).exists():
+            # Skip only when nothing is left to do. A verified training whose
+            # strips, identity or scores are missing still needs run_arm, which
+            # resumes past the finished training step.
+            plan = plan_steps(arm_steps(ctx, arm))
+            if not any(will_run for _, will_run in plan):
+                status(f"arm {arm} skip (every step already done; use --force to re-run)")
+                continue
         running = ctx.trainer_processes()
         if running:
             pid, command = running[0]

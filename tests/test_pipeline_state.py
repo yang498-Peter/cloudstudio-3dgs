@@ -454,7 +454,8 @@ class ArmCompletionTests(PipelineFixture):
         self.plant_checkpoint("armB", step=5000)
         self.assertEqual(run_queue(self.ctx, ["armA", "armB"]), 0)
         log = self.config.queue_status_file().read_text(encoding="utf-8")
-        self.assertIn("arm armA skip", log)
+        self.assertNotIn("arm armA skip", log)
+        self.assertIn("arm armA exit 0", log)
         self.assertIn("arm armB start", log)
         trained = [rest[1] for tool, rest in self.runner.calls if tool == "train_gsplat.py"]
         self.assertEqual(trained, [str(self.config.arm_config("armB"))], "a paused arm is re-run, not silently accepted")

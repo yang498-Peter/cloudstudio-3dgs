@@ -94,7 +94,9 @@ class QueueTests(PipelineFixture):
         self.assertEqual(run_queue(self.ctx, ["armA", "armB"]), 0)
         trained = [rest[1] for tool, rest in self.runner.calls if tool == "train_gsplat.py"]
         self.assertEqual(trained, [str(self.config.arm_config("armB"))])
-        self.assertIn("arm armA skip", self.queue_log())
+        # A trained arm is not retrained, but its remaining steps run (exit 0).
+        self.assertNotIn("arm armA skip", self.queue_log())
+        self.assertIn("arm armA exit 0", self.queue_log())
         self.runner.calls.clear()
         self.assertEqual(run_queue(self.ctx, ["armA"], force=True), 0)
         trained = [rest[1] for tool, rest in self.runner.calls if tool == "train_gsplat.py"]
