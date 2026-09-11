@@ -45,6 +45,8 @@ import argparse
 import copy
 import hashlib
 import json
+import math
+import re
 import sys
 from pathlib import Path
 from typing import Any, Mapping, Sequence
@@ -69,7 +71,14 @@ VARIANTS: dict[str, dict[str, Any]] = {
     "R1": {},
     "G0": {"default_strategy.lifecycle_execution_order": "post_optimizer_gsplat", "densification_gradient_source": "total_loss"},
     "G1": {"default_strategy.lifecycle_execution_order": "post_optimizer_gsplat", "densification_gradient_source": "rgb_only"},
+    # Data-side variant: the recipe is R1, the difference lives in the preset
+    # (build_diagnostic_set.py --exclude-faces), recorded under diag.data_variant.
+    "F3": {},
 }
+# The stager's cap rule for the diagnostic arms (the *_c134 configs): cap_max
+# = floor(multiplier x Tile initialization count); the trainer rejects
+# cap <= initialization count, and cap 15M let a 5-view arm balloon to 14.5M.
+CAP_INIT_MULTIPLIER_C134 = 1.34
 # Which presets get which variants (task brief §6 / §13): U0 and U1 on the
 # recipe only; the coverage set also carries the growth-signal pair.
 DEFAULT_PLAN: dict[str, tuple[str, ...]] = {"U0": ("R1",), "U1": ("R1",), "DIAG": ("R1", "G0", "G1")}
@@ -117,8 +126,17 @@ def build_diagnostic_arm(
     base_config_sha256: str,
     checkpoint_every: int | None = None,
     refine_stop_fraction: float | None = None,
+    label_suffix: str | None = None,
+    cap_init_multiplier: float | None = None,
+    initialization_point_count: int | None = None,
+    note: str | None = None,
 ) -> dict[str, Any]:
     """Pure: base config dict + selection -> diagnostic arm config dict.
+
+    ``label_suffix`` (e.g. ``c134``) is appended to the variant label in the
+    run_id / ``diag.variant`` (``diag_<region>_<count>_<label>_<suffix>``);
+    ``cap_init_multiplier`` sets ``cap_max = floor(multiplier x
+    initialization_point_count)`` (the Tile's signed initialization count).
 
     The returned config already passed ``validate_research_schedule_contract``
     (torch-free); ``TrainerConfig.validate`` is the caller's job.
@@ -132,7 +150,20 @@ def build_diagnostic_arm(
             f"base config trains Tile {base.get('mipmap_tile_id')} but the selection is for Tile {tile_id}"
         )
     count = int(selection["count"])
-    run_id = diag_run_id(region, count, label)
+    full_label = f"{label}_{label_suffix}" if label_suffix else label
+    run_id = diag_run_id(region, count, full_label)
+    cap_rule: dict[str, Any] | None = None
+    if cap_init_multiplier is not None:
+        if initialization_point_count is None or int(initialization_point_count) <= 0:
+            raise ValueError("cap_init_multiplier needs the Tile initialization point count")
+        cap_max = int(math.floor(float(cap_init_multiplier) * int(initialization_point_count)))
+        if cap_max <= int(initialization_point_count):
+            raise ValueError(f"cap_max {cap_max} would not exceed the initialization count {initialization_point_count}")
+        cap_rule = {
+            "multiplier": float(cap_init_multiplier),
+            "initialization_point_count": int(initialization_point_count),
+            "cap_max": cap_max,
+        }
 
     staged = copy.deepcopy(dict(base))
     rebinding: dict[str, dict[str, Any]] = {}
@@ -175,6 +206,9 @@ def build_diagnostic_arm(
     if checkpoint_every is not None:
         before, after = _set_path(arm, "checkpoint_every", int(checkpoint_every))
         variant_changes["checkpoint_every"] = {"base": before, "diag": after}
+    if cap_rule is not None:
+        before, after = _set_path(arm, "cap_max", int(cap_rule["cap_max"]))
+        variant_changes["cap_max"] = {"base": before, "diag": after}
 
     arm["diag"] = {
         "schema_version": 1,
@@ -182,7 +216,7 @@ def build_diagnostic_arm(
         "region": selection["region"],
         "preset": selection.get("preset"),
         "count": count,
-        "variant": label,
+        "variant": full_label,
         "variant_fields": variant_changes,
         "horizon_steps": int(horizon),
         "base_config": base_config_path,
@@ -212,6 +246,23 @@ def build_diagnostic_arm(
             "H = max_steps; controlled_stop_after_steps removed so the run completes and writes run_manifest.json",
         ],
     }
+    if cap_rule is not None:
+        arm["diag"]["cap_policy"] = (
+            f"cap_max = {cap_rule['multiplier']:g} x tile initialization count ({cap_rule['cap_max']}), the stager's rule; "
+            "the cap-15M 5-view arm ballooned to 14.5M gaussians and the trainer rejects cap == initialization count"
+        )
+        arm["diag"]["cap_rule"] = cap_rule
+    data_variant = {
+        key: selection[key]
+        for key in ("preset_dir", "excluded_faces", "face_exclusion", "reused_selection")
+        if key in selection
+    }
+    if data_variant:
+        # What the preset did to the view set beyond selecting parents (e.g.
+        # F3: pitch_up faces dropped) - the trainer only sees the manifest.
+        arm["diag"]["data_variant"] = data_variant
+    if note:
+        arm["diag"]["notes"].append(str(note))
     # Re-validate after the variant edits (they do not touch schedule fields,
     # but the contract must hold on the file that is written).
     validate_research_schedule_contract(arm)
@@ -268,6 +319,31 @@ def build_eval_config(
     return config
 
 
+def _ply_vertex_count(path: Path) -> int | None:
+    """``element vertex N`` from a PLY header, or None when unreadable."""
+    try:
+        with open(path, "rb") as handle:
+            head = handle.read(8192)
+    except OSError:
+        return None
+    match = re.search(rb"element vertex (\d+)", head)
+    return int(match.group(1)) if match else None
+
+
+def tile_initialization_point_count(diag_tile_inputs: Mapping[str, Any], *, initialization_ply: Path | None) -> int:
+    """The Tile's signed initialization count (what 1.34x is taken of), cross-
+    checked against the PLY header when the file is readable."""
+    tiles = diag_tile_inputs.get("tiles") or []
+    if len(tiles) != 1:
+        raise ValueError("derived Tile inputs manifest must hold exactly one Tile")
+    count = int(tiles[0]["initialization"]["point_count"])
+    if initialization_ply is not None:
+        header = _ply_vertex_count(initialization_ply)
+        if header is not None and header != count:
+            raise ValueError(f"initialization PLY holds {header} vertices but the manifest says {count}")
+    return count
+
+
 def _default_reference_scale(base: Mapping[str, Any]) -> tuple[float | None, str]:
     """The base arm's runtime median Gaussian scale, if its run left a report."""
     output_dir = base.get("output_dir")
@@ -295,6 +371,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--runs-root", type=Path, default=None, help="where the arms write outputs (default <diag-root>/runs)")
     parser.add_argument("--validate", action="store_true", help="TrainerConfig.from_dict(...).validate() every config (needs torch + data)")
     parser.add_argument("--eval", action="store_true", help="also write <region>_eval.json from the largest preset")
+    parser.add_argument("--label-suffix", default=None, help="appended to the variant label in run_id / diag.variant, e.g. c134")
+    parser.add_argument(
+        "--cap-init-multiplier", type=float, default=None,
+        help=f"cap_max = floor(multiplier x Tile initialization count) (the *_c134 arms use {CAP_INIT_MULTIPLIER_C134})",
+    )
+    parser.add_argument("--note", default=None, help="free-text line appended to diag.notes")
     args = parser.parse_args(argv)
 
     base = _load(args.base)
@@ -321,8 +403,15 @@ def main(argv: Sequence[str] | None = None) -> int:
         selection = _load(preset_dir / "selection.json")
         preset = str(selection["preset"])
         variants = tuple(args.variants) if args.variants else DEFAULT_PLAN.get(preset, ("R1",))
+        point_count = None
+        if args.cap_init_multiplier is not None:
+            ply = selection.get("initialization_ply")
+            point_count = tile_initialization_point_count(
+                _load(preset_dir / "tile_inputs_manifest.json"), initialization_ply=Path(ply) if ply else None
+            )
         for label in variants:
-            run_id = diag_run_id(selection["region"]["label"], int(selection["count"]), label)
+            full_label = f"{label}_{args.label_suffix}" if args.label_suffix else label
+            run_id = diag_run_id(selection["region"]["label"], int(selection["count"]), full_label)
             arm = build_diagnostic_arm(
                 base,
                 selection=selection,
@@ -336,7 +425,13 @@ def main(argv: Sequence[str] | None = None) -> int:
                 base_config_sha256=base_sha,
                 checkpoint_every=checkpoint_every,
                 refine_stop_fraction=args.refine_stop_fraction,
+                label_suffix=args.label_suffix,
+                cap_init_multiplier=args.cap_init_multiplier,
+                initialization_point_count=point_count,
+                note=args.note,
             )
+            if arm["run_id"] != run_id:
+                raise AssertionError(f"run_id mismatch: {arm['run_id']} != {run_id}")
             out = args.out_dir / f"{run_id}.json"
             _dump(out, arm)
             written.append(out)
@@ -347,6 +442,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 f"every={lifecycle['refine_every']} reset_every={lifecycle['reset_every']} prune_switch={lifecycle['prune_switch_step']} "
                 f"grow={schedule['event_summary']['grow']['count']} resets={schedule['event_summary']['reset']['count']} late_first={schedule['event_summary']['late_threshold']['first_step']} "
                 f"epochs={schedule['views']['configured_epochs']} means_lr={arm['learning_rates']['means']:.4g} mismatches={[m['name'] for m in schedule['mismatches']]}"
+                + (f" cap_max={arm['cap_max']} (= floor({args.cap_init_multiplier:g} x {point_count}))" if point_count else "")
             )
             if args.validate:
                 from cloudstudio_3dgs.training.trainer import TrainerConfig
