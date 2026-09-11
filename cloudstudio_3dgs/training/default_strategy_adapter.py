@@ -169,6 +169,7 @@ class DefaultStrategyAdapter:
         relaxed_cull_at_capacity: bool = True,
         growth_metric: str = "count_mean",
         surface_anchor_prune: Any | None = None,
+        sky_growth_block: Any | None = None,
     ) -> None:
         from gsplat.strategy import DefaultStrategy
 
@@ -209,6 +210,10 @@ class DefaultStrategyAdapter:
         # may not become parents. None keeps the recovered lifecycle exact;
         # the trainer assigns it after construction like the birth guard.
         self.surface_anchor_prune = surface_anchor_prune
+        # Sky growth block (sky_supervision.SkyGrowthBlock): rows seen mostly
+        # in the sky may not become parents. Same contract as the anchor
+        # prune - None keeps the lifecycle exact, the trainer assigns it.
+        self.sky_growth_block = sky_growth_block
         self.opacity_cull_policy = str(opacity_cull_policy)
         self.opacity_cull_min_observations = int(opacity_cull_min_observations)
         self.opacity_cull_consecutive_events = int(
@@ -873,6 +878,19 @@ class DefaultStrategyAdapter:
             surface_anchor_rejected_count = int(unsupported.sum().item())
             if surface_anchor_rejected_count:
                 eligible[candidate_indices[unsupported]] = False
+        sky_growth_blocked_count = 0
+        sky_growth_blocked_total = 0
+        if self.sky_growth_block is not None and bool(eligible.any()):
+            # Sky supervision parent mask: a candidate whose projected centre
+            # sat in the effective sky mask in most of its observations this
+            # window may not breed. Pure parent mask, like the anchor guard.
+            blocked = self.sky_growth_block.blocked_parent_mask(state, eligible)
+            sky_growth_blocked_count = int(blocked.sum().item())
+            if sky_growth_blocked_count:
+                eligible = eligible & ~blocked
+            sky_growth_blocked_total = self.sky_growth_block.record_blocked(
+                state, sky_growth_blocked_count
+            )
         supported_candidate_count = int(eligible.sum().item())
         capacity_rejected_count = 0
         if self.capacity_cap is not None:
@@ -1002,6 +1020,16 @@ class DefaultStrategyAdapter:
             ),
             "capacity_rejected_count": capacity_rejected_count,
             "surface_anchor_rejected_count": surface_anchor_rejected_count,
+            # Keys present only with the block, so the default telemetry
+            # record keeps its shape.
+            **(
+                {
+                    "sky_growth_blocked_count": sky_growth_blocked_count,
+                    "sky_growth_blocked_total": sky_growth_blocked_total,
+                }
+                if self.sky_growth_block is not None
+                else {}
+            ),
             "clone_parent_count": duplicate_count,
             "split_parent_count": split_count,
             "split_parent_opacity": self._opacity_summary(opacity[split_mask]),
@@ -1576,6 +1604,10 @@ class DefaultStrategyAdapter:
             return
         self.inner._update_state(params, state, info, packed=False)
         self._accumulate_footprint_weighted_gradient(params, state, info)
+        if self.sky_growth_block is not None:
+            # Same window as grad2d/count: filled every step here, zeroed at
+            # the refine event below.
+            self.sky_growth_block.accumulate(params, state, info)
         if not self.is_refine_step(step):
             self._surface_anchor_standalone(params, optimizers, state, step)
             return
@@ -1636,6 +1668,8 @@ class DefaultStrategyAdapter:
         if state.get("_footprint_grad_sum") is not None:
             state["_footprint_grad_sum"].zero_()
             state["_footprint_weight_sum"].zero_()
+        if self.sky_growth_block is not None:
+            self.sky_growth_block.reset(state)
         self.last_lifecycle_event = {
             "before_count": int(before),
             "clone_count": clone_count,
@@ -1833,6 +1867,11 @@ class DefaultStrategyAdapter:
                 None
                 if self.surface_anchor_prune is None
                 else self.surface_anchor_prune.state_dict()
+            ),
+            "sky_growth_block": (
+                None
+                if self.sky_growth_block is None
+                else self.sky_growth_block.state_dict()
             ),
             "opacity_cull_policy": self.opacity_cull_policy,
             "opacity_cull_min_observations": self.opacity_cull_min_observations,

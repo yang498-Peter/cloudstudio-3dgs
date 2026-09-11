@@ -31,6 +31,11 @@ exposure gain is applied exactly as before.
 Two twins on purpose, as for the alpha support: a torch version for the
 trainer and a numpy version for CPU audits (``tools/estimate_rgb_supervision
 _fraction.py``); ``tests/test_rgb_supervision_mask.py`` pins them.
+
+``exclude`` (sky supervision, ``sky_supervision.py``): an optional bool mask
+of pixels removed from the supervised set after the mode's own construction,
+in either mode. Without it the ``all`` path hands back ``rgb_mask`` itself
+(the same tensor object), so the default stays byte-identical.
 """
 
 from __future__ import annotations
@@ -82,6 +87,8 @@ class RgbSupervision:
     mask: Any
     supervised_pixels: int
     rgb_mask_pixels: int
+    # Pixels the optional ``exclude`` mask removed from the mode's own set.
+    excluded_pixels: int = 0
 
     @property
     def fraction(self) -> float:
@@ -98,19 +105,30 @@ def rgb_supervision_mask(
     confidence: Any | None,
     mode: str,
     dilation_radius_px: int,
+    exclude: Any | None = None,
 ) -> RgbSupervision:
     """Torch construction of the supervised-pixel mask for one view.
 
-    ``mode == "all"`` returns ``rgb_mask`` itself (the same tensor object),
-    so the default path stays byte-identical. In ``lidar_support`` a view
-    without any signed LiDAR return (``depth_mask is None``) has an empty
-    supervised set.
+    ``mode == "all"`` without ``exclude`` returns ``rgb_mask`` itself (the
+    same tensor object), so the default path stays byte-identical. In
+    ``lidar_support`` a view without any signed LiDAR return (``depth_mask is
+    None``) has an empty supervised set. ``exclude`` removes its true pixels
+    from the result in either mode.
     """
     if mode not in RGB_SUPERVISION_MASK_MODES:
         raise ValueError(f"unknown rgb_supervision_mask {mode!r}")
     rgb_pixels = int(rgb_mask.sum().item())
     if mode == "all":
-        return RgbSupervision(mask=rgb_mask, supervised_pixels=rgb_pixels, rgb_mask_pixels=rgb_pixels)
+        if exclude is None:
+            return RgbSupervision(mask=rgb_mask, supervised_pixels=rgb_pixels, rgb_mask_pixels=rgb_pixels)
+        mask = rgb_mask & ~exclude
+        supervised = int(mask.sum().item())
+        return RgbSupervision(
+            mask=mask,
+            supervised_pixels=supervised,
+            rgb_mask_pixels=rgb_pixels,
+            excluded_pixels=rgb_pixels - supervised,
+        )
     if int(dilation_radius_px) <= 0:
         raise ValueError("lidar_support rgb supervision requires a positive dilation radius")
     if depth_mask is None or confidence is None:
@@ -125,8 +143,16 @@ def rgb_supervision_mask(
         dilation_radius_px=int(dilation_radius_px),
     ).support
     mask = rgb_mask & support
+    excluded = 0
+    if exclude is not None:
+        before = int(mask.sum().item())
+        mask = mask & ~exclude
+        excluded = before - int(mask.sum().item())
     return RgbSupervision(
-        mask=mask, supervised_pixels=int(mask.sum().item()), rgb_mask_pixels=rgb_pixels
+        mask=mask,
+        supervised_pixels=int(mask.sum().item()),
+        rgb_mask_pixels=rgb_pixels,
+        excluded_pixels=excluded,
     )
 
 
@@ -137,6 +163,7 @@ def rgb_supervision_mask_numpy(
     confidence: np.ndarray | None,
     mode: str,
     dilation_radius_px: int,
+    exclude: np.ndarray | None = None,
 ) -> RgbSupervision:
     """numpy twin of :func:`rgb_supervision_mask` (same mask, same counts)."""
     if mode not in RGB_SUPERVISION_MASK_MODES:
@@ -144,7 +171,16 @@ def rgb_supervision_mask_numpy(
     rgb_mask = np.asarray(rgb_mask, dtype=bool)
     rgb_pixels = int(rgb_mask.sum())
     if mode == "all":
-        return RgbSupervision(mask=rgb_mask, supervised_pixels=rgb_pixels, rgb_mask_pixels=rgb_pixels)
+        if exclude is None:
+            return RgbSupervision(mask=rgb_mask, supervised_pixels=rgb_pixels, rgb_mask_pixels=rgb_pixels)
+        mask = rgb_mask & ~np.asarray(exclude, dtype=bool)
+        supervised = int(mask.sum())
+        return RgbSupervision(
+            mask=mask,
+            supervised_pixels=supervised,
+            rgb_mask_pixels=rgb_pixels,
+            excluded_pixels=rgb_pixels - supervised,
+        )
     if int(dilation_radius_px) <= 0:
         raise ValueError("lidar_support rgb supervision requires a positive dilation radius")
     if depth_mask is None or confidence is None:
@@ -158,4 +194,14 @@ def rgb_supervision_mask_numpy(
         dilation_radius_px=int(dilation_radius_px),
     ).support
     mask = rgb_mask & support
-    return RgbSupervision(mask=mask, supervised_pixels=int(mask.sum()), rgb_mask_pixels=rgb_pixels)
+    excluded = 0
+    if exclude is not None:
+        before = int(mask.sum())
+        mask = mask & ~np.asarray(exclude, dtype=bool)
+        excluded = before - int(mask.sum())
+    return RgbSupervision(
+        mask=mask,
+        supervised_pixels=int(mask.sum()),
+        rgb_mask_pixels=rgb_pixels,
+        excluded_pixels=excluded,
+    )

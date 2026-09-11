@@ -217,6 +217,8 @@ class FaceCacheDataset:
         tile_ownership_box: Any | None = None,
         tile_ownership_margin_m: float = 0.5,
         tile_ownership_dilation_px: int = 15,
+        sky_mask_manifest_path: Path | None = None,
+        sky_mask_root: Path | None = None,
     ) -> None:
         # Tile crops are pixel rectangles around in-Tile LiDAR returns, so a
         # crop also contains pixels whose true surface lies in a neighbouring
@@ -323,6 +325,35 @@ class FaceCacheDataset:
                 self.renderer_mask_manifest.get("masks", [])
             ):
                 raise ValueError("renderer mask manifest contains duplicate samples")
+        # Sky masks (sky_supervision.py) mirror the renderer mask binding:
+        # signed manifest, bound to this Face4 cache and split, one record
+        # per selected face, artifact SHA verified on first access.
+        if (sky_mask_manifest_path is None) != (sky_mask_root is None):
+            raise ValueError(
+                "sky_mask_manifest_path and sky_mask_root must be provided together"
+            )
+        self.sky_mask_manifest_sha256 = None
+        self.sky_mask_root = None if sky_mask_root is None else Path(sky_mask_root)
+        self._sky_mask_by_face: dict[tuple[str, str], dict[str, Any]] = {}
+        if sky_mask_manifest_path is not None:
+            from cloudstudio_3dgs.training.sky_supervision import (
+                verify_sky_mask_manifest,
+            )
+
+            sky_manifest = json.loads(
+                Path(sky_mask_manifest_path).read_text(encoding="utf-8")
+            )
+            self.sky_mask_manifest_sha256 = verify_sky_mask_manifest(sky_manifest)
+            if sky_manifest.get("source_face_manifest_sha256") != self.face_manifest_sha256:
+                raise ValueError("sky mask manifest is bound to a different Face4 cache")
+            if sky_manifest.get("split") != self.manifest.get("split"):
+                raise ValueError("sky mask and Face4 manifests use different splits")
+            self._sky_mask_by_face = {
+                (str(record["image_id"]), str(record["face_id"])): record
+                for record in sky_manifest.get("masks", [])
+            }
+            if len(self._sky_mask_by_face) != len(sky_manifest.get("masks", [])):
+                raise ValueError("sky mask manifest contains duplicate samples")
         self.mono_depth_manifest = None
         self.mono_depth_manifest_sha256 = None
         self.mono_depth_root = (
@@ -500,6 +531,16 @@ class FaceCacheDataset:
                         raise ValueError(
                             f"renderer mask record differs from Face4 for {manifest_sample_id}"
                         )
+                if (
+                    self.sky_mask_manifest_sha256 is not None
+                    and (str(image_record["image_id"]), face_id)
+                    not in self._sky_mask_by_face
+                ):
+                    # Fail closed like the backgrounds: a selected face
+                    # without a sky mask is an error, never "no sky here".
+                    raise ValueError(
+                        f"sky mask manifest does not cover {manifest_sample_id}"
+                    )
                 if int(face_entry.get("mask_true_pixels", -1)) == 0:
                     self.filtered_empty_mask_count += 1
                     continue
@@ -665,6 +706,13 @@ class FaceCacheDataset:
                 self.face_lidar_geometry_manifest_sha256
             ),
             "tile_cropped": any(crop is not None for _, _, crop in self._samples),
+            # Only when configured: the identity is spread into the checkpoint
+            # identity, so an unconditional key would reshape every run's.
+            **(
+                {"sky_mask_manifest_sha256": self.sky_mask_manifest_sha256}
+                if self.sky_mask_manifest_sha256 is not None
+                else {}
+            ),
         }
 
     @property
@@ -793,6 +841,29 @@ class FaceCacheDataset:
             raise ValueError(
                 f"face {base_image_id}/{face_id} has an empty supervision mask"
             )
+
+        sky_mask = None
+        sky_record = self._sky_mask_by_face.get((base_image_id, face_id))
+        if sky_record is not None:
+            assert self.sky_mask_root is not None
+            sky_path = _safe_artifact(self.sky_mask_root, str(sky_record["mask_path"]))
+            self._verify(sky_path, str(sky_record["mask_sha256"]), "sky mask")
+            with Image.open(sky_path) as source:
+                sky_mask = np.asarray(source.convert("L"), dtype=np.uint8) > 0
+            if sky_mask.shape != expected_shape:
+                raise ValueError(
+                    f"sky mask shape mismatch for {base_image_id}/{face_id}: "
+                    f"expected {expected_shape}, got {sky_mask.shape}"
+                )
+            # Same drift check as data.sky_masks.load_sky_mask: the record's
+            # pixel count is part of the signed manifest.
+            if "sky_pixels" in sky_record and int(np.count_nonzero(sky_mask)) != int(
+                sky_record["sky_pixels"]
+            ):
+                raise ValueError(
+                    f"sky mask pixel count differs from its record for "
+                    f"{base_image_id}/{face_id}"
+                )
 
         depth_range = None
         depth_confidence = None
@@ -927,6 +998,7 @@ class FaceCacheDataset:
             bottom = y + crop["height"]
             image = np.ascontiguousarray(image[y:bottom, x:right])
             rgb_mask = np.ascontiguousarray(rgb_mask[y:bottom, x:right])
+            sky_mask = None if sky_mask is None else np.ascontiguousarray(sky_mask[y:bottom, x:right])
             depth_range = None if depth_range is None else np.ascontiguousarray(depth_range[y:bottom, x:right])
             depth_confidence = None if depth_confidence is None else np.ascontiguousarray(depth_confidence[y:bottom, x:right])
             depth_mask = None if depth_mask is None else np.ascontiguousarray(depth_mask[y:bottom, x:right])
@@ -1005,6 +1077,7 @@ class FaceCacheDataset:
             mesh_confidence=mesh_confidence,
             mesh_depth_mask=mesh_depth_mask,
             mesh_geometry_cache_path=mesh_geometry_cache_path,
+            sky_mask=sky_mask,
         )
 
     def camera_sample(self, index: int) -> Any:

@@ -1240,6 +1240,15 @@ def advance_adaptive_growth_gate(
             "surface_anchor_prune is a research departure and is recorded by "
             "the trainer, not this gate"
         )
+    sky_supervision = signed_config.get("sky_supervision") or {}
+    if isinstance(sky_supervision, dict) and sky_supervision.get("enabled"):
+        # Same policy: a semantic sky mask changing the loss and the growth
+        # eligibility is a research departure from full-frame parity.
+        raise ValueError(
+            "adaptive growth gate signs full-frame photometric supervision only; "
+            "sky_supervision is a research departure and is recorded by the "
+            "trainer, not this gate"
+        )
     warm_start_value = signed_config.get("warm_start_checkpoint")
     resume_value = signed_config.get("resume_checkpoint")
     if warm_start_value is not None and resume_value is not None:
