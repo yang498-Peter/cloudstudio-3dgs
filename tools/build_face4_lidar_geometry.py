@@ -5,6 +5,14 @@ The source Face4 RGB/mask cache is never rewritten.  Raw-fisheye sparse LiDAR
 range is forward-splatted into each signed Face4 virtual camera, intersected
 with that face's existing supervision mask, and stored in a separate signed
 sidecar consumed by ``FaceCacheDataset``.
+
+Hidden-point rejection (``--visibility-cell-px > 0``) is applied in both
+projection paths and the manifest records what was requested and what was
+effectively applied (``visibility_filter``).  ``--verify-visibility`` audits
+an existing cache: it samples faces and reports the fraction of 3x3 windows
+whose returns violate the cache's own loose visibility rule, plus how many
+returns a re-run of the filter would still remove (both ~0 on a filtered
+cache).
 """
 
 from __future__ import annotations
@@ -13,6 +21,7 @@ import argparse
 import hashlib
 import json
 import os
+import random
 import sys
 import tempfile
 from concurrent.futures import ThreadPoolExecutor
@@ -48,11 +57,23 @@ from cloudstudio_3dgs.geometry.lidar_projection import (
     DepthProjectionConfig,
     SparseDepthMap,
     project_camera_points_to_face,
+    visible_point_mask,
 )
+from cloudstudio_3dgs.training.alpha_support import window_range_spread_numpy
 from cloudstudio_3dgs.training.face_dataset import (
     SAMPLE_ID_SEPARATOR,
     verify_face_manifest,
 )
+
+MANIFEST_NAME = "face_lidar_geometry_manifest.json"
+
+# Where the hidden-point test runs in each projection path; recorded in the
+# manifest so a consumer can tell a filtered cache from one that only carried
+# the parameters (the pre-fix warp path did exactly that).
+VISIBILITY_APPLIED_IN_DIRECT = "project_camera_points_to_face_before_face_zbuffer"
+VISIBILITY_APPLIED_IN_WARP = "warped_face_raster_zbuffer_winners_before_supervision_mask"
+VISIBILITY_STATS_BASIS_DIRECT = "in_frustum_points_before_face_zbuffer"
+VISIBILITY_STATS_BASIS_WARP = "face_raster_returns_before_supervision_mask"
 
 
 def _read(path: Path) -> dict[str, Any]:
@@ -115,6 +136,47 @@ def _camera_calibration(camera: dict[str, Any]) -> tuple[np.ndarray, np.ndarray]
     return K, radial
 
 
+def face_visibility_keep_mask(
+    face_range: np.ndarray,
+    face_valid: np.ndarray,
+    config: DepthProjectionConfig,
+) -> tuple[np.ndarray, int, int]:
+    """Hidden-point test on a nearest-range face raster.
+
+    ``warp_sparse_depth_to_face`` z-buffers to the smallest range per pixel, so
+    the per-cell minimum over the raster equals the per-cell minimum over every
+    splatted point; filtering the z-buffer winners therefore keeps exactly the
+    returns ``project_camera_points_to_face`` keeps when it filters before its
+    own z-buffer.  Returns ``(keep HxW bool, candidates, kept)``; with the
+    filter disabled ``keep`` is ``face_valid`` and ``kept == candidates``.
+    """
+    valid = np.asarray(face_valid, dtype=bool)
+    if valid.ndim != 2:
+        raise ValueError("face_valid must be an HxW raster")
+    height, width = valid.shape
+    keep = valid.copy()
+    candidates = int(np.count_nonzero(valid))
+    if int(config.visibility_cell_px) <= 0 or candidates == 0:
+        return keep, candidates, candidates
+    ys, xs = np.nonzero(valid)
+    ranges = np.asarray(face_range, dtype=np.float64)[ys, xs]
+    visible = visible_point_mask(
+        np.column_stack([xs, ys]), ranges, width, height, config
+    )
+    keep[ys[~visible], xs[~visible]] = False
+    return keep, candidates, int(np.count_nonzero(visible))
+
+
+def _visibility_requested(config: DepthProjectionConfig) -> dict[str, Any] | None:
+    if int(config.visibility_cell_px) <= 0:
+        return None
+    return {
+        "visibility_cell_px": int(config.visibility_cell_px),
+        "visibility_tolerance": float(config.visibility_tolerance),
+        "visibility_margin_m": float(config.visibility_margin_m),
+    }
+
+
 def build_face4_lidar_geometry(
     *,
     face_manifest_path: Path,
@@ -155,6 +217,8 @@ def build_face4_lidar_geometry(
     projection_settings = dict(depth.get("projection", {}))
     projection_settings.update(projection_overrides or {})
     projection_config = DepthProjectionConfig(**projection_settings)
+    projection_config.validate()
+    visibility_enabled = int(projection_config.visibility_cell_px) > 0
     if direct_projection:
         assert point_cloud_path is not None
         expected_cloud_sha = str(depth.get("point_cloud_sha256", ""))
@@ -231,17 +295,23 @@ def build_face4_lidar_geometry(
                 raise ValueError(f"Face4 mask SHA256 mismatch for {sample_id}")
             with Image.open(mask_path) as source:
                 supervision_mask = np.asarray(source.convert("L"), dtype=np.uint8) > 0
+            visibility_candidates = 0
+            visibility_kept = 0
             if direct_projection:
                 assert points_camera is not None
                 assert point_source_index is not None
+                projection_stats: dict[str, int] = {}
                 face_sparse = project_camera_points_to_face(
                     points_camera,
                     spec,
                     source_index=point_source_index,
                     supervision_mask=supervision_mask,
                     config=projection_config,
+                    stats=projection_stats,
                 )
                 pixel_index = face_sparse.pixel_index
+                visibility_candidates = int(projection_stats.get("visibility_candidates", 0))
+                visibility_kept = int(projection_stats.get("visibility_kept", 0))
             else:
                 assert source_range is not None
                 assert source_confidence is not None
@@ -257,7 +327,14 @@ def build_face4_lidar_geometry(
                     spec,
                     unprojected=unprojected,
                 )
-                face_valid &= supervision_mask
+                # Hidden-point rejection on the full warped raster, before the
+                # supervision-mask intersection: returns outside the mask still
+                # define the front surface their neighbours are judged against,
+                # matching the direct path, which applies its mask last.
+                visible, visibility_candidates, visibility_kept = (
+                    face_visibility_keep_mask(face_range, face_valid, projection_config)
+                )
+                face_valid = visible & supervision_mask
                 keep = face_valid & np.isfinite(face_range) & (face_range > 0.0)
                 keep &= (
                     np.isfinite(face_confidence)
@@ -289,20 +366,25 @@ def build_face4_lidar_geometry(
                 artifact = _safe_artifact(output_root, relative)
                 _atomic_write(artifact, payload)
                 artifact_sha = hashlib.sha256(payload).hexdigest()
-            records.append(
-                {
-                    "sample_id": sample_id,
-                    "image_id": image_id,
-                    "face_id": face_id,
-                    "path": relative,
-                    "sha256": artifact_sha,
-                    "shape": [int(spec.height), int(spec.width)],
-                    "valid_pixels": int(pixel_index.size),
-                    "valid_fraction": float(
-                        pixel_index.size / max(1, np.count_nonzero(supervision_mask))
-                    ),
+            record = {
+                "sample_id": sample_id,
+                "image_id": image_id,
+                "face_id": face_id,
+                "path": relative,
+                "sha256": artifact_sha,
+                "shape": [int(spec.height), int(spec.width)],
+                "valid_pixels": int(pixel_index.size),
+                "valid_fraction": float(
+                    pixel_index.size / max(1, np.count_nonzero(supervision_mask))
+                ),
+            }
+            if visibility_enabled:
+                record["visibility"] = {
+                    "candidates": int(visibility_candidates),
+                    "kept": int(visibility_kept),
+                    "removed": int(visibility_candidates - visibility_kept),
                 }
-            )
+            records.append(record)
         return records
 
     images = list(face["images"])
@@ -313,6 +395,35 @@ def build_face4_lidar_geometry(
             batches = list(executor.map(process, images))
     records = [record for batch in batches for record in batch]
     valid_total = sum(int(record["valid_pixels"]) for record in records)
+    visibility_filter: dict[str, Any] = {
+        "requested": _visibility_requested(projection_config),
+        "applied": bool(visibility_enabled),
+        "applied_in": (
+            (VISIBILITY_APPLIED_IN_DIRECT if direct_projection else VISIBILITY_APPLIED_IN_WARP)
+            if visibility_enabled
+            else None
+        ),
+        "stats_basis": (
+            (VISIBILITY_STATS_BASIS_DIRECT if direct_projection else VISIBILITY_STATS_BASIS_WARP)
+            if visibility_enabled
+            else None
+        ),
+    }
+    if visibility_enabled:
+        candidates_total = sum(int(record["visibility"]["candidates"]) for record in records)
+        kept_total = sum(int(record["visibility"]["kept"]) for record in records)
+        visibility_filter.update(
+            {
+                "candidates": candidates_total,
+                "kept": kept_total,
+                "removed": candidates_total - kept_total,
+                "removed_fraction": (
+                    float((candidates_total - kept_total) / candidates_total)
+                    if candidates_total
+                    else 0.0
+                ),
+            }
+        )
     payload = {
         "schema_version": FACE_LIDAR_GEOMETRY_SCHEMA_VERSION,
         "kind": FACE_LIDAR_GEOMETRY_KIND,
@@ -328,12 +439,9 @@ def build_face4_lidar_geometry(
             if direct_projection
             else "kb4_forward_splat_nearest_range_zbuffer"
         )
-        + (
-            "_visibility_filtered"
-            if int(projection_config.visibility_cell_px) > 0
-            else ""
-        ),
+        + ("_visibility_filtered" if visibility_enabled else ""),
         "projection_config": projection_config.to_dict(),
+        "visibility_filter": visibility_filter,
         "intermediate_fisheye_raster": not direct_projection,
         "destination_pixel_quantizations": 1 if direct_projection else 2,
         "provenance_mode": (
@@ -367,19 +475,135 @@ def build_face4_lidar_geometry(
     signed = sign_face_lidar_geometry_manifest(payload)
     verify_face_lidar_geometry_manifest(signed)
     _atomic_write(
-        output_root / "face_lidar_geometry_manifest.json",
+        output_root / MANIFEST_NAME,
         (json.dumps(signed, ensure_ascii=False, indent=2) + "\n").encode("utf-8"),
     )
     return signed
 
 
+def verify_cache_visibility(
+    output_root: Path,
+    *,
+    sample_ids: list[str] | None = None,
+    sample_count: int = 5,
+    seed: int = 0,
+    projection_overrides: dict | None = None,
+    loose_window_radius_px: int = 1,
+) -> dict[str, Any]:
+    """Audit an existing cache against its own loose visibility rule.
+
+    For each sampled non-empty face: ``windows_loose_violation_frac`` is the
+    share of (2r+1)^2 pixel windows holding at least one return whose farthest
+    return exceeds ``(1 + tolerance) x nearest + margin`` (the audit's
+    "3x3 loose-rule violation"); ``rerun_removed_fraction`` is the share of
+    the face's returns a fresh ``visible_point_mask`` pass would drop.  A
+    cache the filter was really applied to scores 0 on both: the cell filter
+    judges every return against the minimum of an 18 px neighbourhood, which
+    bounds every 3x3 window, and re-applying it is idempotent.
+    """
+    output_root = Path(output_root)
+    manifest = _read(output_root / MANIFEST_NAME)
+    manifest_sha = verify_face_lidar_geometry_manifest(manifest)
+    settings = dict(manifest.get("projection_config", {}))
+    declared = manifest.get("visibility_filter")
+    settings.update(projection_overrides or {})
+    config = DepthProjectionConfig(**settings)
+    config.validate()
+    if int(config.visibility_cell_px) <= 0:
+        raise ValueError(
+            "cache manifest declares no visibility filter; pass --visibility-cell-px "
+            "to audit it against an explicit rule"
+        )
+    tolerance = float(config.visibility_tolerance)
+    margin = float(config.visibility_margin_m)
+    records = {str(r["sample_id"]): r for r in manifest["records"] if int(r["valid_pixels"]) > 0}
+    if sample_ids:
+        missing = [s for s in sample_ids if s not in records]
+        if missing:
+            raise ValueError(f"sample IDs absent or empty in cache: {missing[:5]}")
+        chosen = list(sample_ids)
+    else:
+        ordered = sorted(records)
+        rng = random.Random(int(seed))
+        chosen = ordered if len(ordered) <= sample_count else rng.sample(ordered, int(sample_count))
+    faces: list[dict[str, Any]] = []
+    for sample_id in chosen:
+        record = records[sample_id]
+        path = _safe_artifact(output_root, str(record["path"]))
+        if _sha256_file(path) != str(record["sha256"]):
+            raise ValueError(f"cache artifact SHA256 mismatch for {sample_id}")
+        range_m, _confidence, valid = load_sparse_depth(path).to_dense()
+        nearest, farthest = window_range_spread_numpy(
+            valid=valid, range_m=range_m, radius=int(loose_window_radius_px)
+        )
+        has_return = np.isfinite(farthest)
+        violation = has_return & (
+            farthest > nearest * np.float32(1.0 + tolerance) + np.float32(margin)
+        )
+        windows = int(np.count_nonzero(has_return))
+        _keep, candidates, kept = face_visibility_keep_mask(range_m, valid, config)
+        faces.append(
+            {
+                "sample_id": sample_id,
+                "valid_pixels": int(record["valid_pixels"]),
+                "windows_with_return": windows,
+                "windows_loose_violation_frac": (
+                    float(np.count_nonzero(violation) / windows) if windows else 0.0
+                ),
+                "rerun_removed": int(candidates - kept),
+                "rerun_removed_fraction": (
+                    float((candidates - kept) / candidates) if candidates else 0.0
+                ),
+                "manifest_visibility": record.get("visibility"),
+            }
+        )
+    violation_values = [f["windows_loose_violation_frac"] for f in faces]
+    removed_values = [f["rerun_removed_fraction"] for f in faces]
+
+    def _stats(values: list[float]) -> dict[str, float]:
+        if not values:
+            return {"mean": 0.0, "median": 0.0, "max": 0.0}
+        array = np.asarray(values, dtype=np.float64)
+        return {
+            "mean": float(array.mean()),
+            "median": float(np.median(array)),
+            "max": float(array.max()),
+        }
+
+    return {
+        "cache_root": str(output_root),
+        "face_lidar_geometry_manifest_sha256": manifest_sha,
+        "projection": manifest.get("projection"),
+        "manifest_visibility_filter": declared,
+        "rule": {
+            "visibility_cell_px": int(config.visibility_cell_px),
+            "visibility_tolerance": tolerance,
+            "visibility_margin_m": margin,
+            "loose_window_radius_px": int(loose_window_radius_px),
+        },
+        "sampled_faces": len(faces),
+        "windows_loose_violation_frac": _stats(violation_values),
+        "rerun_removed_fraction": _stats(removed_values),
+        "faces": faces,
+    }
+
+
+def _load_sample_ids(path: Path) -> list[str]:
+    payload = _read(path)
+    if isinstance(payload, dict):
+        payload = payload.get("view_sample_ids", payload.get("sample_ids"))
+    if not isinstance(payload, list) or not all(isinstance(s, str) for s in payload):
+        raise ValueError(f"{path} must hold a JSON list of sample IDs or a view_sample_ids key")
+    return list(payload)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--face-manifest", required=True, type=Path)
-    parser.add_argument("--face-root", required=True, type=Path)
-    parser.add_argument("--dataset-manifest", required=True, type=Path)
-    parser.add_argument("--depth-manifest", required=True, type=Path)
-    parser.add_argument("--depth-root", required=True, type=Path)
+    parser.add_argument("--face-manifest", type=Path)
+    parser.add_argument("--face-root", type=Path)
+    parser.add_argument("--dataset-manifest", type=Path)
+    parser.add_argument("--depth-manifest", type=Path)
+    parser.add_argument("--depth-root", type=Path)
     parser.add_argument(
         "--point-cloud",
         type=Path,
@@ -388,7 +612,12 @@ def main() -> int:
             "directly to Face4 instead of warping integer fisheye depth"
         ),
     )
-    parser.add_argument("--output", required=True, type=Path)
+    parser.add_argument(
+        "--output",
+        required=True,
+        type=Path,
+        help="cache root to build, or the existing cache to audit with --verify-visibility",
+    )
     parser.add_argument(
         "--storage-profile",
         choices=("audit", "trainer_compact"),
@@ -411,6 +640,29 @@ def main() -> int:
     )
     parser.add_argument("--visibility-tolerance", type=float, default=0.2)
     parser.add_argument("--visibility-margin-m", type=float, default=0.1)
+    parser.add_argument(
+        "--verify-visibility",
+        action="store_true",
+        help=(
+            "audit the existing cache at --output instead of building: sample "
+            "faces and report loose-rule window violations and what a re-run of "
+            "the filter would still remove"
+        ),
+    )
+    parser.add_argument(
+        "--sample-id",
+        action="append",
+        default=[],
+        help="verify only this sample_id (repeatable; image_id::face_id)",
+    )
+    parser.add_argument(
+        "--sample-ids-file",
+        type=Path,
+        help="JSON list of sample IDs, or an object with view_sample_ids (e.g. a diagnostic selection.json)",
+    )
+    parser.add_argument("--sample-count", type=int, default=5)
+    parser.add_argument("--seed", type=int, default=0)
+    parser.add_argument("--verify-report", type=Path, help="write the verify JSON here as well")
     args = parser.parse_args()
     projection_overrides = None
     if int(args.visibility_cell_px) > 0:
@@ -419,7 +671,32 @@ def main() -> int:
             "visibility_tolerance": float(args.visibility_tolerance),
             "visibility_margin_m": float(args.visibility_margin_m),
         }
-    manifest_path = args.output / "face_lidar_geometry_manifest.json"
+
+    if args.verify_visibility:
+        sample_ids = list(args.sample_id)
+        if args.sample_ids_file is not None:
+            sample_ids.extend(_load_sample_ids(args.sample_ids_file))
+        report = verify_cache_visibility(
+            args.output,
+            sample_ids=sample_ids or None,
+            sample_count=int(args.sample_count),
+            seed=int(args.seed),
+            projection_overrides=projection_overrides,
+        )
+        text = json.dumps(report, ensure_ascii=False, indent=2)
+        if args.verify_report is not None:
+            _atomic_write(args.verify_report, (text + "\n").encode("utf-8"))
+        print(text)
+        return 0
+
+    missing = [
+        name
+        for name in ("face_manifest", "face_root", "dataset_manifest", "depth_manifest", "depth_root")
+        if getattr(args, name) is None
+    ]
+    if missing:
+        parser.error("building requires --" + ", --".join(m.replace("_", "-") for m in missing))
+    manifest_path = args.output / MANIFEST_NAME
     if manifest_path.exists():
         raise FileExistsError(f"refusing to replace {manifest_path}")
     signed = build_face4_lidar_geometry(
@@ -435,10 +712,13 @@ def main() -> int:
         workers=args.workers,
     )
     summary = signed["summary"]
+    visibility = signed["visibility_filter"]
     print(
         f"Face4 LiDAR geometry {signed['split']}: "
         f"faces={summary['face_count']}, with_depth={summary['with_depth_count']}, "
-        f"valid_pixels={summary['valid_pixel_count']}, sha256="
+        f"valid_pixels={summary['valid_pixel_count']}, "
+        f"visibility_applied={visibility['applied']}, "
+        f"visibility_removed_fraction={visibility.get('removed_fraction')}, sha256="
         f"{signed['face_lidar_geometry_manifest_sha256']}"
     )
     return 0

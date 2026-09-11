@@ -146,6 +146,7 @@ def project_camera_points_to_face(
     source_index: np.ndarray | None = None,
     supervision_mask: np.ndarray | None = None,
     config: DepthProjectionConfig = DepthProjectionConfig(),
+    stats: dict[str, int] | None = None,
 ) -> SparseDepthMap:
     """Project exact camera-frame LiDAR points directly into one pinhole face.
 
@@ -153,6 +154,10 @@ def project_camera_points_to_face(
     deliberately avoids reconstructing rays from an intermediate integer
     fisheye depth map.  ``source_index`` remains bound to the original LAS
     point so downstream audits can prove where every retained sample came from.
+
+    ``stats``, when given, receives ``visibility_candidates`` (in-frustum
+    points before the hidden-point test) and ``visibility_kept`` so a builder
+    can record how much the filter actually removed.
     """
     config.validate()
     points = np.asarray(points_camera, dtype=np.float64)
@@ -214,6 +219,9 @@ def project_camera_points_to_face(
         )
 
     visible = visible_point_mask(rounded[selected], ranges[selected], width, height, config)
+    if stats is not None:
+        stats["visibility_candidates"] = int(len(selected))
+        stats["visibility_kept"] = int(np.count_nonzero(visible))
     selected = selected[visible]
     if not len(selected):
         return SparseDepthMap(
