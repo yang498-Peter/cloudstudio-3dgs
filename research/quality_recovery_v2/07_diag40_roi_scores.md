@@ -43,3 +43,18 @@ Raw Laplacian variance scales with the square of a global gain. Our canonical re
 ## Does the brightness term touch the full-delivery numbers?
 
 Re-scored the delivery compare strips the same way (whole panel, luma matched to the photo): G9 (SH1) 0.211 raw -> 0.219 matched, R1d 0.238 -> 0.232, reference 0.574 -> 0.534; luma ratios 0.95-0.96 (ours, merged with baked per-tile gains) and 1.01 (reference). The delivery-level gap (ours ~0.23 vs reference ~0.53 of the photo) stands; the brightness confound is specific to single-tile canonical checkpoints (no exposure gain applied at render time) and to dark ROIs such as the door leaf.
+
+## X1 and D-line arms (brightness-matched, ROI-all, appended 19:05)
+
+| region | arm | n | ours/photo | ref/photo | ours/ref median | Q1 | Q3 |
+|---|---|---|---|---|---|---|---|
+| indoor | D1_c134 | 49 | 0.526 | 0.508 | **0.906** | 0.816 | 1.074 |
+| indoor | D1_c134_v6f | 49 | 0.505 | 0.508 | **0.825** | 0.685 | 1.065 |
+| indoor | R1_c134_v6f | 49 | 0.473 | 0.508 | **0.825** | 0.704 | 1.008 |
+| indoor | X1_c134 | 49 | 0.510 | 0.508 | **0.858** | 0.713 | 1.079 |
+| outdoor | D1_c134 | 45 | 0.856 | 1.389 | **0.592** | 0.551 | 0.652 |
+| outdoor | D1_c134_v6f | 45 | 0.859 | 1.389 | **0.597** | 0.546 | 0.658 |
+| outdoor | R1_c134_v6f | 45 | 0.839 | 1.389 | **0.598** | 0.551 | 0.663 |
+| outdoor | X1_c134 | 45 | 0.874 | 1.389 | **0.612** | 0.560 | 0.683 |
+
+Reference rows (same metric): indoor R1 0.881 / G0 0.863 / G1 0.990; outdoor R1 0.595 / G0 0.597 / G1 0.597. Indoor spread across the eight near-identical D/R arms is 0.825-0.906, i.e. the ROI-all noise band indoors is about +-5%; outdoors 0.592-0.598 (+-1%).
