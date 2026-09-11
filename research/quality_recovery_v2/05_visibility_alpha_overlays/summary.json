@@ -1,0 +1,696 @@
+{
+  "generator": "tools/build_alpha_support_overlays.py",
+  "trainer_references": {
+    "alpha_mask_construction": "cloudstudio_3dgs/training/trainer.py::_render_supervision_loss (lidar_alpha_loss block) -> cloudstudio_3dgs/training/alpha_support.py::lidar_alpha_support",
+    "legacy_inline_construction": "trainer.py (pre-knob): lidar_alpha_valid = depth_mask & isfinite(confidence) & (confidence > 0); lidar_alpha_confidence = where(valid, confidence, 0); if radius > 0: max_pool2d(kernel 2r+1, stride 1, pad r); lidar_alpha_valid = pooled > 0; lidar_alpha_mask = rgb_mask & lidar_alpha_valid; lidar_alpha_support_fraction = lidar_alpha_mask.mean()",
+    "tensor_sample": "trainer.py::_tensor_sample (range_m / confidence / depth_mask from TrainingSample)",
+    "face_dataset_load": "face_dataset.py::FaceCacheDataset.__getitem__: rgb_mask = renderer mask PNG > 0; depth_range, depth_confidence, depth_valid = load_sparse_depth(npz).to_dense(); depth_mask = rgb_mask & depth_valid; crop [y:y+h, x:x+w]"
+  },
+  "strict_rule": {
+    "tolerance": 0.03,
+    "margin_m": 0.1,
+    "edge_erosion_px": 3
+  },
+  "regions": {
+    "indoor_door_leaf_Tile_1": {
+      "selection": "C:\\Peter\\3dgs-runs\\house0305_sop\\diag_v2\\indoor_door_leaf_Tile_1\\DIAG_40\\selection.json",
+      "config": "run_configs\\house0305_tiles\\diag_v2\\diag_indoor_door_leaf_Tile_1_40_R1_ci.json",
+      "tile": "Tile_1",
+      "radius_px": 6,
+      "lidar_alpha_weight": 0.1,
+      "lidar_alpha_target": 0.95,
+      "loose_rule": {
+        "tolerance": 0.2,
+        "margin_m": 0.1
+      },
+      "all_views": {
+        "views": 113,
+        "current_support_frac_all": {
+          "median": 0.8644718519804372,
+          "p10": 0.7238797966329433,
+          "p90": 0.9837505063122465,
+          "mean": 0.8560144129705985
+        },
+        "current_support_frac_rgb": {
+          "median": 0.8931118659356457,
+          "p10": 0.7362725482346699,
+          "p90": 0.9984287346379356,
+          "mean": 0.8821991909399824
+        },
+        "strict_support_frac_all": {
+          "median": 0.16354468111178078,
+          "p10": 0.07153933541793205,
+          "p90": 0.34859764634404056,
+          "mean": 0.17671187500573618
+        },
+        "strict_support_frac_rgb": {
+          "median": 0.16517328168148634,
+          "p10": 0.07245926439950992,
+          "p90": 0.3615571320237775,
+          "mean": 0.18220440336055369
+        },
+        "rejected_frac_of_current": {
+          "median": 0.8197103429902115,
+          "p10": 0.5968828718884958,
+          "p90": 0.9274467961247784,
+          "mean": 0.7700202209096865
+        },
+        "rejected_discontinuity_frac_of_current": {
+          "median": 0.5948236047825133,
+          "p10": 0.3897842963158379,
+          "p90": 0.7707583281906256,
+          "mean": 0.575351917230314
+        },
+        "rejected_interior_band_frac_of_current": {
+          "median": 0.12861619233050825,
+          "p10": 0.037533555620081975,
+          "p90": 0.177615445291436,
+          "mean": 0.11755622631117174
+        },
+        "rejected_edge_erosion_frac_of_current": {
+          "median": 0.06321347425448534,
+          "p10": 0.030459428918902434,
+          "p90": 0.13663096084495116,
+          "mean": 0.07711207736820071
+        },
+        "loose_violation_frac_of_current": {
+          "median": 0.5948236047825133,
+          "p10": 0.3897842963158379,
+          "p90": 0.7707583281906256,
+          "mean": 0.575351917230314
+        },
+        "returns_in_strict_band_of_window_nearest_frac": {
+          "median": 0.5063384199650294,
+          "p10": 0.3103201382430338,
+          "p90": 0.6429594012207459,
+          "mean": 0.5119807659214968
+        },
+        "windows_r1_loose_violation_frac": {
+          "median": 0.14746456607801542,
+          "p10": 0.017720430582382807,
+          "p90": 0.37803579995111064,
+          "mean": 0.18137705970604476
+        },
+        "return_range_median_m": {
+          "median": 6.933998107910156,
+          "p10": 3.7494941711425787,
+          "p90": 20.51416358947754,
+          "mean": 9.846017624424622
+        },
+        "pixel_weighted": {
+          "current_support_frac_rgb": 0.8510935745430503,
+          "strict_support_frac_rgb": 0.22192401907046738,
+          "rejected_frac_of_current": 0.7392483908839075,
+          "rejected_discontinuity_frac_of_current": 0.5546999038499217,
+          "rejected_interior_band_frac_of_current": 0.10853851109554821,
+          "rejected_edge_erosion_frac_of_current": 0.07600997593843754
+        }
+      },
+      "roi_views": {
+        "views": 63,
+        "current_support_frac_all": {
+          "median": 0.999076364319484,
+          "p10": 0.8967214496418037,
+          "p90": 1.0,
+          "mean": 0.9599101005816709
+        },
+        "current_support_frac_rgb": {
+          "median": 1.0,
+          "p10": 0.9951195359633416,
+          "p90": 1.0,
+          "mean": 0.998880120343466
+        },
+        "strict_support_frac_all": {
+          "median": 0.02126449301672597,
+          "p10": 0.0006405748401929626,
+          "p90": 0.09779117380455976,
+          "mean": 0.03635686125873651
+        },
+        "strict_support_frac_rgb": {
+          "median": 0.02126449301672597,
+          "p10": 0.0009464452444199314,
+          "p90": 0.09893793680187454,
+          "mean": 0.03744576579566766
+        },
+        "rejected_frac_of_current": {
+          "median": 0.978735506983274,
+          "p10": 0.9010620631981255,
+          "p90": 0.9990535547555801,
+          "mean": 0.9624840612260362
+        },
+        "rejected_discontinuity_frac_of_current": {
+          "median": 0.6582654633502091,
+          "p10": 0.19002069149646245,
+          "p90": 0.9393533325411608,
+          "mean": 0.6362596487587757
+        },
+        "rejected_interior_band_frac_of_current": {
+          "median": 0.20360638540027512,
+          "p10": 0.011175602805523198,
+          "p90": 0.610114034847313,
+          "mean": 0.2716671139401108
+        },
+        "rejected_edge_erosion_frac_of_current": {
+          "median": 0.047299972287105585,
+          "p10": 0.00838604659145263,
+          "p90": 0.0976484940093847,
+          "mean": 0.05455729852714973
+        },
+        "loose_violation_frac_of_current": {
+          "median": 0.6582654633502091,
+          "p10": 0.19002069149646245,
+          "p90": 0.9393533325411608,
+          "mean": 0.6362596487587757
+        },
+        "pixel_weighted": {
+          "current_support_frac_rgb": 0.9954538384290214,
+          "strict_support_frac_rgb": 0.04529022288411167,
+          "rejected_frac_of_current": 0.9545029401307181,
+          "rejected_discontinuity_frac_of_current": 0.8265282384010304,
+          "rejected_interior_band_frac_of_current": 0.08632918259318365,
+          "rejected_edge_erosion_frac_of_current": 0.04164551913650405
+        }
+      },
+      "by_face": {
+        "pitch_down_56": {
+          "current_support_frac_rgb": 0.5201186493098342,
+          "strict_support_frac_rgb": 0.462457883185121,
+          "rejected_frac_of_current": 0.1108607934001703,
+          "rejected_discontinuity_frac_of_current": 0.034004767285966624,
+          "rejected_interior_band_frac_of_current": 0.025162416648757253,
+          "rejected_edge_erosion_frac_of_current": 0.051693609465446426
+        },
+        "pitch_up_56": {
+          "current_support_frac_rgb": 0.8526016673025318,
+          "strict_support_frac_rgb": 0.16281497990786375,
+          "rejected_frac_of_current": 0.8090374601037562,
+          "rejected_discontinuity_frac_of_current": 0.5880616006087662,
+          "rejected_interior_band_frac_of_current": 0.11337415474262909,
+          "rejected_edge_erosion_frac_of_current": 0.10760170475236082
+        },
+        "yaw_minus_35": {
+          "current_support_frac_rgb": 0.9296300994270861,
+          "strict_support_frac_rgb": 0.2365444512479412,
+          "rejected_frac_of_current": 0.7455499220671542,
+          "rejected_discontinuity_frac_of_current": 0.5892969582933915,
+          "rejected_interior_band_frac_of_current": 0.11286874583500306,
+          "rejected_edge_erosion_frac_of_current": 0.043384217938759684
+        },
+        "yaw_plus_35": {
+          "current_support_frac_rgb": 0.9096852274520986,
+          "strict_support_frac_rgb": 0.19872691924642813,
+          "rejected_frac_of_current": 0.7815432050017626,
+          "rejected_discontinuity_frac_of_current": 0.5959757264882155,
+          "rejected_interior_band_frac_of_current": 0.1168616494082767,
+          "rejected_edge_erosion_frac_of_current": 0.06870582910527025
+        }
+      },
+      "by_camera": {
+        "left": {
+          "current_support_frac_rgb": 0.9908172123695962,
+          "strict_support_frac_rgb": 0.06520465553517427,
+          "rejected_frac_of_current": 0.9341910347124132,
+          "rejected_discontinuity_frac_of_current": 0.7914249180546176,
+          "rejected_interior_band_frac_of_current": 0.10228771467598272,
+          "rejected_edge_erosion_frac_of_current": 0.04047840198181293
+        },
+        "right": {
+          "current_support_frac_rgb": 0.8441509704104525,
+          "strict_support_frac_rgb": 0.22971110877027137,
+          "rejected_frac_of_current": 0.7278791154400039,
+          "rejected_discontinuity_frac_of_current": 0.5408938333150273,
+          "rejected_interior_band_frac_of_current": 0.10890306461160869,
+          "rejected_edge_erosion_frac_of_current": 0.07808221751336802
+        }
+      },
+      "torch_cross_check": {
+        "views": 5,
+        "all_identical": true,
+        "details": [
+          {
+            "current": true,
+            "strict": true,
+            "sample_id": "img_02167f65b42e301e9acb4f89::pitch_up_56"
+          },
+          {
+            "current": true,
+            "strict": true,
+            "sample_id": "img_02167f65b42e301e9acb4f89::yaw_minus_35"
+          },
+          {
+            "current": true,
+            "strict": true,
+            "sample_id": "img_02167f65b42e301e9acb4f89::yaw_plus_35"
+          },
+          {
+            "current": true,
+            "strict": true,
+            "sample_id": "img_05cc6ae9bfec314d854c8837::pitch_up_56"
+          },
+          {
+            "current": true,
+            "strict": true,
+            "sample_id": "img_05cc6ae9bfec314d854c8837::yaw_minus_35"
+          }
+        ]
+      }
+    },
+    "outdoor_gravel_Tile_0": {
+      "selection": "C:\\Peter\\3dgs-runs\\house0305_sop\\diag_v2\\outdoor_gravel_Tile_0\\DIAG_40\\selection.json",
+      "config": "run_configs\\house0305_tiles\\diag_v2\\diag_outdoor_gravel_Tile_0_40_R1_ci.json",
+      "tile": "Tile_0",
+      "radius_px": 6,
+      "lidar_alpha_weight": 0.1,
+      "lidar_alpha_target": 0.95,
+      "loose_rule": {
+        "tolerance": 0.2,
+        "margin_m": 0.1
+      },
+      "all_views": {
+        "views": 151,
+        "current_support_frac_all": {
+          "median": 0.8238562390562734,
+          "p10": 0.5485307103610675,
+          "p90": 0.8948527219689651,
+          "mean": 0.7579574496575594
+        },
+        "current_support_frac_rgb": {
+          "median": 0.8544839648719391,
+          "p10": 0.5672934074158127,
+          "p90": 0.9280584163017687,
+          "mean": 0.7855881124000088
+        },
+        "strict_support_frac_all": {
+          "median": 0.4113982686269774,
+          "p10": 0.16584773287460203,
+          "p90": 0.6018017318370675,
+          "mean": 0.40877099755801477
+        },
+        "strict_support_frac_rgb": {
+          "median": 0.42870179487207294,
+          "p10": 0.17053053982389957,
+          "p90": 0.620011008097067,
+          "mean": 0.42374519946205563
+        },
+        "rejected_frac_of_current": {
+          "median": 0.5160575298405643,
+          "p10": 0.0,
+          "p90": 0.7905033906635546,
+          "mean": 0.4274733505505981
+        },
+        "rejected_discontinuity_frac_of_current": {
+          "median": 0.3230444819730894,
+          "p10": 0.0,
+          "p90": 0.5854895956265569,
+          "mean": 0.2985061988936649
+        },
+        "rejected_interior_band_frac_of_current": {
+          "median": 0.07414610058991931,
+          "p10": 0.0,
+          "p90": 0.14277808190332952,
+          "mean": 0.07325651609831453
+        },
+        "rejected_edge_erosion_frac_of_current": {
+          "median": 0.05060330551752211,
+          "p10": 0.0,
+          "p90": 0.13199926924664385,
+          "mean": 0.055710635558618715
+        },
+        "loose_violation_frac_of_current": {
+          "median": 0.3230444819730894,
+          "p10": 0.0,
+          "p90": 0.5854895956265569,
+          "mean": 0.2985061988936649
+        },
+        "returns_in_strict_band_of_window_nearest_frac": {
+          "median": 0.6966383869937169,
+          "p10": 0.4462316839436968,
+          "p90": 1.0,
+          "mean": 0.7102004771312728
+        },
+        "windows_r1_loose_violation_frac": {
+          "median": 0.0467080959457382,
+          "p10": 0.0,
+          "p90": 0.29031642457457246,
+          "mean": 0.08989029636472859
+        },
+        "return_range_median_m": {
+          "median": 5.642949104309082,
+          "p10": 1.817456603050232,
+          "p90": 15.776100158691406,
+          "mean": 6.7582738873184915
+        },
+        "pixel_weighted": {
+          "current_support_frac_rgb": 0.7899192193547371,
+          "strict_support_frac_rgb": 0.4230660656229847,
+          "rejected_frac_of_current": 0.46441856932082803,
+          "rejected_discontinuity_frac_of_current": 0.33437220467325407,
+          "rejected_interior_band_frac_of_current": 0.07390103457972827,
+          "rejected_edge_erosion_frac_of_current": 0.0561453300678457
+        }
+      },
+      "roi_views": {
+        "views": 63,
+        "current_support_frac_all": {
+          "median": 0.9998358256562283,
+          "p10": 0.7783940327904387,
+          "p90": 1.0,
+          "mean": 0.9292948502554685
+        },
+        "current_support_frac_rgb": {
+          "median": 0.9998358256562283,
+          "p10": 0.8496216866755547,
+          "p90": 1.0,
+          "mean": 0.9591826547229133
+        },
+        "strict_support_frac_all": {
+          "median": 0.909723219270958,
+          "p10": 0.7052260075952725,
+          "p90": 0.9855091362858933,
+          "mean": 0.8677695223144384
+        },
+        "strict_support_frac_rgb": {
+          "median": 0.9284861845972957,
+          "p10": 0.7215389666315363,
+          "p90": 0.9881338004739635,
+          "mean": 0.8976572813480541
+        },
+        "rejected_frac_of_current": {
+          "median": 0.016660020149441693,
+          "p10": 0.0,
+          "p90": 0.1670216959183177,
+          "mean": 0.06158310816945908
+        },
+        "rejected_discontinuity_frac_of_current": {
+          "median": 0.0,
+          "p10": 0.0,
+          "p90": 0.0,
+          "mean": 0.0004407261463174191
+        },
+        "rejected_interior_band_frac_of_current": {
+          "median": 0.01050052263721177,
+          "p10": 0.0,
+          "p90": 0.12805180973458644,
+          "mean": 0.0423762117516744
+        },
+        "rejected_edge_erosion_frac_of_current": {
+          "median": 0.009995678350023844,
+          "p10": 0.0,
+          "p90": 0.044038639090987854,
+          "mean": 0.01876617027146727
+        },
+        "loose_violation_frac_of_current": {
+          "median": 0.0,
+          "p10": 0.0,
+          "p90": 0.0,
+          "mean": 0.0004407261463174191
+        },
+        "pixel_weighted": {
+          "current_support_frac_rgb": 0.9117401917909003,
+          "strict_support_frac_rgb": 0.8654074494804973,
+          "rejected_frac_of_current": 0.05081792239452898,
+          "rejected_discontinuity_frac_of_current": 0.0005030607114848123,
+          "rejected_interior_band_frac_of_current": 0.0350995517511666,
+          "rejected_edge_erosion_frac_of_current": 0.015215309931877568
+        }
+      },
+      "by_face": {
+        "pitch_down_56": {
+          "current_support_frac_rgb": 0.5949341282771131,
+          "strict_support_frac_rgb": 0.5889379181588104,
+          "rejected_frac_of_current": 0.01007877987377745,
+          "rejected_discontinuity_frac_of_current": 0.0038016502488340716,
+          "rejected_interior_band_frac_of_current": 0.0022633936132609354,
+          "rejected_edge_erosion_frac_of_current": 0.004013736011682443
+        },
+        "pitch_up_56": {
+          "current_support_frac_rgb": 0.7919944599062342,
+          "strict_support_frac_rgb": 0.18646487020179275,
+          "rejected_frac_of_current": 0.7645629109275983,
+          "rejected_discontinuity_frac_of_current": 0.5811877255427967,
+          "rejected_interior_band_frac_of_current": 0.0671429272049723,
+          "rejected_edge_erosion_frac_of_current": 0.11623225817982927
+        },
+        "yaw_minus_35": {
+          "current_support_frac_rgb": 0.8892278555352469,
+          "strict_support_frac_rgb": 0.4364726700649947,
+          "rejected_frac_of_current": 0.5091554236093159,
+          "rejected_discontinuity_frac_of_current": 0.36108267215129186,
+          "rejected_interior_band_frac_of_current": 0.09805699457228687,
+          "rejected_edge_erosion_frac_of_current": 0.050015756885737124
+        },
+        "yaw_plus_35": {
+          "current_support_frac_rgb": 0.8654385870650523,
+          "strict_support_frac_rgb": 0.4672482643603263,
+          "rejected_frac_of_current": 0.4601023442403953,
+          "rejected_discontinuity_frac_of_current": 0.3138113589297881,
+          "rejected_interior_band_frac_of_current": 0.09948293893815754,
+          "rejected_edge_erosion_frac_of_current": 0.04680804637244961
+        }
+      },
+      "by_camera": {
+        "left": {
+          "current_support_frac_rgb": 0.8002193836338835,
+          "strict_support_frac_rgb": 0.4164916856520397,
+          "rejected_frac_of_current": 0.4795281216999449,
+          "rejected_discontinuity_frac_of_current": 0.3589643923166101,
+          "rejected_interior_band_frac_of_current": 0.06488311869547514,
+          "rejected_edge_erosion_frac_of_current": 0.05568061068785968
+        },
+        "right": {
+          "current_support_frac_rgb": 0.7779902206303886,
+          "strict_support_frac_rgb": 0.4306800966385448,
+          "rejected_frac_of_current": 0.4464196525637893,
+          "rejected_discontinuity_frac_of_current": 0.3050773104791672,
+          "rejected_interior_band_frac_of_current": 0.08464342543618968,
+          "rejected_edge_erosion_frac_of_current": 0.056698916648432414
+        }
+      },
+      "torch_cross_check": {
+        "views": 5,
+        "all_identical": true,
+        "details": [
+          {
+            "current": true,
+            "strict": true,
+            "sample_id": "img_03f32cc827b85f5858eb1527::pitch_down_56"
+          },
+          {
+            "current": true,
+            "strict": true,
+            "sample_id": "img_03f32cc827b85f5858eb1527::pitch_up_56"
+          },
+          {
+            "current": true,
+            "strict": true,
+            "sample_id": "img_03f32cc827b85f5858eb1527::yaw_minus_35"
+          },
+          {
+            "current": true,
+            "strict": true,
+            "sample_id": "img_03f32cc827b85f5858eb1527::yaw_plus_35"
+          },
+          {
+            "current": true,
+            "strict": true,
+            "sample_id": "img_0466fd896d0aec73619005f8::pitch_up_56"
+          }
+        ]
+      }
+    }
+  },
+  "rendered": [
+    {
+      "region": "indoor_door_leaf_Tile_1",
+      "sample_id": "img_26e10d650ada982eed86237e::yaw_minus_35",
+      "file": "indoor_door_leaf_Tile_1__00__img_26e10d650ada982eed86237e__yaw_minus_35.png",
+      "rejected_frac_of_current": 0.47174867994029096,
+      "roi_file": "indoor_door_leaf_Tile_1__00__img_26e10d650ada982eed86237e__yaw_minus_35__roi.png",
+      "roi_rejected_frac_of_current": 0.9126040428061831
+    },
+    {
+      "region": "indoor_door_leaf_Tile_1",
+      "sample_id": "img_9f8e6e6735bab2261cf49998::pitch_up_56",
+      "file": "indoor_door_leaf_Tile_1__01__img_9f8e6e6735bab2261cf49998__pitch_up_56.png",
+      "rejected_frac_of_current": 0.7157032629510806,
+      "roi_file": "indoor_door_leaf_Tile_1__01__img_9f8e6e6735bab2261cf49998__pitch_up_56__roi.png",
+      "roi_rejected_frac_of_current": 0.9115277508897857
+    },
+    {
+      "region": "indoor_door_leaf_Tile_1",
+      "sample_id": "img_88226fd046cc5356cc68c8ec::yaw_minus_35",
+      "file": "indoor_door_leaf_Tile_1__02__img_88226fd046cc5356cc68c8ec__yaw_minus_35.png",
+      "rejected_frac_of_current": 0.755675748683128,
+      "roi_file": "indoor_door_leaf_Tile_1__02__img_88226fd046cc5356cc68c8ec__yaw_minus_35__roi.png",
+      "roi_rejected_frac_of_current": 0.9935266392220035
+    },
+    {
+      "region": "indoor_door_leaf_Tile_1",
+      "sample_id": "img_a4bc513964ab0170b07c28bc::yaw_minus_35",
+      "file": "indoor_door_leaf_Tile_1__03__img_a4bc513964ab0170b07c28bc__yaw_minus_35.png",
+      "rejected_frac_of_current": 0.7863099186752168,
+      "roi_file": "indoor_door_leaf_Tile_1__03__img_a4bc513964ab0170b07c28bc__yaw_minus_35__roi.png",
+      "roi_rejected_frac_of_current": 0.9970933753179121
+    },
+    {
+      "region": "indoor_door_leaf_Tile_1",
+      "sample_id": "img_7c4bd9a8b55c8f86fa134466::pitch_up_56",
+      "file": "indoor_door_leaf_Tile_1__04__img_7c4bd9a8b55c8f86fa134466__pitch_up_56.png",
+      "rejected_frac_of_current": 0.8197103429902115,
+      "roi_file": "indoor_door_leaf_Tile_1__04__img_7c4bd9a8b55c8f86fa134466__pitch_up_56__roi.png",
+      "roi_rejected_frac_of_current": 0.9744675369828527
+    },
+    {
+      "region": "indoor_door_leaf_Tile_1",
+      "sample_id": "img_e1287e860ec48f842b16e821::yaw_plus_35",
+      "file": "indoor_door_leaf_Tile_1__05__img_e1287e860ec48f842b16e821__yaw_plus_35.png",
+      "rejected_frac_of_current": 0.8500104424582805,
+      "roi_file": "indoor_door_leaf_Tile_1__05__img_e1287e860ec48f842b16e821__yaw_plus_35__roi.png",
+      "roi_rejected_frac_of_current": 0.9997360576325922
+    },
+    {
+      "region": "indoor_door_leaf_Tile_1",
+      "sample_id": "img_e59222a5e5b43cad84439894::yaw_plus_35",
+      "file": "indoor_door_leaf_Tile_1__06__img_e59222a5e5b43cad84439894__yaw_plus_35.png",
+      "rejected_frac_of_current": 0.877287114233704,
+      "roi_file": "indoor_door_leaf_Tile_1__06__img_e59222a5e5b43cad84439894__yaw_plus_35__roi.png",
+      "roi_rejected_frac_of_current": 0.9971478918015514
+    },
+    {
+      "region": "indoor_door_leaf_Tile_1",
+      "sample_id": "img_b4812019b4dfa216489f95df::yaw_minus_35",
+      "file": "indoor_door_leaf_Tile_1__07__img_b4812019b4dfa216489f95df__yaw_minus_35.png",
+      "rejected_frac_of_current": 0.8839582523910139,
+      "roi_file": "indoor_door_leaf_Tile_1__07__img_b4812019b4dfa216489f95df__yaw_minus_35__roi.png",
+      "roi_rejected_frac_of_current": 0.9681591494492245
+    },
+    {
+      "region": "indoor_door_leaf_Tile_1",
+      "sample_id": "img_1fb3a72aca781ca07d397457::yaw_minus_35",
+      "file": "indoor_door_leaf_Tile_1__08__img_1fb3a72aca781ca07d397457__yaw_minus_35.png",
+      "rejected_frac_of_current": 0.9060174793092007,
+      "roi_file": "indoor_door_leaf_Tile_1__08__img_1fb3a72aca781ca07d397457__yaw_minus_35__roi.png",
+      "roi_rejected_frac_of_current": 0.982318339100346
+    },
+    {
+      "region": "indoor_door_leaf_Tile_1",
+      "sample_id": "img_dad684e3df7bafd45b805a5d::yaw_plus_35",
+      "file": "indoor_door_leaf_Tile_1__09__img_dad684e3df7bafd45b805a5d__yaw_plus_35.png",
+      "rejected_frac_of_current": 0.9122509204546245,
+      "roi_file": "indoor_door_leaf_Tile_1__09__img_dad684e3df7bafd45b805a5d__yaw_plus_35__roi.png",
+      "roi_rejected_frac_of_current": 0.9844842448041375
+    },
+    {
+      "region": "indoor_door_leaf_Tile_1",
+      "sample_id": "img_6f0133802dcbba5715db2a6b::yaw_minus_35",
+      "file": "indoor_door_leaf_Tile_1__10__img_6f0133802dcbba5715db2a6b__yaw_minus_35.png",
+      "rejected_frac_of_current": 0.9262991313533732,
+      "roi_file": "indoor_door_leaf_Tile_1__10__img_6f0133802dcbba5715db2a6b__yaw_minus_35__roi.png",
+      "roi_rejected_frac_of_current": 0.9598221963513209
+    },
+    {
+      "region": "indoor_door_leaf_Tile_1",
+      "sample_id": "img_02167f65b42e301e9acb4f89::yaw_plus_35",
+      "file": "indoor_door_leaf_Tile_1__11__img_02167f65b42e301e9acb4f89__yaw_plus_35.png",
+      "rejected_frac_of_current": 0.9712633019161487,
+      "roi_file": "indoor_door_leaf_Tile_1__11__img_02167f65b42e301e9acb4f89__yaw_plus_35__roi.png",
+      "roi_rejected_frac_of_current": 0.9717462047738895
+    },
+    {
+      "region": "outdoor_gravel_Tile_0",
+      "sample_id": "img_074273e7808b362c2a94f76a::pitch_down_56",
+      "file": "outdoor_gravel_Tile_0__00__img_074273e7808b362c2a94f76a__pitch_down_56.png",
+      "rejected_frac_of_current": 0.0,
+      "roi_file": "outdoor_gravel_Tile_0__00__img_074273e7808b362c2a94f76a__pitch_down_56__roi.png",
+      "roi_rejected_frac_of_current": 0.0
+    },
+    {
+      "region": "outdoor_gravel_Tile_0",
+      "sample_id": "img_69e4bef02a10ed141acc261e::pitch_down_56",
+      "file": "outdoor_gravel_Tile_0__01__img_69e4bef02a10ed141acc261e__pitch_down_56.png",
+      "rejected_frac_of_current": 0.0,
+      "roi_file": "outdoor_gravel_Tile_0__01__img_69e4bef02a10ed141acc261e__pitch_down_56__roi.png",
+      "roi_rejected_frac_of_current": 0.0
+    },
+    {
+      "region": "outdoor_gravel_Tile_0",
+      "sample_id": "img_ba2f05a90b6e766693a2bd0d::pitch_down_56",
+      "file": "outdoor_gravel_Tile_0__02__img_ba2f05a90b6e766693a2bd0d__pitch_down_56.png",
+      "rejected_frac_of_current": 0.0,
+      "roi_file": "outdoor_gravel_Tile_0__02__img_ba2f05a90b6e766693a2bd0d__pitch_down_56__roi.png",
+      "roi_rejected_frac_of_current": 0.0
+    },
+    {
+      "region": "outdoor_gravel_Tile_0",
+      "sample_id": "img_4ce1f1404af327ce8e242a2e::pitch_down_56",
+      "file": "outdoor_gravel_Tile_0__03__img_4ce1f1404af327ce8e242a2e__pitch_down_56.png",
+      "rejected_frac_of_current": 0.0009216041272728205,
+      "roi_file": "outdoor_gravel_Tile_0__03__img_4ce1f1404af327ce8e242a2e__pitch_down_56__roi.png",
+      "roi_rejected_frac_of_current": 0.0
+    },
+    {
+      "region": "outdoor_gravel_Tile_0",
+      "sample_id": "img_03f32cc827b85f5858eb1527::yaw_plus_35",
+      "file": "outdoor_gravel_Tile_0__04__img_03f32cc827b85f5858eb1527__yaw_plus_35.png",
+      "rejected_frac_of_current": 0.24150753584499948,
+      "roi_file": "outdoor_gravel_Tile_0__04__img_03f32cc827b85f5858eb1527__yaw_plus_35__roi.png",
+      "roi_rejected_frac_of_current": 0.005817219812547255
+    },
+    {
+      "region": "outdoor_gravel_Tile_0",
+      "sample_id": "img_38fa922ad61d7da7aa5839a9::yaw_minus_35",
+      "file": "outdoor_gravel_Tile_0__05__img_38fa922ad61d7da7aa5839a9__yaw_minus_35.png",
+      "rejected_frac_of_current": 0.3904540427132463,
+      "roi_file": "outdoor_gravel_Tile_0__05__img_38fa922ad61d7da7aa5839a9__yaw_minus_35__roi.png",
+      "roi_rejected_frac_of_current": 0.0721146991730824
+    },
+    {
+      "region": "outdoor_gravel_Tile_0",
+      "sample_id": "img_f0ff00b70da5711d5c787073::yaw_minus_35",
+      "file": "outdoor_gravel_Tile_0__06__img_f0ff00b70da5711d5c787073__yaw_minus_35.png",
+      "rejected_frac_of_current": 0.45685977013233847,
+      "roi_file": "outdoor_gravel_Tile_0__06__img_f0ff00b70da5711d5c787073__yaw_minus_35__roi.png",
+      "roi_rejected_frac_of_current": 0.11139083139083139
+    },
+    {
+      "region": "outdoor_gravel_Tile_0",
+      "sample_id": "img_6cda7e312f7350eff34e978b::yaw_minus_35",
+      "file": "outdoor_gravel_Tile_0__07__img_6cda7e312f7350eff34e978b__yaw_minus_35.png",
+      "rejected_frac_of_current": 0.4816465446312387,
+      "roi_file": "outdoor_gravel_Tile_0__07__img_6cda7e312f7350eff34e978b__yaw_minus_35__roi.png",
+      "roi_rejected_frac_of_current": 0.29946843353100416
+    },
+    {
+      "region": "outdoor_gravel_Tile_0",
+      "sample_id": "img_18576273c5c20fc7e1f342c8::yaw_minus_35",
+      "file": "outdoor_gravel_Tile_0__08__img_18576273c5c20fc7e1f342c8__yaw_minus_35.png",
+      "rejected_frac_of_current": 0.5126095784019693,
+      "roi_file": "outdoor_gravel_Tile_0__08__img_18576273c5c20fc7e1f342c8__yaw_minus_35__roi.png",
+      "roi_rejected_frac_of_current": 0.11928332403792527
+    },
+    {
+      "region": "outdoor_gravel_Tile_0",
+      "sample_id": "img_e08b30473e1f1809ad33265e::yaw_plus_35",
+      "file": "outdoor_gravel_Tile_0__09__img_e08b30473e1f1809ad33265e__yaw_plus_35.png",
+      "rejected_frac_of_current": 0.5256880341904059,
+      "roi_file": "outdoor_gravel_Tile_0__09__img_e08b30473e1f1809ad33265e__yaw_plus_35__roi.png",
+      "roi_rejected_frac_of_current": 0.3498670068396482
+    },
+    {
+      "region": "outdoor_gravel_Tile_0",
+      "sample_id": "img_9294bdfdfc421be19feca3a8::yaw_plus_35",
+      "file": "outdoor_gravel_Tile_0__10__img_9294bdfdfc421be19feca3a8__yaw_plus_35.png",
+      "rejected_frac_of_current": 0.5380734398155771,
+      "roi_file": "outdoor_gravel_Tile_0__10__img_9294bdfdfc421be19feca3a8__yaw_plus_35__roi.png",
+      "roi_rejected_frac_of_current": 0.2894002350373541
+    },
+    {
+      "region": "outdoor_gravel_Tile_0",
+      "sample_id": "img_c54fcbe99fb2556e3eee453b::yaw_minus_35",
+      "file": "outdoor_gravel_Tile_0__11__img_c54fcbe99fb2556e3eee453b__yaw_minus_35.png",
+      "rejected_frac_of_current": 0.7596578066358401,
+      "roi_file": "outdoor_gravel_Tile_0__11__img_c54fcbe99fb2556e3eee453b__yaw_minus_35__roi.png",
+      "roi_rejected_frac_of_current": 0.0954414433650048
+    }
+  ]
+}

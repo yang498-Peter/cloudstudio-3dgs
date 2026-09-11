@@ -26,6 +26,11 @@ from cloudstudio_3dgs.data.face_lidar_geometry import (
 from cloudstudio_3dgs.data.renderer_masks import verify_renderer_mask_manifest
 from cloudstudio_3dgs.geometry.lidar_projection import SparseDepthMap
 from cloudstudio_3dgs.evaluation.quality_report import sign_run_manifest
+from cloudstudio_3dgs.training.alpha_support import (
+    ALPHA_SUPPORT_MODES,
+    lidar_alpha_support,
+    strict_visibility_contract,
+)
 from cloudstudio_3dgs.training.backend import (
     GsplatBackend,
     rendered_range_to_euclidean,
@@ -62,6 +67,7 @@ from cloudstudio_3dgs.pipeline.mipmap_gate import (
 from cloudstudio_3dgs.training.exposure import (
     ExposureCompensationConfig,
     ExposureCompensator,
+    ExposureCurve,
 )
 from cloudstudio_3dgs.training.golden_eval import (
     GoldenEvaluationConfig,
@@ -270,6 +276,11 @@ class TrainerConfig:
     lidar_alpha_weight: float = 0.0
     lidar_alpha_target: float = 0.95
     lidar_alpha_dilation_radius_px: int = 0
+    # "dilated" grows every signed LiDAR return by the dilation radius (the
+    # historical construction); "strict_visibility" supports a pixel only
+    # where the returns in its window agree on one surface, so silhouettes
+    # are not pushed across depth discontinuities. See alpha_support.py.
+    lidar_alpha_support_mode: str = "dilated"
     da2_depth_weight: float = 0.0
     # Monocular depth supervision: pixels whose aligned target is at or beyond
     # this range are excluded (sky and far background saturate the relative
@@ -535,6 +546,7 @@ class TrainerConfig:
                 "lidar_alpha_weight",
                 "lidar_alpha_target",
                 "lidar_alpha_dilation_radius_px",
+                "lidar_alpha_support_mode",
                 "da2_depth_weight",
                 "mono_depth_max_range_m",
                 "da2_depth_space",
@@ -723,6 +735,7 @@ class TrainerConfig:
         unsupported_fresh_auxiliary = set(self.warm_start_fresh_auxiliary) - {
             "rig_pose_deltas",
             "exposure_log_gains",
+            "exposure_curve_knots",
         }
         if unsupported_fresh_auxiliary:
             raise ValueError(
@@ -741,12 +754,20 @@ class TrainerConfig:
                 raise ValueError(
                     "fresh rig_pose_deltas requires rig_pose_refinement.enabled"
                 )
-            if (
-                "exposure_log_gains" in self.warm_start_fresh_auxiliary
-                and not self.exposure_compensation.enabled
+            if "exposure_log_gains" in self.warm_start_fresh_auxiliary and not (
+                self.exposure_compensation.enabled
+                and not self.exposure_compensation.is_curve
             ):
                 raise ValueError(
-                    "fresh exposure_log_gains requires exposure compensation"
+                    "fresh exposure_log_gains requires per_image exposure compensation"
+                )
+            if "exposure_curve_knots" in self.warm_start_fresh_auxiliary and not (
+                self.exposure_compensation.enabled
+                and self.exposure_compensation.is_curve
+                and not self.exposure_compensation.is_frozen_curve
+            ):
+                raise ValueError(
+                    "fresh exposure_curve_knots requires a learnable camera_curve exposure"
                 )
         if (self.background_image_manifest is None) != (
             self.background_image_root is None
@@ -893,6 +914,18 @@ class TrainerConfig:
             raise ValueError(
                 "lidar_alpha_dilation_radius_px requires positive lidar_alpha_weight"
             )
+        if self.lidar_alpha_support_mode not in ALPHA_SUPPORT_MODES:
+            raise ValueError(
+                "lidar_alpha_support_mode must be one of "
+                + ", ".join(ALPHA_SUPPORT_MODES)
+            )
+        if (
+            self.lidar_alpha_support_mode != "dilated"
+            and self.lidar_alpha_weight <= 0.0
+        ):
+            raise ValueError(
+                "lidar_alpha_support_mode requires positive lidar_alpha_weight"
+            )
         if (
             self.lidar_linear_aux_weight > 0.0
             and self.lidar_range_loss_mode != "robust_log_huber"
@@ -954,7 +987,11 @@ class TrainerConfig:
             and not self.exposure_compensation.enabled
         ) or (
             self.exposure_compensation.enabled
-            and self.exposure_compensation.learning_rate == 0.0
+            and (
+                self.exposure_compensation.learning_rate == 0.0
+                # A frozen scene-wide camera curve is a fixed nuisance too.
+                or self.exposure_compensation.is_frozen_curve
+            )
             and not self.ppisp.enabled
         )
         expected_lrs = {"means", "scales", "quats", "opacities", "colors"}
@@ -1366,6 +1403,16 @@ class TrainerConfig:
                     raise ValueError(
                         "pre-optimizer vendor lifecycle permits only the signed "
                         "surface-alpha dilation profile"
+                    )
+                if (
+                    self.lidar_alpha_support_mode != "dilated"
+                    and not self.surface_alpha_floor_profile
+                ):
+                    # The support-mode knob is a research variation of the
+                    # enhanced-surface profile, never of a parity arm.
+                    raise ValueError(
+                        "pre-optimizer vendor lifecycle permits a non-dilated "
+                        "alpha support mode only under surface_alpha_floor_profile"
                     )
                 cull_defaults = {
                     "opacity_cull_min_observations": 0,
@@ -2077,13 +2124,28 @@ class TrainerConfig:
                 "lidar_alpha_coverage": {
                     "enabled": uses_lidar_alpha,
                     "source": (
-                        "signed_lidar_depth_mask"
+                        "signed_lidar_depth_mask_strict_visibility"
+                        if self.lidar_alpha_support_mode == "strict_visibility"
+                        else "signed_lidar_depth_mask"
                         if self.lidar_alpha_dilation_radius_px == 0
                         else "signed_lidar_depth_mask_confidence_max_dilated"
                     ),
                     "target": self.lidar_alpha_target,
                     "dilation_radius_px": self.lidar_alpha_dilation_radius_px,
                     "loss": "confidence_weighted_squared_deficit",
+                    # Keys present only off the default so every existing
+                    # contract (and its trainer_config_sha256) keeps its
+                    # exact shape; the strict mode changes the identity.
+                    **(
+                        {
+                            "support_mode": self.lidar_alpha_support_mode,
+                            "strict_visibility": strict_visibility_contract(
+                                self.lidar_alpha_dilation_radius_px
+                            ),
+                        }
+                        if self.lidar_alpha_support_mode != "dilated"
+                        else {}
+                    ),
                 },
             },
             "dynamic_person_mask": {
@@ -2942,25 +3004,19 @@ def _render_supervision_loss(
             raise ValueError("LiDAR alpha coverage requires depth supervision")
         if rendered_alpha is None:
             raise RuntimeError("rasterizer did not return alpha coverage")
-        lidar_alpha_valid = (
-            tensors["depth_mask"]
-            & backend.torch.isfinite(tensors["confidence"])
-            & (tensors["confidence"] > 0.0)
+        # Mask + pooled-confidence weights; "dilated" is the historical
+        # inline construction op for op, "strict_visibility" rejects windows
+        # whose returns disagree on one surface (alpha_support.py).
+        alpha_support = lidar_alpha_support(
+            backend.torch,
+            depth_mask=tensors["depth_mask"],
+            confidence=tensors["confidence"],
+            range_m=tensors.get("range_m"),
+            mode=config.lidar_alpha_support_mode,
+            dilation_radius_px=config.lidar_alpha_dilation_radius_px,
         )
-        lidar_alpha_confidence = backend.torch.where(
-            lidar_alpha_valid,
-            tensors["confidence"],
-            backend.torch.zeros_like(tensors["confidence"]),
-        )
-        if config.lidar_alpha_dilation_radius_px > 0:
-            radius = config.lidar_alpha_dilation_radius_px
-            lidar_alpha_confidence = backend.torch.nn.functional.max_pool2d(
-                lidar_alpha_confidence[None, None],
-                kernel_size=2 * radius + 1,
-                stride=1,
-                padding=radius,
-            )[0, 0]
-            lidar_alpha_valid = lidar_alpha_confidence > 0.0
+        lidar_alpha_valid = alpha_support.support
+        lidar_alpha_confidence = alpha_support.weights
         lidar_alpha_mask = tensors["rgb_mask"] & lidar_alpha_valid
         lidar_alpha_support_fraction = lidar_alpha_mask.to(
             dtype=rendered.dtype
@@ -3803,7 +3859,31 @@ def train(
         auxiliary_optimizers["rig_pose_deltas"] = pose_optimizer
     exposure = None
     exposure_optimizer = None
-    if config.exposure_compensation.enabled:
+    if config.exposure_compensation.enabled and config.exposure_compensation.is_curve:
+        # camera_curve: one smooth log-gain curve per physical camera over
+        # capture time, read per base image at its dataset-manifest timestamp.
+        # With frozen_curve the knots come from the scene-wide fit and are not
+        # optimised (no auxiliary optimizer), so every tile shares one
+        # correction and the checkpoint still carries the curve it trained
+        # against.
+        timestamp_ns_by_image = {
+            str(image["image_id"]): int(image["timestamp_ns"])
+            for image in json.loads(
+                config.dataset_manifest.read_text(encoding="utf-8")
+            )["images"]
+        }
+        exposure = ExposureCurve(
+            getattr(trainset, "exposure_image_ids", trainset.image_ids),
+            config=config.exposure_compensation,
+            device=config.device,
+            camera_by_image=trainset.camera_id_by_image,
+            timestamp_ns_by_image=timestamp_ns_by_image,
+        )
+        exposure_optimizer = exposure.make_optimizer()
+        auxiliary_params["exposure_curve_knots"] = exposure.knot_log_gains
+        if exposure_optimizer is not None:
+            auxiliary_optimizers["exposure_curve_knots"] = exposure_optimizer
+    elif config.exposure_compensation.enabled:
         # Face samples ("base::face_id") share their base image's exposure:
         # every face of one capture saw the same physical auto-exposure.
         exposure = ExposureCompensator(
