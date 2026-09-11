@@ -89,6 +89,10 @@ class TrainingSample:
     mesh_confidence: np.ndarray | None = None
     mesh_depth_mask: np.ndarray | None = None
     mesh_geometry_cache_path: Path | None = None
+    # Raw per-face sky label (bool [H, W], same crop as rgb_mask) from the
+    # signed sky mask cache; the trainer derives the effective sky mask from
+    # it (sky_supervision.py). None unless sky supervision is configured.
+    sky_mask: np.ndarray | None = None
 
 
 class S1TrainingDataset:

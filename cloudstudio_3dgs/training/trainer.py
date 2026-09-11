@@ -134,6 +134,13 @@ from cloudstudio_3dgs.training.surface_anchor import (
     SurfaceAnchorPrune,
     SurfaceAnchorPruneConfig,
 )
+from cloudstudio_3dgs.training.sky_supervision import (
+    SKY_MASK_INFO_KEY,
+    SkyGrowthBlock,
+    SkySupervisionConfig,
+    sky_supervision_mask,
+    verify_sky_mask_manifest,
+)
 from cloudstudio_3dgs.training.regularization import (
     GeometryRegularizationConfig,
     clip_oversized_gaussians,
@@ -423,6 +430,13 @@ class TrainerConfig:
     surface_anchor_prune: SurfaceAnchorPruneConfig = field(
         default_factory=SurfaceAnchorPruneConfig
     )
+    # Sky supervision (research/quality_recovery_v2/12_sky_supervision.md): on
+    # the signed per-face sky mask the accumulated alpha is pulled to 0, the
+    # photometric/DA2 terms are silenced and sky-seen rows may not breed.
+    # Disabled by default and byte-identical off.
+    sky_supervision: SkySupervisionConfig = field(
+        default_factory=SkySupervisionConfig
+    )
     learning_rates: dict[str, float] = field(
         default_factory=lambda: {
             "means": 1.6e-4,
@@ -519,6 +533,7 @@ class TrainerConfig:
         if not isinstance(anchor_prune_value, dict):
             raise ValueError("surface_anchor_prune must be an object")
         surface_anchor_prune = SurfaceAnchorPruneConfig(**anchor_prune_value)
+        sky_supervision = SkySupervisionConfig.from_value(value.get("sky_supervision"))
         scale_value = value.get("metric_scale_calibration", {})
         if not isinstance(scale_value, dict):
             raise ValueError("metric_scale_calibration must be an object")
@@ -657,6 +672,7 @@ class TrainerConfig:
             lidar_admission=lidar_admission,
             tangent_proposal=tangent_proposal,
             surface_anchor_prune=surface_anchor_prune,
+            sky_supervision=sky_supervision,
             **paths,
             **options,
         )
@@ -1040,6 +1056,25 @@ class TrainerConfig:
                 raise ValueError(
                     "surface_anchor_prune.outside_box='prune' requires "
                     "tile_inputs_manifest and mipmap_tile_id"
+                )
+        self.sky_supervision.validate()
+        if self.sky_supervision.enabled:
+            if self.face_cache_manifest is None:
+                raise ValueError("sky_supervision requires face-cache training")
+            if self.sky_supervision.growth_block and (
+                self.densification_strategy != "default_3dgs"
+                or self.default_strategy.get("exact_mipmap_lifecycle") is not True
+                or not self.topology_policy.strategy_enabled
+            ):
+                # The block is a parent mask inside the recovered classic
+                # lifecycle (DefaultStrategyAdapter._grow_mipmap); gsplat's
+                # DefaultStrategy and the MCMC sampler never read it, so
+                # enabling it there would be a silent no-op.
+                raise ValueError(
+                    "sky_supervision.growth_block requires densification_strategy="
+                    "'default_3dgs' with default_strategy.exact_mipmap_lifecycle "
+                    "and an active topology policy; set growth_block=false to run "
+                    "the alpha term and the exclusions without it"
                 )
         if (
             self.tangent_proposal.enabled
@@ -1595,6 +1630,35 @@ class TrainerConfig:
                 raise ValueError(
                     "renderer mask manifest is bound to different Face4 inputs"
                 )
+        if self.sky_supervision.enabled:
+            sky_manifest_path = self.sky_supervision.mask_manifest
+            sky_root = self.sky_supervision.mask_root
+            assert sky_manifest_path is not None and sky_root is not None
+            if not sky_manifest_path.is_file():
+                raise FileNotFoundError(
+                    f"sky mask manifest is missing: {sky_manifest_path}"
+                )
+            if not sky_root.is_dir():
+                raise FileNotFoundError(f"sky mask root is missing: {sky_root}")
+            if not self.face_cache_manifest.is_file():
+                raise FileNotFoundError(
+                    f"face cache manifest is missing: {self.face_cache_manifest}"
+                )
+            sky_manifest = json.loads(sky_manifest_path.read_text(encoding="utf-8"))
+            verify_sky_mask_manifest(sky_manifest)
+            face_cache = json.loads(
+                self.face_cache_manifest.read_text(encoding="utf-8")
+            )
+            if sky_manifest.get("source_face_manifest_sha256") != face_cache.get(
+                "face_manifest_sha256"
+            ):
+                raise ValueError(
+                    "sky mask manifest is bound to different Face4 inputs"
+                )
+            if sky_manifest.get("split") != face_cache.get("split"):
+                raise ValueError(
+                    "sky mask manifest and Face4 cache use different splits"
+                )
         if (self.tile_inputs_manifest is None) != (self.tile_inputs_root is None):
             raise ValueError(
                 "tile_inputs_manifest and tile_inputs_root must be provided together"
@@ -2115,6 +2179,9 @@ class TrainerConfig:
             strategy_contract["surface_anchor_prune"] = (
                 self.surface_anchor_prune.to_dict()
             )
+        if self.sky_supervision.enabled and self.sky_supervision.growth_block:
+            # Same rule; the loss-side knobs live under loss_contract.
+            strategy_contract["sky_growth_block"] = SkyGrowthBlock().state_dict()
         if (
             self.topology_policy.mode != "adaptive_growth"
             or self.fixed_topology_schedule.enabled
@@ -2344,6 +2411,18 @@ class TrainerConfig:
                     dilation_radius_px=self.rgb_supervision_dilation_radius_px,
                 )
             )
+        if self.sky_supervision.enabled:
+            # Key present only when enabled; the manifest is bound by its
+            # signature, as the renderer mask is.
+            sky_manifest = json.loads(
+                self.sky_supervision.mask_manifest.read_text(encoding="utf-8")
+            )
+            contract["loss_contract"]["sky_supervision"] = {
+                **self.sky_supervision.to_dict(),
+                "manifest_sha256": verify_sky_mask_manifest(sky_manifest),
+                "manifest_consumed_by_dataset": True,
+                "source_face_manifest_bound": True,
+            }
         if uses_rgb_gradient:
             contract["loss_contract"]["rgb_gradient"] = {
                 "mode": "masked_forward_difference_l1",
@@ -2841,6 +2920,10 @@ def _tensor_sample(sample: TrainingSample, torch: Any, device: str) -> dict[str,
                 "depth_mask": torch.as_tensor(np.array(sample.depth_mask, copy=True), dtype=torch.bool, device=device),
             }
         )
+    if getattr(sample, "sky_mask", None) is not None:
+        result["sky_mask"] = torch.as_tensor(
+            np.array(sample.sky_mask, copy=True), dtype=torch.bool, device=device
+        )
     if sample.mono_depth_range_m is not None:
         result.update(
             {
@@ -3042,6 +3125,25 @@ def _render_supervision_loss(
     # the photo-derived terms see only the dilated LiDAR support; a view with
     # no supervised pixel contributes a graph-connected zero (no gradient)
     # instead of tripping the empty-mask guards of the loss functions.
+    # Sky supervision (sky_supervision.py): the effective sky mask of the view
+    # is built once here and shared by the alpha term, the exclusions and
+    # (through info) the growth block. None when disabled.
+    sky = None
+    sky_config = config.sky_supervision
+    if sky_config.enabled:
+        if "sky_mask" not in tensors:
+            raise ValueError(
+                "sky_supervision is enabled but the sample carries no sky mask"
+            )
+        sky = sky_supervision_mask(
+            backend.torch,
+            sky_mask=tensors["sky_mask"],
+            rgb_mask=tensors["rgb_mask"],
+            depth_mask=tensors.get("depth_mask"),
+            erosion_px=sky_config.mask_erosion_px,
+            lidar_window_px=sky_config.require_no_lidar_within_px,
+        )
+    sky_excludes_photometric = sky is not None and sky_config.exclude_photometric
     supervision = rgb_supervision_mask(
         backend.torch,
         rgb_mask=tensors["rgb_mask"],
@@ -3049,9 +3151,14 @@ def _render_supervision_loss(
         confidence=tensors.get("confidence"),
         mode=config.rgb_supervision_mask,
         dilation_radius_px=config.rgb_supervision_dilation_radius_px,
+        exclude=sky.mask if sky_excludes_photometric else None,
     )
     rgb_mask = supervision.mask
-    masked_supervision = config.rgb_supervision_mask != "all"
+    # Either restriction may empty the supervised set; both take the
+    # graph-connected-zero path below instead of the fail-closed guards.
+    masked_supervision = (
+        config.rgb_supervision_mask != "all" or sky_excludes_photometric
+    )
     # "all" keeps the loss functions' own empty-mask guards (fail closed).
     has_supervised_pixels = (
         supervision.supervised_pixels > 0 or not masked_supervision
@@ -3168,6 +3275,25 @@ def _render_supervision_loss(
         else:
             lidar_alpha_loss = rendered.new_zeros(())
         loss = loss + config.lidar_alpha_weight * lidar_alpha_loss
+    sky_alpha_loss = None
+    sky_alpha_mean = None
+    sky_pixel_fraction = None
+    if sky is not None:
+        sky_pixel_fraction = sky.fraction
+        if rendered_alpha is None:
+            raise RuntimeError("rasterizer did not return alpha coverage")
+        if sky.sky_pixels > 0:
+            # Accumulated alpha BEFORE the backdrop composite (backend.render
+            # composites rgb + (1 - alpha) * backdrop with this very tensor):
+            # on sky pixels the Tile must contribute nothing, so alpha is
+            # pulled to the target with a plain L1 over the sky pixels.
+            sky_alpha = rendered_alpha[sky.mask]
+            sky_alpha_mean = sky_alpha.detach().mean()
+            sky_alpha_loss = (sky_alpha - float(sky_config.alpha_target)).abs().mean()
+        else:
+            sky_alpha_loss = rendered_alpha.sum() * 0.0
+        if float(sky_config.alpha_weight) > 0.0:
+            loss = loss + float(sky_config.alpha_weight) * sky_alpha_loss
     range_loss = None
     linear_range_aux_loss = None
     if has_range and getattr(sample, "camera_model", "fisheye") == "pinhole":
@@ -3231,6 +3357,11 @@ def _render_supervision_loss(
             # Photo-predicted depth outside the LiDAR support is content the
             # Tile cannot own (see rgb_supervision.py); silence it with RGB.
             da2_valid = da2_valid & rgb_mask
+        if sky is not None and sky_config.exclude_mono_depth:
+            # Aligned monocular depth has no notion of sky (face_dataset.py):
+            # a sky pixel must not ask for a surface at any range, whether or
+            # not the photometric exclusion is on.
+            da2_valid = da2_valid & ~sky.mask
         if bool(da2_valid.any()):
             if config.da2_depth_space == "compressed":
                 da2_prediction = _mipmap_compress_depth(backend.torch, rendered_range)
@@ -3322,6 +3453,15 @@ def _render_supervision_loss(
     info["cloudstudio_lidar_alpha_support_fraction"] = (
         lidar_alpha_support_fraction
     )
+    info["cloudstudio_sky_alpha_loss"] = sky_alpha_loss
+    info["cloudstudio_sky_alpha_mean"] = sky_alpha_mean
+    info["cloudstudio_sky_pixel_fraction"] = sky_pixel_fraction
+    info["cloudstudio_sky_pixels"] = None if sky is None else sky.sky_pixels
+    info["cloudstudio_sky_raw_pixels"] = None if sky is None else sky.raw_sky_pixels
+    if sky is not None:
+        # The growth block reads the step's effective mask from this same
+        # dict (it is what strategy_post_step receives); absent when off.
+        info[SKY_MASK_INFO_KEY] = sky.mask.detach()
     info["cloudstudio_rendered_range_tensor"] = rendered_range
     # Stashed for the error-weighted MCMC score update; detached, so it never
     # extends the autograd graph.
@@ -3662,6 +3802,16 @@ def train(
             face_lidar_geometry_root=config.face_lidar_geometry_root,
             mesh_geometry_manifest_path=config.mesh_geometry_manifest,
             mesh_geometry_root=config.mesh_geometry_root,
+            sky_mask_manifest_path=(
+                config.sky_supervision.mask_manifest
+                if config.sky_supervision.enabled
+                else None
+            ),
+            sky_mask_root=(
+                config.sky_supervision.mask_root
+                if config.sky_supervision.enabled
+                else None
+            ),
         )
     else:
         trainset = S1TrainingDataset(
@@ -3956,6 +4106,9 @@ def train(
         # validate() already pinned the classic exact lifecycle, the only
         # path whose cull/grow hooks read this.
         backend.strategy.surface_anchor_prune = surface_anchor_prune
+    if config.sky_supervision.enabled and config.sky_supervision.growth_block:
+        # validate() pinned the classic exact lifecycle for the block too.
+        backend.strategy.sky_growth_block = SkyGrowthBlock()
     backend.pinhole_rasterize_mode = config.pinhole_rasterize_mode
     backend.pinhole_with_ut = config.pinhole_with_ut
     runtime_contract = {
@@ -4579,6 +4732,18 @@ def train(
                         raw=info["cloudstudio_lidar_alpha_loss"],
                         weight=config.lidar_alpha_weight,
                     ),
+                    # Present only when enabled so the default audit record
+                    # keeps its shape.
+                    **(
+                        {
+                            "sky_alpha": AuditedLossTerm(
+                                raw=info["cloudstudio_sky_alpha_loss"],
+                                weight=float(config.sky_supervision.alpha_weight),
+                            )
+                        }
+                        if config.sky_supervision.enabled
+                        else {}
+                    ),
                     # normal_terms["total"] already carries its config weight.
                     "lidar_normal": AuditedLossTerm(
                         raw=None if normal_terms is None else normal_terms["total"],
@@ -4952,6 +5117,14 @@ def train(
             else float(
                 info["cloudstudio_lidar_alpha_support_fraction"].detach().cpu()
             ),
+            # Sky supervision (None when disabled, like the LiDAR alpha term).
+            "sky_alpha_loss": None
+            if info["cloudstudio_sky_alpha_loss"] is None
+            else float(info["cloudstudio_sky_alpha_loss"].detach().cpu()),
+            "sky_pixel_fraction": info["cloudstudio_sky_pixel_fraction"],
+            "sky_alpha_mean": None
+            if info["cloudstudio_sky_alpha_mean"] is None
+            else float(info["cloudstudio_sky_alpha_mean"].detach().cpu()),
             "rgb_ssim_loss": float(ssim.detach().cpu()),
             "rgb_ssim_mode": config.rgb_ssim_mode,
             "rgb_local_ssim_loss": None
@@ -5036,6 +5209,8 @@ def train(
                 {
                     "lifecycle_cull_total": lifecycle_event.get("cull_count"),
                     "lifecycle_after_count": lifecycle_event.get("after_count"),
+                    "sky_growth_blocked_parents": growth.get("sky_growth_blocked_count"),
+                    "sky_growth_blocked_total": growth.get("sky_growth_blocked_total"),
                     "lifecycle_clone_parents": growth.get("clone_parent_count"),
                     "lifecycle_split_parents": growth.get("split_parent_count"),
                     "lifecycle_split_parent_op_p50": (growth.get("split_parent_opacity") or {}).get("p50"),
