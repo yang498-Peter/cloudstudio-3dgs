@@ -1,0 +1,80 @@
+{
+ "gaussian_count": 4546380,
+ "anchor_count": 3417320,
+ "opacity_floor": 0.05,
+ "visible_count": 2971309,
+ "distance_quantiles_m": {
+  "p50": 0.06186366900743921,
+  "p90": 2.5803248906949796,
+  "p95": 4.108658652331221,
+  "p99": 5.6768474259501
+ },
+ "far_fraction_table": [
+  {
+   "threshold_m": 0.05,
+   "far_count": 2417615,
+   "far_fraction": 0.5317670322322375,
+   "far_fraction_visible": 0.5150625532383202
+  },
+  {
+   "threshold_m": 0.1,
+   "far_count": 1987144,
+   "far_fraction": 0.43708268996432326,
+   "far_fraction_visible": 0.42429178520308725
+  },
+  {
+   "threshold_m": 0.2,
+   "far_count": 1670355,
+   "far_fraction": 0.3674032966887942,
+   "far_fraction_visible": 0.353267869481094
+  },
+  {
+   "threshold_m": 0.5,
+   "far_count": 1369566,
+   "far_fraction": 0.3012431868871498,
+   "far_fraction_visible": 0.286731538187378
+  },
+  {
+   "threshold_m": 1.0,
+   "far_count": 1029324,
+   "far_fraction": 0.22640518390455702,
+   "far_fraction_visible": 0.21289135529155667
+  }
+ ],
+ "z_split_m": 0.2,
+ "z_quantiles_near_m": {
+  "p05": 0.15728851556777954,
+  "p50": 0.8386541604995728,
+  "p95": 17.611892318725587
+ },
+ "z_quantiles_far_m": {
+  "p05": 0.019101456739008503,
+  "p50": 4.997684955596924,
+  "p95": 17.210697937011716
+ },
+ "outside_box_count": 1881479,
+ "outside_box_fraction": 0.4138411219475715,
+ "outside_box_and_far_fraction": 0.33429629727387505,
+ "checkpoint": "C:\\Peter\\3dgs-runs\\house0305_sop\\tile1_K2_sky_20k\\checkpoints\\latest.pt",
+ "checkpoint_step": 20000,
+ "initialization_ply": "C:\\Peter\\3dgs-runs\\house0305_sop\\tile_inputs_v9\\Tile_1\\initialization_full_lidar.ply",
+ "box": [
+  [
+   -81.30969759999999,
+   -5.056892571428578,
+   -8.0632724
+  ],
+  [
+   9.70169760000001,
+   -1.515545523809535,
+   33.9402724
+  ]
+ ],
+ "timing_s": {
+  "tree_build": 1.4175206000072649,
+  "checkpoint_load": 0.6529429999936838,
+  "query_all_thresholds": 7.0638183999981266
+ },
+ "config": "C:\\Peter\\3dgs-runs\\house0305_sop\\tile1_K2_sky_20k.json",
+ "box_source": "C:\\Peter\\3dgs-runs\\house0305_sop\\tile_inputs_v9\\tile_inputs_manifest.json tile 1"
+}
