@@ -67,3 +67,5 @@ Reference rows (same metric): indoor R1 0.881 / G0 0.863 / G1 0.990; outdoor R1 
 | tile1_S1_anchor_20k (hard prune probe) | 49 | 0.224 | 0.508 | **0.390** |
 
 The door ROI itself is unchanged by the hard prune (+6%, inside the indoor +-5% band) while the sky views and walls elsewhere are destroyed (README row "S1 上界探针结果"). K1 / S2 rows follow when they land.
+| tile1_S2_growthgate_20k (growth gate only) | 49 | 0.217 | 0.508 | **0.384** |
+| tile1_K1_sky_20k (sky alpha, weak mask) | 49 | 0.226 | 0.508 | **0.453** |
