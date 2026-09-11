@@ -76,6 +76,22 @@ class ScoreCompareRoiTests(unittest.TestCase):
         self.assertTrue(any("no ROI" in r for r in reasons))
         self.assertTrue(any("3 region samples" in r for r in reasons))
 
+    def test_brightness_matching_removes_a_global_gain(self):
+        strip = _strip(60, 40, noise=(10, 30, 10, 50))
+        # darken "ours" by a global gain of 0.5: raw Laplacian variance drops 4x, matched stays 1
+        ours = strip[:, 68:128].astype(np.float64) * 0.5
+        strip[:, 68:128] = ours.astype(np.uint8)
+        frames = [self._write("compare_00_a.png", "img_a::yaw_plus_35", strip)]
+        (self.compare / "compare_summary.json").write_text(json.dumps({"frames": frames}), encoding="utf-8")
+        selection = {"roi_in_crops": [
+            {"sample_id": "img_a::yaw_plus_35", "roi": {"crop": {"width": 60, "height": 40}, "x0": 10, "y0": 10, "x1": 50, "y1": 30, "samples_in_crop": 40}},
+        ]}
+        raw = score_compare_dir(self.compare, roi_boxes(selection), 10, imread=self._imread)
+        matched = score_compare_dir(self.compare, roi_boxes(selection), 10, imread=self._imread, match_brightness=True)
+        self.assertLess(raw["frames"][0]["ours_over_photo"], 0.35)
+        self.assertGreater(matched["frames"][0]["ours_over_photo"], 0.9)
+        self.assertTrue(matched["brightness_matched"])
+
     def test_panel_not_matching_the_recorded_crop_is_refused(self):
         frames = [self._write("compare_00_a.png", "img_a::yaw_plus_35", _strip(60, 40))]
         (self.compare / "compare_summary.json").write_text(json.dumps({"frames": frames}), encoding="utf-8")

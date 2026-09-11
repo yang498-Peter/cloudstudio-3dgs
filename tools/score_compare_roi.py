@@ -27,6 +27,24 @@ def laplacian_variance(panel) -> float:
     return float(cv2.Laplacian(cv2.cvtColor(panel, cv2.COLOR_BGR2GRAY), cv2.CV_64F).var())
 
 
+def brightness_matched_variance(panel, target_mean: float) -> float:
+    """Laplacian variance after scaling the panel's luma to ``target_mean``.
+
+    Laplacian variance grows with the square of a global gain, so an arm whose
+    canonical brightness differs from another's (X1's frozen exposure curve vs
+    X0's per-image gains) would win or lose on brightness alone; matching the
+    mean luma to the photo's removes that term.
+    """
+    import cv2
+    import numpy as np
+
+    gray = cv2.cvtColor(panel, cv2.COLOR_BGR2GRAY).astype(np.float64)
+    mean = float(gray.mean())
+    if mean <= 0:
+        return 0.0
+    return float(cv2.Laplacian(gray * (target_mean / mean), cv2.CV_64F).var())
+
+
 def split_panels(strip, gap: int = 8):
     """The strip is photo | ours | reference at native crop size with ``gap`` px between."""
     width = (strip.shape[1] - 2 * gap) // 3
@@ -41,7 +59,7 @@ def roi_boxes(selection: dict) -> dict:
     }
 
 
-def score_compare_dir(compare_dir: Path, boxes: dict, min_samples: int, *, imread=None, var=laplacian_variance) -> dict:
+def score_compare_dir(compare_dir: Path, boxes: dict, min_samples: int, *, imread=None, var=laplacian_variance, match_brightness: bool = False) -> dict:
     summary = json.loads((compare_dir / "compare_summary.json").read_text(encoding="utf-8"))
     if imread is None:
         import cv2
@@ -71,7 +89,14 @@ def score_compare_dir(compare_dir: Path, boxes: dict, min_samples: int, *, imrea
                 f"{frame['file']}: panel {panels[0].shape[1]}x{panels[0].shape[0]} does not match the "
                 f"recorded Tile crop {crop_w}x{crop_h}; ROI boxes cannot be applied"
             )
-        photo, ours, ref = (var(p[y0:y1, x0:x1]) for p in panels)
+        crops = [p[y0:y1, x0:x1] for p in panels]
+        if match_brightness:
+            import cv2
+
+            target = float(cv2.cvtColor(crops[0], cv2.COLOR_BGR2GRAY).mean())
+            photo, ours, ref = (brightness_matched_variance(c, target) for c in crops)
+        else:
+            photo, ours, ref = (var(c) for c in crops)
         rows.append({
             "sample_id": sample_id, "file": frame["file"], "box": [x0, y0, x1, y1],
             "samples_in_crop": int(roi["samples_in_crop"]),
@@ -84,6 +109,7 @@ def score_compare_dir(compare_dir: Path, boxes: dict, min_samples: int, *, imrea
     result = {
         "compare_dir": str(compare_dir), "arm": compare_dir.parent.name, "n": len(scored),
         "n_skipped": len(skipped), "frames": rows, "skipped": skipped,
+        "brightness_matched": bool(match_brightness),
     }
     if scored:
         result["ours_over_photo_median"] = statistics.median(r["ours_over_photo"] for r in scored)
@@ -97,16 +123,19 @@ def main(argv=None) -> int:
     parser.add_argument("--selection", type=Path, required=True, help="diagnostic selection.json carrying roi_in_crops")
     parser.add_argument("--min-samples", type=int, default=10)
     parser.add_argument("--json", type=Path, help="write all per-frame rows here")
+    parser.add_argument("--match-brightness", action="store_true",
+                        help="scale each panel's luma to the photo's mean before the Laplacian (removes global-gain differences between arms)")
     parser.add_argument("compare_dirs", nargs="+", type=Path)
     args = parser.parse_args(argv)
     boxes = roi_boxes(json.loads(args.selection.read_text(encoding="utf-8")))
     results = []
     for compare_dir in args.compare_dirs:
-        result = score_compare_dir(compare_dir, boxes, args.min_samples)
+        result = score_compare_dir(compare_dir, boxes, args.min_samples, match_brightness=args.match_brightness)
         results.append(result)
         if result["n"]:
+            tag = " brightness-matched" if result["brightness_matched"] else ""
             print(
-                f"{result['arm']} ROI n {result['n']} (skipped {result['n_skipped']}) "
+                f"{result['arm']} ROI{tag} n {result['n']} (skipped {result['n_skipped']}) "
                 f"sharpness ours/photo median {result['ours_over_photo_median']:.3f}  "
                 f"ref/photo median {result['ref_over_photo_median']:.3f}  "
                 f"ours/ref median {result['ours_over_ref_median']:.3f}"

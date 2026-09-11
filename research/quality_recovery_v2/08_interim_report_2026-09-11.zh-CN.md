@@ -1,0 +1,73 @@
+# 阶段汇报（2026-09-11 16:50）——按任务书 §16 七问
+
+范围：任务书 `00_task_brief_2026-09-11.zh-CN.md` 落地后的第一天。已闭合 G-line（增殖信号 / 生命周期顺序）与 X-line（低维光度），D-line（严格可见性 × 修复缓存）2×2 正在 GPU 上跑。数字全部来自本目录已入库文件；图在 `figures/`。
+
+## 1. 运行的是哪份代码、扩展、配置与数据
+
+| 项 | 值 |
+|---|---|
+| 研究分支 `fix/loss-parity-and-split`（工作树 `cloudstudio-3dgs-work`） | HEAD `415226af31dfe33553ff9f432353b5ff792cf968`（研究基线冻结 tag `research-baseline-2026-09-11` = `1ca1cd4`） |
+| 工程分支 `eng/cli-pipeline`（训练器实际从这里加载） | 诊断链 v4 十臂：`7788b03f75ce`；X1 臂：`9b5234b763c1`（两次并入研究分支，无冲突，`dirty_files: []`） |
+| gsplat | 1.5.3，`external/gsplat-clean` HEAD `f2d14131483644e9977451b6403f6f0b73e6637f` + 锁定补丁 `85a800a9…`，JIT 扩展 `gsplat_cuda.pyd` sha256 `60e7a45870f64d8e98659aa05666a98dcba5b8eb9352b066ec1b2e59caaf738e`（107,533,824 B） |
+| 运行时 | Python 3.12.10，torch 2.11.0+cu128，CUDA 12.8，RTX 5070 Ti，seed 42，SH1 |
+| 数据 | house0305 v9 划分；诊断臂用 `diag_v2/<region>/DIAG_40/` 派生并签名的 tile 输入/几何 manifest（引用原 PLY/npz）；LiDAR 面缓存 `face4_lidar_train_vis6`（旧，未过滤）与 `face4_lidar_train_vis6f`（新，sha `5e855da4…`） |
+| 每臂 | `identity/<arm>.json` 记 config_as_run sha、resolved 字段、输入 manifest sha、checkpoint sha；例：室内 R1 config sha `49c90cc2…`，cap 4,579,208；室外 X1 config sha `d5e191d0…`，cap 9,440,001 |
+
+## 2. 这轮只检验什么假设，哪些参数必要联动
+
+| 线 | 假设 | 臂 | 必要联动 |
+|---|---|---|---|
+| U | 少视角能否拟合锐（表示/投影/尺度/滤波是否是瓶颈） | U0（1 视角）、U1（5 视角）、DIAG-40（40 视角） | 日程合同 `research_rescaled_horizon_v1` H=3000；cap = 1.34×init（少视角会填满切片 cap） |
+| G | §7.1 增殖信号被 LiDAR/几何项污染 | G0（`post_optimizer_gsplat` 顺序，rgb_only 的必要前提）、G1（G0 + `rgb_only`） | 只改这两个字段，其余逐字段同 R1（`diag.variant_fields`） |
+| X | §8 跨时段曝光不一致导致糊 | X0 = R1（逐图 gain）、X1（每相机 10 s 节点时间曲线，全场拟合一次后冻结，`frozen: true`，曲线 sha `75a1e5d4…`） | `exposure_compensation.mode = camera_curve`，其余不动；评估必须亮度归一 |
+| D | §8.3 未过滤的穿透回波给了矛盾 alpha 支持 | D0 = R1（旧缓存 + dilated）、D1（旧 + strict）、D0f（修复缓存 + dilated）、D1f（修复 + strict） | D0→D0f 只差几何 manifest sha 一个契约键；D0f→D1f 只差 7 个 `lidar_alpha_coverage` 键 |
+
+## 3. 代码事实 / 实际测量 / 解释
+
+**代码事实**
+- `build_face4_lidar_geometry.py` 的 warp 路径此前从未调用 `visible_point_mask`，manifest 的 `visibility_cell_px=6` 只是记账（`05_vis6_cache_fix.md`）。修复后重建：42.6% 的栅格回波被判为穿透并剔除。
+- `build_three_way_compare.py` 默认等步长抽帧，切片臂必然抽到天空/切片外内容；现有 `--sample-ids` 固定视角。
+- Laplacian 方差 ∝ 全局增益²；单切片 canonical 渲染不应用曝光 gain（`01_exposure_policy_audit.md`）。
+- 生命周期顺序、`rgb_only` 增殖信号、`camera_curve` 曝光都已是训练器旋钮，缺省路径字节不变（测试覆盖）。
+
+**实际测量**（全部配对、同视角）
+- U0：室内 0.760 / 室外 0.876（同视角参考 0.460 / 0.670）；U1 室内 0.968（参考 0.919）、室外 0.557（参考 0.876）。
+- 配对整板（40 视角 checkpoint 渲染在 U1 五视角帧上）：室内 0.316 vs 0.968；室外 0.265 vs 0.557。
+- 亮度归一 ROI-all ours/ref（`07_diag40_roi_scores.md` 第二表）：室内 R1 0.881 / G0 0.863 / G1 0.990；室外 R1 0.595 / G0 0.597 / G1 0.597。
+- X1 亮度归一整板：室内 0.227 vs R1 0.219（R1 luma 比 1.164 → X1 0.997）；室外 0.264 vs 0.263。
+- 交付级（合并件，烘了每切片 gain）：亮度归一后 G9 0.219、R1d 0.232、参考 0.534，luma 0.95–1.01 → 交付差距不受亮度项影响。
+- vis6f 复核：旧缓存 5+5 DIAG 面宽松违反率均值 8.6% / 9.7%，修复缓存 0.000。
+
+**解释（未证）**
+- 40 视角失败形态是悬浮半透明烟雾/色块（`figures/DIAG40_indoor_R1_views.jpg`），与"矛盾 alpha 支持在空中凝团"一致——D-line 正在检验。
+- 室外砾石 0.60 是高频随机纹理对亚像素配准/曝光差异更敏感——未检验，属 P-line（位姿）。
+
+## 4. 原图 / 标准渲染 / 补偿渲染 / 新视角 / 几何：谁改善、谁变差
+
+- **标准渲染（canonical）**：G0、G1、X1 在两区都没有超过 R1（亮度归一 ROI ±5% 内；室内 G0 −2%、G1 +12%（n=49，单臂，未复跑，不算赢）、X1 −11%（n=5））。
+- **补偿渲染**：X1 把室内 canonical 亮度偏置从 +16% 压到 0，这是它唯一的改善；不是锐度。
+- **新视角（离轨 18 帧 PSNR）**：R1 14.79 / G0 14.78 / G1 14.64 / X1 14.41（室内），室外 15.16 / 15.15 / 15.13 / 15.12——X1 室内变差 0.4 dB（新视角上冻结曲线与真实曝光不匹配的代价）。
+- **几何/形态**：四臂各分位一致（short p50 0.91–0.94 mm、opacity p50 0.17、frac<0.1 0.31–0.32）；没有臂改变几何。
+
+## 5. 室内 / 室外分别怎样，尾部 ROI 是否被平均掩盖
+
+- 整板中位数**曾经**掩盖：室内 0.288 / 室外 0.270 看起来一样差，且"室内更糊"一半来自天空/切片外抽帧。
+- ROI 口径 + 亮度归一后：**室内门叶纹理能量 0.88–0.99 ≈ 参考；室外砾石 0.60 才是真缺口**（Q1–Q3 室内 0.63–1.19，室外 0.53–0.66；室内 49 帧里 8–12 帧 ours ≥ ref，室外 0 帧）。
+- 室内剩余问题是 Laplacian 看不到的：悬浮体/烟雾（错误的深度层）。这就是 D-line 要看的东西，判读将以出图和离轨 PSNR 为主、ROI 锐度为辅。
+- 尾部：室内 ROI 帧 `img_02167::yaw_minus_35` ours/ref 0.12–0.15（三臂一致）——一个被大片烟雾挡住的视角，会单独跟踪。
+
+## 6. 改善是否超过噪声，是否依赖更多显存/时间/模型
+
+- 本轮没有"改善"可宣称：G0/G1/X1 都在 R1 的 ±5% 内（复跑噪声按 Tile_0 R0 经验 ±3%，DIAG 尺度的噪声带待 D0f 对 R1 的复跑给出）。
+- 所有臂同显存（cap 1.34×init）、同步数（3000）、同模型规模（终态 4.41–4.42M / 9.29M，差 <0.3%）。
+- 分界点结论（5→40 视角糊 2–3×）是配对同视角测的，与噪声无关。
+
+## 7. 下一步最小验证；升级到全场/产品需要什么证据
+
+1. **D-line 2×2**（进行中，`after_x1_dline.cmd`，约 2.5 h）：D1f / D0f / D1，两区。升级条件：D1f 相对 R1 在亮度归一 ROI-all 上两区都不降（≥ −3%）、离轨 PSNR 不降、出图上悬浮烟雾明显减少。任一区变差即不进全场。
+2. **噪声带**：D0f 与 R1 只差缓存，若两者差 <3%，就把它当 DIAG 尺度噪声带的上界。
+3. **室外砾石**：P0/P1（位姿 + 缓存重投影）小样；在 D-line 后排。
+4. **升级到全场**（20k、四切片、cap 15M）只在 D-line 有赢家后做，且必须先重建四切片的 `tile_face_lidar_v9f`（步骤 L）；产品化前还需 grouped split 的真留出集重训控制臂（WP01）。
+5. **不做**：再跑 G-line、再跑 X 的锐度矩阵、在 Tile_0 全量臂上找糊的根因、任何锐化/超分。
+
+图：`figures/U0_single_view_fits.png`、`figures/DIAG40_indoor_R1_views.jpg`、`figures/DIAG40_outdoor_R1_views.jpg`、`figures/DIAG40_indoor_R1_vs_X1.jpg`。

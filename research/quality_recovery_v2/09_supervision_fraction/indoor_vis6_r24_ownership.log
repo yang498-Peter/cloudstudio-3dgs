@@ -1,0 +1,39 @@
+[indoor_door_leaf_Tile_1] 20/113 views, 30s
+[indoor_door_leaf_Tile_1] 40/113 views, 56s
+[indoor_door_leaf_Tile_1] 60/113 views, 83s
+[indoor_door_leaf_Tile_1] 80/113 views, 100s
+[indoor_door_leaf_Tile_1] 100/113 views, 125s
+[indoor_door_leaf_Tile_1] 113/113 views, 141s
+### indoor_door_leaf_Tile_1 (radius 24 px)
+
+| scope | n | median | min | Q1-Q3 |
+|---|---|---|---|---|
+| all views | 113 | 0.993 | 0.891 | 0.979-1.000 |
+| pitch_down | 7 | 0.994 | 0.987 | 0.989-0.999 |
+| pitch_up | 40 | 0.963 | 0.891 | 0.943-1.000 |
+| yaw | 66 | 0.998 | 0.967 | 0.987-1.000 |
+| ROI (all) | 63 | 1.000 | 0.997 | 1.000-1.000 |
+| ROI pitch_up | 13 | 1.000 | 1.000 | 1.000-1.000 |
+| ROI yaw | 50 | 1.000 | 0.997 | 1.000-1.000 |
+
+pixel-weighted supervised share 0.980; views without any LiDAR return: 0 / 113
+
+Tile ownership (returns inside the Tile box + margin; 113 views):
+
+| quantity | n | median | min | Q1-Q3 |
+|---|---|---|---|---|
+| owned share of returns | 113 | 0.449 | 0.128 | 0.269-0.606 |
+| owned share of returns, pitch_down | 7 | 1.000 | 0.994 | 0.997-1.000 |
+| owned share of returns, pitch_up | 40 | 0.362 | 0.128 | 0.204-0.452 |
+| owned share of returns, yaw | 66 | 0.508 | 0.181 | 0.307-0.606 |
+| foreign region share of rgb_mask | 113 | 0.359 | 0.000 | 0.195-0.510 |
+| supervised: lidar_support minus foreign region | 113 | 0.605 | 0.243 | 0.471-0.805 |
+| supervised: lidar_support minus foreign, pitch_down | 7 | 0.994 | 0.986 | 0.987-0.999 |
+| supervised: lidar_support minus foreign, pitch_up | 40 | 0.489 | 0.243 | 0.322-0.698 |
+| supervised: lidar_support minus foreign, yaw | 66 | 0.640 | 0.285 | 0.507-0.779 |
+| supervised: owned returns only, dilated | 113 | 0.639 | 0.224 | 0.512-0.833 |
+| supervised: owned only, pitch_down | 7 | 0.994 | 0.987 | 0.987-0.999 |
+| supervised: owned only, pitch_up | 40 | 0.523 | 0.224 | 0.327-0.726 |
+| supervised: owned only, yaw | 66 | 0.689 | 0.313 | 0.567-0.812 |
+| ROI: lidar_support minus foreign | 63 | 1.000 | 0.908 | 1.000-1.000 |
+| ROI: owned returns only | 63 | 1.000 | 0.913 | 1.000-1.000 |
