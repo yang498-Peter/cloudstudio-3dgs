@@ -686,3 +686,27 @@ class AuditToolTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class GrowthOnlyModeTests(unittest.TestCase):
+    def test_cull_false_never_becomes_due_but_keeps_the_growth_gate(self):
+        from cloudstudio_3dgs.training.surface_anchor import SurfaceAnchorPruneConfig
+
+        config = SurfaceAnchorPruneConfig(enabled=True, start_step=0, every=100, reject_unsupported_parents=True, cull=False)
+        config.validate()
+        self.assertFalse(config.cull)
+        self.assertEqual(config.to_dict()["cull"], False)
+        with self.assertRaises(ValueError):
+            SurfaceAnchorPruneConfig(enabled=True, reject_unsupported_parents=False, cull=False).validate()
+        # a config that only gates growth must never schedule a removal
+        import types
+        fake = types.SimpleNamespace(config=config)
+        from cloudstudio_3dgs.training.surface_anchor import SurfaceAnchorPrune
+
+        self.assertFalse(SurfaceAnchorPrune.due(fake, 5000))
+        self.assertFalse(SurfaceAnchorPrune.extra_due(fake, 5000))
+        default = SurfaceAnchorPruneConfig(enabled=True, start_step=0, every=100)
+        fake_default = types.SimpleNamespace(config=default)
+        self.assertTrue(SurfaceAnchorPrune.due(fake_default, 5000))
+        self.assertTrue(SurfaceAnchorPrune.extra_due(fake_default, 5000))
+
