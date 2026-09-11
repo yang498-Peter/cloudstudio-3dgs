@@ -67,6 +67,7 @@ from cloudstudio_3dgs.pipeline.mipmap_gate import (
 from cloudstudio_3dgs.training.exposure import (
     ExposureCompensationConfig,
     ExposureCompensator,
+    ExposureCurve,
 )
 from cloudstudio_3dgs.training.golden_eval import (
     GoldenEvaluationConfig,
@@ -734,6 +735,7 @@ class TrainerConfig:
         unsupported_fresh_auxiliary = set(self.warm_start_fresh_auxiliary) - {
             "rig_pose_deltas",
             "exposure_log_gains",
+            "exposure_curve_knots",
         }
         if unsupported_fresh_auxiliary:
             raise ValueError(
@@ -752,12 +754,20 @@ class TrainerConfig:
                 raise ValueError(
                     "fresh rig_pose_deltas requires rig_pose_refinement.enabled"
                 )
-            if (
-                "exposure_log_gains" in self.warm_start_fresh_auxiliary
-                and not self.exposure_compensation.enabled
+            if "exposure_log_gains" in self.warm_start_fresh_auxiliary and not (
+                self.exposure_compensation.enabled
+                and not self.exposure_compensation.is_curve
             ):
                 raise ValueError(
-                    "fresh exposure_log_gains requires exposure compensation"
+                    "fresh exposure_log_gains requires per_image exposure compensation"
+                )
+            if "exposure_curve_knots" in self.warm_start_fresh_auxiliary and not (
+                self.exposure_compensation.enabled
+                and self.exposure_compensation.is_curve
+                and not self.exposure_compensation.is_frozen_curve
+            ):
+                raise ValueError(
+                    "fresh exposure_curve_knots requires a learnable camera_curve exposure"
                 )
         if (self.background_image_manifest is None) != (
             self.background_image_root is None
@@ -977,7 +987,11 @@ class TrainerConfig:
             and not self.exposure_compensation.enabled
         ) or (
             self.exposure_compensation.enabled
-            and self.exposure_compensation.learning_rate == 0.0
+            and (
+                self.exposure_compensation.learning_rate == 0.0
+                # A frozen scene-wide camera curve is a fixed nuisance too.
+                or self.exposure_compensation.is_frozen_curve
+            )
             and not self.ppisp.enabled
         )
         expected_lrs = {"means", "scales", "quats", "opacities", "colors"}
@@ -3845,7 +3859,31 @@ def train(
         auxiliary_optimizers["rig_pose_deltas"] = pose_optimizer
     exposure = None
     exposure_optimizer = None
-    if config.exposure_compensation.enabled:
+    if config.exposure_compensation.enabled and config.exposure_compensation.is_curve:
+        # camera_curve: one smooth log-gain curve per physical camera over
+        # capture time, read per base image at its dataset-manifest timestamp.
+        # With frozen_curve the knots come from the scene-wide fit and are not
+        # optimised (no auxiliary optimizer), so every tile shares one
+        # correction and the checkpoint still carries the curve it trained
+        # against.
+        timestamp_ns_by_image = {
+            str(image["image_id"]): int(image["timestamp_ns"])
+            for image in json.loads(
+                config.dataset_manifest.read_text(encoding="utf-8")
+            )["images"]
+        }
+        exposure = ExposureCurve(
+            getattr(trainset, "exposure_image_ids", trainset.image_ids),
+            config=config.exposure_compensation,
+            device=config.device,
+            camera_by_image=trainset.camera_id_by_image,
+            timestamp_ns_by_image=timestamp_ns_by_image,
+        )
+        exposure_optimizer = exposure.make_optimizer()
+        auxiliary_params["exposure_curve_knots"] = exposure.knot_log_gains
+        if exposure_optimizer is not None:
+            auxiliary_optimizers["exposure_curve_knots"] = exposure_optimizer
+    elif config.exposure_compensation.enabled:
         # Face samples ("base::face_id") share their base image's exposure:
         # every face of one capture saw the same physical auto-exposure.
         exposure = ExposureCompensator(
