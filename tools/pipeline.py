@@ -904,7 +904,7 @@ def classify_trainer_exit(exit_code: int | None, tail: str) -> TrainerExit:
     if "Traceback (most recent call last)" in tail:
         return TrainerExit(EXIT_CRASH, None, f"traceback in log without controlled-stop marker (exit {exit_code})")
     complete = _TRAINING_COMPLETE_RE.findall(tail)
-    if complete and exit_code == 0:
+    if complete and exit_code in (0, None):
         return TrainerExit(EXIT_COMPLETED, int(complete[-1]), "training complete marker in log")
     if exit_code == 0:
         return TrainerExit(EXIT_UNKNOWN, None, "exit 0 without a completion marker in log")
@@ -1067,6 +1067,29 @@ class TrainingVerdict:
         }
 
 
+def run_manifest_exit(checkpoint: Path) -> "TrainerExit | None":
+    """Completion evidence from the trainer's own run_manifest.json.
+
+    The manifest sits in the run directory (checkpoints/../run_manifest.json)
+    and carries training.status == "COMPLETE" with completed_steps; a run that
+    was interrupted, or whose logs were overwritten by a later failed launch,
+    still proves its completion through it.
+    """
+    manifest = Path(checkpoint).parent.parent / "run_manifest.json"
+    if not manifest.is_file():
+        return None
+    try:
+        training = json.loads(manifest.read_text(encoding="utf-8")).get("training") or {}
+    except (OSError, ValueError):
+        return None
+    if training.get("status") != "COMPLETE":
+        return None
+    steps = training.get("completed_steps")
+    if not isinstance(steps, int):
+        return None
+    return TrainerExit(EXIT_COMPLETED, steps, "run_manifest.json status COMPLETE")
+
+
 def verify_training(
     *,
     checkpoint: Path,
@@ -1085,6 +1108,11 @@ def verify_training(
     """
     info = inspector(Path(checkpoint))
     exit = classify_trainer_exit(exit_code, log_tail)
+    manifest_exit = run_manifest_exit(Path(checkpoint))
+    if manifest_exit is not None:
+        # The trainer writes run_manifest.json only after a natural completion,
+        # so it outranks whatever the (possibly overwritten) logs say.
+        exit = manifest_exit
     target = declared_target_steps(Path(arm_config))
     checks: dict[str, str] = {}
     failures: list[str] = []
