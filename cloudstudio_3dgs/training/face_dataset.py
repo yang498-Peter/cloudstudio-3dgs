@@ -708,6 +708,13 @@ class FaceCacheDataset:
     def __len__(self) -> int:
         return len(self._samples)
 
+    def sample_ids(self) -> list[str]:
+        """``base_image_id::face_id`` for every sample, in index order."""
+        return [
+            f"{image_record['image_id']}{SAMPLE_ID_SEPARATOR}{face_entry['face_id']}"
+            for image_record, face_entry, _ in self._samples
+        ]
+
     def _verify(self, path: Path, expected: str, label: str) -> None:
         if not path.is_file():
             raise FileNotFoundError(f"missing {label}: {path}")

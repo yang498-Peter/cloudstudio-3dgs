@@ -100,6 +100,11 @@ def main() -> int:
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--frames", type=int, default=4)
     parser.add_argument(
+        "--sample-ids", type=Path,
+        help="JSON list of dataset sample ids (image_id::face_id) to render in that order "
+             "instead of the strided --frames picks; every id must exist in the Tile dataset",
+    )
+    parser.add_argument(
         "--background", type=float, nargs=3, default=(1.0, 1.0, 1.0)
     )
     from tools.sharpness_metrics import HONOUR_RENDER_MODE_HELP
@@ -201,8 +206,16 @@ def main() -> int:
             residual_m = payload.get("median_nn_distance_m")
         reference = to_device(_load_ply_gaussians(args.reference_ply, transform))
 
-    stride = max(1, len(dataset) // args.frames)
-    picks = list(range(0, len(dataset), stride))[: args.frames]
+    if args.sample_ids is not None:
+        wanted = json.loads(args.sample_ids.read_text(encoding="utf-8"))
+        index_of = {sample_id: i for i, sample_id in enumerate(dataset.sample_ids())}
+        missing = [sample_id for sample_id in wanted if sample_id not in index_of]
+        if missing:
+            raise ValueError(f"{len(missing)} requested sample ids are not in this Tile dataset: {missing[:5]}")
+        picks = [index_of[sample_id] for sample_id in wanted]
+    else:
+        stride = max(1, len(dataset) // args.frames)
+        picks = list(range(0, len(dataset), stride))[: args.frames]
     args.output.mkdir(parents=True, exist_ok=True)
 
     rows = []
@@ -259,6 +272,7 @@ def main() -> int:
         "background_rgb": list(args.background),
         "render_spec": render_spec.record(),
         "frames": rows,
+        "frame_selection": "sample_ids" if args.sample_ids is not None else f"strided_{args.frames}",
     }
     (args.output / "compare_summary.json").write_text(
         json.dumps(summary, indent=1), encoding="utf-8"
