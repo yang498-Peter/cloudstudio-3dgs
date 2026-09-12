@@ -73,3 +73,4 @@ The door ROI itself is unchanged by the hard prune (+6%, inside the indoor +-5% 
 | tile1_R1d_rerun_20k (identical config rerun) | 49 | 0.174 | 0.508 | **0.315** |
 
 Rerun spread at 20k scale (single pair): ROI-all 0.315-0.366 (+-7%), whole-panel 0.076-0.082 (+-4%), off-trajectory PSNR 15.16-16.14 (+-0.5 dB). K1/K2 ROI (0.453/0.465) and K2 whole-panel (0.107) lie outside that spread; their PSNR gains do not.
+| tile1_F3_nopitchup_20k (551 pitch_up faces held out) | 44 | 0.176 | 0.508 | **0.385** |
