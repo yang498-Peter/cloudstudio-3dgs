@@ -1,0 +1,130 @@
+{
+ "schema_version": 1,
+ "repo": {
+  "root": "C:\\Peter\\cloudstudio-3dgs-work",
+  "head": "9a3f412608fe7b103c2acb899a95ae0af927a6b2",
+  "branch": "fix/loss-parity-and-split",
+  "dirty_files": [
+   "M research/quality_recovery_v2/README.zh-CN.md",
+   "?? research/quality_recovery_v2/13_door_plane/stage1_occupancy.npz"
+  ]
+ },
+ "runtime": {
+  "python": "3.12.10",
+  "platform": "Windows-11-10.0.26200-SP0",
+  "torch_extensions_dir": null,
+  "cublas_workspace_config": null,
+  "torch": "2.11.0+cu128",
+  "cuda_runtime": "12.8",
+  "cudnn_deterministic": false,
+  "cudnn_benchmark": false,
+  "gpu": "NVIDIA GeForce RTX 5070 Ti",
+  "gsplat": {
+   "version": "1.5.3",
+   "package": "C:\\Peter\\cloudstudio-3dgs\\external\\gsplat-clean\\gsplat",
+   "git_head": "f2d14131483644e9977451b6403f6f0b73e6637f",
+   "git_dirty_files": [
+    "M examples/datasets/colmap.py",
+    " M examples/simple_trainer.py",
+    " M gsplat/cuda/build.py",
+    " M gsplat/cuda/csrc/Rasterization.cpp",
+    " M gsplat/cuda/csrc/RasterizeToPixelsFromWorld3DGSParallelBatchBwd.cu"
+   ],
+   "extension": {
+    "error": "AttributeError(\"'NoneType' object has no attribute '__file__'\")"
+   }
+  }
+ },
+ "checkpoint": {
+  "file": {
+   "path": "C:\\Peter\\3dgs-runs\\house0305_sop\\global_coarse_B0_10k\\checkpoints\\latest.pt",
+   "sha256": "20210d67b765d7288a3df9aa48fa3267c74aa9e5cbdc89d138261853c4d266c1",
+   "size": 733595466
+  },
+  "payload": {
+   "schema_version": 1,
+   "step": 10000,
+   "gaussian_count": 2404410,
+   "sh_rest_coeffs": 3,
+   "param_shapes": {
+    "means": [
+     2404410,
+     3
+    ],
+    "opacities": [
+     2404410
+    ],
+    "quats": [
+     2404410,
+     4
+    ],
+    "scales": [
+     2404410,
+     3
+    ],
+    "sh0": [
+     2404410,
+     1,
+     3
+    ],
+    "shN": [
+     2404410,
+     3,
+     3
+    ]
+   },
+   "identity": {
+    "face_manifest_sha256": "449e7f9b7d2cdd878d497dea82f65a033048729563d42655d669df8615391ea1",
+    "face_plan": "mipmap_face4",
+    "source_identity": {
+     "crop": null,
+     "dataset_manifest_sha256": "33f5f81419dd587c54985f141cde647716b6d491aa5924efc3be26d121bcbd15",
+     "depth_manifest_sha256": "af8fb5400fd5b1fbb63b315fb602fe18b388f4b66a53634520f68b3ff41f14da",
+     "factor": 1,
+     "mask_manifest_sha256": "b96cffe2354a8a7efee661aab781004ab1c19979fb1fbc4ce10e36cec46ef8a4",
+     "person_mask_manifest_sha256": "52a2701123251a4eec5e8c5c689cfd0b1be8f1682faac0d2e466d74d89ced10f",
+     "split": "train",
+     "split_manifest_sha256": "f78afec0e6e0e72fe7abe2d0d9c1d72ad6110cddf592d90d4124682c33d46545"
+    },
+    "fov_deg": 190.0,
+    "split": "train",
+    "min_face_weight": 0.02,
+    "mono_depth_manifest_sha256": "ff105ca719b37d97a7cc214b19c7f628a2a37fc5c3981d136a54c85ff02d5377",
+    "renderer_mask_manifest_sha256": "c7a3688f06186b201e521050f0eae5ae5162906bff92615d0d33c241bdc4bf8f",
+    "face_lidar_geometry_manifest_sha256": "98305c46e0a73e3d606ea985469d3467982fc0590073fa8f14ba995ce8917bc7",
+    "tile_cropped": false,
+    "coordinate_transform_sha256": "5188b35a4150a7d9010079bc929ff661e4a090400515ac7108b49e4f379093ae",
+    "trainer_config_sha256": "8c8ab4658cc1ea91dfd97abcf940fec4046a6aafd263fcee8bc6c689bb68a3fc",
+    "initialization_ply_sha256": "bb7d7e545865464686ea870cc3d2e809d1d2b32e0a9dc98126da5439718935d1",
+    "scale_calibration_sha256": "5af1a4820bb0d0dddab3d98be2f9dd06b0b08271574c4e1e60046dab4412b49d",
+    "gsplat_runtime": {
+     "package": "gsplat",
+     "version": "1.5.3",
+     "locked_commit": "f2d14131483644e9977451b6403f6f0b73e6637f",
+     "source_kind": "locked_patch",
+     "commit": "f2d14131483644e9977451b6403f6f0b73e6637f"
+    },
+    "initialization_geometry_sha256": "9e9a5b5b7291fb170b64a544426ffb40c5613d2c3ac24143c84b381e98aaa9b2",
+    "surface_initialization_sha256": "2194dfdc006f337d47a3f216c23f3107b3c73f57adb50628758f6d9b326af0da"
+   },
+   "has_torch_rng_state": true,
+   "has_cuda_rng_state": true,
+   "has_sampler_state": true,
+   "strategy_state_keys": [
+    "_cloudstudio_birth_kind",
+    "_cloudstudio_birth_step",
+    "_cloudstudio_current_step",
+    "_footprint_grad_sum",
+    "_footprint_weight_sum",
+    "_visible_alpha_sum",
+    "count",
+    "grad2d",
+    "radii",
+    "scene_scale"
+   ],
+   "sky_layer": null,
+   "imported": null
+  }
+ },
+ "extra_files": []
+}
