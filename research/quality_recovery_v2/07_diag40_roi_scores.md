@@ -85,3 +85,6 @@ Rerun spread at 20k scale (single pair): ROI-all 0.315-0.366 (+-7%), whole-panel
 | tile1_B5_cap6_20k (B3 with cap 6M) | 49 | 0.210 | 0.508 | **0.501** (fair 0.499) |
 
 Capacity curve at fixed configuration (ownership + sky alpha + stand-in backdrop): cap 4.5M -> 3.49M gaussians, ROI 0.405, off-surface 0.138; cap 6M -> 4.65M, ROI 0.501, 0.157; cap 15M -> 7.75M, ROI 0.528, 0.202. Baseline R1d: 3.34M, 0.366, 0.338.
+| tile1_B5_rerun_20k (identical rerun of B5) | 49 | 0.227 | 0.508 | **0.414** (fair 0.427) |
+
+Rerun spread of the ROI median is +-10-20%, larger than the earlier +-7% estimate: R1d 0.366/0.315, B5 0.501/0.414. Paired per-view medians are the reliable statistic: R1d->B5 1.077 (27/49), R1d_rerun->B5_rerun 1.286 (39/49). Geometry reproduces exactly: off-surface 0.157/0.161, outside box 0.216/0.218, count 4.65M/4.66M.
