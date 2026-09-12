@@ -77,3 +77,6 @@ Rerun spread at 20k scale (single pair): ROI-all 0.315-0.366 (+-7%), whole-panel
 | tile1_K3_sky_20k (full sky region, no guard) | 49 | 0.250 | 0.508 | **0.472** |
 | tile1_O1_ownership_20k (cached tile ownership) | 49 | 0.255 | 0.508 | **0.509** |
 | tile1_O2_ownership_sky_20k (K2 + ownership) | 49 | 0.302 | 0.508 | **0.543** |
+| tile1_B1_standin_20k (stand-in backdrop) | 49 | 0.126 | 0.508 | **0.225** (fair 0.225) |
+| tile1_B1_standin_K2sky_20k = B2 (sky alpha + stand-in) | 49 | 0.193 | 0.508 | **0.393** (fair 0.395) |
+| tile1_R1d_20k under the stand-in backdrop (fair) | 49 | 0.219 | 0.508 | **0.367** |
