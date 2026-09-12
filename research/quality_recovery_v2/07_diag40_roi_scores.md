@@ -81,3 +81,4 @@ Rerun spread at 20k scale (single pair): ROI-all 0.315-0.366 (+-7%), whole-panel
 | tile1_B1_standin_K2sky_20k = B2 (sky alpha + stand-in) | 49 | 0.193 | 0.508 | **0.393** (fair 0.395) |
 | tile1_R1d_20k under the stand-in backdrop (fair) | 49 | 0.219 | 0.508 | **0.367** |
 | tile1_B3_own_sky_standin_20k (ownership + sky + stand-in) | 49 | 0.240 | 0.508 | **0.528** |
+| tile1_B4_cap45_20k (B3 with cap 4.5M) | 49 | 0.204 | 0.508 | **0.405** (fair 0.406) |
