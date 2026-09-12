@@ -75,3 +75,13 @@ The door ROI itself is unchanged by the hard prune (+6%, inside the indoor +-5% 
 Rerun spread at 20k scale (single pair): ROI-all 0.315-0.366 (+-7%), whole-panel 0.076-0.082 (+-4%), off-trajectory PSNR 15.16-16.14 (+-0.5 dB). K1/K2 ROI (0.453/0.465) and K2 whole-panel (0.107) lie outside that spread; their PSNR gains do not.
 | tile1_F3_nopitchup_20k (551 pitch_up faces held out) | 44 | 0.176 | 0.508 | **0.385** |
 | tile1_K3_sky_20k (full sky region, no guard) | 49 | 0.250 | 0.508 | **0.472** |
+| tile1_O1_ownership_20k (cached tile ownership) | 49 | 0.255 | 0.508 | **0.509** |
+| tile1_O2_ownership_sky_20k (K2 + ownership) | 49 | 0.302 | 0.508 | **0.543** |
+| tile1_B1_standin_20k (stand-in backdrop) | 49 | 0.126 | 0.508 | **0.225** (fair 0.225) |
+| tile1_B1_standin_K2sky_20k = B2 (sky alpha + stand-in) | 49 | 0.193 | 0.508 | **0.393** (fair 0.395) |
+| tile1_R1d_20k under the stand-in backdrop (fair) | 49 | 0.219 | 0.508 | **0.367** |
+| tile1_B3_own_sky_standin_20k (ownership + sky + stand-in) | 49 | 0.240 | 0.508 | **0.528** |
+| tile1_B4_cap45_20k (B3 with cap 4.5M) | 49 | 0.204 | 0.508 | **0.405** (fair 0.406) |
+| tile1_B5_cap6_20k (B3 with cap 6M) | 49 | 0.210 | 0.508 | **0.501** (fair 0.499) |
+
+Capacity curve at fixed configuration (ownership + sky alpha + stand-in backdrop): cap 4.5M -> 3.49M gaussians, ROI 0.405, off-surface 0.138; cap 6M -> 4.65M, ROI 0.501, 0.157; cap 15M -> 7.75M, ROI 0.528, 0.202. Baseline R1d: 3.34M, 0.366, 0.338.

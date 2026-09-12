@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from collections import OrderedDict
 from pathlib import Path
 from typing import Any
 
@@ -27,7 +28,14 @@ def _sha256_bytes(payload: bytes) -> str:
 class ViewBackgroundLibrary:
     """Loads per-view background images and serves them at render size."""
 
-    def __init__(self, manifest_path: Path, root: Path, *, device: str) -> None:
+    def __init__(
+        self,
+        manifest_path: Path,
+        root: Path,
+        *,
+        device: str,
+        cache_budget_bytes: int = 6 * 1024**3,
+    ) -> None:
         import numpy as np
 
         manifest_path = Path(manifest_path)
@@ -50,7 +58,13 @@ class ViewBackgroundLibrary:
         self.device = device
         self.views = views
         self._np = np
-        self._cache: dict[str, Any] = {}
+        # Decoded backdrops are cached by view. The dome library is small, but a
+        # stand-in library at full crop resolution is ~10 MB per view: Tile_3 would
+        # hold 19 GiB of a 32 GB machine. Bound it (LRU by insertion order) so a
+        # long tile keeps the hit rate without exhausting RAM; 0 disables caching.
+        self.cache_budget_bytes = int(cache_budget_bytes)
+        self._cache: "OrderedDict[str, Any]" = OrderedDict()
+        self._cache_bytes = 0
 
     def __len__(self) -> int:
         return len(self.views)
@@ -69,7 +83,14 @@ class ViewBackgroundLibrary:
 
             with Image.open(self.root / entry["file"]) as image:
                 cached = self._np.asarray(image.convert("RGB"), dtype=self._np.uint8)
-            self._cache[image_id] = cached
+            if self.cache_budget_bytes > 0:
+                self._cache[image_id] = cached
+                self._cache_bytes += cached.nbytes
+                while self._cache_bytes > self.cache_budget_bytes and len(self._cache) > 1:
+                    _, evicted = self._cache.popitem(last=False)
+                    self._cache_bytes -= evicted.nbytes
+        else:
+            self._cache.move_to_end(image_id)
         tensor = (
             torch.as_tensor(cached, device=self.device, dtype=torch.float32) / 255.0
         )

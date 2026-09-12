@@ -57,3 +57,50 @@ class ViewBackgroundTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class BoundedCacheTests(unittest.TestCase):
+    """The stand-in libraries are ~10 MB per view; an unbounded cache would hold 19 GiB."""
+
+    def _library(self, tmp, budget):
+        import json
+        import numpy as np
+        from PIL import Image
+        from cloudstudio_3dgs.training.view_backgrounds import ViewBackgroundLibrary, _sha256_bytes
+
+        root = Path(tmp)
+        views = {}
+        for i in range(6):
+            name = f"v{i}.png"
+            Image.fromarray(np.full((32, 32, 3), i * 10, np.uint8)).save(root / name)
+            views[f"img_{i}"] = {"file": name, "height": 32, "width": 32}
+        body = {"schema_version": 1, "views": views}
+        body["manifest_sha256"] = _sha256_bytes(
+            json.dumps(body, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        )
+        (root / "m.json").write_text(json.dumps(body), encoding="utf-8")
+        return ViewBackgroundLibrary(root / "m.json", root, device="cpu", cache_budget_bytes=budget)
+
+    def test_cache_is_evicted_once_the_budget_is_exceeded(self):
+        import torch
+
+        with tempfile.TemporaryDirectory() as tmp:
+            one = 32 * 32 * 3
+            library = self._library(tmp, budget=2 * one)
+            for i in range(4):
+                library.background_for(f"img_{i}", height=32, width=32, torch=torch)
+            self.assertLessEqual(library._cache_bytes, 2 * one)
+            self.assertLessEqual(len(library._cache), 2)
+            # the most recent view is still cached, the oldest is gone
+            self.assertIn("img_3", library._cache)
+            self.assertNotIn("img_0", library._cache)
+
+    def test_zero_budget_disables_caching_but_still_serves(self):
+        import torch
+
+        with tempfile.TemporaryDirectory() as tmp:
+            library = self._library(tmp, budget=0)
+            first = library.background_for("img_1", height=32, width=32, torch=torch)
+            second = library.background_for("img_1", height=32, width=32, torch=torch)
+            self.assertEqual(len(library._cache), 0)
+            self.assertTrue(bool((first == second).all()))
