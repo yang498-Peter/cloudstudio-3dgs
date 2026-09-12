@@ -1,0 +1,62 @@
+{
+ "schema_version": 1,
+ "kind": "b_line_config_validation_v1",
+ "b0_full_face_view_count": 3536,
+ "b0_filtered_empty_mask_count": 0,
+ "B0": {
+  "path": "C:\\Peter\\3dgs-runs\\house0305_sop\\house0305_global_coarse_B0_10k.json",
+  "max_steps": 70720,
+  "status": "PASS",
+  "seconds": 0.1
+ },
+ "B1": {
+  "path": "C:\\Peter\\3dgs-runs\\house0305_sop\\tile1_B1_standin_20k.json",
+  "as_written_before_gpu_build": {
+   "status": "FAIL",
+   "error_type": "ValueError",
+   "error": "background image manifest is missing: C:\\Peter\\3dgs-runs\\house0305_sop\\tile_backgrounds_B1\\Tile_1\\background_manifest.json",
+   "traceback_tail": [
+    "  File \"C:\\Peter\\cloudstudio-3dgs-work\\cloudstudio_3dgs\\training\\trainer.py\", line 844, in validate",
+    "    raise ValueError(",
+    "ValueError: background image manifest is missing: C:\\Peter\\3dgs-runs\\house0305_sop\\tile_backgrounds_B1\\Tile_1\\background_manifest.json"
+   ],
+   "seconds": 0.0
+  },
+  "repointed_to_dome_only_library": {
+   "status": "PASS",
+   "seconds": 0.9
+  }
+ },
+ "B1_K2sky": {
+  "path": "C:\\Peter\\3dgs-runs\\house0305_sop\\tile1_B1_standin_K2sky_20k.json",
+  "as_written_before_gpu_build": {
+   "status": "FAIL",
+   "error_type": "ValueError",
+   "error": "background image manifest is missing: C:\\Peter\\3dgs-runs\\house0305_sop\\tile_backgrounds_B1\\Tile_1\\background_manifest.json",
+   "traceback_tail": [
+    "  File \"C:\\Peter\\cloudstudio-3dgs-work\\cloudstudio_3dgs\\training\\trainer.py\", line 844, in validate",
+    "    raise ValueError(",
+    "ValueError: background image manifest is missing: C:\\Peter\\3dgs-runs\\house0305_sop\\tile_backgrounds_B1\\Tile_1\\background_manifest.json"
+   ],
+   "seconds": 0.0
+  },
+  "repointed_to_dome_only_library": {
+   "status": "PASS",
+   "seconds": 1.7
+  }
+ },
+ "B1_vs_R1d_changed_keys": [
+  "background_image_manifest",
+  "background_image_root",
+  "lineage",
+  "output_dir",
+  "run_id"
+ ],
+ "B1_K2sky_vs_K2_changed_keys": [
+  "background_image_manifest",
+  "background_image_root",
+  "lineage",
+  "output_dir",
+  "run_id"
+ ]
+}

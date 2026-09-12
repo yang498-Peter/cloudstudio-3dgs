@@ -1,0 +1,95 @@
+{
+ "kind": "standin_backdrop_plan_v1",
+ "config": "C:\\Peter\\3dgs-runs\\house0305_sop\\tile1_R1d_20k.json",
+ "dome": {
+  "path": "C:\\Peter\\3dgs-runs\\probes\\sky_house0305.pt",
+  "sha256": "a70c3f762b8130c6f7a9ca7fb7ae8907730b1d84108513081f5a2d6306f7562a"
+ },
+ "tile_inputs_manifest_sha256": "7af17f43c5c3884521ddff037ecc756c9ef4a2f8825c4b62480da1a9d8621e03",
+ "output": "C:\\Peter\\3dgs-runs\\house0305_sop\\tile_backgrounds_B1\\Tile_1",
+ "background_rgb": [
+  1.0,
+  1.0,
+  1.0
+ ],
+ "downsample": 1,
+ "estimated_param_bytes": 1718020972,
+ "schema_version": 1,
+ "composition": "single_pass_render_of_dome_plus_standin",
+ "dome_count": 100000,
+ "sources": [
+  {
+   "path": "C:\\Peter\\3dgs-runs\\house0305_sop\\tile0_R1_range0_20k\\checkpoints\\latest.pt",
+   "sha256": "5173756fbdda95a0f9f9630968e98966985ed226b30139120a409d15e3c35d9e",
+   "step": 20000,
+   "exposure_gain_median": 0.8818333745002747,
+   "exposure_gain_applied": 0.8818333745002747,
+   "sh_bands": 3,
+   "input_count": 11458698,
+   "removed_inside_box": 454280,
+   "removed_opacity": 4017917,
+   "removed_anchor": 0,
+   "kept_count": 6986501,
+   "seconds": 5.7
+  },
+  {
+   "path": "C:\\Peter\\3dgs-runs\\house0305_sop\\tile2_R1d_20k\\checkpoints\\latest.pt",
+   "sha256": "20f7188e4c9df0dd4cd86ffe168812436a12989b0218277dff58cf6e7ea4453c",
+   "step": 20000,
+   "exposure_gain_median": 0.9153816103935242,
+   "exposure_gain_applied": 0.9153816103935242,
+   "sh_bands": 3,
+   "input_count": 7469977,
+   "removed_inside_box": 666045,
+   "removed_opacity": 1980688,
+   "removed_anchor": 0,
+   "kept_count": 4823244,
+   "seconds": 3.6
+  },
+  {
+   "path": "C:\\Peter\\3dgs-runs\\house0305_sop\\tile3_R1d_cap13m_20k\\checkpoints\\latest.pt",
+   "sha256": "a023724d3bb473094f777316caafbf5a418ab07a08cad2b0da8ec19cf39ca7f4",
+   "step": 20000,
+   "exposure_gain_median": 0.9326584935188293,
+   "exposure_gain_applied": 0.9326584935188293,
+   "sh_bands": 3,
+   "input_count": 9889343,
+   "removed_inside_box": 138949,
+   "removed_opacity": 2985998,
+   "removed_anchor": 0,
+   "kept_count": 6764396,
+   "seconds": 4.5
+  }
+ ],
+ "standin_count": 18574141,
+ "rendered_gaussian_count": 18674141,
+ "exclusion": {
+  "box_kind": "training_and_export_box",
+  "box": [
+   [
+    -81.30969759999999,
+    -5.056892571428578,
+    -8.0632724
+   ],
+   [
+    9.70169760000001,
+    -1.515545523809535,
+    33.9402724
+   ]
+  ],
+  "margin_m": 0.0
+ },
+ "min_opacity": 0.05,
+ "anchor": {
+  "source": null,
+  "max_distance_m": null,
+  "anchor_count": null
+ },
+ "exposure": {
+  "harmonized": true,
+  "target_gain": 1.0,
+  "frame": "photo"
+ },
+ "tile_id": 1,
+ "view_count": 1829
+}

@@ -1,0 +1,36 @@
+{
+ "kind": "tile_crop_photo_coverage_v1",
+ "face_views": 3536,
+ "face_views_in_no_tile": 30,
+ "pixel_fraction_outside_every_tile_crop": 0.03405045592429052,
+ "view_uncovered_fraction_percentiles": {
+  "p50": 0.0,
+  "p90": 0.08241758241758246,
+  "p95": 0.15643868494143215,
+  "mean": 0.03405045592429051
+ },
+ "views_with_more_than_half_uncovered": 53,
+ "per_face_id": {
+  "pitch_down_56": {
+   "faces": 884,
+   "mean_uncovered_fraction": 0.0941688293432987,
+   "fully_covered_faces": 343
+  },
+  "pitch_up_56": {
+   "faces": 884,
+   "mean_uncovered_fraction": 0.006821822948569503,
+   "fully_covered_faces": 750
+  },
+  "yaw_minus_35": {
+   "faces": 884,
+   "mean_uncovered_fraction": 0.019008291755482354,
+   "fully_covered_faces": 577
+  },
+  "yaw_plus_35": {
+   "faces": 884,
+   "mean_uncovered_fraction": 0.016202879649811684,
+   "fully_covered_faces": 590
+  }
+ },
+ "tile1_views": 1829
+}
