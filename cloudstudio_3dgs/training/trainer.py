@@ -331,6 +331,13 @@ class TrainerConfig:
     tile_ownership_masking: bool = False
     tile_ownership_margin_m: float = 0.5
     tile_ownership_dilation_px: int = 15
+    # Precomputed ownership pairs (tools/build_tile_ownership_masks.py). Null
+    # keeps the on-the-fly computation byte for byte; set, the dataset loads
+    # the signed cache (bound to the same Face4 / renderer mask / LiDAR
+    # geometry / Tile inputs / margin / dilation) instead of recomputing the
+    # full-resolution dilation on the CPU every step.
+    tile_ownership_cache_manifest: Path | None = None
+    tile_ownership_cache_root: Path | None = None
     mesh_depth_weight: float = 0.0
     mesh_normal_weight: float = 0.0
     competitor_loss_schedule_enabled: bool = False
@@ -489,6 +496,8 @@ class TrainerConfig:
                 "sky_shell_checkpoint",
                 "background_image_manifest",
                 "background_image_root",
+                "tile_ownership_cache_manifest",
+                "tile_ownership_cache_root",
             )
         }
         crop_value = value.get("crop")
@@ -977,6 +986,19 @@ class TrainerConfig:
                 or int(self.tile_ownership_dilation_px) < 0
             ):
                 raise ValueError("tile_ownership_dilation_px must be a non-negative integer")
+        if (self.tile_ownership_cache_manifest is None) != (
+            self.tile_ownership_cache_root is None
+        ):
+            raise ValueError(
+                "tile_ownership_cache_manifest and tile_ownership_cache_root must be "
+                "provided together"
+            )
+        if self.tile_ownership_cache_manifest is not None:
+            if not self.tile_ownership_masking:
+                raise ValueError(
+                    "tile_ownership_cache_manifest requires tile_ownership_masking"
+                )
+            self._validate_tile_ownership_cache()
         if self.mono_depth_max_range_m is not None and not (
             float(self.mono_depth_max_range_m) > 0.0
         ):
@@ -2084,6 +2106,99 @@ class TrainerConfig:
             ),
         }
 
+    def _validate_tile_ownership_cache(self) -> None:
+        """Bind the precomputed ownership cache to this config's inputs.
+
+        Every input the on-the-fly pair depends on must match: the Face4
+        cache, the renderer mask manifest (or none), the LiDAR geometry
+        manifest (or none), the signed Tile inputs / selected Tile / box and
+        the margin / dilation knobs. Anything else would silently train on
+        pairs computed for a different supervision set.
+        """
+        from cloudstudio_3dgs.data.tile_ownership_masks import (
+            verify_tile_ownership_manifest,
+        )
+
+        manifest_path = self.tile_ownership_cache_manifest
+        root = self.tile_ownership_cache_root
+        assert manifest_path is not None and root is not None
+        if not manifest_path.is_file():
+            raise FileNotFoundError(
+                f"tile ownership cache manifest is missing: {manifest_path}"
+            )
+        if not root.is_dir():
+            raise FileNotFoundError(f"tile ownership cache root is missing: {root}")
+        assert self.face_cache_manifest is not None
+        assert self.tile_inputs_manifest is not None
+        if not self.face_cache_manifest.is_file():
+            raise FileNotFoundError(
+                f"face cache manifest is missing: {self.face_cache_manifest}"
+            )
+        if not self.tile_inputs_manifest.is_file():
+            raise FileNotFoundError(
+                f"Tile inputs manifest is missing: {self.tile_inputs_manifest}"
+            )
+        ownership = json.loads(manifest_path.read_text(encoding="utf-8"))
+        verify_tile_ownership_manifest(ownership)
+        face_cache = json.loads(self.face_cache_manifest.read_text(encoding="utf-8"))
+        if ownership.get("source_face_manifest_sha256") != face_cache.get(
+            "face_manifest_sha256"
+        ):
+            raise ValueError("tile ownership cache is bound to different Face4 inputs")
+        if ownership.get("split") != face_cache.get("split"):
+            raise ValueError("tile ownership cache and Face4 cache use different splits")
+        renderer_sha = None
+        if self.renderer_mask_manifest is not None:
+            if not self.renderer_mask_manifest.is_file():
+                raise FileNotFoundError(
+                    f"renderer mask manifest is missing: {self.renderer_mask_manifest}"
+                )
+            renderer_sha = json.loads(
+                self.renderer_mask_manifest.read_text(encoding="utf-8")
+            ).get("renderer_mask_manifest_sha256")
+        if ownership.get("renderer_mask_manifest_sha256") != renderer_sha:
+            raise ValueError(
+                "tile ownership cache is bound to a different renderer mask manifest"
+            )
+        lidar_sha = None
+        if self.face_lidar_geometry_manifest is not None:
+            if not self.face_lidar_geometry_manifest.is_file():
+                raise FileNotFoundError(
+                    "Face4 LiDAR geometry manifest is missing: "
+                    f"{self.face_lidar_geometry_manifest}"
+                )
+            lidar_sha = json.loads(
+                self.face_lidar_geometry_manifest.read_text(encoding="utf-8")
+            ).get("face_lidar_geometry_manifest_sha256")
+        if ownership.get("face_lidar_geometry_manifest_sha256") != lidar_sha:
+            raise ValueError(
+                "tile ownership cache is bound to a different Face4 LiDAR geometry"
+            )
+        tile_inputs = json.loads(self.tile_inputs_manifest.read_text(encoding="utf-8"))
+        tile_inputs_sha = verify_tile_inputs_manifest(tile_inputs)
+        if ownership.get("tile_inputs_manifest_sha256") != tile_inputs_sha:
+            raise ValueError("tile ownership cache is bound to different Tile inputs")
+        if int(ownership.get("tile_id", -1)) != int(self.mipmap_tile_id):
+            raise ValueError("tile ownership cache was built for a different Tile")
+        selected = [
+            tile
+            for tile in tile_inputs.get("tiles", [])
+            if int(tile["tile_id"]) == int(self.mipmap_tile_id)
+        ]
+        if len(selected) != 1:
+            raise ValueError("Tile inputs do not contain a unique selected Tile")
+        expected_box = np.asarray(selected[0]["training_and_export_box"], dtype=np.float64)
+        cache_box = np.asarray(ownership["training_and_export_box"], dtype=np.float64)
+        if not np.array_equal(expected_box, cache_box):
+            raise ValueError("tile ownership cache was built for a different Tile box")
+        rule = ownership["rule"]
+        if float(rule["margin_m"]) != float(self.tile_ownership_margin_m) or int(
+            rule["dilation_px"]
+        ) != int(self.tile_ownership_dilation_px):
+            raise ValueError(
+                "tile ownership cache margin/dilation differ from the config knobs"
+            )
+
     def contract_dict(self) -> dict[str, Any]:
         uses_lidar_linear_aux = self.lidar_linear_aux_weight > 0.0
         uses_lidar_rgb_boost = self.lidar_rgb_l1_weight > 0.0
@@ -2139,6 +2254,21 @@ class TrainerConfig:
                 "margin_m": float(self.tile_ownership_margin_m),
                 "dilation_px": int(self.tile_ownership_dilation_px),
             }
+            if self.tile_ownership_cache_manifest is not None:
+                # Key present only when the precomputed cache is consumed; the
+                # on-the-fly contract keeps its exact shape. The pairs are the
+                # same either way, the cache is bound by its signature.
+                from cloudstudio_3dgs.data.tile_ownership_masks import (
+                    verify_tile_ownership_manifest,
+                )
+
+                loss_weights["tile_ownership_masking"]["cache_manifest_sha256"] = (
+                    verify_tile_ownership_manifest(
+                        json.loads(
+                            self.tile_ownership_cache_manifest.read_text(encoding="utf-8")
+                        )
+                    )
+                )
         lidar_range_contract = {
             "mode": self.lidar_range_loss_mode,
             "semantics": "euclidean_ray_range_m",
@@ -3835,6 +3965,8 @@ def train(
             tile_ownership_box=tile_ownership_box,
             tile_ownership_margin_m=config.tile_ownership_margin_m,
             tile_ownership_dilation_px=config.tile_ownership_dilation_px,
+            tile_ownership_cache_manifest_path=config.tile_ownership_cache_manifest,
+            tile_ownership_cache_root=config.tile_ownership_cache_root,
             face_lidar_geometry_manifest_path=(
                 config.face_lidar_geometry_manifest
             ),

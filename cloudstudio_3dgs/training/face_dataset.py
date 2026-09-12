@@ -217,6 +217,8 @@ class FaceCacheDataset:
         tile_ownership_box: Any | None = None,
         tile_ownership_margin_m: float = 0.5,
         tile_ownership_dilation_px: int = 15,
+        tile_ownership_cache_manifest_path: Path | None = None,
+        tile_ownership_cache_root: Path | None = None,
         sky_mask_manifest_path: Path | None = None,
         sky_mask_root: Path | None = None,
     ) -> None:
@@ -459,6 +461,65 @@ class FaceCacheDataset:
                 mesh_geometry.get("records", [])
             ):
                 raise ValueError("mesh geometry manifest contains duplicate sample IDs")
+        # Precomputed ownership pairs (data.tile_ownership_masks): the cache is
+        # bound to every input the on-the-fly path reads - RGB cache, renderer
+        # mask (or none), LiDAR geometry (or none), box, margin, dilation - so
+        # a verified record is the same pair __getitem__ would compute.
+        if (tile_ownership_cache_manifest_path is None) != (
+            tile_ownership_cache_root is None
+        ):
+            raise ValueError(
+                "tile_ownership_cache_manifest_path and root must be provided together"
+            )
+        self.tile_ownership_cache_manifest_sha256 = None
+        self.tile_ownership_cache_root = (
+            None if tile_ownership_cache_root is None else Path(tile_ownership_cache_root)
+        )
+        self._ownership_by_sample: dict[str, dict[str, Any]] = {}
+        if tile_ownership_cache_manifest_path is not None:
+            from cloudstudio_3dgs.data.tile_ownership_masks import (
+                verify_tile_ownership_manifest,
+            )
+
+            if self.tile_ownership_box is None:
+                raise ValueError(
+                    "a tile ownership cache requires tile_ownership_box (masking on)"
+                )
+            ownership = json.loads(
+                Path(tile_ownership_cache_manifest_path).read_text(encoding="utf-8")
+            )
+            self.tile_ownership_cache_manifest_sha256 = verify_tile_ownership_manifest(
+                ownership
+            )
+            if ownership.get("source_face_manifest_sha256") != self.face_manifest_sha256:
+                raise ValueError("tile ownership cache is bound to a different Face4 cache")
+            if ownership.get("split") != self.manifest.get("split"):
+                raise ValueError("tile ownership cache and Face4 manifests use different splits")
+            if ownership.get("renderer_mask_manifest_sha256") != self.renderer_mask_manifest_sha256:
+                raise ValueError(
+                    "tile ownership cache is bound to a different renderer mask manifest"
+                )
+            if (
+                ownership.get("face_lidar_geometry_manifest_sha256")
+                != self.face_lidar_geometry_manifest_sha256
+            ):
+                raise ValueError(
+                    "tile ownership cache is bound to a different Face4 LiDAR geometry"
+                )
+            cache_box = np.asarray(ownership["training_and_export_box"], dtype=np.float64)
+            if not np.array_equal(cache_box, self.tile_ownership_box):
+                raise ValueError("tile ownership cache was built for a different Tile box")
+            rule = ownership["rule"]
+            if (
+                float(rule["margin_m"]) != self.tile_ownership_margin_m
+                or int(rule["dilation_px"]) != self.tile_ownership_dilation_px
+            ):
+                raise ValueError(
+                    "tile ownership cache margin/dilation differ from the dataset settings"
+                )
+            self._ownership_by_sample = {
+                str(record["sample_id"]): record for record in ownership["records"]
+            }
 
         tile_by_sample: dict[str, dict[str, int]] | None = None
         if tile_views is not None:
@@ -590,6 +651,33 @@ class FaceCacheDataset:
                 raise ValueError(
                     "mesh geometry does not cover selected Tile views: "
                     f"{missing_mesh[:4]}"
+                )
+        if self.tile_ownership_cache_manifest_sha256 is not None:
+            # Fail closed like the other caches: every selected view needs a
+            # record whose crop is the crop this dataset applies.
+            missing_ownership: list[str] = []
+            crop_mismatch: list[str] = []
+            for record, entry, crop in self._samples:
+                sample_id = f"{record['image_id']}{SAMPLE_ID_SEPARATOR}{entry['face_id']}"
+                cached = self._ownership_by_sample.get(sample_id)
+                if cached is None:
+                    missing_ownership.append(sample_id)
+                    continue
+                cached_crop = cached.get("crop")
+                if (
+                    (cached_crop is None) != (crop is None)
+                    or (crop is not None and {k: int(v) for k, v in cached_crop.items()} != crop)
+                ):
+                    crop_mismatch.append(sample_id)
+            if missing_ownership:
+                raise ValueError(
+                    "tile ownership cache does not cover selected Tile views: "
+                    f"{sorted(missing_ownership)[:4]}"
+                )
+            if crop_mismatch:
+                raise ValueError(
+                    "tile ownership cache crops differ from the selected Tile crops: "
+                    f"{sorted(crop_mismatch)[:4]}"
                 )
         if not self._samples:
             raise ValueError("face cache contains no usable face samples")
@@ -762,6 +850,40 @@ class FaceCacheDataset:
             f"{image_record['image_id']}{SAMPLE_ID_SEPARATOR}{face_entry['face_id']}"
             for image_record, face_entry, _ in self._samples
         ]
+
+    def tile_crop(self, index: int) -> dict[str, int] | None:
+        """The Tile crop ``{x, y, width, height}`` applied to sample ``index``."""
+        crop = self._samples[index][2]
+        return None if crop is None else dict(crop)
+
+    def _cached_tile_ownership(
+        self, sample_id: str, expected_shape: tuple[int, int]
+    ) -> tuple[np.ndarray, np.ndarray]:
+        """The precomputed (owned, foreign_region) pair of one sample.
+
+        Called only where the on-the-fly path would call
+        ``tile_ownership_masks``; a record without an artifact there means the
+        cache was built from different depth inputs, so it is an error.
+        """
+        from cloudstudio_3dgs.data.tile_ownership_masks import load_ownership_pair
+
+        record = self._ownership_by_sample[sample_id]
+        if not bool(record.get("ownership_applied")):
+            raise ValueError(
+                f"tile ownership cache records no LiDAR support for {sample_id} "
+                "but the sample has returns"
+            )
+        assert self.tile_ownership_cache_root is not None
+        path = _safe_artifact(self.tile_ownership_cache_root, str(record["path"]))
+        self._verify(path, str(record["sha256"]), "tile ownership mask")
+        owned, foreign_region = load_ownership_pair(
+            self.tile_ownership_cache_root, record, verify_sha=False
+        )
+        if owned.shape != tuple(expected_shape):
+            raise ValueError(
+                f"tile ownership mask shape differs from the cropped sample for {sample_id}"
+            )
+        return owned, foreign_region
 
     def _verify(self, path: Path, expected: str, label: str) -> None:
         if not path.is_file():
@@ -1008,21 +1130,27 @@ class FaceCacheDataset:
             sensor_coords = None if sensor_coords is None else np.ascontiguousarray(sensor_coords[y:bottom, x:right])
             K[0, 2] -= float(x)
             K[1, 2] -= float(y)
+        ownership_sample_id = f"{base_image_id}{SAMPLE_ID_SEPARATOR}{face_id}"
         if (
             self.tile_ownership_box is not None
             and depth_range is not None
             and depth_mask is not None
             and bool(depth_mask.any())
         ):
-            owned, foreign_region = tile_ownership_masks(
-                depth_range,
-                depth_mask,
-                K,
-                c2w,
-                self.tile_ownership_box,
-                self.tile_ownership_margin_m,
-                self.tile_ownership_dilation_px,
-            )
+            if self.tile_ownership_cache_manifest_sha256 is not None:
+                owned, foreign_region = self._cached_tile_ownership(
+                    ownership_sample_id, depth_mask.shape
+                )
+            else:
+                owned, foreign_region = tile_ownership_masks(
+                    depth_range,
+                    depth_mask,
+                    K,
+                    c2w,
+                    self.tile_ownership_box,
+                    self.tile_ownership_margin_m,
+                    self.tile_ownership_dilation_px,
+                )
             masked_rgb = rgb_mask & ~foreign_region
             if bool(masked_rgb.any()):
                 rgb_mask = masked_rgb
@@ -1032,6 +1160,15 @@ class FaceCacheDataset:
             # photometric mask (an empty mask is a hard error downstream);
             # the foreign returns still leave the range supervision.
             depth_mask = owned
+        elif self.tile_ownership_cache_manifest_sha256 is not None and bool(
+            self._ownership_by_sample[ownership_sample_id]["ownership_applied"]
+        ):
+            # The cache saw LiDAR support this dataset does not: the depth
+            # inputs drifted from the ones the cache was built on.
+            raise ValueError(
+                f"tile ownership cache records LiDAR support for {ownership_sample_id} "
+                "but the sample has none"
+            )
         mesh_depth_mask = None
         if mesh_depth_range is not None:
             assert mesh_depth_valid is not None and mesh_confidence is not None

@@ -1,0 +1,169 @@
+{
+ "tile1_training_samples": 1829,
+ "door_quad_fully_inside_face": 324,
+ "door_quad_partially_inside": 241,
+ "carport_side_views": 116,
+ "interior_side_views": 208,
+ "roi_list_views_fully_visible": 33,
+ "carport_cam_distance_p10_p50_p90_m": [
+  5.240868221781966,
+  6.761804590822136,
+  8.433790889991894
+ ],
+ "interior_cam_distance_p10_p50_p90_m": [
+  2.725476096538254,
+  8.10278521018332,
+  12.194410668927244
+ ],
+ "thresholds": {
+  "behind_m": 0.3,
+  "on_m": 0.15,
+  "dilate_px": 6
+ },
+ "aggregate": {
+  "carport_vis6": {
+   "views": 116,
+   "quad_pixels": 3256777,
+   "lidar_pixels_in_quad": 1585080,
+   "coverage_frac": 0.4867020370138944,
+   "alpha_floor_footprint_frac_of_quad": 0.9991058644789005,
+   "behind_leaf": 962782,
+   "on_leaf": 229677,
+   "in_front": 163275,
+   "behind_frac_of_lidar": 0.6074027809321927,
+   "on_frac_of_lidar": 0.14489931107578166,
+   "front_frac_of_lidar": 0.10300741918388977,
+   "per_view_behind_frac_p10_p50_p90": [
+    0.40716813689590753,
+    0.6498451718757392,
+    0.7289918695356081
+   ]
+  },
+  "carport_vis6f": {
+   "views": 116,
+   "quad_pixels": 3256777,
+   "lidar_pixels_in_quad": 940651,
+   "coverage_frac": 0.2888288022176526,
+   "alpha_floor_footprint_frac_of_quad": 0.9855338575530348,
+   "behind_leaf": 472581,
+   "on_leaf": 172731,
+   "in_front": 87724,
+   "behind_frac_of_lidar": 0.5023978074758864,
+   "on_frac_of_lidar": 0.1836292099832988,
+   "front_frac_of_lidar": 0.09325881756358097,
+   "per_view_behind_frac_p10_p50_p90": [
+    0.036769999643648146,
+    0.5440719304743359,
+    0.6817276900202788
+   ]
+  },
+  "interior_vis6": {
+   "views": 208,
+   "quad_pixels": 14693576,
+   "lidar_pixels_in_quad": 5458126,
+   "coverage_frac": 0.3714634204770847,
+   "alpha_floor_footprint_frac_of_quad": 0.9774530720091555,
+   "behind_leaf": 2828237,
+   "on_leaf": 331190,
+   "in_front": 2064623,
+   "behind_frac_of_lidar": 0.5181699726243036,
+   "on_frac_of_lidar": 0.060678335384708966,
+   "front_frac_of_lidar": 0.3782659103142727,
+   "per_view_behind_frac_p10_p50_p90": [
+    0.014409001266120198,
+    0.10372072622755824,
+    0.6983834866098344
+   ]
+  },
+  "interior_vis6f": {
+   "views": 208,
+   "quad_pixels": 14693576,
+   "lidar_pixels_in_quad": 1740408,
+   "coverage_frac": 0.11844686412620045,
+   "alpha_floor_footprint_frac_of_quad": 0.9500804297061518,
+   "behind_leaf": 318494,
+   "on_leaf": 172719,
+   "in_front": 1213531,
+   "behind_frac_of_lidar": 0.1829996184802644,
+   "on_frac_of_lidar": 0.09924052291186894,
+   "front_frac_of_lidar": 0.6972681118450387,
+   "per_view_behind_frac_p10_p50_p90": [
+    0.0,
+    0.0,
+    0.3137851725466729
+   ]
+  },
+  "roi_list_vis6": {
+   "views": 33,
+   "quad_pixels": 1423786,
+   "lidar_pixels_in_quad": 642220,
+   "coverage_frac": 0.45106497746150054,
+   "alpha_floor_footprint_frac_of_quad": 0.9998279235784029,
+   "behind_leaf": 377920,
+   "on_leaf": 82925,
+   "in_front": 56201,
+   "behind_frac_of_lidar": 0.588458783594407,
+   "on_frac_of_lidar": 0.12912241910871664,
+   "front_frac_of_lidar": 0.08751051041699107,
+   "per_view_behind_frac_p10_p50_p90": [
+    0.3868774427968913,
+    0.6194310252281267,
+    0.7162392037794643
+   ]
+  },
+  "roi_list_vis6f": {
+   "views": 33,
+   "quad_pixels": 1423786,
+   "lidar_pixels_in_quad": 411505,
+   "coverage_frac": 0.28902166477265545,
+   "alpha_floor_footprint_frac_of_quad": 0.9920739493154168,
+   "behind_leaf": 192238,
+   "on_leaf": 72726,
+   "in_front": 29192,
+   "behind_frac_of_lidar": 0.46715835773562897,
+   "on_frac_of_lidar": 0.17673175295561414,
+   "front_frac_of_lidar": 0.0709395997618498,
+   "per_view_behind_frac_p10_p50_p90": [
+    0.07694471612574776,
+    0.5109720024764395,
+    0.5418245975689202
+   ]
+  },
+  "figure5_vis6": {
+   "views": 5,
+   "quad_pixels": 229997,
+   "lidar_pixels_in_quad": 102883,
+   "coverage_frac": 0.44732322595512114,
+   "alpha_floor_footprint_frac_of_quad": 1.0,
+   "behind_leaf": 62337,
+   "on_leaf": 15425,
+   "in_front": 5414,
+   "behind_frac_of_lidar": 0.6059018496739014,
+   "on_frac_of_lidar": 0.14992758764810513,
+   "front_frac_of_lidar": 0.05262288230319878,
+   "per_view_behind_frac_p10_p50_p90": [
+    0.45110760852574217,
+    0.6341583913838249,
+    0.6665938356279731
+   ]
+  },
+  "figure5_vis6f": {
+   "views": 5,
+   "quad_pixels": 229997,
+   "lidar_pixels_in_quad": 72760,
+   "coverage_frac": 0.31635195241677067,
+   "alpha_floor_footprint_frac_of_quad": 0.9969912651034579,
+   "behind_leaf": 35505,
+   "on_leaf": 14928,
+   "in_front": 3499,
+   "behind_frac_of_lidar": 0.48797416162726776,
+   "on_frac_of_lidar": 0.2051676745464541,
+   "front_frac_of_lidar": 0.04808960967564596,
+   "per_view_behind_frac_p10_p50_p90": [
+    0.30173582178125835,
+    0.5178408646959239,
+    0.5352323735660505
+   ]
+  }
+ }
+}

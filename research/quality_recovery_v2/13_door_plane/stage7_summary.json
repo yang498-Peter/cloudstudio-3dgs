@@ -1,0 +1,357 @@
+{
+ "closed_interval_cf": [
+  0.85,
+  0.9
+ ],
+ "groups": {
+  "carport_clear": {
+   "vis6": {
+    "views": 95,
+    "quad_px": 2290095,
+    "lidar_px": 1084540,
+    "coverage": 0.4735786070010196,
+    "beyond_plane_frac": 0.6480747598060007,
+    "on_plane_frac": 0.14316023383185497,
+    "near_frac": 0.02315820532207203,
+    "leafpoly_lidar_px": 372910,
+    "leafpoly_on_leaf_frac": 0.6186050253412352,
+    "leafpoly_beyond_leaf_frac": 0.22676517122093803
+   },
+   "vis6f": {
+    "views": 95,
+    "quad_px": 2290095,
+    "lidar_px": 831021,
+    "coverage": 0.36287621255886765,
+    "beyond_plane_frac": 0.5619737648025742,
+    "on_plane_frac": 0.18166327926731093,
+    "near_frac": 0.0228357646798336,
+    "leafpoly_lidar_px": 287415,
+    "leafpoly_on_leaf_frac": 0.7778925943322373,
+    "leafpoly_beyond_leaf_frac": 0.026550458396395457
+   },
+   "sample_ids": 95
+  },
+  "carport_clear_frontal_cf0p14_0p23": {
+   "vis6": {
+    "views": 34,
+    "quad_px": 1441387,
+    "lidar_px": 639034,
+    "coverage": 0.4433465821462244,
+    "beyond_plane_frac": 0.6390849313182084,
+    "on_plane_frac": 0.1340194731422741,
+    "near_frac": 0.005957429495144233,
+    "leafpoly_lidar_px": 372910,
+    "leafpoly_on_leaf_frac": 0.6186050253412352,
+    "leafpoly_beyond_leaf_frac": 0.22676517122093803
+   },
+   "vis6f": {
+    "views": 34,
+    "quad_px": 1441387,
+    "lidar_px": 473051,
+    "coverage": 0.32819152663372153,
+    "beyond_plane_frac": 0.5281438999177679,
+    "on_plane_frac": 0.17557514940249572,
+    "near_frac": 0.007944175152362008,
+    "leafpoly_lidar_px": 287415,
+    "leafpoly_on_leaf_frac": 0.7778925943322373,
+    "leafpoly_beyond_leaf_frac": 0.026550458396395457
+   },
+   "sample_ids": 34
+  },
+  "interior_clear_open": {
+   "vis6": {
+    "views": 36,
+    "quad_px": 4807436,
+    "lidar_px": 1486784,
+    "coverage": 0.30926755967214126,
+    "beyond_plane_frac": 0.810640953897809,
+    "on_plane_frac": 0.1051988721966338,
+    "near_frac": 0.07144682751495846,
+    "leafpoly_lidar_px": 30548,
+    "leafpoly_on_leaf_frac": 0.11116930731962812,
+    "leafpoly_beyond_leaf_frac": 0.8874885426214482
+   },
+   "vis6f": {
+    "views": 36,
+    "quad_px": 4807436,
+    "lidar_px": 473056,
+    "coverage": 0.09840089394845818,
+    "beyond_plane_frac": 0.4867394135155246,
+    "on_plane_frac": 0.29242415274301564,
+    "near_frac": 0.1957146722586755,
+    "leafpoly_lidar_px": 3613,
+    "leafpoly_on_leaf_frac": 0.93274287295876,
+    "leafpoly_beyond_leaf_frac": 0.05646277331857182
+   },
+   "sample_ids": 36
+  },
+  "interior_clear_closed": {
+   "vis6": {
+    "views": 1,
+    "quad_px": 920166,
+    "lidar_px": 157715,
+    "coverage": 0.17139842158914803,
+    "beyond_plane_frac": 0.9137304631772502,
+    "on_plane_frac": 0.03252702659861142,
+    "near_frac": 0.019281615572393242,
+    "leafpoly_lidar_px": 13919,
+    "leafpoly_on_leaf_frac": 0.27387024929951864,
+    "leafpoly_beyond_leaf_frac": 0.6177886342409656
+   },
+   "vis6f": {
+    "views": 1,
+    "quad_px": 920166,
+    "lidar_px": 67544,
+    "coverage": 0.0734041466431057,
+    "beyond_plane_frac": 0.8243071183228711,
+    "on_plane_frac": 0.06699336728650954,
+    "near_frac": 0.04376406490583916,
+    "leafpoly_lidar_px": 4736,
+    "leafpoly_on_leaf_frac": 0.7793496621621622,
+    "leafpoly_beyond_leaf_frac": 0.002533783783783784
+   },
+   "sample_ids": [
+    "img_4a55ba7140adf532c2944b6d::yaw_plus_35"
+   ]
+  },
+  "occluded_any_side": {
+   "vis6": {
+    "views": 163,
+    "quad_px": 9127555,
+    "lidar_px": 3964058,
+    "coverage": 0.43429571226905783,
+    "beyond_plane_frac": 0.4298214102820897,
+    "on_plane_frac": 0.05936895978817666,
+    "near_frac": 0.4607445198834124,
+    "leafpoly_lidar_px": 236757,
+    "leafpoly_on_leaf_frac": 0.4466224863467606,
+    "leafpoly_beyond_leaf_frac": 0.12328674548165419
+   },
+   "vis6f": {
+    "views": 163,
+    "quad_px": 9127555,
+    "lidar_px": 1243022,
+    "coverage": 0.13618345767294746,
+    "beyond_plane_frac": 0.03003728011250002,
+    "on_plane_frac": 0.04060990070972195,
+    "near_frac": 0.9039027466931397,
+    "leafpoly_lidar_px": 58584,
+    "leafpoly_on_leaf_frac": 0.009439437389048204,
+    "leafpoly_beyond_leaf_frac": 0.0025945650689608085
+   },
+   "sample_ids": 163
+  }
+ },
+ "carport_frontal_gap_region_vis6f": {
+  "views": 34,
+  "gap_px": 260396,
+  "gap_lidar": 58671,
+  "beyond_0p3": 36146,
+  "beyond_crop_2p65": 19924,
+  "delta_p50_list": [
+   2.7665217216929623,
+   2.7630320497862146,
+   2.296411655394062,
+   2.3125914730871653,
+   1.1713023546222412,
+   0.7994711826115006,
+   0.17064207436542222,
+   0.1697888119167814,
+   0.17822518969172263,
+   0.19194967878116742,
+   0.19968297706300753,
+   0.2112495188753063,
+   0.22079481234113896,
+   0.23739946152620028,
+   0.24863483232079542,
+   0.24601873311666766,
+   0.24804356292340835,
+   0.24851899130270816,
+   0.24216525610363382,
+   0.24719890644393772,
+   0.23987717910015194,
+   0.24471922838092208,
+   0.2414577444078585,
+   0.23969241907883765,
+   0.237150765599762,
+   0.24275304674891895,
+   0.2546158210617344,
+   0.2740898197647774,
+   0.27880047160851973,
+   0.3060755818538974,
+   0.35983810643789216,
+   0.42098971647029115,
+   0.5073706123499369,
+   0.5246264000703373
+  ],
+  "beyond_crop_frac_of_gap_lidar": 0.3395885531182356,
+  "beyond_0p3_frac_of_gap_lidar": 0.6160794941282746,
+  "delta_p50_median_over_views": 0.24762123468367303
+ },
+ "closed_view_pixel_share_of_clear_door_pixels": 0.11476687133474862,
+ "partially_visible": {
+  "total": 241,
+  "in_closed_interval": [
+   {
+    "sample_id": "img_1966204401da23120883fd70::pitch_down_56",
+    "cf": 0.8597,
+    "dist_m": 1.51,
+    "side": "interior",
+    "corners_inside": 1,
+    "closed_interval": true
+   },
+   {
+    "sample_id": "img_1966204401da23120883fd70::yaw_minus_35",
+    "cf": 0.8597,
+    "dist_m": 1.51,
+    "side": "interior",
+    "corners_inside": 1,
+    "closed_interval": true
+   },
+   {
+    "sample_id": "img_1966204401da23120883fd70::yaw_plus_35",
+    "cf": 0.8597,
+    "dist_m": 1.51,
+    "side": "interior",
+    "corners_inside": 3,
+    "closed_interval": true
+   },
+   {
+    "sample_id": "img_3a87ece1cbe89f05808cde41::yaw_minus_35",
+    "cf": 0.8507,
+    "dist_m": 1.92,
+    "side": "interior",
+    "corners_inside": 3,
+    "closed_interval": true
+   },
+   {
+    "sample_id": "img_3a87ece1cbe89f05808cde41::yaw_plus_35",
+    "cf": 0.8507,
+    "dist_m": 1.92,
+    "side": "interior",
+    "corners_inside": 1,
+    "closed_interval": true
+   },
+   {
+    "sample_id": "img_4a55ba7140adf532c2944b6d::pitch_down_56",
+    "cf": 0.8665,
+    "dist_m": 1.45,
+    "side": "interior",
+    "corners_inside": 1,
+    "closed_interval": true
+   },
+   {
+    "sample_id": "img_50b23cb80cabf1841bac6f5c::yaw_minus_35",
+    "cf": 0.8529,
+    "dist_m": 1.83,
+    "side": "interior",
+    "corners_inside": 3,
+    "closed_interval": true
+   },
+   {
+    "sample_id": "img_50b23cb80cabf1841bac6f5c::yaw_plus_35",
+    "cf": 0.8529,
+    "dist_m": 1.83,
+    "side": "interior",
+    "corners_inside": 1,
+    "closed_interval": true
+   },
+   {
+    "sample_id": "img_669111f98083cce643c39165::pitch_down_56",
+    "cf": 0.871,
+    "dist_m": 1.68,
+    "side": "interior",
+    "corners_inside": 1,
+    "closed_interval": true
+   },
+   {
+    "sample_id": "img_669111f98083cce643c39165::yaw_plus_35",
+    "cf": 0.871,
+    "dist_m": 1.68,
+    "side": "interior",
+    "corners_inside": 2,
+    "closed_interval": true
+   },
+   {
+    "sample_id": "img_71a7ea5f418376a993b7afdc::yaw_minus_35",
+    "cf": 0.8552,
+    "dist_m": 1.64,
+    "side": "interior",
+    "corners_inside": 3,
+    "closed_interval": true
+   },
+   {
+    "sample_id": "img_71a7ea5f418376a993b7afdc::yaw_plus_35",
+    "cf": 0.8552,
+    "dist_m": 1.64,
+    "side": "interior",
+    "corners_inside": 1,
+    "closed_interval": true
+   },
+   {
+    "sample_id": "img_abcaa5cd6df859ada3b95e63::yaw_minus_35",
+    "cf": 0.8575,
+    "dist_m": 1.53,
+    "side": "interior",
+    "corners_inside": 1,
+    "closed_interval": true
+   },
+   {
+    "sample_id": "img_abcaa5cd6df859ada3b95e63::yaw_plus_35",
+    "cf": 0.8575,
+    "dist_m": 1.53,
+    "side": "interior",
+    "corners_inside": 3,
+    "closed_interval": true
+   },
+   {
+    "sample_id": "img_bcc1fa7629c0cbff22cd2e32::yaw_minus_35",
+    "cf": 0.862,
+    "dist_m": 1.48,
+    "side": "interior",
+    "corners_inside": 1,
+    "closed_interval": true
+   },
+   {
+    "sample_id": "img_bcc1fa7629c0cbff22cd2e32::yaw_plus_35",
+    "cf": 0.862,
+    "dist_m": 1.48,
+    "side": "interior",
+    "corners_inside": 3,
+    "closed_interval": true
+   },
+   {
+    "sample_id": "img_cc38ed44cf7d949c28bae20e::yaw_minus_35",
+    "cf": 0.8643,
+    "dist_m": 1.45,
+    "side": "interior",
+    "corners_inside": 1,
+    "closed_interval": true
+   },
+   {
+    "sample_id": "img_cc38ed44cf7d949c28bae20e::yaw_plus_35",
+    "cf": 0.8643,
+    "dist_m": 1.45,
+    "side": "interior",
+    "corners_inside": 3,
+    "closed_interval": true
+   },
+   {
+    "sample_id": "img_e1b2fb3c5e8472dcbba00e23::pitch_down_56",
+    "cf": 0.8688,
+    "dist_m": 1.52,
+    "side": "interior",
+    "corners_inside": 2,
+    "closed_interval": true
+   },
+   {
+    "sample_id": "img_e1b2fb3c5e8472dcbba00e23::yaw_plus_35",
+    "cf": 0.8688,
+    "dist_m": 1.52,
+    "side": "interior",
+    "corners_inside": 3,
+    "closed_interval": true
+   }
+  ]
+ }
+}
