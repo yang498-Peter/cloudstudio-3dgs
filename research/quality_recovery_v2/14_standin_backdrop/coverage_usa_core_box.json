@@ -1,0 +1,184 @@
+{
+ "schema_version": 1,
+ "kind": "gaussian_model_tile_coverage_v1",
+ "label": "USAgs_aligned",
+ "ply": "C:\\baidunetdiskdownload\\house\\USAgs.ply",
+ "vertex_count": 22452075,
+ "non_finite_dropped": 0,
+ "transform_json": "C:\\Peter\\3dgs-runs\\probes\\usa_gs_alignment.json",
+ "transform_applied": true,
+ "tile_inputs_manifest": "C:\\Peter\\3dgs-runs\\house0305_sop\\tile_inputs_v9\\tile_inputs_manifest.json",
+ "tile_inputs_manifest_sha256": "7af17f43c5c3884521ddff037ecc756c9ef4a2f8825c4b62480da1a9d8621e03",
+ "box_kind": "core_box",
+ "boxes": {
+  "Tile_0": [
+   [
+    -81.1284,
+    -75.59460000000001,
+    -7.9796000000000005
+   ],
+   [
+    9.52040000000001,
+    -5.049838095238101,
+    33.8566
+   ]
+  ],
+  "Tile_1": [
+   [
+    -81.1284,
+    -5.049838095238101,
+    -7.9796000000000005
+   ],
+   [
+    9.52040000000001,
+    -1.5226000000000113,
+    33.8566
+   ]
+  ],
+  "Tile_2": [
+   [
+    -81.1284,
+    -1.5226000000000113,
+    -7.9796000000000005
+   ],
+   [
+    9.52040000000001,
+    79.95660000000001,
+    33.8566
+   ]
+  ],
+  "Tile_3": [
+   [
+    9.52040000000001,
+    -75.59460000000001,
+    -7.9796000000000005
+   ],
+   [
+    91.92840000000001,
+    79.95660000000001,
+    33.8566
+   ]
+  ]
+ },
+ "bounds_m": {
+  "min": [
+   -57.75602930127826,
+   -65.60415412873013,
+   -5.3651800382360815
+  ],
+  "max": [
+   56.80105905462774,
+   59.758024354148716,
+   30.938378196372945
+  ]
+ },
+ "subsets": [
+  {
+   "subset": "all",
+   "count": 22452075,
+   "inside_union_count": 22452075,
+   "inside_union_fraction": 1.0,
+   "outside_union_count": 0,
+   "outside_union_fraction": 0.0,
+   "per_tile_count": {
+    "Tile_0": 8433755,
+    "Tile_1": 2042088,
+    "Tile_2": 4542236,
+    "Tile_3": 7433996
+   },
+   "outside_by_horizontal_distance": [
+    {
+     "beyond_union_xy_m": [
+      0.0,
+      1.0
+     ],
+     "count": 0
+    },
+    {
+     "beyond_union_xy_m": [
+      1.0,
+      5.0
+     ],
+     "count": 0
+    },
+    {
+     "beyond_union_xy_m": [
+      5.0,
+      20.0
+     ],
+     "count": 0
+    },
+    {
+     "beyond_union_xy_m": [
+      20.0,
+      null
+     ],
+     "count": 0
+    }
+   ],
+   "outside_over_footprint_above_boxes_count": 0,
+   "outside_over_footprint_below_boxes_count": 0,
+   "outside_z_m": null,
+   "outside_beyond_union_xy_m": null,
+   "inside_z_m": {
+    "p05": 0.06127767050243551,
+    "p50": 0.369774665981627,
+    "p95": 12.09024499787854
+   }
+  },
+  {
+   "subset": "opacity_ge_0.05",
+   "count": 22452075,
+   "inside_union_count": 22452075,
+   "inside_union_fraction": 1.0,
+   "outside_union_count": 0,
+   "outside_union_fraction": 0.0,
+   "per_tile_count": {
+    "Tile_0": 8433755,
+    "Tile_1": 2042088,
+    "Tile_2": 4542236,
+    "Tile_3": 7433996
+   },
+   "outside_by_horizontal_distance": [
+    {
+     "beyond_union_xy_m": [
+      0.0,
+      1.0
+     ],
+     "count": 0
+    },
+    {
+     "beyond_union_xy_m": [
+      1.0,
+      5.0
+     ],
+     "count": 0
+    },
+    {
+     "beyond_union_xy_m": [
+      5.0,
+      20.0
+     ],
+     "count": 0
+    },
+    {
+     "beyond_union_xy_m": [
+      20.0,
+      null
+     ],
+     "count": 0
+    }
+   ],
+   "outside_over_footprint_above_boxes_count": 0,
+   "outside_over_footprint_below_boxes_count": 0,
+   "outside_z_m": null,
+   "outside_beyond_union_xy_m": null,
+   "inside_z_m": {
+    "p05": 0.06127767050243551,
+    "p50": 0.369774665981627,
+    "p95": 12.09024499787854
+   }
+  }
+ ],
+ "opacity_floor": 0.05
+}

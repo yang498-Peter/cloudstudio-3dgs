@@ -1,0 +1,317 @@
+{
+ "schema_version": 1,
+ "kind": "gaussian_model_tile_coverage_v1",
+ "label": "USAgs_aligned",
+ "ply": "C:\\baidunetdiskdownload\\house\\USAgs.ply",
+ "vertex_count": 22452075,
+ "non_finite_dropped": 0,
+ "transform_json": "C:\\Peter\\3dgs-runs\\probes\\usa_gs_alignment.json",
+ "transform_applied": true,
+ "tile_inputs_manifest": "C:\\Peter\\3dgs-runs\\house0305_sop\\tile_inputs_v9\\tile_inputs_manifest.json",
+ "tile_inputs_manifest_sha256": "7af17f43c5c3884521ddff037ecc756c9ef4a2f8825c4b62480da1a9d8621e03",
+ "box_kind": "training_and_export_box",
+ "boxes": {
+  "Tile_0": [
+   [
+    -81.30969759999999,
+    -75.73568952380954,
+    -8.0632724
+   ],
+   [
+    9.70169760000001,
+    -4.9087485714285775,
+    33.9402724
+   ]
+  ],
+  "Tile_1": [
+   [
+    -81.30969759999999,
+    -5.056892571428578,
+    -8.0632724
+   ],
+   [
+    9.70169760000001,
+    -1.515545523809535,
+    33.9402724
+   ]
+  ],
+  "Tile_2": [
+   [
+    -81.30969759999999,
+    -1.6855584000000112,
+    -8.0632724
+   ],
+   [
+    9.70169760000001,
+    80.1195584,
+    33.9402724
+   ]
+  ],
+  "Tile_3": [
+   [
+    9.35558400000001,
+    -75.90570240000001,
+    -8.0632724
+   ],
+   [
+    92.09321600000001,
+    80.2677024,
+    33.9402724
+   ]
+  ]
+ },
+ "bounds_m": {
+  "min": [
+   -57.75602930127826,
+   -65.60415412873013,
+   -5.3651800382360815
+  ],
+  "max": [
+   56.80105905462774,
+   59.758024354148716,
+   30.938378196372945
+  ]
+ },
+ "subsets": [
+  {
+   "subset": "all",
+   "count": 22452075,
+   "inside_union_count": 22452075,
+   "inside_union_fraction": 1.0,
+   "outside_union_count": 0,
+   "outside_union_fraction": 0.0,
+   "per_tile_count": {
+    "Tile_0": 8557589,
+    "Tile_1": 2030161,
+    "Tile_2": 4592071,
+    "Tile_3": 7272254
+   },
+   "outside_by_horizontal_distance": [
+    {
+     "beyond_union_xy_m": [
+      0.0,
+      1.0
+     ],
+     "count": 0
+    },
+    {
+     "beyond_union_xy_m": [
+      1.0,
+      5.0
+     ],
+     "count": 0
+    },
+    {
+     "beyond_union_xy_m": [
+      5.0,
+      20.0
+     ],
+     "count": 0
+    },
+    {
+     "beyond_union_xy_m": [
+      20.0,
+      null
+     ],
+     "count": 0
+    }
+   ],
+   "outside_over_footprint_above_boxes_count": 0,
+   "outside_over_footprint_below_boxes_count": 0,
+   "outside_z_m": null,
+   "outside_beyond_union_xy_m": null,
+   "inside_z_m": {
+    "p05": 0.06127767050243551,
+    "p50": 0.369774665981627,
+    "p95": 12.09024499787854
+   }
+  },
+  {
+   "subset": "opacity_ge_0.05",
+   "count": 22452075,
+   "inside_union_count": 22452075,
+   "inside_union_fraction": 1.0,
+   "outside_union_count": 0,
+   "outside_union_fraction": 0.0,
+   "per_tile_count": {
+    "Tile_0": 8557589,
+    "Tile_1": 2030161,
+    "Tile_2": 4592071,
+    "Tile_3": 7272254
+   },
+   "outside_by_horizontal_distance": [
+    {
+     "beyond_union_xy_m": [
+      0.0,
+      1.0
+     ],
+     "count": 0
+    },
+    {
+     "beyond_union_xy_m": [
+      1.0,
+      5.0
+     ],
+     "count": 0
+    },
+    {
+     "beyond_union_xy_m": [
+      5.0,
+      20.0
+     ],
+     "count": 0
+    },
+    {
+     "beyond_union_xy_m": [
+      20.0,
+      null
+     ],
+     "count": 0
+    }
+   ],
+   "outside_over_footprint_above_boxes_count": 0,
+   "outside_over_footprint_below_boxes_count": 0,
+   "outside_z_m": null,
+   "outside_beyond_union_xy_m": null,
+   "inside_z_m": {
+    "p05": 0.06127767050243551,
+    "p50": 0.369774665981627,
+    "p95": 12.09024499787854
+   }
+  },
+  {
+   "subset": "lidar_unsupported_gt_0.5m",
+   "count": 283839,
+   "inside_union_count": 283839,
+   "inside_union_fraction": 1.0,
+   "outside_union_count": 0,
+   "outside_union_fraction": 0.0,
+   "per_tile_count": {
+    "Tile_0": 76183,
+    "Tile_1": 1686,
+    "Tile_2": 93036,
+    "Tile_3": 112934
+   },
+   "outside_by_horizontal_distance": [
+    {
+     "beyond_union_xy_m": [
+      0.0,
+      1.0
+     ],
+     "count": 0
+    },
+    {
+     "beyond_union_xy_m": [
+      1.0,
+      5.0
+     ],
+     "count": 0
+    },
+    {
+     "beyond_union_xy_m": [
+      5.0,
+      20.0
+     ],
+     "count": 0
+    },
+    {
+     "beyond_union_xy_m": [
+      20.0,
+      null
+     ],
+     "count": 0
+    }
+   ],
+   "outside_over_footprint_above_boxes_count": 0,
+   "outside_over_footprint_below_boxes_count": 0,
+   "outside_z_m": null,
+   "outside_beyond_union_xy_m": null,
+   "inside_z_m": {
+    "p05": -0.3476848862003547,
+    "p50": 9.196877735243019,
+    "p95": 21.987386223386082
+   }
+  },
+  {
+   "subset": "lidar_unsupported_gt_0.5m_opacity_ge_0.05",
+   "count": 283839,
+   "inside_union_count": 283839,
+   "inside_union_fraction": 1.0,
+   "outside_union_count": 0,
+   "outside_union_fraction": 0.0,
+   "per_tile_count": {
+    "Tile_0": 76183,
+    "Tile_1": 1686,
+    "Tile_2": 93036,
+    "Tile_3": 112934
+   },
+   "outside_by_horizontal_distance": [
+    {
+     "beyond_union_xy_m": [
+      0.0,
+      1.0
+     ],
+     "count": 0
+    },
+    {
+     "beyond_union_xy_m": [
+      1.0,
+      5.0
+     ],
+     "count": 0
+    },
+    {
+     "beyond_union_xy_m": [
+      5.0,
+      20.0
+     ],
+     "count": 0
+    },
+    {
+     "beyond_union_xy_m": [
+      20.0,
+      null
+     ],
+     "count": 0
+    }
+   ],
+   "outside_over_footprint_above_boxes_count": 0,
+   "outside_over_footprint_below_boxes_count": 0,
+   "outside_z_m": null,
+   "outside_beyond_union_xy_m": null,
+   "inside_z_m": {
+    "p05": -0.3476848862003547,
+    "p50": 9.196877735243019,
+    "p95": 21.987386223386082
+   }
+  }
+ ],
+ "opacity_floor": 0.05,
+ "anchor": {
+  "ply": "C:\\Peter\\3dgs-datasets\\house0305_init_full\\sparse_pc.ply",
+  "point_count": 18409149,
+  "bounds_m": {
+   "min": [
+    -56.40599822998047,
+    -53.37300109863281,
+    -2.003000020980835
+   ],
+   "max": [
+    67.20600128173828,
+    57.73500061035156,
+    27.8799991607666
+   ]
+  },
+  "max_distance_m": 0.5
+ },
+ "lidar_unsupported_location": {
+  "beyond_las_xy_extent_count": 5564,
+  "over_las_footprint_count": 278275,
+  "over_footprint_z_m": {
+   "p05": -0.3467278293322929,
+   "p50": 9.297877205913991,
+   "p95": 22.022483011677725
+  }
+ },
+ "png": "C:\\Peter\\cloudstudio-3dgs-work\\research\\quality_recovery_v2\\14_standin_backdrop\\coverage_usa_lidar_support.png"
+}
