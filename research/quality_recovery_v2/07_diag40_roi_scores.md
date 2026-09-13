@@ -88,3 +88,4 @@ Capacity curve at fixed configuration (ownership + sky alpha + stand-in backdrop
 | tile1_B5_rerun_20k (identical rerun of B5) | 49 | 0.227 | 0.508 | **0.414** (fair 0.427) |
 
 Rerun spread of the ROI median is +-10-20%, larger than the earlier +-7% estimate: R1d 0.366/0.315, B5 0.501/0.414. Paired per-view medians are the reliable statistic: R1d->B5 1.077 (27/49), R1d_rerun->B5_rerun 1.286 (39/49). Geometry reproduces exactly: off-surface 0.157/0.161, outside box 0.216/0.218, count 4.65M/4.66M.
+| tile1_B6_band40_20k (ownership band 40px) | 49 | 0.202 | 0.508 | **0.401** (fair 0.405) |
