@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import sys
 import tempfile
 import unittest
@@ -96,13 +97,22 @@ def _write_tile_inputs(root: Path) -> Path:
     return path
 
 
-def _params(means: list[list[float]], opacities: list[float] | None = None) -> dict:
+def _params(
+    means: list[list[float]],
+    opacities: list[float] | None = None,
+    log_scales: list[float] | None = None,
+) -> dict:
     count = len(means)
     values = torch.arange(count, dtype=torch.float32).reshape(count, 1, 1)
+    scales = (
+        torch.full((count, 3), -2.0, dtype=torch.float32)
+        if log_scales is None
+        else torch.tensor(log_scales, dtype=torch.float32).reshape(count, 1).expand(count, 3).clone()
+    )
     return {
         "means": torch.tensor(means, dtype=torch.float32),
         "quats": torch.zeros((count, 4), dtype=torch.float32) + values.reshape(count, 1),
-        "scales": torch.full((count, 3), -2.0, dtype=torch.float32),
+        "scales": scales,
         "opacities": torch.tensor(
             [2.0] * count if opacities is None else opacities, dtype=torch.float32
         ),
@@ -111,13 +121,15 @@ def _params(means: list[list[float]], opacities: list[float] | None = None) -> d
     }
 
 
-def _write_checkpoint(path: Path, means: list[list[float]], *, step: int, opacities=None) -> Path:
+def _write_checkpoint(
+    path: Path, means: list[list[float]], *, step: int, opacities=None, log_scales=None
+) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
     torch.save(
         {
             "schema_version": 1,
             "step": step,
-            "params": _params(means, opacities),
+            "params": _params(means, opacities, log_scales),
             "identity": {"coordinate_transform_sha256": COORDINATE_SHA},
             "auxiliary_params": {"exposure_log_gains": torch.zeros(3)},
         },
@@ -277,6 +289,75 @@ class MergeFillLayerTests(unittest.TestCase):
         self.assertEqual(source["rejected_by_opacity_floor_count"], 1)
         self.assertEqual(source["retained_gaussian_count"], 1)
         self.assertEqual(report["fill_exclusion"]["min_opacity"], 0.5)
+
+    def test_long_axis_filter_drops_the_oversized_fill_rows(self) -> None:
+        # The occupancy rule keeps exactly the rows sitting where no delivery gaussian is,
+        # which is canopy and open sky, so it selects the prior's largest gaussians. On the
+        # 25k prior the retained subset has a 21.7 mm median long axis against 4.7 mm for
+        # tile rows, and 27.7% of it is over 50 mm - the rows that sit in front of fine
+        # structure in a novel view.
+        big = math.log(0.40)      # 0.40 m long axis
+        small = math.log(0.02)    # 0.02 m
+        fill = _write_checkpoint(
+            self.root / "sized.pt",
+            [[5.0, 5.0, 5.0], [6.0, 6.0, 6.0], [7.0, 7.0, 7.0]],
+            step=50,
+            log_scales=[big, small, big],
+        )
+        report = _run(
+            self.tile_inputs,
+            self._output("sized"),
+            "--fill-checkpoint",
+            str(fill),
+            "--fill-max-long-axis-m",
+            "0.1",
+        )
+        source = report["fill_sources"][0]
+        self.assertEqual(source["input_gaussian_count"], 3)
+        self.assertEqual(source["rejected_by_long_axis_count"], 2)
+        self.assertEqual(source["retained_gaussian_count"], 1)
+        self.assertEqual(report["fill_exclusion"]["max_long_axis_m"], 0.1)
+        merged = torch.load(
+            self.root / "sized" / "merged.pt", map_location="cpu", weights_only=False
+        )
+        np.testing.assert_allclose(merged["params"]["means"].numpy()[4:], [[6.0, 6.0, 6.0]])
+
+    def test_the_long_axis_filter_reads_the_longest_axis_not_the_mean(self) -> None:
+        # Scales are stored as logs and rendered linear; a row that is small on two axes and
+        # long on the third still covers a novel view along that third axis.
+        fill = self.root / "anisotropic.pt"
+        fill.parent.mkdir(parents=True, exist_ok=True)
+        params = _params([[5.0, 5.0, 5.0]])
+        params["scales"] = torch.tensor(
+            [[math.log(0.01), math.log(0.01), math.log(0.40)]], dtype=torch.float32
+        )
+        torch.save(
+            {
+                "schema_version": 1,
+                "step": 50,
+                "params": params,
+                "identity": {"coordinate_transform_sha256": COORDINATE_SHA},
+                "auxiliary_params": {"exposure_log_gains": torch.zeros(3)},
+            },
+            fill,
+        )
+        report = _run(
+            self.tile_inputs,
+            self._output("aniso"),
+            "--fill-checkpoint",
+            str(fill),
+            "--fill-max-long-axis-m",
+            "0.1",
+        )
+        self.assertEqual(report["fill_sources"][0]["rejected_by_long_axis_count"], 1)
+        self.assertEqual(report["fill_gaussian_count"], 0)
+
+    def test_without_the_filter_the_report_records_it_as_unset(self) -> None:
+        report = _run(
+            self.tile_inputs, self._output("nofilter"), "--fill-checkpoint", str(self.fill)
+        )
+        self.assertIsNone(report["fill_exclusion"]["max_long_axis_m"])
+        self.assertEqual(report["fill_sources"][0]["rejected_by_long_axis_count"], 0)
 
     def test_without_a_fill_source_the_report_has_no_fill_keys(self) -> None:
         report = _run(self.tile_inputs, self._output("plain"))

@@ -231,6 +231,19 @@ def main() -> int:
     )
     parser.add_argument("--fill-occupancy-clearance-voxels", type=int, default=1)
     parser.add_argument(
+        "--fill-max-long-axis-m",
+        type=float,
+        default=None,
+        help=(
+            "drop fill gaussians whose longest axis exceeds this, in metres. The occupancy "
+            "rule keeps exactly the rows sitting where no delivery gaussian is, which is "
+            "canopy and open sky, so it selects the prior's largest gaussians: measured on "
+            "the 25k prior, the retained subset has a 21.7 mm median long axis and a 145 mm "
+            "p90 against 4.7 mm and 17.8 mm for tile rows, and 27.7 percent of it is over "
+            "50 mm. Those are the rows that sit in front of fine structure in a novel view"
+        ),
+    )
+    parser.add_argument(
         "--fill-min-opacity",
         type=float,
         default=0.0,
@@ -411,6 +424,15 @@ def main() -> int:
                 dead = (opacity < float(args.fill_min_opacity)).numpy()
                 rejected_opacity = int(np.count_nonzero(dead & keep))
                 keep &= ~dead
+            rejected_long_axis = 0
+            if args.fill_max_long_axis_m is not None:
+                # Scales are stored as logs and rendered linear; the longest axis is what
+                # decides how much of a novel view one fill gaussian can cover.
+                scales = torch.exp(params["scales"].detach().cpu().float())
+                long_axis = scales.max(dim=1).values.numpy()
+                oversized = long_axis > float(args.fill_max_long_axis_m)
+                rejected_long_axis = int(np.count_nonzero(oversized & keep))
+                keep &= ~oversized
             keep_tensor = torch.from_numpy(keep)
             kept = int(np.count_nonzero(keep))
             for key in parameter_keys:
@@ -435,6 +457,7 @@ def main() -> int:
                     "rejected_inside_tile_box_count": rejected_box,
                     "rejected_as_delivery_occupied_count": rejected_occupied,
                     "rejected_by_opacity_floor_count": rejected_opacity,
+                    "rejected_by_long_axis_count": rejected_long_axis,
                     "retained_gaussian_count": kept,
                     "retained_bounds": (
                         [retained_means.min(axis=0).tolist(), retained_means.max(axis=0).tolist()]
@@ -497,6 +520,11 @@ def main() -> int:
                 else int(args.fill_occupancy_clearance_voxels)
             ),
             "min_opacity": float(args.fill_min_opacity),
+            "max_long_axis_m": (
+                None
+                if args.fill_max_long_axis_m is None
+                else float(args.fill_max_long_axis_m)
+            ),
             "rule": (
                 "reject_inside_any_tile_training_and_export_box"
                 if args.fill_occupancy_voxel_m is None
