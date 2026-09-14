@@ -59,6 +59,7 @@ from cloudstudio_3dgs.training.losses import (
 from cloudstudio_3dgs.training.mipmap_loss_schedule import (
     competitor_high_type2_loss_weights,
 )
+from cloudstudio_3dgs.training.sample_prefetch import EpochOrderCache, SamplePrefetcher
 from cloudstudio_3dgs.training.presets import (
     assert_trainer_preset_matches,
     expand_trainer_preset,
@@ -268,6 +269,11 @@ class TrainerConfig:
     device: str = "cuda:0"
     seed: int = 42
     view_sampling_mode: str = "with_replacement"
+    # Decode the next step's six artifacts on a worker thread while this step renders.
+    # Off by default: enabling it changes wall clock only - the sampling order, the RNG
+    # and every tensor stay identical - but a run that enables it is still a different
+    # run under the frozen-config rule and must carry its own arm name.
+    prefetch_training_samples: bool = False
     max_steps: int = 3_000
     checkpoint_every: int = 500
     checkpoint_keep_every: int = 0
@@ -588,6 +594,7 @@ class TrainerConfig:
                 "require_person_masks",
                 "seed",
                 "view_sampling_mode",
+                "prefetch_training_samples",
                 "max_steps",
                 "checkpoint_every",
                 "checkpoint_keep_every",
@@ -788,6 +795,15 @@ class TrainerConfig:
             "fisher_yates_without_replacement_per_epoch",
         }:
             raise ValueError("unsupported training view sampling mode")
+        if self.prefetch_training_samples and (
+            self.view_sampling_mode != "fisher_yates_without_replacement_per_epoch"
+        ):
+            # With replacement the next index comes out of the sampler RNG, so it cannot
+            # be known a step early without drawing ahead and changing the draw order.
+            raise ValueError(
+                "prefetch_training_samples requires "
+                "fisher_yates_without_replacement_per_epoch sampling"
+            )
         if self.cuda_empty_cache_interval_steps < 0:
             raise ValueError("cuda_empty_cache_interval_steps must be non-negative")
         if self.resume_checkpoint is not None and self.warm_start_checkpoint is not None:
@@ -2221,6 +2237,11 @@ class TrainerConfig:
                 else "torch_generator_state"
             ),
         }
+        if self.prefetch_training_samples:
+            # Wall-clock only: the sample order, the RNG and every tensor are unchanged.
+            # Recorded so an as-run contract says which runs decoded ahead, and left out
+            # entirely when off so every existing contract signs to the same bytes.
+            view_sampling_contract["prefetch_training_samples"] = True
         if self.lidar_rgb_l1_weight > 0.0:
             loss_weights["lidar_rgb_l1"] = self.lidar_rgb_l1_weight
         if uses_rgb_gradient:
@@ -4648,6 +4669,25 @@ def train(
 
     sampled_epoch = -1
     sampled_order: tuple[int, ...] = ()
+    # Under the epoch permutation the index is a pure function of the step, the seed and
+    # the dataset length, so the next step's artifacts can be decoded while this step
+    # renders. The cache holds two epochs so looking one step past an epoch boundary
+    # costs one extra permutation rather than a reshuffle every step.
+    epoch_orders = EpochOrderCache(
+        fisher_yates_epoch_order, len(trainset), config.seed
+    )
+    prefetcher = (
+        SamplePrefetcher(trainset.__getitem__, name="face-sample-prefetch")
+        if config.prefetch_training_samples
+        else None
+    )
+    prefetch_last_step = config.max_steps - 1
+    if controlled_stop_after_steps is not None:
+        # ``completed`` is ``step + 1``; the run raises after that step, so the sample for
+        # the step after it would be decoded and thrown away.
+        prefetch_last_step = min(prefetch_last_step, controlled_stop_after_steps - 1)
+    if prefetcher is not None and completed_steps <= prefetch_last_step:
+        prefetcher.prime(epoch_orders.index_for_step(completed_steps))
     for step in range(completed_steps, config.max_steps):
         phase = config.fixed_topology_schedule.phase_for_step(step)
         if not phase_history or phase_history[-1]["name"] != phase["name"]:
@@ -4699,9 +4739,7 @@ def train(
         ):
             epoch = step // len(trainset)
             if epoch != sampled_epoch:
-                sampled_order = fisher_yates_epoch_order(
-                    len(trainset), seed=config.seed, epoch=epoch
-                )
+                sampled_order = epoch_orders.order(epoch)
                 sampled_epoch = epoch
             index = sampled_order[step % len(trainset)]
         else:
@@ -4716,7 +4754,14 @@ def train(
         if view_last_seen_step[index] >= 0:
             view_revisit_gaps.append(step - view_last_seen_step[index])
         view_last_seen_step[index] = step
-        sample = trainset[index]
+        if prefetcher is None:
+            sample = trainset[index]
+        else:
+            sample = prefetcher.get(index)
+            if step < prefetch_last_step:
+                # Start the next step's decode now, so it overlaps this step's render
+                # instead of running between two of them.
+                prefetcher.prime(epoch_orders.index_for_step(step + 1))
         tensors = _tensor_sample(sample, torch, config.device)
         c2w_override = (
             None
@@ -5614,6 +5659,8 @@ def train(
                 )
         if completed == controlled_stop_after_steps:
             torch.cuda.synchronize(config.device)
+            if prefetcher is not None:
+                prefetcher.close()
             raise ControlledTrainingInterruption(
                 completed_steps=completed,
                 checkpoint_path=checkpoint_path,
@@ -5626,6 +5673,8 @@ def train(
             # tensors remain resident; non-tiled runs leave this disabled.
             torch.cuda.empty_cache()
 
+    if prefetcher is not None:
+        prefetcher.close()
     torch.cuda.synchronize(config.device)
     duration_seconds = time.perf_counter() - started
     peak_vram_bytes = int(torch.cuda.max_memory_allocated(config.device))
