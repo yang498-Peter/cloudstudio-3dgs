@@ -31,6 +31,7 @@ from typing import Any, Callable, Mapping, Sequence
 from tools.pipeline import _timestamp, _write_json_atomic, file_sha256
 
 from cloudstudio3dgs_sdk.bundle import PreparedScene, load_dataset_bundle
+from cloudstudio3dgs_sdk.discover import DatasetEstimate, estimate_dataset_summary
 from cloudstudio3dgs_sdk.plan import (
     STAGES,
     DatasetSummary,
@@ -260,6 +261,10 @@ class Project:
         self.stream = stream or sys.stdout
         self._dataset = dataset
         self._plan: Plan | None = None
+        # An estimated summary never lands in ``_dataset`` or ``_plan``: those
+        # feed the run path, and a run must refuse an estimate even if a
+        # dry-run built one earlier in the same process.
+        self._estimate: DatasetEstimate | None = None
 
     # -- plumbing --------------------------------------------------------
 
@@ -271,12 +276,22 @@ class Project:
             raise KeyError(f"unknown stage {stage!r}")
         return StageState(self.layout.state / f"stage_{stage}.json", stage=stage)
 
-    def dataset_summary(self) -> DatasetSummary:
-        """The prepared scene. Read from the prepare manifest unless injected."""
+    def dataset_summary(self, *, allow_estimate: bool = False) -> DatasetSummary:
+        """The prepared scene. Read from the prepare manifest unless injected.
+
+        ``allow_estimate`` is the planning-only escape hatch: with no prepare
+        manifest it derives a summary from the capture
+        (:func:`cloudstudio3dgs_sdk.discover.estimate_dataset_summary`) instead
+        of refusing, so ``--dry-run`` and ``preflight`` can cost a dataset
+        nobody has ingested yet. It is off by default, which is what keeps a
+        real run failing closed.
+        """
         if self._dataset is not None:
             return self._dataset
         manifest = self.layout.prepare_manifest
         if not manifest.is_file():
+            if allow_estimate:
+                return self.dataset_estimate().summary
             raise StageRefused(
                 f"no prepared dataset: {manifest} does not exist. Run prepare() first, or pass "
                 "dataset=DatasetSummary(...) to plan a scene before ingestion."
@@ -284,6 +299,19 @@ class Project:
         payload = json.loads(manifest.read_text(encoding="utf-8"))
         self._dataset = DatasetSummary.from_json(payload["dataset"])
         return self._dataset
+
+    def dataset_estimate(self) -> DatasetEstimate:
+        """Derive the summary from the capture, with the notes behind it.
+
+        Cached for the life of the project because the derivation streams the
+        whole point cloud twice; the cache is separate from ``_dataset`` on
+        purpose, so nothing on the run path can pick it up.
+        """
+        if self._estimate is None:
+            self._estimate = estimate_dataset_summary(
+                self.dataset_root, self.profile, scene_tag=self.scene_tag
+            )
+        return self._estimate
 
     def bundle_paths(self) -> dict[str, str]:
         manifest = self.layout.prepare_manifest
@@ -306,8 +334,23 @@ class Project:
         payload = json.loads(manifest.read_text(encoding="utf-8"))
         return {int(key): str(value) for key, value in (payload.get("prior_tile_checkpoints") or {}).items()}
 
-    def plan(self, *, refresh: bool = False, stages: Sequence[str] = STAGES) -> Plan:
-        """The plan for this project. ``stages`` narrows it without running."""
+    def plan(
+        self,
+        *,
+        refresh: bool = False,
+        stages: Sequence[str] = STAGES,
+        allow_estimate: bool = False,
+    ) -> Plan:
+        """The plan for this project. ``stages`` narrows it without running.
+
+        ``allow_estimate`` falls back to a capture-derived dataset summary when
+        nothing has been prepared. The resulting plan is marked and cannot be
+        executed; see :meth:`dataset_summary`.
+        """
+        if allow_estimate:
+            # Never cached: a cached estimated plan would be handed to the next
+            # caller, who may be a run.
+            return self._build_plan(stages, allow_estimate=True)
         if tuple(stages) != tuple(STAGES):
             # A narrowed plan is a different object; never cache it as *the* plan.
             return self._build_plan(stages)
@@ -315,10 +358,10 @@ class Project:
             self._plan = self._build_plan(STAGES)
         return self._plan
 
-    def _build_plan(self, stages: Sequence[str]) -> Plan:
+    def _build_plan(self, stages: Sequence[str], *, allow_estimate: bool = False) -> Plan:
         return build_plan(
             self.profile,
-            self.dataset_summary(),
+            self.dataset_summary(allow_estimate=allow_estimate),
             dataset_root=self.dataset_root,
             work_root=self.work_root,
             repo_root=self.repo_root,
@@ -330,9 +373,9 @@ class Project:
             stages=stages,
         )
 
-    def preflight(self, *, require_gpu: bool = True) -> PreflightReport:
+    def preflight(self, *, require_gpu: bool = True, allow_estimate: bool = False) -> PreflightReport:
         return preflight(
-            self.plan(),
+            self.plan(allow_estimate=allow_estimate),
             self.profile,
             repo_root=self.repo_root,
             probes=self.probes,
@@ -414,6 +457,16 @@ class Project:
                 return StageResult(stage, "skipped", why)
         self._verify_upstream(stage)
         plan = self.plan(refresh=True)
+        if plan.dataset.estimated:
+            # plan(allow_estimate=False) already refuses to build one, so this
+            # only fires for a summary handed in through dataset=/--summary
+            # that carries the flag. Estimated numbers cost a delivery nobody
+            # can reconstruct; they are never a training input.
+            raise StageRefused(
+                f"[{stage}] refuses an estimated dataset summary: its tile boxes, view counts "
+                "and initialisation counts were derived from the capture, not measured by "
+                "prepare(). Estimates are for --dry-run and preflight. Run prepare() first."
+            )
         report: PreflightReport | None = None
         if stage in GPU_STAGES:
             report = self.preflight(require_gpu=True)

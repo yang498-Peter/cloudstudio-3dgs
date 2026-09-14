@@ -73,6 +73,12 @@ class DatasetSummary:
     global_init_point_count: int
     lidar_point_count: int = 0
     has_reference_model: bool = False
+    # True when these numbers were derived from the capture rather than read
+    # from a prepare manifest (see cloudstudio3dgs_sdk.discover). A plan built
+    # on one is costable but not runnable: Project refuses to train from it.
+    estimated: bool = False
+    # One sentence per estimated field. render() prints them under ESTIMATED.
+    estimate_notes: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         if not self.tiles:
@@ -95,6 +101,8 @@ class DatasetSummary:
             "global_init_point_count": self.global_init_point_count,
             "lidar_point_count": self.lidar_point_count,
             "has_reference_model": self.has_reference_model,
+            "estimated": self.estimated,
+            "estimate_notes": list(self.estimate_notes),
         }
 
     @classmethod
@@ -119,6 +127,11 @@ class DatasetSummary:
             global_init_point_count=int(payload["global_init_point_count"]),
             lidar_point_count=int(payload.get("lidar_point_count", 0)),
             has_reference_model=bool(payload.get("has_reference_model", False)),
+            # An estimate written out and fed back in through --summary is
+            # still an estimate; the flag has to survive the round trip or the
+            # refusal in Project can be walked around with a text editor.
+            estimated=bool(payload.get("estimated", False)),
+            estimate_notes=tuple(str(note) for note in payload.get("estimate_notes", ())),
         )
 
     @classmethod
@@ -284,11 +297,25 @@ class Plan:
         lines.append(f"  plan_sha256    {self.plan_sha256}")
         lines.append(f"  dataset        {self.dataset_root}")
         lines.append(f"  work           {self.work_root}")
+        marker = " [ESTIMATED]" if self.dataset.estimated else ""
         lines.append(
-            f"  tiles          {self.dataset.tile_count}"
+            f"  tiles          {self.dataset.tile_count}{marker}"
             f" ({', '.join(f'{t.name} {t.view_count}v init {t.init_point_count/1e6:.2f}M cap {self.tile_caps[t.tile_id]/1e6:.2f}M' for t in self.dataset.tiles)})"
         )
         lines.append(f"  generations    {', '.join(self.generations)}")
+        if self.dataset.estimated:
+            # Printed before the step list, not after it: whoever reads only the
+            # top of the transcript has to see that the tile numbers under these
+            # costs were guessed from the capture.
+            lines.append("")
+            lines.append(
+                "ESTIMATED DATASET - this scene has no prepare manifest, so the tile boxes, "
+                "the per-tile view counts and the initialisation counts below were derived "
+                "from the capture, not measured by prepare(). Every time and disk figure "
+                "downstream inherits their error. A real run refuses this summary."
+            )
+            for note in self.dataset.estimate_notes:
+                lines.append(f"  - {note}")
         for stage in STAGES:
             steps = self.stage_steps(stage)
             if not steps:
@@ -530,6 +557,13 @@ def build_plan(
                 f"previous final population {tile.previous_final_population/1e6:.2f}M; the floor rule "
                 f"raised the cap to {cap/1e6:.2f}M"
             )
+
+    if dataset.estimated:
+        warnings.append(
+            "the dataset summary is ESTIMATED (derived from the capture, not from a prepare "
+            "manifest): tile boxes, per-tile view counts and initialisation counts are "
+            "derivations, so every cost below is too. Plan only - a run refuses it"
+        )
 
     missing_prior = [tile.tile_id for tile in dataset.tiles if tile.tile_id not in prior]
     generations = ("seed", "delivery") if missing_prior else ("delivery",)

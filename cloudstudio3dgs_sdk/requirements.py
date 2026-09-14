@@ -420,6 +420,25 @@ def preflight(
         )
     )
 
+    # -- where the dataset numbers came from ------------------------------
+    # A warning, not a failure: preflight answers "can this host run it", and
+    # an estimated summary is a perfectly good question to ask that about. The
+    # refusal lives on the run path, in Project._run_stage.
+    checks.append(
+        Check(
+            "dataset_summary_source",
+            WARN if plan.dataset.estimated else PASS,
+            "ESTIMATED from the capture: tile boxes, per-tile view counts and initialisation "
+            "counts are derivations, so every cost built on them is one too"
+            if plan.dataset.estimated
+            else "measured by prepare()",
+            required=False,
+            remedy="run prepare() before reading these numbers as a commitment"
+            if plan.dataset.estimated
+            else "",
+        )
+    )
+
     # -- plan warnings ----------------------------------------------------
     for index, warning in enumerate(plan.warnings):
         checks.append(Check(f"plan_warning_{index}", WARN, warning, required=False))

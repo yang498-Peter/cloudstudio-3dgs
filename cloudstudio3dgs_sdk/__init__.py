@@ -12,6 +12,11 @@ object, never a new code path in :mod:`cloudstudio3dgs_sdk.project`.
 from __future__ import annotations
 
 from cloudstudio3dgs_sdk.bundle import DerivedCaches, PreparedScene, load_dataset_bundle
+from cloudstudio3dgs_sdk.discover import (
+    DatasetEstimate,
+    DiscoveryError,
+    estimate_dataset_summary,
+)
 from cloudstudio3dgs_sdk.plan import (
     DatasetSummary,
     Estimate,
@@ -34,8 +39,10 @@ __all__ = [
     "PROFILES",
     "PROFILE_B5FILL2",
     "Check",
+    "DatasetEstimate",
     "DatasetSummary",
     "DerivedCaches",
+    "DiscoveryError",
     "Estimate",
     "Plan",
     "PlannedStep",
@@ -49,6 +56,7 @@ __all__ = [
     "StageState",
     "TileSummary",
     "build_plan",
+    "estimate_dataset_summary",
     "get_profile",
     "load_dataset_bundle",
     "preflight",

@@ -8,6 +8,12 @@ and disk estimate and the confidence behind each estimate - and runs nothing.
 Two helper commands exist because both answer questions people ask before
 they commit a machine for a day: ``preflight`` prints the host report, and
 ``profile`` prints one recipe with its provenance.
+
+``--dry-run`` and ``preflight`` work on a dataset nobody has prepared. With no
+``prepare_manifest.json`` they derive the dataset summary from the capture
+(:mod:`cloudstudio3dgs_sdk.discover`) and label every number that came from
+that derivation. A real ``run`` does not: it still refuses without a prepare
+manifest, and refuses an estimated summary even if one is handed to it.
 """
 
 from __future__ import annotations
@@ -18,6 +24,8 @@ import sys
 from pathlib import Path
 from typing import Sequence
 
+from cloudstudio3dgs_sdk.discover import DiscoveryError
+from cloudstudio3dgs_sdk.ingest.errors import IngestError
 from cloudstudio3dgs_sdk.plan import STAGES, DatasetSummary
 from cloudstudio3dgs_sdk.profile import PROFILES, get_profile
 from cloudstudio3dgs_sdk.project import Project, StageRefused
@@ -187,12 +195,15 @@ def main(argv: Sequence[str] | None = None, *, stream=None) -> int:
     try:
         project = _project(args, stream)
         if args.command == "preflight":
-            report = project.preflight(require_gpu=not args.no_gpu)
+            # Both of these answer questions asked *before* ingestion, so both
+            # fall back to a capture-derived summary when there is no prepare
+            # manifest. The transcript says so; a real run still refuses one.
+            report = project.preflight(require_gpu=not args.no_gpu, allow_estimate=True)
             print(report.render(), file=stream)
             return EXIT_OK if report.ok else EXIT_REFUSED
         if args.command == "run":
             if args.dry_run:
-                plan = project.plan(stages=args.stages)
+                plan = project.plan(stages=args.stages, allow_estimate=True)
                 print(plan.render(), file=stream)
                 if args.plan_json:
                     Path(args.plan_json).parent.mkdir(parents=True, exist_ok=True)
@@ -205,7 +216,7 @@ def main(argv: Sequence[str] | None = None, *, stream=None) -> int:
             for result in results:
                 print(f"{result.stage}: {result.action} {result.reason}".rstrip(), file=stream)
             return EXIT_OK if all(result.ok for result in results) else EXIT_REFUSED
-    except (StageRefused, PreflightFailed) as error:
+    except (StageRefused, PreflightFailed, DiscoveryError, IngestError) as error:
         print(f"cloudstudio3dgs_sdk: {error}", file=sys.stderr)
         return EXIT_REFUSED
     except (OSError, ValueError, KeyError) as error:
