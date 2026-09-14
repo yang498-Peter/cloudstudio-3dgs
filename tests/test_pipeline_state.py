@@ -707,7 +707,11 @@ class DeliveryScoringTests(PipelineFixture):
         reimport = self.calls_with("import_gaussian_ply.py", "house0305_r1d_merged.ply")
         self.assertEqual(reimport[0], ["--ply", str(self.body), "--output", str(self.out / "reimported.pt")])
         batteries = self.calls_with("evaluate_probe_views.py", "delivery_r1d")
-        self.assertEqual([b[b.index("--checkpoint") + 1] for b in batteries], [str(self.out / "merged.pt"), str(self.out / "reimported.pt")])
+        self.assertEqual(
+            [b[b.index("--checkpoint") + 1] for b in batteries],
+            [str(self.out / "merged.pt"), str(self.out / "reimported.pt"), str(self.out / "delivery_pair.pt")],
+            "pre-export, the body alone, and the delivered body+sky pair",
+        )
         compares = self.calls_with("build_three_way_compare.py", "delivery_r1d")
         self.assertEqual([c[c.index("--checkpoint") + 1] for c in compares], [str(self.out / "merged.pt"), str(self.out / "reimported.pt")])
         offtrajs = self.calls_with("build_offtrajectory_compare.py", "delivery_r1d")

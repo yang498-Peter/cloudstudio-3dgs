@@ -38,6 +38,11 @@ closed here rather than in the cmd scripts:
   that checkpoint, bound to the PLY's sha256 in ``delivery_report.json``;
   the merged.pt scores stay as a separate pre-export record. Publishing
   lands in ``exports/candidate_<TAG>/`` unless ``--publish`` is passed.
+  A delivery ships TWO files, so the body PLY is only half of it: the
+  ``pair`` step joins the re-imported body with the frozen sky layer and
+  ``final_battery_pair`` scores that. Both batteries are recorded under
+  ``final.coverage``, labelled ``body_only`` and ``delivered_pair``, and the
+  gate reads the pair - that is the product. Morphology stays on the body.
 * **One GPU holder at a time, atomically.** Every GPU step takes the
   ``<run_root>/gpu.lock`` lease (O_EXCL create, pid liveness for staleness)
   before starting; the live-process scan from the 2026-09-07 double start
@@ -1805,6 +1810,12 @@ def deliver_steps(
     final_battery = out / "battery_final.json"
     final_compare_dir = out / "compare_final"
     final_offtraj_dir = out / "offtraj_final"
+    # The delivered pair: the body PLY re-imported, joined with the frozen sky layer publish
+    # copies beside it. The customer opens both files, so only the pair is the product.
+    sky_reimported = out / "reimported_sky.pt"
+    pair_checkpoint = out / "delivery_pair.pt"
+    pair_record = out / "delivery_pair.json"
+    pair_battery = out / "battery_final_pair.json"
     identity = cfg.identity_dir / f"delivery_{tag}_merged.json"
     scores = out / "scores.txt"
     delivery_report = out / "delivery_report.json"
@@ -1900,6 +1911,11 @@ def deliver_steps(
         """morph / battery / three-way / off-trajectory for one checkpoint."""
 
         def morph_run() -> None:
+            # Morphology stays on the BODY alone, never on the delivered pair. It compares the
+            # shape distribution of our gaussians against a competitor's model, and the sky
+            # dome's few huge, far, near-flat gaussians would move every percentile of that
+            # distribution without saying anything about the surfaces being compared. Coverage
+            # is the opposite case and is read from the pair - see the pair battery below.
             gate()
             argv = ctx.python_tool("checkpoint_morphology.py", checkpoint, "--label", f"{label}_{tag}")
             with ctx.gpu_lease(f"{label} morph {tag}", argv):
@@ -2045,29 +2061,159 @@ def deliver_steps(
         if not reimport_done():
             raise StepFailed(f"{reimported} does not match the current {body_ply.name}; re-import first")
 
+    def require_sky() -> None:
+        """Fail closed on the sky layer rather than quietly score half the delivery.
+
+        Falling back to a body-only battery here would silently restore the defect this
+        step exists to remove: the body's sky is *correctly* transparent because the sky
+        layer supplies it, and a coverage metric reads that transparency as a hole.
+        ``publish_run`` already refuses to ship without the file; the pair battery refuses
+        to score without it.
+        """
+        if not cfg.sky_ply.is_file():
+            raise StepFailed(f"sky PLY missing: {cfg.sky_ply}; the delivered pair cannot be built")
+        try:
+            with cfg.sky_ply.open("rb") as handle:
+                handle.read(1)
+        except OSError as error:
+            raise StepFailed(f"sky PLY unreadable: {cfg.sky_ply} ({error})") from error
+
+    def pair_done() -> bool:
+        if not (pair_checkpoint.is_file() and pair_record.is_file()):
+            return False
+        try:
+            record = _read_json(pair_record)
+        except ValueError:
+            return False
+        return _stamp_matches(record.get("body"), reimported) and _stamp_matches(record.get("sky"), cfg.sky_ply)
+
+    def build_pair() -> None:
+        """Join the re-imported body with the frozen sky layer into the delivered model.
+
+        A delivery ships two files and nothing ever composited them, so every quality
+        number scored the body alone against photographs that contain sky. Measured on
+        house0305's 48 battery views, body alone -> body plus sky moved alpha p05 from
+        0.189 to 0.898 on the no-fill candidate with sharpness unchanged (0.454 -> 0.453),
+        and PSNR by at most 0.018, because the evaluator already composites a per-view
+        backdrop behind the render. Only alpha was ever penalised, and alpha is what the
+        gate reads.
+        """
+        require_reimported()
+        require_sky()
+        ctx.run_or_fail(
+            ctx.python_tool("import_gaussian_ply.py", "--ply", cfg.sky_ply, "--output", sky_reimported),
+            log=out / "reimport_sky.log",
+        )
+        ctx.run_or_fail(
+            ctx.python_tool(
+                "concat_delivery_layers.py",
+                "--body", reimported, "--sky", sky_reimported, "--output", pair_checkpoint,
+            ),
+            log=out / "delivery_pair.log",
+        )
+        _write_json_atomic(
+            pair_record,
+            {
+                "body": {"path": str(reimported), **_file_stamp(reimported)},
+                "sky": {"path": str(cfg.sky_ply), "sha256": file_sha256(cfg.sky_ply), **_file_stamp(cfg.sky_ply)},
+                "sky_checkpoint": str(sky_reimported),
+                "checkpoint": str(pair_checkpoint),
+                "joined_at": _timestamp(),
+            },
+        )
+        _append_text(log, f"[pair] {reimported.name} + {cfg.sky_ply.name} -> {pair_checkpoint.name}\n")
+
+    def require_pair() -> None:
+        require_reimported()
+        require_sky()
+        if not pair_done():
+            raise StepFailed(
+                f"{pair_checkpoint} does not match the current {reimported.name} + {cfg.sky_ply.name}; "
+                "rebuild the delivered pair first"
+            )
+
+    def pair_battery_run() -> None:
+        require_pair()
+        argv = ctx.python_tool(
+            "evaluate_probe_views.py", "--config", cfg.delivery_eval_config, "--checkpoint", pair_checkpoint,
+            "--views", cfg.battery_views, "--output", pair_battery,
+        )
+        with ctx.gpu_lease(f"final pair battery {tag}", argv):
+            ctx.run_or_fail(argv, log=out / f"{pair_battery.stem}.log")
+
+    def battery_coverage(path: Path, layers: str) -> dict[str, Any]:
+        """One battery's coverage reading, labelled with the layers it actually scored.
+
+        Both readings are kept side by side and never folded into one number: the
+        body-only figure is what every historical delivery report contains, so a reader
+        comparing this delivery against an older one must be able to tell which is which.
+        """
+        try:
+            report_json = _read_json(path)
+        except (OSError, ValueError) as error:
+            raise StepFailed(f"{path.name} ({layers}) is not readable JSON: {error}") from error
+        if not isinstance(report_json, dict) or report_json.get("alpha_p05") is None:
+            raise StepFailed(f"{path.name} ({layers}) carries no alpha_p05; coverage cannot be judged")
+        return {
+            "layers": layers,
+            "battery": str(path),
+            "views": report_json.get("views"),
+            "alpha_p05": report_json.get("alpha_p05"),
+            "alpha_mean": report_json.get("alpha_mean"),
+            "psnr_mean": report_json.get("psnr_mean"),
+            "psnr_p10": report_json.get("psnr_p10"),
+            "gaussian_count": report_json.get("gaussian_count"),
+        }
+
     def final_scores_done() -> bool:
         if not (scores.is_file() and delivery_report.is_file()):
             return False
         final = read_report().get("final")
-        return isinstance(final, dict) and _stamp_matches(final.get("ply"), body_ply)
+        if not (isinstance(final, dict) and _stamp_matches(final.get("ply"), body_ply)):
+            return False
+        # A report written before the delivered pair was scored records only the body's
+        # coverage, which is the defect; re-run the gate rather than accept it.
+        coverage = final.get("coverage")
+        return isinstance(coverage, dict) and isinstance(coverage.get("delivered_pair"), dict)
 
     def final_scores() -> None:
         require_reimported()
+        require_pair()
         _append_text(log, "[scores]\n")
         score_strips(scores, final_compare_dir, final_offtraj_dir, final_morph, out / "scores.log")
         ply = _ply_record(body_ply)
         source = _read_json(reimport_record).get("source", {})
         if source.get("sha256") != ply["sha256"]:
             raise StepFailed(f"{body_ply.name} changed after re-import (sha {source.get('sha256', '?')[:12]} vs {ply['sha256'][:12]})")
+        body_coverage = battery_coverage(final_battery, "body")
+        pair_coverage = battery_coverage(pair_battery, "body+sky")
         payload = read_report()
         payload["final"] = {
             "bound_to_ply_sha256": ply["sha256"],
             "ply": ply,
             "scored_checkpoint": str(reimported),
+            # Morphology is the body's alone: it is a shape comparison against a
+            # competitor's model, and the sky dome's gaussians would distort it.
             "morph": str(final_morph),
             "battery": str(final_battery),
             "compare": str(final_compare_dir),
             "offtraj": str(final_offtraj_dir),
+            "delivered_pair": {
+                "checkpoint": str(pair_checkpoint),
+                "body": str(reimported),
+                "sky": str(cfg.sky_ply),
+                "battery": str(pair_battery),
+            },
+            # Two readings, both kept, each saying which layers it scored. "body" is the
+            # historical number every earlier delivery report carries; "delivered_pair" is
+            # the model the customer opens, and is what the gate below reads.
+            "coverage": {"body_only": body_coverage, "delivered_pair": pair_coverage},
+            "gate": {
+                "reads": "delivered_pair",
+                "alpha_p05": pair_coverage["alpha_p05"],
+                "body_only_alpha_p05": body_coverage["alpha_p05"],
+                "why": "the delivery ships body + sky; the body's sky is transparent by design",
+            },
             "scores": str(scores),
             "scores_sha256": file_sha256(scores),
             "scored_at": _timestamp(),
@@ -2075,8 +2221,18 @@ def deliver_steps(
         payload["export"] = {"min_opacity": cfg.export_min_opacity, "threshold_control": str(threshold_record)}
         _write_json_atomic(delivery_report, payload)
         _append_text(log, scores.read_text(encoding="utf-8"))
+        _append_text(
+            log,
+            "[coverage] delivered pair (body+sky) alpha p05 %s; body alone %s\n"
+            % (pair_coverage["alpha_p05"], body_coverage["alpha_p05"]),
+        )
         _append_text(log, f"[complete] {_timestamp()} ply sha256 {ply['sha256']}\n")
-        job().set(STATE_QUALITY_ACCEPTED, f"final scores bound to PLY sha256 {ply['sha256'][:12]}")
+        job().set(
+            STATE_QUALITY_ACCEPTED,
+            f"final scores bound to PLY sha256 {ply['sha256'][:12]}; "
+            f"delivered pair (body+sky) alpha p05 {pair_coverage['alpha_p05']} "
+            f"(body alone {body_coverage['alpha_p05']})",
+        )
 
     def publish_run() -> None:
         if not final_scores_done():
@@ -2108,8 +2264,12 @@ def deliver_steps(
         Step("export", export, artifacts=(body_ply,)),
         Step("threshold_control", threshold_control, artifacts=(threshold_record,)),
         Step("reimport", reimport, artifacts=(reimported, reimport_record), done=reimport_done),
+        Step("pair", build_pair, artifacts=(pair_checkpoint, pair_record), done=pair_done),
     ]
     steps += render_steps("final", reimported, morph_out=final_morph, battery_out=final_battery, compare_out=final_compare_dir, offtraj_out=final_offtraj_dir, gate=require_reimported)
+    # The second battery scores the delivered pair. It is not optional and has no config
+    # switch: a switch to turn it off is a switch to put the measured defect back.
+    steps.append(Step("final_battery_pair", pair_battery_run, artifacts=(pair_battery,)))
 
     def freeze() -> None:
         require_reimported()

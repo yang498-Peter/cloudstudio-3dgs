@@ -11,7 +11,7 @@
     "tile_inputs_root": "root the tile manifest paths resolve against",
     "exports_dir": "where delivery body/sky PLYs are published",
     "delivery_eval_config": "evaluation config for the merged model (battery, matched strips)",
-    "sky_ply": "frozen sky layer copied beside every delivery body PLY",
+    "sky_ply": "frozen sky layer copied beside every delivery body PLY, and joined with the re-imported body into the delivered pair the quality gate scores; missing or unreadable fails the delivery rather than falling back to a body-only score",
     "identity_dir": "freeze_run_identity.py outputs, relative to repo_root",
     "scene_tag": "prefix of exported PLY names: <scene_tag>_<tag>_merged.ply",
     "delivery_tiles": "tiles trained per delivery; tile arm names follow delivery_tile_arm_pattern",

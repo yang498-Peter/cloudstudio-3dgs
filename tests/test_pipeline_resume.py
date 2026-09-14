@@ -138,8 +138,36 @@ class FakeRunner:
         elif tool == "import_gaussian_ply.py":
             _arg_after(rest, "--output").write_bytes(b"reimported:" + _arg_after(rest, "--ply").read_bytes()[:64])
         elif tool == "evaluate_probe_views.py":
-            _arg_after(rest, "--output").write_text("{}", encoding="utf-8")
+            self._battery(rest)
+        elif tool == "concat_delivery_layers.py":
+            body = _arg_after(rest, "--body").read_bytes()
+            sky = _arg_after(rest, "--sky").read_bytes()
+            _arg_after(rest, "--output").write_bytes(b"pair:" + body[:32] + b"+" + sky[:32])
         return 0
+
+    def _battery(self, rest: list[str]) -> None:
+        """A probe-views report whose alpha depends on which layers were scored.
+
+        The two numbers are the measured house0305 contrast: the body alone reads its
+        correctly transparent sky as a coverage hole (alpha p05 0.189), the delivered pair
+        does not (0.898), and sharpness / PSNR barely move between them.
+        """
+        checkpoint = _arg_after(rest, "--checkpoint")
+        pair = checkpoint.name.startswith("delivery_pair")
+        _arg_after(rest, "--output").write_text(
+            json.dumps(
+                {
+                    "source": str(checkpoint),
+                    "views": int(rest[rest.index("--views") + 1]),
+                    "gaussian_count": 1400 if pair else 1000,
+                    "alpha_p05": 0.898 if pair else 0.189,
+                    "alpha_mean": 0.982 if pair else 0.712,
+                    "psnr_mean": 19.118 if pair else 19.100,
+                    "psnr_p10": 14.152 if pair else 14.150,
+                }
+            ),
+            encoding="utf-8",
+        )
 
     def _train(self, arm_config: Path, stderr: Path | None) -> int:
         arm = arm_config.stem
@@ -250,10 +278,12 @@ DELIVERY_STEPS_AFTER_TILES = [
     "export",
     "threshold_control",
     "reimport",
+    "pair",
     "final_morph",
     "final_battery",
     "final_compare_matched",
     "final_offtraj_matched",
+    "final_battery_pair",
     "identity",
     "scores",
     "publish",
