@@ -1,0 +1,78 @@
+{
+  "schema_version": 1,
+  "kind": "cloudstudio_rerun_band",
+  "run_a": "C:\\Peter\\3dgs-runs\\house0305_sop\\tile1_B5_rerun_20k",
+  "run_b": "C:\\Peter\\3dgs-runs\\house0305_sop\\tile1_B5_prefetch_20k",
+  "roi_name": "compare_roi_compare_ids",
+  "negative_control": {
+    "shared_views": 49,
+    "identical_boxes": 49,
+    "max_abs_delta_lv_photo": 0.0,
+    "max_abs_delta_lv_ref": 0.0,
+    "passed": true
+  },
+  "panel_statistic": {
+    "a_ours_over_ref_median": 0.4143080542821627,
+    "b_ours_over_ref_median": 0.4598742564742773,
+    "panel_change_pct": 10.998145394750626
+  },
+  "paired_statistic": {
+    "n": 49,
+    "median_pct": 2.594410456929471,
+    "p10_pct": -14.797238061993534,
+    "p90_pct": 14.390881851191374,
+    "max_abs_pct": 23.563633311869044,
+    "mean_abs_pct": 10.193328672523505,
+    "stdev_pct": 11.579295044653762,
+    "b_wins": 26,
+    "sign_test_fraction": 0.5306122448979592
+  },
+  "morphology": {
+    "gaussian_count": {
+      "a": 4658981.0,
+      "b": 4650972.0,
+      "change_pct": -0.17190454307497713
+    },
+    "long_gt_20mm": {
+      "a": 0.053,
+      "b": 0.053,
+      "change_pct": 0.0
+    },
+    "long_p50_mm": {
+      "a": 5.117,
+      "b": 5.076,
+      "change_pct": -0.8012507328512873
+    },
+    "long_p95_mm": {
+      "a": 20.6,
+      "b": 20.5,
+      "change_pct": -0.4854368932038904
+    },
+    "max_over_mid_p50": {
+      "a": 1.87,
+      "b": 1.87,
+      "change_pct": 0.0
+    },
+    "max_over_min_p50": {
+      "a": 16.55,
+      "b": 17.33,
+      "change_pct": 4.712990936555876
+    },
+    "opacity_frac_below_0p1": {
+      "a": 0.494,
+      "b": 0.493,
+      "change_pct": -0.20242914979757104
+    },
+    "opacity_p50": {
+      "a": 0.103,
+      "b": 0.104,
+      "change_pct": 0.9708737864077679
+    },
+    "short_p50_mm": {
+      "a": 0.345,
+      "b": 0.333,
+      "change_pct": -3.478260869565205
+    }
+  },
+  "verdict": "within_rerun_noise"
+}
