@@ -18,7 +18,8 @@
     "delivery_baselines": "earlier deliveries scored beside a new one; relative paths resolve against run_root",
     "trainer_process_pattern": "substring of a live command line that means 'a trainer holds the GPU' (secondary check behind the gpu.lock lease)",
     "gpu_device": "device id recorded in <run_root>/gpu.lock by every GPU step",
-    "env": "extra environment variables for every subprocess"
+    "env": "extra environment variables for every subprocess",
+    "min_delivered_alpha_p05": "minimum alpha p05 the delivered pair (body + sky) must reach before a delivery is accepted. null records the number and accepts anyway. The house0305 campaign's working bar is 0.70; measured on the three 2026-09-15 candidates the pair reads 0.898 (no fill), 0.915 and 0.929, so 0.70 would have passed all three and the body-only readings (0.189 / 0.722 / 0.825) would have failed two. Left null here because choosing the bar is a product decision"
   },
   "schema_version": 1,
   "run_root": "C:/Peter/3dgs-runs/house0305_sop",
@@ -39,7 +40,11 @@
   "export_min_opacity": 0.05,
   "merge_policy": "core_owner_only",
   "harmonize_exposure": true,
-  "delivery_tiles": [1, 2, 3],
+  "delivery_tiles": [
+    1,
+    2,
+    3
+  ],
   "delivery_tile_arm_pattern": "tile{tile}_{tag}_20k",
   "delivery_baselines": {
     "compare": [

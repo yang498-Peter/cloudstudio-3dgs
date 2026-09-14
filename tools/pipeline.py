@@ -103,6 +103,10 @@ DEFAULTS: dict[str, Any] = {
     # because the stand-in backdrop that covered those pixels during training does not ship.
     # The fill layer puts coarse-prior gaussians back into voxels no delivery gaussian
     # occupies. Off by default: a delivery that wants it names the prior checkpoint.
+    # Minimum alpha p05 the delivered pair must reach before a delivery is accepted. Null
+    # means record the number and accept anyway, which is what every run did before the gate
+    # could read the pair at all. Setting it turns the gate into something that can fail.
+    "min_delivered_alpha_p05": None,
     "fill_checkpoint": None,
     "fill_min_opacity": None,
     "fill_occupancy_voxel_m": 0.2,
@@ -246,6 +250,7 @@ class PipelineConfig:
     export_min_opacity: float
     merge_policy: str
     harmonize_exposure: bool
+    min_delivered_alpha_p05: float | None
     fill_checkpoint: Path | None
     fill_min_opacity: float | None
     fill_occupancy_voxel_m: float
@@ -378,6 +383,12 @@ def parse_pipeline_config(raw: dict[str, Any], *, source: Path | None = None) ->
         raise PipelineConfigError("pipeline config key 'export_min_opacity' must be a number")
     if not isinstance(merged["harmonize_exposure"], bool):
         raise PipelineConfigError("pipeline config key 'harmonize_exposure' must be true or false")
+    floor = merged["min_delivered_alpha_p05"]
+    if floor is not None:
+        if not isinstance(floor, (int, float)) or isinstance(floor, bool):
+            raise PipelineConfigError("pipeline config key 'min_delivered_alpha_p05' must be a number or null")
+        if not 0.0 <= float(floor) <= 1.0:
+            raise PipelineConfigError("pipeline config key 'min_delivered_alpha_p05' must be between 0 and 1")
     fill_checkpoint = merged["fill_checkpoint"]
     if fill_checkpoint is not None:
         if not isinstance(fill_checkpoint, str) or not fill_checkpoint:
@@ -452,6 +463,7 @@ def parse_pipeline_config(raw: dict[str, Any], *, source: Path | None = None) ->
         export_min_opacity=float(merged["export_min_opacity"]),
         merge_policy=merged["merge_policy"],
         harmonize_exposure=bool(merged["harmonize_exposure"]),
+        min_delivered_alpha_p05=None if floor is None else float(floor),
         fill_checkpoint=fill_checkpoint,
         fill_min_opacity=None if fill_min_opacity is None else float(fill_min_opacity),
         fill_occupancy_voxel_m=float(voxel),
@@ -2213,6 +2225,12 @@ def deliver_steps(
                 "alpha_p05": pair_coverage["alpha_p05"],
                 "body_only_alpha_p05": body_coverage["alpha_p05"],
                 "why": "the delivery ships body + sky; the body's sky is transparent by design",
+                "min_delivered_alpha_p05": cfg.min_delivered_alpha_p05,
+                "verdict": (
+                    "recorded_only"
+                    if cfg.min_delivered_alpha_p05 is None
+                    else "cleared"
+                ),
             },
             "scores": str(scores),
             "scores_sha256": file_sha256(scores),
@@ -2227,11 +2245,29 @@ def deliver_steps(
             % (pair_coverage["alpha_p05"], body_coverage["alpha_p05"]),
         )
         _append_text(log, f"[complete] {_timestamp()} ply sha256 {ply['sha256']}\n")
+        # Until this existed the gate could not fail: QUALITY_ACCEPTED was reached by
+        # completing steps, so a bad number passed as readily as a good one. The floor stays
+        # unset by default, because choosing it is a product decision and no delivery should
+        # start being blocked until someone makes one.
+        floor = cfg.min_delivered_alpha_p05
+        measured = pair_coverage["alpha_p05"]
+        if floor is not None and (measured is None or float(measured) < float(floor)):
+            _append_text(
+                log, "[FAIL] delivered pair alpha p05 %s below the floor %s\n" % (measured, floor)
+            )
+            job().fail(
+                f"delivered pair (body+sky) alpha p05 {measured} is below the configured "
+                f"floor {floor}; the body alone read {body_coverage['alpha_p05']}"
+            )
+            raise StepFailed(
+                f"delivered pair alpha p05 {measured} < min_delivered_alpha_p05 {floor}"
+            )
         job().set(
             STATE_QUALITY_ACCEPTED,
             f"final scores bound to PLY sha256 {ply['sha256'][:12]}; "
             f"delivered pair (body+sky) alpha p05 {pair_coverage['alpha_p05']} "
-            f"(body alone {body_coverage['alpha_p05']})",
+            f"(body alone {body_coverage['alpha_p05']})"
+            + ("" if floor is None else f"; floor {floor} cleared"),
         )
 
     def publish_run() -> None:
