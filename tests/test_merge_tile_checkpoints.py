@@ -64,11 +64,38 @@ TILE_MEANS = {
 }
 
 
-def _write_tile_inputs(root: Path) -> Path:
+def _write_point_ply(path: Path, points) -> None:
+    """A real binary little-endian point PLY, the shape the tile initialisation clouds have."""
+    rows = np.asarray(points, dtype=np.float32).reshape(-1, 3)
+    header = (
+        "ply\n"
+        "format binary_little_endian 1.0\n"
+        f"element vertex {len(rows)}\n"
+        "property float x\n"
+        "property float y\n"
+        "property float z\n"
+        "property uchar red\n"
+        "property uchar green\n"
+        "property uchar blue\n"
+        "end_header\n"
+    ).encode("ascii")
+    record = np.zeros(len(rows), dtype=np.dtype([
+        ("x", "<f4"), ("y", "<f4"), ("z", "<f4"),
+        ("red", "u1"), ("green", "u1"), ("blue", "u1"),
+    ]))
+    record["x"], record["y"], record["z"] = rows[:, 0], rows[:, 1], rows[:, 2]
+    path.write_bytes(header + record.tobytes())
+
+
+def _write_tile_inputs(root: Path, tile_points=None) -> Path:
+    root.mkdir(parents=True, exist_ok=True)
     tiles = []
     for tile_id, (core, export) in enumerate(zip(CORE_BOXES, EXPORT_BOXES)):
         artifact = root / f"Tile_{tile_id}_init.ply"
-        artifact.write_bytes(f"synthetic init {tile_id}\n".encode("utf-8"))
+        if tile_points is None:
+            artifact.write_bytes(f"synthetic init {tile_id}\n".encode("utf-8"))
+        else:
+            _write_point_ply(artifact, tile_points.get(tile_id, [[0.0, 0.0, 0.0]]))
         tiles.append(
             {
                 "tile_id": tile_id,
@@ -358,6 +385,76 @@ class MergeFillLayerTests(unittest.TestCase):
         )
         self.assertIsNone(report["fill_exclusion"]["max_long_axis_m"])
         self.assertEqual(report["fill_sources"][0]["rejected_by_long_axis_count"], 0)
+
+    def test_lidar_distance_filter_drops_fill_rows_that_float(self) -> None:
+        # Two size caps both restored off-trajectory sharpness to the no-fill level (0.447)
+        # while dropping alpha p05 back to 0.190, so the coverage came from exactly the rows a
+        # size cap removes. Distance to the LiDAR surface is orthogonal to size: a hole at a
+        # real surface no tile painted deserves a fill row, a hole in open air does not.
+        points = {0: [[5.0, 5.0, 5.0]], 1: [[5.1, 5.0, 5.0]],
+                  2: [[5.0, 5.1, 5.0]], 3: [[5.0, 5.0, 5.1]]}
+        tile_inputs = _write_tile_inputs(self.root / "lidar", tile_points=points)
+        for tile_id, means in TILE_MEANS.items():
+            _write_checkpoint(tile_inputs.parent / f"tile{tile_id}.pt", means, step=100 + tile_id)
+        fill = _write_checkpoint(
+            tile_inputs.parent / "fill.pt",
+            [[5.0, 5.0, 5.02], [8.0, 8.0, 8.0]],
+            step=50,
+        )
+        report = _run(
+            tile_inputs,
+            self._output("lidarfilter"),
+            "--fill-checkpoint",
+            str(fill),
+            "--fill-max-lidar-distance-m",
+            "0.5",
+        )
+        source = report["fill_sources"][0]
+        self.assertEqual(source["rejected_by_lidar_distance_count"], 1)
+        self.assertEqual(source["retained_gaussian_count"], 1)
+        self.assertEqual(report["fill_exclusion"]["max_lidar_distance_m"], 0.5)
+        # the fixture has two tiles, so the surface cloud is their two points
+        self.assertEqual(report["fill_exclusion"]["lidar_surface_point_count"], 2)
+        merged = torch.load(
+            self.root / "lidarfilter" / "merged.pt", map_location="cpu", weights_only=False
+        )
+        np.testing.assert_allclose(merged["params"]["means"].numpy()[4:], [[5.0, 5.0, 5.02]])
+
+    def test_the_lidar_cloud_is_checked_against_the_manifest(self) -> None:
+        # The rule only means anything if the cloud is the one the tiles were built on.
+        points = {0: [[5.0, 5.0, 5.0]], 1: [[5.1, 5.0, 5.0]],
+                  2: [[5.0, 5.1, 5.0]], 3: [[5.0, 5.0, 5.1]]}
+        tile_inputs = _write_tile_inputs(self.root / "tampered", tile_points=points)
+        for tile_id, means in TILE_MEANS.items():
+            _write_checkpoint(tile_inputs.parent / f"tile{tile_id}.pt", means, step=100 + tile_id)
+        fill = _write_checkpoint(tile_inputs.parent / "fill.pt", [[5.0, 5.0, 5.02]], step=50)
+        _write_point_ply(tile_inputs.parent / "Tile_0_init.ply", [[99.0, 99.0, 99.0]])
+        with self.assertRaises(Exception):
+            _run(
+                tile_inputs,
+                self._output("tampered_out"),
+                "--fill-checkpoint",
+                str(fill),
+                "--fill-max-lidar-distance-m",
+                "0.5",
+            )
+
+    def test_without_the_distance_rule_the_report_records_it_as_unset(self) -> None:
+        report = _run(
+            self.tile_inputs, self._output("nodistance"), "--fill-checkpoint", str(self.fill)
+        )
+        self.assertIsNone(report["fill_exclusion"]["max_lidar_distance_m"])
+        self.assertIsNone(report["fill_exclusion"]["lidar_surface_point_count"])
+        self.assertEqual(report["fill_sources"][0]["rejected_by_lidar_distance_count"], 0)
+
+    def test_point_ply_reader_round_trips_coordinates(self) -> None:
+        path = self.root / "cloud.ply"
+        points = [[1.5, -2.25, 3.0], [0.0, 0.0, 0.0], [-7.5, 8.25, 9.75]]
+        _write_point_ply(path, points)
+        sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
+        from merge_v28_tile_checkpoints import read_point_ply_xyz
+
+        np.testing.assert_allclose(read_point_ply_xyz(path), points)
 
     def test_without_a_fill_source_the_report_has_no_fill_keys(self) -> None:
         report = _run(self.tile_inputs, self._output("plain"))
