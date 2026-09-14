@@ -106,6 +106,73 @@ def inside_any_box_mask(
     return inside
 
 
+def read_point_ply_xyz(path: Path) -> np.ndarray:
+    """Read the xyz of a binary little-endian point PLY.
+
+    The tile initialisation clouds are plain point PLYs (float x/y/z plus uchar colour), not
+    gaussian PLYs, so the gaussian reader does not apply. Only the vertex element is read and
+    only its coordinates are kept.
+    """
+    with open(path, "rb") as handle:
+        if handle.readline().strip() != b"ply":
+            raise ValueError(f"not a PLY file: {path}")
+        fmt = handle.readline().split()
+        if fmt[:2] != [b"format", b"binary_little_endian"]:
+            raise ValueError(f"unsupported PLY format in {path}: {fmt!r}")
+        count = None
+        fields: list[tuple[str, str]] = []
+        in_vertex = False
+        sizes = {
+            b"float": "<f4", b"float32": "<f4", b"double": "<f8", b"float64": "<f8",
+            b"uchar": "u1", b"uint8": "u1", b"char": "i1", b"int8": "i1",
+            b"short": "<i2", b"ushort": "<u2", b"int": "<i4", b"uint": "<u4",
+        }
+        while True:
+            line = handle.readline()
+            if not line:
+                raise ValueError(f"PLY header never ended: {path}")
+            parts = line.split()
+            if not parts:
+                continue
+            if parts[0] == b"end_header":
+                break
+            if parts[0] == b"element":
+                in_vertex = parts[1] == b"vertex"
+                if in_vertex:
+                    count = int(parts[2])
+            elif parts[0] == b"property" and in_vertex:
+                if parts[1] == b"list":
+                    raise ValueError(f"list properties are not supported: {path}")
+                if parts[1] not in sizes:
+                    raise ValueError(f"unsupported PLY property type {parts[1]!r} in {path}")
+                fields.append((parts[2].decode("ascii"), sizes[parts[1]]))
+        if count is None:
+            raise ValueError(f"PLY has no vertex element: {path}")
+        dtype = np.dtype(fields)
+        data = np.frombuffer(handle.read(count * dtype.itemsize), dtype=dtype, count=count)
+    for axis in ("x", "y", "z"):
+        if axis not in data.dtype.names:
+            raise ValueError(f"PLY has no {axis} property: {path}")
+    return np.stack([data["x"], data["y"], data["z"]], axis=1).astype(np.float64)
+
+
+def lidar_surface_points(manifest: dict, root: Path) -> np.ndarray:
+    """Every tile's LiDAR initialisation cloud, sha-checked, as one array."""
+    clouds = []
+    for tile in manifest["tiles"]:
+        init = tile["initialization"]
+        path = root / str(init["path"])
+        digest = _sha256(path)
+        if digest != str(init["sha256"]):
+            raise ValueError(
+                f"tile {tile['tile_id']} initialisation cloud does not match the manifest: {path}"
+            )
+        clouds.append(read_point_ply_xyz(path))
+    if not clouds:
+        raise ValueError("the tile inputs manifest lists no tiles")
+    return np.concatenate(clouds, axis=0)
+
+
 def unclaimed_voxel_mask(
     fill_means: np.ndarray,
     tile_means: np.ndarray,
@@ -230,6 +297,31 @@ def main() -> int:
         ),
     )
     parser.add_argument("--fill-occupancy-clearance-voxels", type=int, default=1)
+    parser.add_argument(
+        "--fill-max-lidar-distance-m",
+        type=float,
+        default=None,
+        help=(
+            "drop fill gaussians farther than this from the nearest LiDAR initialisation "
+            "point, in metres. A hole at a real surface that no tile painted deserves a fill "
+            "row; a hole in empty air does not, because a row there is correct only from the "
+            "viewpoints that could not see behind it. Builds a KD-tree over every tile's "
+            "initialisation cloud, so it costs about a minute and some memory"
+        ),
+    )
+    parser.add_argument(
+        "--fill-max-long-axis-m",
+        type=float,
+        default=None,
+        help=(
+            "drop fill gaussians whose longest axis exceeds this, in metres. The occupancy "
+            "rule keeps exactly the rows sitting where no delivery gaussian is, which is "
+            "canopy and open sky, so it selects the prior's largest gaussians: measured on "
+            "the 25k prior, the retained subset has a 21.7 mm median long axis and a 145 mm "
+            "p90 against 4.7 mm and 17.8 mm for tile rows, and 27.7 percent of it is over "
+            "50 mm. Those are the rows that sit in front of fine structure in a novel view"
+        ),
+    )
     parser.add_argument(
         "--fill-min-opacity",
         type=float,
@@ -361,6 +453,10 @@ def main() -> int:
     # where a Tile already put a gaussian.
     fill_records: list[dict] = []
     fill_total = 0
+    # Built once, and only when a fill source actually asks for the distance rule: the tree
+    # spans every tile's initialisation cloud and costs about a minute to build.
+    surface_tree = None
+    surface_point_count = None
     fill_paths = list(args.fill_checkpoint or [])
     if fill_paths:
         export_boxes = np.asarray(
@@ -411,6 +507,28 @@ def main() -> int:
                 dead = (opacity < float(args.fill_min_opacity)).numpy()
                 rejected_opacity = int(np.count_nonzero(dead & keep))
                 keep &= ~dead
+            rejected_lidar_distance = 0
+            if args.fill_max_lidar_distance_m is not None:
+                if surface_tree is None:
+                    from scipy.spatial import cKDTree
+
+                    surface_points = lidar_surface_points(manifest, args.tile_inputs_root)
+                    surface_point_count = int(len(surface_points))
+                    surface_tree = cKDTree(surface_points)
+                    del surface_points
+                distances, _ = surface_tree.query(means, k=1, workers=-1)
+                far = distances > float(args.fill_max_lidar_distance_m)
+                rejected_lidar_distance = int(np.count_nonzero(far & keep))
+                keep &= ~far
+            rejected_long_axis = 0
+            if args.fill_max_long_axis_m is not None:
+                # Scales are stored as logs and rendered linear; the longest axis is what
+                # decides how much of a novel view one fill gaussian can cover.
+                scales = torch.exp(params["scales"].detach().cpu().float())
+                long_axis = scales.max(dim=1).values.numpy()
+                oversized = long_axis > float(args.fill_max_long_axis_m)
+                rejected_long_axis = int(np.count_nonzero(oversized & keep))
+                keep &= ~oversized
             keep_tensor = torch.from_numpy(keep)
             kept = int(np.count_nonzero(keep))
             for key in parameter_keys:
@@ -435,6 +553,8 @@ def main() -> int:
                     "rejected_inside_tile_box_count": rejected_box,
                     "rejected_as_delivery_occupied_count": rejected_occupied,
                     "rejected_by_opacity_floor_count": rejected_opacity,
+                    "rejected_by_long_axis_count": rejected_long_axis,
+                    "rejected_by_lidar_distance_count": rejected_lidar_distance,
                     "retained_gaussian_count": kept,
                     "retained_bounds": (
                         [retained_means.min(axis=0).tolist(), retained_means.max(axis=0).tolist()]
@@ -497,6 +617,17 @@ def main() -> int:
                 else int(args.fill_occupancy_clearance_voxels)
             ),
             "min_opacity": float(args.fill_min_opacity),
+            "max_lidar_distance_m": (
+                None
+                if args.fill_max_lidar_distance_m is None
+                else float(args.fill_max_lidar_distance_m)
+            ),
+            "lidar_surface_point_count": surface_point_count,
+            "max_long_axis_m": (
+                None
+                if args.fill_max_long_axis_m is None
+                else float(args.fill_max_long_axis_m)
+            ),
             "rule": (
                 "reject_inside_any_tile_training_and_export_box"
                 if args.fill_occupancy_voxel_m is None
