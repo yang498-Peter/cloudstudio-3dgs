@@ -94,6 +94,14 @@ DEFAULTS: dict[str, Any] = {
     "export_min_opacity": 0.05,
     "merge_policy": "core_owner_only",
     "harmonize_exposure": True,
+    # Ownership masking leaves the delivery transparent wherever no tile was responsible,
+    # because the stand-in backdrop that covered those pixels during training does not ship.
+    # The fill layer puts coarse-prior gaussians back into voxels no delivery gaussian
+    # occupies. Off by default: a delivery that wants it names the prior checkpoint.
+    "fill_checkpoint": None,
+    "fill_min_opacity": None,
+    "fill_occupancy_voxel_m": 0.2,
+    "fill_occupancy_clearance_voxels": 0,
     "delivery_tiles": [1, 2, 3],
     "delivery_tile_arm_pattern": "tile{tile}_{tag}_20k",
     "delivery_baselines": {"compare": [], "offtraj": {}},
@@ -233,6 +241,10 @@ class PipelineConfig:
     export_min_opacity: float
     merge_policy: str
     harmonize_exposure: bool
+    fill_checkpoint: Path | None
+    fill_min_opacity: float | None
+    fill_occupancy_voxel_m: float
+    fill_occupancy_clearance_voxels: int
     delivery_tiles: list[int]
     delivery_tile_arm_pattern: str
     delivery_baselines: dict[str, Any]
@@ -361,6 +373,28 @@ def parse_pipeline_config(raw: dict[str, Any], *, source: Path | None = None) ->
         raise PipelineConfigError("pipeline config key 'export_min_opacity' must be a number")
     if not isinstance(merged["harmonize_exposure"], bool):
         raise PipelineConfigError("pipeline config key 'harmonize_exposure' must be true or false")
+    fill_checkpoint = merged["fill_checkpoint"]
+    if fill_checkpoint is not None:
+        if not isinstance(fill_checkpoint, str) or not fill_checkpoint:
+            raise PipelineConfigError("pipeline config key 'fill_checkpoint' must be a path or null")
+        fill_checkpoint = Path(fill_checkpoint)
+        if not fill_checkpoint.is_file():
+            # Fail closed here rather than let the merge run and silently ship a delivery
+            # with the coverage gap the fill layer exists to close.
+            raise PipelineConfigError(f"fill_checkpoint does not exist: {fill_checkpoint}")
+    fill_min_opacity = merged["fill_min_opacity"]
+    if fill_min_opacity is not None and (
+        not isinstance(fill_min_opacity, (int, float)) or isinstance(fill_min_opacity, bool)
+    ):
+        raise PipelineConfigError("pipeline config key 'fill_min_opacity' must be a number or null")
+    voxel = merged["fill_occupancy_voxel_m"]
+    if not isinstance(voxel, (int, float)) or isinstance(voxel, bool) or voxel <= 0:
+        raise PipelineConfigError("pipeline config key 'fill_occupancy_voxel_m' must be a positive number")
+    clearance = merged["fill_occupancy_clearance_voxels"]
+    if not isinstance(clearance, int) or isinstance(clearance, bool) or clearance < 0:
+        raise PipelineConfigError(
+            "pipeline config key 'fill_occupancy_clearance_voxels' must be a non-negative integer"
+        )
     tiles = merged["delivery_tiles"]
     if not isinstance(tiles, list) or not tiles or not all(isinstance(t, int) and not isinstance(t, bool) for t in tiles):
         raise PipelineConfigError("pipeline config key 'delivery_tiles' must be a non-empty list of integers")
@@ -413,6 +447,10 @@ def parse_pipeline_config(raw: dict[str, Any], *, source: Path | None = None) ->
         export_min_opacity=float(merged["export_min_opacity"]),
         merge_policy=merged["merge_policy"],
         harmonize_exposure=bool(merged["harmonize_exposure"]),
+        fill_checkpoint=fill_checkpoint,
+        fill_min_opacity=None if fill_min_opacity is None else float(fill_min_opacity),
+        fill_occupancy_voxel_m=float(voxel),
+        fill_occupancy_clearance_voxels=int(clearance),
         delivery_tiles=[int(t) for t in tiles],
         delivery_tile_arm_pattern=pattern,
         delivery_baselines=baselines,
@@ -1826,6 +1864,14 @@ def deliver_steps(
         ]
         if cfg.harmonize_exposure:
             argv.append("--harmonize-exposure")
+        if cfg.fill_checkpoint is not None:
+            argv += [
+                "--fill-checkpoint", str(cfg.fill_checkpoint),
+                "--fill-occupancy-voxel-m", str(cfg.fill_occupancy_voxel_m),
+                "--fill-occupancy-clearance-voxels", str(cfg.fill_occupancy_clearance_voxels),
+            ]
+            if cfg.fill_min_opacity is not None:
+                argv += ["--fill-min-opacity", str(cfg.fill_min_opacity)]
         try:
             with ctx.gpu_lease(f"merge {tag}", argv):
                 ctx.run_or_fail(argv, log=out / "merge.log")
