@@ -297,7 +297,10 @@ class PrepareTests(ProjectFixture):
         self.assertEqual(pipeline["delivery_eval_config"], str(self.work / "delivery_eval.json"))
         self.assertEqual(pipeline["sky_ply"], str(self.work / "caches" / "sky_dome.ply"))
 
-    def test_sky_dome_ply_and_eval_config_skip_when_their_outputs_exist(self) -> None:
+    def test_sky_dome_ply_skips_when_its_output_exists_but_derived_configs_are_refreshed(self) -> None:
+        """A built artefact is skipped when present; the evaluator config and arm configs
+        are derived from the manifest and rewritten every time, because a resumed run once
+        scored against a stale evaluator config the manifest no longer described."""
         project = self.project()
         self.seed_prepare_manifest(project)
         (self.work / "caches").mkdir(parents=True, exist_ok=True)
@@ -305,7 +308,9 @@ class PrepareTests(ProjectFixture):
         (self.work / "delivery_eval.json").write_text("{}", encoding="utf-8")
         result = project.prepare()
         self.assertIn("sky_dome_ply", result.steps_skipped)
-        self.assertIn("delivery_eval_config", result.steps_skipped)
+        self.assertIn("delivery_eval_config", result.steps_run)
+        self.assertIn("write_arm_configs", result.steps_run)
+        self.assertNotEqual((self.work / "delivery_eval.json").read_text(encoding="utf-8"), "{}", "the stale stub was replaced")
         self.assertNotIn("sky_dome_ply", self.runner.calls)
         self.assertIn("sky_dome", self.runner.calls)
 

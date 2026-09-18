@@ -220,6 +220,12 @@ class PlannedStep:
     config_path: str = ""
     note: str = ""
     blocking: str = ""  # non-empty means this step cannot run yet, and why
+    # A cheap, deterministic rewrite of files derived from the prepare manifest
+    # (arm configs, the evaluator config). Never skipped because its outputs exist:
+    # the outputs are byte-identical when nothing changed, and stale when the
+    # manifest did - a resumed run once scored against an evaluator config the
+    # manifest no longer described.
+    refresh: bool = False
 
     def as_json(self) -> dict[str, Any]:
         payload: dict[str, Any] = {
@@ -231,6 +237,7 @@ class PlannedStep:
             "outputs": list(self.outputs),
             "note": self.note,
             "blocking": self.blocking,
+            "refresh": self.refresh,
         }
         if self.config is not None:
             payload["config_path"] = self.config_path
@@ -389,7 +396,13 @@ class Plan:
 
 
 def step_is_skippable(step: PlannedStep) -> bool:
-    """Would the stage driver skip this step? True when every output exists."""
+    """Would the stage driver skip this step? True when every output exists.
+
+    A ``refresh`` step is never skipped: it rewrites derived files cheaply and
+    deterministically, so it costs nothing and cannot go stale.
+    """
+    if step.refresh:
+        return False
     return bool(step.outputs) and all(Path(output).exists() for output in step.outputs)
 
 
@@ -800,6 +813,7 @@ def build_plan(
                 name="write_arm_configs",
                 stage="prepare",
                 resource="cpu",
+                refresh=True,
                 estimate=Estimate(1.0, 0, "file writes", MEASURED),
                 outputs=tuple(
                     str(layout.arm_config(_arm_name(profile, tile.tile_id, generation)))
@@ -815,6 +829,7 @@ def build_plan(
                 name="delivery_eval_config",
                 stage="prepare",
                 resource="cpu",
+                refresh=True,
                 estimate=Estimate(1.0, 0, "file write", MEASURED),
                 outputs=(cache["delivery_eval_config"],),
                 note=(

@@ -541,7 +541,12 @@ class Project:
                 self.say(f"[{stage}] skip {step.name} (adopted artefact; never rebuilt in place)")
                 skipped.append(step.name)
                 continue
-            if not force and step.outputs and all(Path(output).exists() for output in step.outputs):
+            if (
+                not force
+                and not step.refresh
+                and step.outputs
+                and all(Path(output).exists() for output in step.outputs)
+            ):
                 self.say(f"[{stage}] skip {step.name} (outputs present)")
                 skipped.append(step.name)
                 continue
