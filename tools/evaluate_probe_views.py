@@ -152,31 +152,28 @@ def main() -> int:
                 device=device,
             )
     else:
-        spec_intrinsics_manifest = raw["face_cache_manifest"].replace("face4", "face4_val")
+        # The validation caches are derived by name from the config's training caches;
+        # the rule is shared with the SDK, which checks them before anything trains.
+        from cloudstudio_3dgs.training.validation_paths import derive_validation_paths
+
+        val = derive_validation_paths(raw)
+        spec_intrinsics_manifest = val["face_cache_manifest"]
         if raw.get("background_image_manifest"):
-            spec_background_manifest = raw["background_image_manifest"].replace(
-                "_train", "_val"
-            )
+            spec_background_manifest = val["background_image_manifest"]
         dataset = FaceCacheDataset(
-            Path(raw["face_cache_manifest"].replace("face4", "face4_val")),
-            Path(raw["face_cache_root"].replace("face4", "face4_val")),
+            Path(val["face_cache_manifest"]),
+            Path(val["face_cache_root"]),
             verify_artifacts=False,
             dataset_manifest_path=Path(raw["dataset_manifest"]),
-            renderer_mask_manifest_path=Path(
-                raw["renderer_mask_manifest"].replace("_train", "_val")
-            ),
-            face_lidar_geometry_manifest_path=Path(
-                raw["face_lidar_geometry_manifest"].replace("_train", "_val")
-            ),
-            face_lidar_geometry_root=Path(
-                raw["face_lidar_geometry_root"].replace("_train", "_val")
-            ),
+            renderer_mask_manifest_path=Path(val["renderer_mask_manifest"]),
+            face_lidar_geometry_manifest_path=Path(val["face_lidar_geometry_manifest"]),
+            face_lidar_geometry_root=Path(val["face_lidar_geometry_root"]),
         )
         backgrounds = None
         if raw.get("background_image_manifest"):
             backgrounds = ViewBackgroundLibrary(
-                Path(raw["background_image_manifest"].replace("_train", "_val")),
-                Path(raw["background_image_root"].replace("_train", "_val")),
+                Path(val["background_image_manifest"]),
+                Path(val["background_image_root"]),
                 device=device,
             )
 

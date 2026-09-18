@@ -214,6 +214,7 @@ def adopt_scene(
     dataset_root: Path | str | None = None,
     reference_ply: Path | str | None = None,
     reference_alignment: Path | str | None = None,
+    eval_config: Path | str | None = None,
 ) -> AdoptedScene:
     """Build the prepared scene from as-run configs, verifying every artefact.
 
@@ -364,6 +365,30 @@ def adopt_scene(
     lock = ledger.file(_agree(everything, "gsplat_lock", what="gsplat lock"), what="gsplat_lock")
     ledger.record("gsplat_lock", lock, file_sha256(lock))
     derived["gsplat_lock"] = str(lock)
+
+    # -- evaluator config (optional) ------------------------------------------
+    # The battery derives its validation caches by name from a trainer config. A scene whose
+    # validation caches live under a different dataset version than its training caches
+    # (house0305: trained on v9, scored on v8's face4_val + face4_lidar_val, as every
+    # campaign delivery was) hands over the evaluator config that names them; prepare then
+    # adopts it verbatim instead of deriving one from the tile-0 delivery config.
+    if eval_config is not None:
+        eval_path = ledger.file(eval_config, what="evaluator config")
+        try:
+            eval_raw = json.loads(eval_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError) as error:
+            raise StageRefused(f"evaluator config {eval_path} is not readable JSON: {error}") from error
+        for key in ("face_cache_manifest", "face_cache_root", "dataset_manifest", "renderer_mask_manifest"):
+            if not eval_raw.get(key):
+                raise StageRefused(f"evaluator config {eval_path} lacks '{key}'; the battery cannot read views from it")
+        ledger.record("delivery_eval_source", eval_path, file_sha256(eval_path))
+        derived["delivery_eval_source"] = str(eval_path)
+        ledger.verified.append(f"evaluator config: {eval_path.name} (adopted verbatim)")
+    else:
+        notes.append(
+            "no --eval-config given: prepare derives the evaluator config from the tile-0 delivery "
+            "config and refuses if the validation caches it implies do not exist"
+        )
 
     # -- competitor reference model (optional) --------------------------------
     # The campaign scores three-way and off-trajectory strips against a competitor delivery.

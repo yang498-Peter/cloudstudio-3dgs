@@ -608,5 +608,43 @@ class FullRunTests(ProjectFixture):
         self.assertEqual(fresh.plan().generations, ("delivery",))
 
 
+class ValidationCacheTests(ProjectFixture):
+    """prepare refuses when the battery's validation caches, derived by name from the evaluator
+    config, do not exist - instead of the battery finding out after every tile has trained."""
+
+    def scene_on_v9_style_caches(self):
+        import dataclasses
+
+        scene = fake_scene(self.dataset_root)
+        train_root = self.dataset_root / "face4_train"
+        train_root.mkdir(parents=True, exist_ok=True)
+        manifest = train_root / "face_manifest.json"
+        manifest.write_text("{}", encoding="utf-8")
+        return dataclasses.replace(scene, face_cache_manifest=manifest, face_cache_root=train_root)
+
+    def test_prepare_refuses_naming_the_missing_validation_cache(self) -> None:
+        project = self.project()
+        project.write_prepare_manifest(self.scene_on_v9_style_caches(), self.dataset)
+        with self.assertRaises(StageRefused) as caught:
+            project.prepare()
+        message = str(caught.exception)
+        self.assertIn("validation caches", message)
+        self.assertIn(str(self.dataset_root / "face4_val"), message)
+        self.assertNotIn("face4_val_train", message, "the v9 spelling must not be mangled")
+        self.assertFalse((self.work / "delivery_eval.json").exists(), "nothing is written on refusal")
+        self.assertEqual(project.stage_state("prepare").state, FAILED)
+
+    def test_prepare_passes_once_the_validation_cache_exists(self) -> None:
+        project = self.project()
+        project.write_prepare_manifest(self.scene_on_v9_style_caches(), self.dataset)
+        val_root = self.dataset_root / "face4_val"
+        val_root.mkdir(parents=True, exist_ok=True)
+        (val_root / "face_manifest.json").write_text("{}", encoding="utf-8")
+        result = project.prepare()
+        self.assertIn("delivery_eval_config", result.steps_run)
+        written = json.loads((self.work / "delivery_eval.json").read_text(encoding="utf-8"))
+        self.assertEqual(written["face_cache_manifest"], str(self.dataset_root / "face4_train" / "face_manifest.json"))
+
+
 if __name__ == "__main__":
     unittest.main()

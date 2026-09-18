@@ -571,9 +571,12 @@ DERIVED_SCENE_KEYS = (
     # optional: the competitor model the strips are scored against; absent on a first delivery
     "reference_ply",
     "reference_alignment",
+    # optional: an adopted evaluator config, when the validation caches are not derivable by
+    # name from the training caches (house0305 scores on v8's validation caches)
+    "delivery_eval_source",
 )
 #: Keys in DERIVED_SCENE_KEYS a scene may legitimately lack. They never become placeholders.
-OPTIONAL_SCENE_KEYS = ("reference_ply", "reference_alignment")
+OPTIONAL_SCENE_KEYS = ("reference_ply", "reference_alignment", "delivery_eval_source")
 DERIVED_TILE_KEYS = (
     "initialization_ply",
     "initialization_geometry",

@@ -193,6 +193,14 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="JSON with the rigid transform bringing --reference-ply into this scene's frame",
     )
+    adopt.add_argument(
+        "--eval-config",
+        type=Path,
+        default=None,
+        help="evaluator config (evaluate_probe_views.py --config) to adopt verbatim, for a scene whose "
+        "validation caches are not derivable by name from its training caches (default: derive from "
+        "the tile-0 delivery config and refuse if the derived validation caches do not exist)",
+    )
     adopt.add_argument("--repo-root", type=Path, default=None)
     adopt.add_argument("--python", type=Path, default=None)
     return parser
@@ -249,6 +257,7 @@ def _adopt(args: argparse.Namespace, stream) -> int:
         dataset_root=args.dataset,
         reference_ply=args.reference_ply,
         reference_alignment=args.reference_alignment,
+        eval_config=args.eval_config,
     )
     project = Project(
         adopted.scene.dataset_root,

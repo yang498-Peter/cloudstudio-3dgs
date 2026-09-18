@@ -433,6 +433,45 @@ class AdoptSucceedsTests(AdoptFixture):
         self.assertEqual(pipeline["delivery_eval_config"], str(self.work / "delivery_eval.json"))
         self.assertTrue((self.work / "delivery_eval.json").is_file())
 
+    def test_an_adopted_evaluator_config_is_written_verbatim_with_its_source_named(self) -> None:
+        """house0305 trains on v9 caches and scores on v8's validation caches, as every campaign
+        delivery did; the evaluator config that names them is adopted, not derived."""
+        source = self.root / "hand" / "delivery_eval.json"
+        source.parent.mkdir(parents=True, exist_ok=True)
+        payload = {
+            "face_cache_manifest": str(self.root / "v8" / "face4" / "face_manifest.json"),
+            "face_cache_root": str(self.root / "v8" / "face4"),
+            "dataset_manifest": str(self.root / "v8" / "dataset_manifest.json"),
+            "renderer_mask_manifest": str(self.root / "v8" / "renderer_mask_train.json"),
+            "sh_degree": 1,
+        }
+        source.write_text(json.dumps(payload), encoding="utf-8")
+        # the validation caches the config implies must exist, or prepare refuses
+        for rel in ("face4_val/face_manifest.json", "renderer_mask_val.json"):
+            write_bytes(self.root / "v8" / rel, b"{}")
+        adopted = self.scene.adopt(eval_config=source)
+        self.assertEqual(adopted.derived_paths["delivery_eval_source"], str(source))
+        self.assertIn("delivery_eval_source", adopted.digests)
+        project = self.scene.project(self.work)
+        project.write_prepare_manifest(
+            adopted.scene, adopted.dataset, prior_tile_checkpoints=adopted.prior_tile_checkpoints,
+            derived_paths=adopted.derived_paths, digests=adopted.digests, adopted=adopted.as_json(),
+        )
+        project.prepare()
+        written = json.loads((self.work / "delivery_eval.json").read_text(encoding="utf-8"))
+        for key, value in payload.items():
+            self.assertEqual(written[key], value)
+        self.assertEqual(written["lineage"]["adopted_from"], str(source))
+        self.assertNotIn("derived_from", written["lineage"])
+
+    def test_an_evaluator_config_without_view_paths_is_refused(self) -> None:
+        source = self.root / "hand" / "not_an_eval.json"
+        source.parent.mkdir(parents=True, exist_ok=True)
+        source.write_text(json.dumps({"sh_degree": 1}), encoding="utf-8")
+        with self.assertRaises(StageRefused) as caught:
+            self.scene.adopt(eval_config=source)
+        self.assertIn("face_cache_manifest", str(caught.exception))
+
     def test_as_run_checkpoints_become_prior_tile_checkpoints(self) -> None:
         adopted = self.scene.adopt()
         self.assertEqual(adopted.prior_tile_checkpoints, {})

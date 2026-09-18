@@ -713,26 +713,62 @@ class Project:
         tile-0 delivery config with its run identity changed is exactly the
         config it needs. Its sh_degree stays the trainer's: a lower value
         here clamps the render and scores a model nobody trained.
+
+        The evaluator reads the *validation* caches derived by name from the
+        config's training caches; those are checked here, at prepare time,
+        because the first SDK delivery trained for seven hours and then died
+        at the battery on a validation cache that did not exist. A scene that
+        adopted an evaluator config (``delivery_eval_source``) gets it verbatim.
         """
-        first = plan.dataset.tiles[0]
-        arm = str(self.profile.tile_rules["arm_name_pattern"]).format(
-            tile=first.tile_id, profile=self.profile.name, generation="delivery"
+        from cloudstudio_3dgs.training.validation_paths import derive_validation_paths
+
+        bundle = self.bundle_paths()
+        target = Path(resolve_cache_paths(self.layout, plan.dataset, bundle)["delivery_eval_config"])
+        adopted = bundle.get("delivery_eval_source")
+        if adopted:
+            source_path = Path(adopted)
+            if not source_path.is_file():
+                raise StageRefused(f"adopted evaluator config is missing: {source_path}")
+            config = json.loads(source_path.read_text(encoding="utf-8"))
+            config["lineage"] = {
+                "adopted_from": str(source_path),
+                "purpose": "evaluate_probe_views.py config adopted verbatim; dataset paths only, never trained",
+                "profile_sha256": self.profile.profile_sha256,
+            }
+        else:
+            first = plan.dataset.tiles[0]
+            arm = str(self.profile.tile_rules["arm_name_pattern"]).format(
+                tile=first.tile_id, profile=self.profile.name, generation="delivery"
+            )
+            source = next(
+                (step for step in plan.steps if step.config is not None and step.name == f"train_{arm}"),
+                None,
+            )
+            if source is None or source.config is None:
+                raise StageFailed(f"no delivery config for {first.name} in the plan; cannot derive delivery_eval.json")
+            config = json.loads(json.dumps(dict(source.config)))
+            config["run_id"] = f"{plan.scene_tag}-delivery-eval"
+            config["output_dir"] = str(self.layout.runs / "delivery_eval")
+            config["lineage"] = {
+                "derived_from": arm,
+                "purpose": "evaluate_probe_views.py config; dataset paths only, never trained",
+                "profile_sha256": self.profile.profile_sha256,
+            }
+        # Only paths the derivation actually moved are validation-side artefacts nobody
+        # else produces; one it left alone (a backdrop library without "_train" in its
+        # name) is the training artefact itself, and the plan builds that later.
+        missing = sorted(
+            f"{key} -> {path}"
+            for key, path in derive_validation_paths(config).items()
+            if str(path) != str(config.get(key)) and not Path(path).exists()
         )
-        source = next(
-            (step for step in plan.steps if step.config is not None and step.name == f"train_{arm}"),
-            None,
-        )
-        if source is None or source.config is None:
-            raise StageFailed(f"no delivery config for {first.name} in the plan; cannot derive delivery_eval.json")
-        config = json.loads(json.dumps(dict(source.config)))
-        config["run_id"] = f"{plan.scene_tag}-delivery-eval"
-        config["output_dir"] = str(self.layout.runs / "delivery_eval")
-        config["lineage"] = {
-            "derived_from": arm,
-            "purpose": "evaluate_probe_views.py config; dataset paths only, never trained",
-            "profile_sha256": self.profile.profile_sha256,
-        }
-        target = Path(resolve_cache_paths(self.layout, plan.dataset, self.bundle_paths())["delivery_eval_config"])
+        if missing:
+            raise StageRefused(
+                "the battery's validation caches, derived by name from the evaluator config, do not "
+                "exist:\n  " + "\n  ".join(missing)
+                + "\n  build them next to the training caches, or adopt an evaluator config that names "
+                "existing ones (adopt --eval-config)"
+            )
         _write_json_atomic(target, config)
         return target
 
