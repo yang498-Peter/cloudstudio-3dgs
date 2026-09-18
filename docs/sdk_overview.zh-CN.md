@@ -2,15 +2,24 @@
 
 面向对象：没有参与 house0305 研究过程、需要在**新数据集**上跑出同一套交付质量的工程/交付团队。
 
-这个包把 2026-09-14 的 house0305 交付候选 **B5fill2** 冻结成一个可复用的配方对象，并在现有
+这个包把 house0305 的交付配方冻结成可复用的配方对象（默认 **b5sky**：不带填充层、身体 + 冻结天空层
+成对交付、样本预取开；**b5fill2** 保留给复现 2026-09-14 那一批交付件），并在现有
 `tools/pipeline.py`（job-state 机、`gpu.lock` 租约、`queue` / `deliver` 子命令）之上提供四个阶段的
-驱动。它**不重写** `tools/pipeline.py`，也**不实现**数据接入——后者由并行任务的
-`cloudstudio3dgs_sdk.ingest` 负责。
+驱动。它**不重写** `tools/pipeline.py`；数据接入由 `cloudstudio3dgs_sdk.ingest` 负责，
+`bundle.load_dataset_bundle()` 把接入层的缓存图跑完 CPU 那一半并投影成训练器的路径契约。
 
 ```
-python -m cloudstudio3dgs_sdk run --dataset <路径> --work <路径> --profile b5fill2 \
-    [--dry-run] [--stages prepare,train,deliver,report] [--vram-gib 16] [--force]
+python -m cloudstudio3dgs_sdk run --dataset <路径> --work <路径> [--profile b5sky] \
+    [--dry-run] [--stages prepare,train,deliver,report] [--vram-gib 15.9] [--force] \
+    [--adapter s1_fisheye] [--run-dir <processed>] [--pipeline-gate <gate.json>]
 ```
+
+两条进入路径，第 9 节各有一段实操：
+
+* **已经准备好的场景**（house0305，或上一轮 SDK 跑过的数据集）：`adopt` 从 as-run 配置生成
+  `prepare_manifest.json`，`run` 直接采纳并验签，不重建任何缓存。
+* **全新数据集**：`run` 的 prepare 阶段走接入层。CPU 缓存自动建；第一个 GPU 缓存把准确命令打印出来
+  停下；就绪门禁（gate chain）必须用门禁工具链单独产出后经 `--pipeline-gate` 传入——SDK 不伪造门禁。
 
 ---
 
@@ -122,14 +131,28 @@ python -m cloudstudio3dgs_sdk run --dataset <路径> --work <路径> --profile b
 * **门禁**：`pipeline_gate`（训练器拒绝在缺它时启动）。
 * **派生缓存**：`DerivedCaches`（天空 mask、天空穹顶、全场背景库、逐切片归属缓存）。
 
-**接入实现不在本包。** `bundle.load_dataset_bundle()` 抛 `NotImplementedError`，并指名
-`cloudstudio3dgs_sdk.ingest.load_dataset` 与 `cloudstudio3dgs_sdk.ingest.plan_caches`——适配器
-（S1 鱼眼 rig / COLMAP / 纯针孔目录）、签名缓存图与自动切片规则是并行任务的交付物。
+**全新数据集由 `bundle.load_dataset_bundle()` 准备**：调用 `cloudstudio3dgs_sdk.ingest.load_dataset`
+（适配器 S1 鱼眼 rig / COLMAP / 纯针孔目录，缺省自动探测，`--adapter` 指定）与 `plan_caches` 得到签名
+缓存图，按依赖顺序建 CPU 缓存；遇到第一个输入就绪的 GPU 缓存抛 `GpuStepRequired`（带准确命令），
+不在 prepare 阶段占 CUDA；粗先验用的全场初始化在这里用 `tools/build_lidar_init.py` 按配方抽稀建出。
+它**不做**两件事，缺了就按名字拒绝：
+
+* 没有 LiDAR 点云的采集件——配方从 LiDAR 初始化每个切片，跑不了。
+* 就绪门禁（`pipeline_gate`）。鱼眼数据的训练器拒绝在缺签名门禁时启动，而门禁链（七个工具：
+  `build_mipmap_frontend_gate` → `advance_mipmap_renderer_mask_gate` → `advance_mipmap_lidar_depth_gate`
+  → `advance_mipmap_da2_gate` → `advance_mipmap_tile_gate` → `promote_surface_frozen_training_gate`
+  → `bind_monocular_depth_gate`）不属于接入层。缓存建好后用它们对着 `<work>/caches` 产出门禁，再
+  `--pipeline-gate PATH` 传入；不传就拒绝并把工具链原样打印出来。
+
+**分体采集件**（S1Mapper 的 `..._Raw_Data`（相机 + info）与 `..._Processed_by_S1Mapper`（`ImgPose.txt` +
+上色 LAS）两个目录）：`--dataset` 指向 Raw_Data，`--run-dir` 指向 Processed 目录，`--adapter s1_fisheye`。
+`run_dir` 只在给出时才传给适配器，没有这个关键字的适配器不受影响。
 
 接入侧的适配器、缓存图与自动切片规则见 `docs/sdk_ingestion.zh-CN.md`。
 
-对**已经准备好的场景**（house0305，或上一轮 SDK 跑过的数据集）不需要它：把一份经过校验的
-`prepare_manifest.json` 放到 `<work>/prepare/` 下，`Project.prepare()` 会直接采纳并验签。
+对**已经准备好的场景**（house0305，或上一轮 SDK 跑过的数据集）不走这条路：`adopt` 子命令从各切片
+的 `config_as_run.json` 与粗先验配置生成 `<work>/prepare/prepare_manifest.json`（校验其中每条路径、记录
+摘要），`Project.prepare()` 直接采纳并验签，被采纳的缓存**永不在原地重建**。
 
 两个 `DatasetBundle` 不要混淆：
 
@@ -291,9 +314,11 @@ BLOCKED merge_tiles: ... (见上)
 | `tests/test_sdk_cli.py` | 31 | `--stages` 解析（排序、去重、未知项）、`--prior-checkpoint` 解析、参数必填与退出码、干跑输出内容（阶段、总计、cap、置信度、argv、警告、BLOCKED）、`--plan-json`、`preflight` 与 `profile` 子命令 |
 | **合计** | **136** | |
 
+上表是 2026-09-14 的快照；之后又加了 `test_sdk_bundle_build.py`（全新数据集构建路径）、
+`test_sdk_adopt.py`（采纳 as-run 配置）、`test_sdk_discover.py` 与接入层套件。**条数以 runner 为准**：
+
 ```
-python -m unittest tests.test_sdk_profile tests.test_sdk_plan tests.test_sdk_project \
-                   tests.test_sdk_requirements tests.test_sdk_cli
+python -m pytest -q tests/test_sdk_*.py tests/test_ingest_*.py
 ```
 
 ---
@@ -311,6 +336,58 @@ python -m cloudstudio3dgs_sdk run --dataset <路径> --work <路径> --stages pr
 python -m cloudstudio3dgs_sdk run --dataset <路径> --work <路径>
 
 # 打印配方与全部出处
-python -m cloudstudio3dgs_sdk profile b5fill2
-python -m cloudstudio3dgs_sdk profile b5fill2 --json
+python -m cloudstudio3dgs_sdk profile b5sky
+python -m cloudstudio3dgs_sdk profile b5sky --json
 ```
+
+### 9.1 已准备好的场景：adopt，然后 run
+
+house0305 就是这样跑的（`day_plan26`，2026-09-18）。四份切片 `config_as_run.json` + 粗先验配置
+生成清单；天空穹顶、天空层 PLY、竞品参考模型都是可选，给了就校验并记进清单：
+
+```bash
+python -m cloudstudio3dgs_sdk adopt --work <work> --profile b5sky --scene-tag house0305 \
+    --tile-config <runs>/tile0_.../config_as_run.json  (每个切片一份) \
+    --coarse-config <runs>/house0305_global_coarse_B0_10k.json \
+    --sky-dome <probes>/sky_house0305.pt --sky-ply <exports>/house0305_f5_sky_20260903.ply \
+    --reference-ply <竞品.ply> --reference-alignment <刚体对齐.json>
+
+# 先干跑：输出里不能出现 "<prepare:" 占位符，否则清单不完整
+python -m cloudstudio3dgs_sdk run --dataset <数据集> --work <work> --profile b5sky --vram-gib 15.9 \
+    --dry-run --prior-checkpoint 0=<上一代 tile0 latest.pt> ... (每个切片一份)
+
+python -m cloudstudio3dgs_sdk run --dataset <数据集> --work <work> --profile b5sky --vram-gib 15.9 \
+    --prior-checkpoint 0=... --prior-checkpoint 1=... --prior-checkpoint 2=... --prior-checkpoint 3=...
+```
+
+注意点：
+
+* `adopt` 从各切片 `monitor/progress.jsonl` 的最后一条读取上一代最终种群，切片 cap 按配方规则**重新推导**，
+  不照抄手工配置里的数字（house0305 Tile_2 手工 8.0M，按规则 6.8M；Tile_0 12.4M 按 15.9 GiB 的卡钳到 10.9M）。
+* `--vram-gib` 要填这张卡**实际可用**的数（RTX 5070 Ti 是 15.9，不是 16）；b5sky 的 `min_vram_gib` 是 15.5。
+* `--reference-ply` / `--reference-alignment` 必须成对。不给时，逐臂的 `offtraj` / `compare` 与交付的
+  `*_matched` 四步以及它们的评分器按名字报 `skip`，形态、battery、身份冻结、成对 alpha 门禁照常跑——
+  一个新场景的首次交付没有竞品可比，不能让训练四十分钟之后死在比对步骤上。
+* **不要**把整个 `run` 再包一层 `tools/gpu_lease.py`：流水线自己对 `<work>/runs/gpu.lock` 逐训练步取租约，
+  外层同文件的租约会让第一个训练步拒绝自己的祖先进程（2026-09-18 实测）。
+* 配方 sha 变了（改任何旋钮）就换一个新的 `--work`，旧工作根不会被续跑。
+
+### 9.2 换一套新数据
+
+```bash
+# 1. 是什么数据？（分体采集件：--dataset 指 Raw_Data，--run-dir 指 Processed_by_S1Mapper）
+python -m cloudstudio3dgs_sdk.ingest.cli detect <dataset>
+
+# 2. 只准备：CPU 缓存自动建，遇到第一个 GPU 缓存停下并打印命令
+python -m cloudstudio3dgs_sdk run --dataset <raw> --run-dir <processed> --adapter s1_fisheye \
+    --work <work> --stages prepare
+# 3. 在有 CUDA 的机器上按打印的命令建 GPU 缓存，重复第 2 步直到 prepare 只剩门禁一项
+
+# 4. 门禁工具链对着 <work>/caches 产出签名门禁（第 4 节列的七个工具，顺序固定）
+# 5. 带门禁完整跑
+python -m cloudstudio3dgs_sdk run --dataset <raw> --run-dir <processed> --adapter s1_fisheye \
+    --work <work> --pipeline-gate <work>/gate/pipeline_gate.json --vram-gib 15.9
+```
+
+没有上一代检查点时不给 `--prior-checkpoint`，计划自动多出一代种子训练（替身背景要有东西可渲染）。
+磁盘按 `--dry-run` 打印的 `peak disk` 预留；house0614 的 900 张子集估算约 57 GiB 缓存。
