@@ -309,7 +309,7 @@ def preflight(
             Check(
                 "gpu",
                 PASS if enough else FAIL,
-                f"{probes.gpu.name}, {probes.gpu.total_vram_gib:.1f} GiB (profile needs {min_vram:.0f})",
+                f"{probes.gpu.name}, {probes.gpu.total_vram_gib:.1f} GiB (profile needs {min_vram:.1f})",
                 remedy="" if enough else "use a larger card or a profile with smaller caps",
             )
         )
