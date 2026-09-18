@@ -39,6 +39,7 @@ PLAN_TOOLS = (
     "build_standin_backgrounds.py",
     "build_three_way_compare.py",
     "build_offtrajectory_compare.py",
+    "score_offtrajectory_strips.py",
     "merge_v28_tile_checkpoints.py",
     "export_gaussian_ply.py",
     "import_gaussian_ply.py",

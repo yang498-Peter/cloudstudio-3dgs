@@ -775,11 +775,16 @@ def build_plan(
             + ": the plan adds a seed generation (profile open question 'backdrop-bootstrap'); "
               "seed arms carry INFERRED settings"
         )
-    if not dataset.has_reference_model:
+    # The competitor model the strips score against: declared on the summary, or adopted
+    # into the manifest (adopt --reference-ply/--reference-alignment). Either counts.
+    reference_ply = paths.get("reference_ply", "")
+    reference_alignment = paths.get("reference_alignment", "")
+    has_reference = bool(reference_ply and reference_alignment) or dataset.has_reference_model
+    if not has_reference:
         warnings.append(
-            "no reference (competitor) model declared: tools/pipeline.py deliver runs "
-            "build_three_way_compare / build_offtrajectory_compare against reference_ply and "
-            "delivery_baselines, which a first delivery of a new scene does not have"
+            "no reference (competitor) model declared: the three-way and off-trajectory "
+            "comparisons against it are not planned, and the report's off-trajectory sharpness "
+            "gate stays UNVERIFIED (adopt --reference-ply/--reference-alignment to score it)"
         )
 
     def path_of(key: str) -> str:
@@ -1280,22 +1285,68 @@ def build_plan(
                 note="body alone: a shape comparison against the competitor; dome rows would distort it",
             )
         )
-        if dataset.has_reference_model:
-            for name, tool_name, seconds in (
-                ("compare_matched", "build_three_way_compare.py", float(cost["compare_seconds"])),
-                ("offtrajectory", "build_offtrajectory_compare.py", float(cost["offtraj_seconds"])),
-            ):
-                steps.append(
-                    PlannedStep(
-                        name=name,
-                        stage="deliver",
-                        resource="gpu",
-                        estimate=Estimate(seconds, 0, "never timed separately", UNMEASURED),
-                        command=(str(python), _tool(repo_root, tool_name)),
-                        outputs=(str(delivery_dir / f"{name}_summary.json"),),
-                        note="needs reference_ply + reference_alignment",
-                    )
+        if has_reference:
+            # The same strips tools/pipeline.py deliver builds, against the same evaluator
+            # config, so the numbers are comparable with the campaign's hand deliveries.
+            frames = str(int(profile.battery["compare_frames"]))
+            compare_out = delivery_dir / "compare_matched"
+            offtraj_out = delivery_dir / "offtrajectory"
+            reference_args = (
+                "--reference-ply", str(reference_ply or "<prepare:reference_ply>"),
+                "--reference-alignment", str(reference_alignment or "<prepare:reference_alignment>"),
+            )
+            steps.append(
+                PlannedStep(
+                    name="compare_matched",
+                    stage="deliver",
+                    resource="gpu",
+                    estimate=Estimate(float(cost["compare_seconds"]), 0, "never timed separately", UNMEASURED),
+                    command=(
+                        str(python), _tool(repo_root, "build_three_way_compare.py"),
+                        "--config", cache["delivery_eval_config"],
+                        "--checkpoint", str(delivery_dir / "reimported.pt"),
+                        *reference_args,
+                        "--output", str(compare_out),
+                        "--frames", frames,
+                    ),
+                    outputs=(str(compare_out / "compare_summary.json"),),
+                    note="three-way strips (photo | ours | competitor) on matched training views",
                 )
+            )
+            steps.append(
+                PlannedStep(
+                    name="offtrajectory",
+                    stage="deliver",
+                    resource="gpu",
+                    estimate=Estimate(float(cost["offtraj_seconds"]), 0, "never timed separately", UNMEASURED),
+                    command=(
+                        str(python), _tool(repo_root, "build_offtrajectory_compare.py"),
+                        cache["delivery_eval_config"],
+                        str(delivery_dir / "reimported.pt"),
+                        str(offtraj_out),
+                        frames,
+                        *reference_args,
+                    ),
+                    outputs=(str(offtraj_out / "offtraj_summary.json"),),
+                    note="off-trajectory strips (ours | competitor) from camera picks off the scan path",
+                )
+            )
+            steps.append(
+                PlannedStep(
+                    name="offtrajectory_score",
+                    stage="deliver",
+                    resource="cpu",
+                    estimate=Estimate(30.0, 0, "Laplacian variance over the strips", INFERRED),
+                    command=(
+                        str(python), _tool(repo_root, "score_offtrajectory_strips.py"),
+                        f"{tag}={offtraj_out}",
+                        "--baseline", tag,
+                        "--json", str(delivery_dir / "offtrajectory_scores.json"),
+                    ),
+                    outputs=(str(delivery_dir / "offtrajectory_scores.json"),),
+                    note="the report's off-trajectory sharpness gate reads the median sharp_ratio of these rows",
+                )
+            )
         steps.append(
             PlannedStep(
                 name="freeze_identity",
@@ -1321,6 +1372,7 @@ def build_plan(
                 name="acceptance_report",
                 stage="report",
                 resource="cpu",
+                refresh=True,
                 estimate=Estimate(float(cost["report_seconds"]), 2 * 1024 * 1024, "reads recorded JSON", MEASURED),
                 outputs=(
                     str(layout.report / f"{tag}_report.json"),

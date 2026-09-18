@@ -20,7 +20,7 @@ from unittest import mock
 from cloudstudio3dgs_sdk.bundle import DerivedCaches, PreparedScene
 from cloudstudio3dgs_sdk.ingest.errors import GpuStepRequired
 from cloudstudio3dgs_sdk.plan import PlannedStep
-from cloudstudio3dgs_sdk.profile import PROFILE_B5FILL2, Provenance, make_profile
+from cloudstudio3dgs_sdk.profile import PROFILE_B5FILL2, PROFILE_B5SKY, Provenance, make_profile
 from cloudstudio3dgs_sdk.project import (
     COMPLETE,
     FAILED,
@@ -28,6 +28,7 @@ from cloudstudio3dgs_sdk.project import (
     Project,
     StageRefused,
     StageState,
+    derived_paths_from_scene,
     digest,
     digest_matches,
 )
@@ -649,6 +650,93 @@ class ValidationCacheTests(ProjectFixture):
         self.assertIn("delivery_eval_config", result.steps_run)
         written = json.loads((self.work / "delivery_eval.json").read_text(encoding="utf-8"))
         self.assertEqual(written["face_cache_manifest"], str(self.dataset_root / "face4_train" / "face_manifest.json"))
+
+
+class ReferenceStripsTests(ProjectFixture):
+    """An adopted competitor model adds the strips to deliver; the sharpness gate reads them.
+
+    Pinned on b5sky, the profile that carries the sharpness gate. The first SDK delivery of house0305 adopted the reference model and still reported the
+    off-trajectory gate UNVERIFIED: the plan only looked at the summary's flag, and the strip
+    steps it would have planned had no arguments. Adding the strips after a delivery is
+    complete must also re-run deliver for just those steps, and then the report.
+    """
+
+    class StripRunner(RecordingRunner):
+        def __call__(self, step: PlannedStep, *, log: Path) -> int:
+            code = super().__call__(step, log=log)
+            if step.name == "offtrajectory_score":
+                rows = [{"file": f"offtraj_{i}.png", "psnr_q": 17.0, "sharp_ratio": ratio} for i, ratio in enumerate((0.40, 0.46, 0.52))]
+                Path(step.outputs[0]).write_text(json.dumps({"b5sky": rows}), encoding="utf-8")
+            return code
+
+    def reference_paths(self) -> dict[str, str]:
+        ply = self.root / "competitor" / "ref.ply"
+        align = self.root / "competitor" / "align.json"
+        ply.parent.mkdir(parents=True, exist_ok=True)
+        ply.write_bytes(PLY_STUB)
+        align.write_text("{}", encoding="utf-8")
+        return {"reference_ply": str(ply), "reference_alignment": str(align)}
+
+    def test_adopted_reference_plans_the_strips_with_real_arguments(self) -> None:
+        self.runner = self.StripRunner()
+        project = self.project(profile=PROFILE_B5SKY)
+        scene = fake_scene(self.dataset_root)
+        project.write_prepare_manifest(
+            scene, self.dataset,
+            derived_paths={**derived_paths_from_scene(scene, repo_root=self.repo), **self.reference_paths()},
+        )
+        plan = project.plan()
+        self.assertFalse(any("no reference" in w for w in plan.warnings))
+        by_name = {s.name: s for s in plan.steps}
+        offtraj = by_name["offtrajectory"]
+        self.assertIn("build_offtrajectory_compare.py", offtraj.command[1])
+        self.assertIn(str(self.work / "delivery_eval.json"), offtraj.command)
+        self.assertIn(str(self.work / "runs" / "delivery_b5sky" / "reimported.pt"), offtraj.command)
+        self.assertIn("--reference-ply", offtraj.command)
+        self.assertIn(str(self.root / "competitor" / "ref.ply"), offtraj.command)
+        compare = by_name["compare_matched"]
+        self.assertIn("--frames", compare.command)
+        self.assertIn("--reference-alignment", compare.command)
+        score = by_name["offtrajectory_score"]
+        self.assertIn("score_offtrajectory_strips.py", score.command[1])
+        self.assertIn(f"b5sky={self.work / 'runs' / 'delivery_b5sky' / 'offtrajectory'}", score.command)
+        results = project.run_all()
+        self.assertTrue(all(r.ok for r in results))
+        report = json.loads((self.work / "report" / "b5sky_report.json").read_text(encoding="utf-8"))
+        gates = {g["gate"]: g for g in report["gates"]}
+        self.assertEqual(gates["offtrajectory_sharpness_min"]["measured"], 0.46, "median sharp_ratio of the rows")
+        self.assertEqual(gates["offtrajectory_sharpness_min"]["status"], "PASS")
+        self.assertEqual(report["measured"]["offtrajectory_strip_count"], 3)
+
+    def test_a_reference_adopted_after_delivery_reruns_only_the_strips_and_then_the_report(self) -> None:
+        self.runner = self.StripRunner()
+        project = self.project(profile=PROFILE_B5SKY)
+        project.write_prepare_manifest(fake_scene(self.dataset_root), self.dataset)
+        first = project.run_all()
+        self.assertEqual([r.action for r in first], ["ran"] * 4)
+        gates = {g["gate"]: g for g in json.loads((self.work / "report" / "b5sky_report.json").read_text(encoding="utf-8"))["gates"]}
+        self.assertEqual(gates["offtrajectory_sharpness_min"]["status"], "UNVERIFIED")
+        # the reference arrives: the manifest changes, so prepare re-runs (cheaply), train
+        # stays as it was, deliver owes exactly the strips, and the report follows
+        self.runner.calls.clear()
+        project = self.project(profile=PROFILE_B5SKY)
+        scene = fake_scene(self.dataset_root)
+        project.write_prepare_manifest(
+            scene, self.dataset,
+            derived_paths={**derived_paths_from_scene(scene, repo_root=self.repo), **self.reference_paths()},
+        )
+        second = project.run_all()
+        by_stage = {r.stage: r for r in second}
+        self.assertEqual(by_stage["deliver"].action, "ran")
+        self.assertEqual(set(by_stage["deliver"].steps_run), {"compare_matched", "offtrajectory", "offtrajectory_score"})
+        self.assertNotIn("merge_tiles", self.runner.calls)
+        self.assertNotIn("battery", self.runner.calls)
+        self.assertEqual(by_stage["report"].action, "ran")
+        gates = {g["gate"]: g for g in json.loads((self.work / "report" / "b5sky_report.json").read_text(encoding="utf-8"))["gates"]}
+        self.assertEqual(gates["offtrajectory_sharpness_min"]["status"], "PASS")
+        # and a third run has nothing left to do
+        third = self.project(profile=PROFILE_B5SKY).run_all()
+        self.assertEqual({r.action for r in third}, {"skipped"})
 
 
 if __name__ == "__main__":

@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import json
 import os
+import statistics
 import subprocess
 import sys
 from dataclasses import dataclass
@@ -34,6 +35,7 @@ from cloudstudio3dgs_sdk.bundle import PreparedScene, load_dataset_bundle
 from cloudstudio3dgs_sdk.discover import DatasetEstimate, estimate_dataset_summary
 from cloudstudio3dgs_sdk.ingest.errors import GpuStepRequired
 from cloudstudio3dgs_sdk.plan import (
+    step_is_skippable,
     STAGES,
     DatasetSummary,
     Plan,
@@ -493,13 +495,26 @@ class Project:
             plan = self.plan()
             self.say(plan.render())
             return StageResult(stage, "planned", "dry run")
+        plan = self.plan(refresh=True)
         if not force:
             current, why = self._stage_is_current(stage)
+            if current:
+                # A plan that grew a step since the stage completed (a reference model
+                # adopted after the first delivery, say) still owes that step.
+                adopted = self.adopted_paths()
+                owed = [
+                    step.name
+                    for step in plan.stage_steps(stage)
+                    if not step.refresh
+                    and not step_is_skippable(step)
+                    and not (step.outputs and all(os.path.normcase(o) in adopted for o in step.outputs))
+                ]
+                if owed:
+                    current, why = False, f"the plan has step(s) without outputs: {', '.join(owed)}"
             if current:
                 self.say(f"[{stage}] skip ({why})")
                 return StageResult(stage, "skipped", why)
         self._verify_upstream(stage)
-        plan = self.plan(refresh=True)
         if plan.dataset.estimated:
             # plan(allow_estimate=False) already refuses to build one, so this
             # only fires for a summary handed in through dataset=/--summary
@@ -558,7 +573,25 @@ class Project:
                 raise
             ran.append(step.name)
         self._record(stage, plan, steps, ran=ran, skipped=skipped)
+        if ran:
+            self._reopen_downstream(stage)
         return StageResult(stage, "ran", "", tuple(ran), tuple(skipped), report)
+
+    def _reopen_downstream(self, stage: str) -> None:
+        """A stage that ran a step owes its consumers a re-run.
+
+        The stage-currency test only asks whether a stage's own outputs still match.
+        Without this, a deliver stage that gained the off-trajectory strips after a
+        report had already been written would leave that report COMPLETE and stale.
+        """
+        for downstream, upstream in STAGE_DEPENDS_ON.items():
+            if upstream != stage:
+                continue
+            state = self.stage_state(downstream)
+            if state.state == COMPLETE:
+                state.set(PENDING, f"{stage} ran again; {downstream} must follow")
+                self.say(f"[{downstream}] reopened: {stage} ran again")
+            self._reopen_downstream(downstream)
 
     def _execute(self, step: PlannedStep, plan: Plan) -> None:
         native = getattr(self, f"_native_{step.name}", None)
@@ -876,10 +909,20 @@ class Project:
         measured["morphology_short_axis_p50_mm"] = (
             stats.get("short_p50_mm") if isinstance(stats, Mapping) else None
         )
-        offtraj = _read_json_or_none(delivery / "offtrajectory_summary.json")
+        # score_offtrajectory_strips.py --json: {tag: [{file, psnr_*, sharp_ratio}, ...]}; the
+        # gate reads the median sharp_ratio, the same number the scorer prints as
+        # "sharpness ours/ref" for every campaign delivery.
+        scores = _read_json_or_none(delivery / "offtrajectory_scores.json")
+        rows = scores.get(plan.delivery_tag) if isinstance(scores, Mapping) else None
+        ratios = [
+            float(row["sharp_ratio"])
+            for row in (rows or [])
+            if isinstance(row, Mapping) and isinstance(row.get("sharp_ratio"), (int, float))
+        ]
         measured["offtrajectory_sharpness_ours_over_ref"] = (
-            offtraj.get("sharpness_ours_over_ref") if isinstance(offtraj, Mapping) else None
+            statistics.median(ratios) if ratios else None
         )
+        measured["offtrajectory_strip_count"] = len(ratios)
         # gate key -> (measurement, comparison, which layers it was read from)
         table: list[tuple[str, str, str, str]] = [
             ("battery_alpha_p05_min", "battery_alpha_p05", "ge", "delivered_pair"),
