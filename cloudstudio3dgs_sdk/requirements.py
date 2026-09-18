@@ -334,19 +334,27 @@ def preflight(
         )
 
     # -- disk -----------------------------------------------------------
-    needed = int(plan.total().disk_bytes * float(runtime["disk_safety_factor"]))
+    # Only the steps a run would still execute count: a resumed run has already paid
+    # for the outputs that exist, and asking for the whole plan's disk again refused
+    # the first SDK delivery at the deliver stage after seven hours of training.
+    factor = float(runtime["disk_safety_factor"])
+    needed = int(plan.pending().disk_bytes * factor)
+    whole = int(plan.total().disk_bytes * factor)
     try:
         free = int(probes.free_disk_bytes(Path(plan.work_root)))
     except OSError as error:
         checks.append(Check("disk_headroom", FAIL, f"cannot stat {plan.work_root}: {error}"))
     else:
         enough = free >= needed
+        scope = (
+            f"the steps still to run need {needed/GIB:.1f} GB"
+            + (f" (whole plan {whole/GIB:.1f} GB)" if whole != needed else "")
+        )
         checks.append(
             Check(
                 "disk_headroom",
                 PASS if enough else FAIL,
-                f"{free/GIB:.1f} GB free at {plan.work_root}, plan needs "
-                f"{needed/GIB:.1f} GB (estimate x {runtime['disk_safety_factor']})",
+                f"{free/GIB:.1f} GB free at {plan.work_root}, {scope} (estimate x {factor})",
                 remedy="" if enough else "free space or point --work at a larger volume",
             )
         )

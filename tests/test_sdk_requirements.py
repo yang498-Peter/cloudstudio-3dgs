@@ -171,15 +171,34 @@ class PreflightTests(unittest.TestCase):
         check = report.get("disk_headroom")
         self.assertEqual(check.status, FAIL)
         self.assertIn("3.0 GB free", check.detail)
-        self.assertIn("plan needs", check.detail)
+        self.assertIn("still to run need", check.detail)
 
     def test_disk_check_applies_the_safety_factor(self) -> None:
         plan = self.plan()
         needed = plan.total().disk_bytes
+        self.assertEqual(plan.pending().disk_bytes, needed, "nothing exists yet: everything is pending")
         just_under = int(needed * 1.24)
         self.assertEqual(self.report(free_disk_bytes=lambda p: just_under).get("disk_headroom").status, FAIL)
         just_over = int(needed * 1.26)
         self.assertEqual(self.report(free_disk_bytes=lambda p: just_over).get("disk_headroom").status, PASS)
+
+    def test_a_resumed_run_is_charged_only_for_the_steps_still_to_run(self) -> None:
+        """The first SDK delivery of house0305 trained for seven hours, then the deliver stage's
+        preflight asked for the whole plan's disk again and refused. Outputs that exist are
+        skipped by the driver, so they cost nothing more."""
+        plan = self.plan()
+        whole = plan.total().disk_bytes
+        heavy = max((s for s in plan.steps if s.outputs), key=lambda s: s.estimate.disk_bytes)
+        self.assertGreater(heavy.estimate.disk_bytes, 0)
+        for output in heavy.outputs:
+            Path(output).parent.mkdir(parents=True, exist_ok=True)
+            Path(output).write_bytes(b"done")
+        pending = plan.pending().disk_bytes
+        self.assertEqual(pending, whole - heavy.estimate.disk_bytes)
+        check = self.report(free_disk_bytes=lambda p: int(pending * 1.26)).get("disk_headroom")
+        self.assertEqual(check.status, PASS, check.detail)
+        self.assertIn("whole plan", check.detail)
+        self.assertEqual(self.report(free_disk_bytes=lambda p: int(pending * 1.24)).get("disk_headroom").status, FAIL)
 
     # -- external assets ---------------------------------------------------
 

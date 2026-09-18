@@ -265,6 +265,20 @@ class Plan:
             total = total + step.estimate
         return total
 
+    def pending(self, stage: str | None = None) -> Estimate:
+        """The estimate for the steps a run would still execute.
+
+        A resumed run (the first SDK delivery of house0305 died twice at the deliver
+        stage after seven hours of training) must not be asked for the disk of steps
+        whose outputs already exist and which the driver will skip.
+        """
+        steps = self.steps if stage is None else self.stage_steps(stage)
+        total = ZERO_ESTIMATE
+        for step in steps:
+            if not step_is_skippable(step):
+                total = total + step.estimate
+        return total
+
     def blocking_steps(self) -> tuple[PlannedStep, ...]:
         return tuple(step for step in self.steps if step.blocking)
 
