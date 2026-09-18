@@ -11,6 +11,7 @@ object, never a new code path in :mod:`cloudstudio3dgs_sdk.project`.
 
 from __future__ import annotations
 
+from cloudstudio3dgs_sdk.adopt import adopt_scene
 from cloudstudio3dgs_sdk.bundle import DerivedCaches, PreparedScene, load_dataset_bundle
 from cloudstudio3dgs_sdk.discover import (
     DatasetEstimate,
@@ -36,6 +37,7 @@ from cloudstudio3dgs_sdk.project import Project, StageResult, StageState
 from cloudstudio3dgs_sdk.requirements import Check, PreflightReport, Probes, preflight
 
 __all__ = [
+    "adopt_scene",
     "PROFILES",
     "PROFILE_B5FILL2",
     "Check",

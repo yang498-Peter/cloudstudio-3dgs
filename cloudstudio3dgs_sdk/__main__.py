@@ -14,6 +14,16 @@ they commit a machine for a day: ``preflight`` prints the host report, and
 (:mod:`cloudstudio3dgs_sdk.discover`) and label every number that came from
 that derivation. A real ``run`` does not: it still refuses without a prepare
 manifest, and refuses an estimated summary even if one is handed to it.
+
+``adopt`` writes that prepare manifest for a scene that was prepared before
+the SDK existed, from its as-run trainer configs:
+
+    python -m cloudstudio3dgs_sdk adopt --work <path> \
+        --tile-config tile0.json --tile-config tile1.json ... \
+        --coarse-config coarse.json [--sky-ply <ply>] [--scene-tag T]
+
+Every artefact the configs name is checked against the shas the signed
+manifests record; a missing file or a mismatch refuses, naming the file.
 """
 
 from __future__ import annotations
@@ -24,10 +34,11 @@ import sys
 from pathlib import Path
 from typing import Sequence
 
+from cloudstudio3dgs_sdk.adopt import adopt_scene
 from cloudstudio3dgs_sdk.discover import DiscoveryError
 from cloudstudio3dgs_sdk.ingest.errors import IngestError
 from cloudstudio3dgs_sdk.plan import STAGES, DatasetSummary
-from cloudstudio3dgs_sdk.profile import PROFILES, get_profile
+from cloudstudio3dgs_sdk.profile import DEFAULT_PROFILE, PROFILES, get_profile
 from cloudstudio3dgs_sdk.project import Project, StageRefused
 from cloudstudio3dgs_sdk.requirements import PreflightFailed
 
@@ -65,9 +76,9 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--work", required=True, type=Path, help="work root; all SDK output lands here")
     run.add_argument(
         "--profile",
-        default="b5fill2",
+        default=DEFAULT_PROFILE,
         choices=sorted(PROFILES),
-        help="frozen recipe to run (default: b5fill2)",
+        help="frozen recipe to run (default: %(default)s)",
     )
     run.add_argument("--dry-run", action="store_true", help="print the execution plan and exit")
     run.add_argument(
@@ -109,7 +120,7 @@ def build_parser() -> argparse.ArgumentParser:
     pre = sub.add_parser("preflight", help="host report only; runs nothing")
     pre.add_argument("--dataset", required=True, type=Path)
     pre.add_argument("--work", required=True, type=Path)
-    pre.add_argument("--profile", default="b5fill2", choices=sorted(PROFILES))
+    pre.add_argument("--profile", default=DEFAULT_PROFILE, choices=sorted(PROFILES))
     pre.add_argument("--summary", type=Path, default=None)
     pre.add_argument("--vram-gib", type=float, default=None)
     pre.add_argument("--repo-root", type=Path, default=None)
@@ -119,6 +130,40 @@ def build_parser() -> argparse.ArgumentParser:
     show = sub.add_parser("profile", help="print a profile, its provenance and its open questions")
     show.add_argument("name", nargs="?", default=None, choices=[*sorted(PROFILES), None])
     show.add_argument("--json", action="store_true", help="print the profile as canonical JSON")
+
+    adopt = sub.add_parser(
+        "adopt",
+        help="write the prepare manifest for an already-prepared scene from its as-run trainer configs",
+    )
+    adopt.add_argument("--work", required=True, type=Path, help="work root; the manifest lands under prepare/")
+    adopt.add_argument(
+        "--tile-config",
+        action="append",
+        required=True,
+        type=Path,
+        metavar="PATH",
+        help="an as-run tile config (config_as_run.json); one per tile, every tile of the scene",
+    )
+    adopt.add_argument("--coarse-config", required=True, type=Path, help="the as-run coarse whole-scene prior config")
+    adopt.add_argument("--profile", default=DEFAULT_PROFILE, choices=sorted(PROFILES))
+    adopt.add_argument("--scene-tag", default=None, help="scene tag (default: the run_id prefix of the first tile)")
+    adopt.add_argument(
+        "--dataset", type=Path, default=None, help="dataset root to record (default: the configs' recording_root)"
+    )
+    adopt.add_argument(
+        "--sky-ply",
+        type=Path,
+        default=None,
+        help="the frozen sky layer PLY exported from the dome (default: the sky_dome_ply step exports it)",
+    )
+    adopt.add_argument(
+        "--sky-dome",
+        type=Path,
+        default=None,
+        help="the sky dome checkpoint (default: dome_source recorded in the backdrop manifests)",
+    )
+    adopt.add_argument("--repo-root", type=Path, default=None)
+    adopt.add_argument("--python", type=Path, default=None)
     return parser
 
 
@@ -158,6 +203,47 @@ def _project(args: argparse.Namespace, stream) -> Project:
     )
 
 
+def _adopt(args: argparse.Namespace, stream) -> int:
+    profile = get_profile(args.profile)
+    adopted = adopt_scene(
+        list(args.tile_config),
+        args.coarse_config,
+        profile=profile,
+        scene_tag=args.scene_tag,
+        sky_ply=args.sky_ply,
+        sky_dome=args.sky_dome,
+        dataset_root=args.dataset,
+    )
+    project = Project(
+        adopted.scene.dataset_root,
+        args.work,
+        profile,
+        repo_root=args.repo_root,
+        python=args.python,
+        stream=stream,
+    )
+    manifest = project.write_prepare_manifest(
+        adopted.scene,
+        adopted.dataset,
+        prior_tile_checkpoints=adopted.prior_tile_checkpoints,
+        derived_paths=adopted.derived_paths,
+        digests=adopted.digests,
+        adopted=adopted.as_json(),
+    )
+    dataset = adopted.dataset
+    print(f"adopted {dataset.scene_tag}: {dataset.tile_count} tiles, {dataset.train_view_count} training faces, "
+          f"coarse init {dataset.global_init_point_count} points", file=stream)
+    for tile in dataset.tiles:
+        print(f"  {tile.name}: {tile.view_count} views, init {tile.init_point_count} points", file=stream)
+    print("verified:", file=stream)
+    for line in adopted.verified:
+        print(f"  - {line}", file=stream)
+    for note in adopted.notes:
+        print(f"note: {note}", file=stream)
+    print(f"prepare manifest written to {manifest}", file=stream)
+    return EXIT_OK
+
+
 def main(argv: Sequence[str] | None = None, *, stream=None) -> int:
     stream = stream or sys.stdout
     # A Windows console defaults to cp1252 and the profile's provenance text carries
@@ -193,6 +279,8 @@ def main(argv: Sequence[str] | None = None, *, stream=None) -> int:
         return EXIT_OK
 
     try:
+        if args.command == "adopt":
+            return _adopt(args, stream)
         project = _project(args, stream)
         if args.command == "preflight":
             # Both of these answer questions asked *before* ingestion, so both

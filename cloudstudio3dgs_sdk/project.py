@@ -28,10 +28,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Mapping, Sequence
 
-from tools.pipeline import _timestamp, _write_json_atomic, file_sha256
+from tools.pipeline import _timestamp, _write_json_atomic, file_sha256, read_ply_vertex_count
 
 from cloudstudio3dgs_sdk.bundle import PreparedScene, load_dataset_bundle
 from cloudstudio3dgs_sdk.discover import DatasetEstimate, estimate_dataset_summary
+from cloudstudio3dgs_sdk.ingest.errors import GpuStepRequired
 from cloudstudio3dgs_sdk.plan import (
     STAGES,
     DatasetSummary,
@@ -40,6 +41,8 @@ from cloudstudio3dgs_sdk.plan import (
     WorkLayout,
     build_plan,
     coarse_config,
+    resolve_cache_paths,
+    tile_key,
 )
 from cloudstudio3dgs_sdk.profile import Profile
 from cloudstudio3dgs_sdk.requirements import PreflightReport, Probes, preflight
@@ -314,11 +317,44 @@ class Project:
         return self._estimate
 
     def bundle_paths(self) -> dict[str, str]:
+        """Every path the prepare manifest binds: trainer paths plus derived caches.
+
+        ``trainer_paths`` are the scene-level keys each arm config carries
+        verbatim; ``derived_paths`` are the tile inputs, the coarse
+        initialisation, the lock and every cache (see
+        :data:`cloudstudio3dgs_sdk.plan.DERIVED_SCENE_KEYS`). The plan reads
+        one merged mapping so there is exactly one place a path can come from.
+        """
         manifest = self.layout.prepare_manifest
         if not manifest.is_file():
             return {}
         payload = json.loads(manifest.read_text(encoding="utf-8"))
-        return dict(payload.get("trainer_paths") or {})
+        paths = dict(payload.get("trainer_paths") or {})
+        paths.update(payload.get("derived_paths") or {})
+        return paths
+
+    def adopted_paths(self) -> set[str]:
+        """Artefacts the prepare manifest adopted from outside this work root.
+
+        They were verified against their signed manifests when adopted and
+        are somebody else's files (house0305's caches live beside the as-run
+        arms, not under ``<work>``). No stage may rebuild one in place, not
+        even under ``--force``: a rebuilt cache would silently replace the
+        input every recorded delivery was scored against.
+        """
+        manifest = self.layout.prepare_manifest
+        if not manifest.is_file():
+            return set()
+        try:
+            payload = json.loads(manifest.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return set()
+        digests = payload.get("digests") or {}
+        return {
+            os.path.normcase(str(record["path"]))
+            for record in digests.values()
+            if isinstance(record, Mapping) and record.get("path")
+        }
 
     def prior_tile_checkpoints(self) -> dict[int, str]:
         """Previous-generation checkpoints the stand-in backdrops may render.
@@ -475,12 +511,29 @@ class Project:
         state = self.stage_state(stage)
         state.set(RUNNING, f"{len(steps)} step(s) planned", plan_sha256=plan.plan_sha256,
                   profile_sha256=self.profile.profile_sha256)
+        if stage == "prepare" and self.layout.prepare_manifest.is_file():
+            # The manifest is ingest_dataset's output, so the driver would skip
+            # that step and never look inside. Adopting is verifying: every
+            # path it names must be there and every digest must still match
+            # before an arm config is written against it.
+            try:
+                self.adopt_prepare_manifest()
+            except StageRefused as error:
+                state.set(FAILED, f"prepare manifest: {error}")
+                raise
         ran: list[str] = []
         skipped: list[str] = []
+        adopted = self.adopted_paths()
         for step in steps:
             if step.blocking:
                 state.set(FAILED, f"{step.name}: {step.blocking}")
                 raise StageRefused(f"[{stage}] {step.name} cannot run: {step.blocking}")
+            if step.outputs and all(os.path.normcase(output) in adopted for output in step.outputs):
+                # Adopted artefacts are inputs, never outputs: --force re-runs
+                # what this work root built, not what it was handed.
+                self.say(f"[{stage}] skip {step.name} (adopted artefact; never rebuilt in place)")
+                skipped.append(step.name)
+                continue
             if not force and step.outputs and all(Path(output).exists() for output in step.outputs):
                 self.say(f"[{stage}] skip {step.name} (outputs present)")
                 skipped.append(step.name)
@@ -512,21 +565,49 @@ class Project:
 
     # -- native steps ------------------------------------------------------
 
-    def _native_ingest_dataset(self, step: PlannedStep, plan: Plan) -> None:
+    def adopt_prepare_manifest(self) -> list[str]:
+        """Verify the existing prepare manifest; refuse if anything it names moved."""
+        from cloudstudio3dgs_sdk.adopt import verify_prepare_manifest
+
         manifest = self.layout.prepare_manifest
-        if manifest.is_file():
+        try:
             payload = json.loads(manifest.read_text(encoding="utf-8"))
-            if "dataset" not in payload or "trainer_paths" not in payload:
-                raise StageFailed(
-                    f"{manifest} is not a prepare manifest (needs 'dataset' and 'trainer_paths')"
-                )
-            self.say(f"[prepare] adopting existing {manifest}")
+        except (OSError, ValueError) as error:
+            raise StageRefused(f"{manifest} is not readable JSON ({error})") from error
+        checked = verify_prepare_manifest(payload, manifest_path=manifest)
+        self.say(f"[prepare] adopting existing {manifest} ({len(checked)} paths/digests verified)")
+        return checked
+
+    def _native_ingest_dataset(self, step: PlannedStep, plan: Plan) -> None:
+        if self.layout.prepare_manifest.is_file():
+            # Reached only under --force (the driver skips the step otherwise):
+            # a manifest that exists is adopted, never rebuilt over.
+            self.adopt_prepare_manifest()
             return
-        scene = load_dataset_bundle(self.dataset_root, self.profile, self.work_root)
+        try:
+            scene = load_dataset_bundle(
+                self.dataset_root,
+                self.profile,
+                self.work_root,
+                python=self.python,
+                repo_root=self.repo_root,
+            )
+        except GpuStepRequired as error:
+            # prepare is the CPU stage. A cache that needs CUDA is not built
+            # here; the operator gets the exact command, never a silent skip.
+            command = getattr(error, "command", None)
+            detail = f"[prepare] a cache in this dataset's plan needs a GPU: {error}"
+            if command:
+                argv = command if isinstance(command, str) else " ".join(str(part) for part in command)
+                detail += f"\n  run on a CUDA host, then re-run prepare: {argv}"
+            raise StageRefused(detail) from error
         self.write_prepare_manifest(scene, self.dataset_summary())
 
     def _native_write_arm_configs(self, step: PlannedStep, plan: Plan) -> None:
         self.write_arm_configs(plan)
+
+    def _native_delivery_eval_config(self, step: PlannedStep, plan: Plan) -> None:
+        self.write_delivery_eval_config(plan)
 
     def _native_threshold_control(self, step: PlannedStep, plan: Plan) -> None:
         """Export the same merge at each control opacity and record the counts."""
@@ -578,10 +659,21 @@ class Project:
         dataset: DatasetSummary,
         *,
         prior_tile_checkpoints: Mapping[int, str] | None = None,
+        derived_paths: Mapping[str, str] | None = None,
+        digests: Mapping[str, Mapping[str, Any]] | None = None,
+        adopted: Mapping[str, Any] | None = None,
     ) -> Path:
-        """Record what prepare produced. This is the SDK's dataset contract."""
+        """Record what prepare produced. This is the SDK's dataset contract.
+
+        ``derived_paths`` defaults to what the scene itself declares (see
+        :func:`derived_paths_from_scene`); ``adopt`` passes the verified map
+        and the digests it established, so a later prepare can re-check them.
+        """
+        derived = dict(derived_paths) if derived_paths is not None else derived_paths_from_scene(
+            scene, repo_root=self.repo_root
+        )
         payload = {
-            "schema_version": 1,
+            "schema_version": 2,
             "kind": "cloudstudio3dgs_sdk_prepare_manifest",
             "scene_tag": dataset.scene_tag,
             "profile": self.profile.name,
@@ -589,13 +681,49 @@ class Project:
             "dataset": dataset.as_json(),
             "scene": scene.as_json(),
             "trainer_paths": scene.trainer_paths(),
+            "derived_paths": {key: str(value) for key, value in sorted(derived.items())},
+            "digests": {key: dict(value) for key, value in sorted((digests or {}).items())},
             "prior_tile_checkpoints": {str(k): str(v) for k, v in (prior_tile_checkpoints or {}).items()},
             "written_at": _timestamp(),
         }
+        if adopted is not None:
+            payload["adopted"] = dict(adopted)
         _write_json_atomic(self.layout.prepare_manifest, payload)
         self._dataset = dataset
         self._plan = None
         return self.layout.prepare_manifest
+
+    def write_delivery_eval_config(self, plan: Plan) -> Path:
+        """``<work>/delivery_eval.json``: the evaluator's view of this scene.
+
+        ``tools/evaluate_probe_views.py`` reads dataset paths straight out of
+        a trainer config (face cache, backgrounds, tile inputs, ownership
+        knobs, device, tile id) and never builds a TrainerConfig, so the
+        tile-0 delivery config with its run identity changed is exactly the
+        config it needs. Its sh_degree stays the trainer's: a lower value
+        here clamps the render and scores a model nobody trained.
+        """
+        first = plan.dataset.tiles[0]
+        arm = str(self.profile.tile_rules["arm_name_pattern"]).format(
+            tile=first.tile_id, profile=self.profile.name, generation="delivery"
+        )
+        source = next(
+            (step for step in plan.steps if step.config is not None and step.name == f"train_{arm}"),
+            None,
+        )
+        if source is None or source.config is None:
+            raise StageFailed(f"no delivery config for {first.name} in the plan; cannot derive delivery_eval.json")
+        config = json.loads(json.dumps(dict(source.config)))
+        config["run_id"] = f"{plan.scene_tag}-delivery-eval"
+        config["output_dir"] = str(self.layout.runs / "delivery_eval")
+        config["lineage"] = {
+            "derived_from": arm,
+            "purpose": "evaluate_probe_views.py config; dataset paths only, never trained",
+            "profile_sha256": self.profile.profile_sha256,
+        }
+        target = Path(resolve_cache_paths(self.layout, plan.dataset, self.bundle_paths())["delivery_eval_config"])
+        _write_json_atomic(target, config)
+        return target
 
     def write_arm_configs(self, plan: Plan) -> list[Path]:
         """Materialise every trainer config the plan named, plus pipeline.json."""
@@ -627,6 +755,7 @@ class Project:
         root's own artefacts and the plan carries the warning.
         """
         paths = self.bundle_paths()
+        cache = resolve_cache_paths(self.layout, plan.dataset, paths)
         payload = {
             "schema_version": 1,
             "run_root": str(self.layout.runs),
@@ -636,11 +765,11 @@ class Project:
             "reference_alignment": paths.get(
                 "reference_alignment", str(self.layout.exports / "reference_alignment.json")
             ),
-            "tile_inputs_manifest": paths.get("tile_inputs_manifest", "<prepare:tile_inputs_manifest>"),
-            "tile_inputs_root": paths.get("tile_inputs_root", "<prepare:tile_inputs_root>"),
+            "tile_inputs_manifest": cache["tile_inputs_manifest"],
+            "tile_inputs_root": cache["tile_inputs_root"],
             "exports_dir": str(self.layout.exports),
-            "delivery_eval_config": str(self.layout.root / "delivery_eval.json"),
-            "sky_ply": str(self.layout.caches / "sky_dome.ply"),
+            "delivery_eval_config": cache["delivery_eval_config"],
+            "sky_ply": cache["sky_dome_ply"],
             "identity_dir": str(self.layout.report),
             "scene_tag": plan.scene_tag,
             "compare_frames": int(self.profile.battery["compare_frames"]),
@@ -657,41 +786,82 @@ class Project:
         return self.layout.pipeline_config
 
     def write_report(self, plan: Plan) -> tuple[Path, Path]:
-        """Acceptance report: profile gates against what the delivery measured."""
+        """Acceptance report: profile gates against what the delivery measured.
+
+        Two batteries are read and both are kept, labelled ``body_only`` and
+        ``delivered_pair``. The gates read the pair - the customer opens body
+        plus sky, and the body's sky is transparent by design, so a coverage
+        number on the body alone reads that transparency as a hole. Morphology
+        and the export count stay on the body: they are shape and size
+        comparisons against a competitor's body, which the dome would distort.
+        Same shape as ``tools/pipeline.py``'s ``final.coverage`` / ``final.gate``.
+        """
         delivery = self.layout.delivery_dir(plan.delivery_tag)
-        battery = _read_json_or_none(delivery / "battery_final.json")
+        body_only = _battery_reading(delivery / "battery_final.json", "body")
+        delivered_pair = _battery_reading(delivery / "battery_final_pair.json", "body+sky")
         merge_report = _read_json_or_none(delivery / "merge_report.json")
+        morphology = _read_json_or_none(delivery / "morph_final.json")
         gates = self.profile.acceptance
         measured: dict[str, Any] = {}
-        if isinstance(battery, Mapping):
-            summary = battery.get("summary") if isinstance(battery.get("summary"), Mapping) else battery
-            for key in ("psnr_mean", "psnr_p10", "alpha_mean", "alpha_p05"):
-                if key in summary:
-                    measured[key] = summary[key]
+        for key in ("psnr_mean", "psnr_p10", "alpha_mean", "alpha_p05"):
+            measured[f"battery_{key}"] = delivered_pair.get(key)
+            measured[f"body_only_{key}"] = body_only.get(key)
         if isinstance(merge_report, Mapping):
             for key in ("merged_gaussian_count", "tile_gaussian_count", "fill_gaussian_count"):
                 if key in merge_report:
                     measured[key] = merge_report[key]
+        body_ply = delivery / f"{plan.scene_tag}_{plan.delivery_tag}_merged.ply"
+        try:
+            measured["export_gaussian_count"] = read_ply_vertex_count(body_ply)
+        except (OSError, ValueError):
+            measured["export_gaussian_count"] = None
+        stats = morphology.get("stats") if isinstance(morphology, Mapping) else None
+        measured["morphology_short_axis_p50_mm"] = (
+            stats.get("short_p50_mm") if isinstance(stats, Mapping) else None
+        )
+        offtraj = _read_json_or_none(delivery / "offtrajectory_summary.json")
+        measured["offtrajectory_sharpness_ours_over_ref"] = (
+            offtraj.get("sharpness_ours_over_ref") if isinstance(offtraj, Mapping) else None
+        )
+        # gate key -> (measurement, comparison, which layers it was read from)
+        table: list[tuple[str, str, str, str]] = [
+            ("battery_alpha_p05_min", "battery_alpha_p05", "ge", "delivered_pair"),
+            ("battery_psnr_p10_min", "battery_psnr_p10", "ge", "delivered_pair"),
+            ("offtrajectory_sharpness_min", "offtrajectory_sharpness_ours_over_ref", "ge", "body_only"),
+            ("export_gaussian_count_max", "export_gaussian_count", "le", "body_only"),
+            ("morphology_short_axis_p50_mm_max", "morphology_short_axis_p50_mm", "le", "body_only"),
+        ]
+        if "battery_alpha_mean_min" in gates:
+            # Older profile revisions gate on the mean; read it the same way.
+            table.insert(0, ("battery_alpha_mean_min", "battery_alpha_mean", "ge", "delivered_pair"))
         verdicts: list[dict[str, Any]] = []
-        for gate, value, comparison in (
-            ("battery_alpha_mean_min", measured.get("alpha_mean"), "ge"),
-            ("battery_psnr_p10_min", measured.get("psnr_p10"), "ge"),
-        ):
+        for gate, measurement, comparison, layers in table:
             threshold = gates.get(gate)
+            value = measured.get(measurement)
+            record = {"gate": gate, "threshold": threshold, "measured": value, "reads": layers}
             if threshold is None or value is None:
-                verdicts.append({"gate": gate, "status": "UNVERIFIED", "threshold": threshold, "measured": value})
-                continue
-            passed = float(value) >= float(threshold) if comparison == "ge" else float(value) <= float(threshold)
-            verdicts.append(
-                {"gate": gate, "status": "PASS" if passed else "FAIL", "threshold": threshold, "measured": value}
-            )
+                record["status"] = "UNVERIFIED"
+            else:
+                passed = float(value) >= float(threshold) if comparison == "ge" else float(value) <= float(threshold)
+                record["status"] = "PASS" if passed else "FAIL"
+            verdicts.append(record)
         payload = {
-            "schema_version": 1,
+            "schema_version": 2,
             "scene_tag": plan.scene_tag,
             "delivery_tag": plan.delivery_tag,
             "profile": self.profile.identity(),
             "plan_sha256": plan.plan_sha256,
             "measured": measured,
+            "coverage": {"body_only": body_only, "delivered_pair": delivered_pair},
+            "gate": {
+                "reads": "delivered_pair",
+                "alpha_p05": delivered_pair.get("alpha_p05"),
+                "body_only_alpha_p05": body_only.get("alpha_p05"),
+                "psnr_p10": delivered_pair.get("psnr_p10"),
+                "body_only_psnr_p10": body_only.get("psnr_p10"),
+                "why": "the delivery ships body + sky; the body's sky is transparent by design",
+                "morphology_reads": "body_only",
+            },
             "gates": verdicts,
             "reference": dict(gates.get("reference", {})),
             "unmeasured_knobs": list(self.profile.unmeasured_knobs()),
@@ -710,13 +880,28 @@ class Project:
             "",
             "## Gates",
             "",
-            "| gate | threshold | measured | verdict |",
-            "| --- | --- | --- | --- |",
+            "| gate | threshold | measured | reads | verdict |",
+            "| --- | --- | --- | --- | --- |",
         ]
         for verdict in verdicts:
             lines.append(
-                f"| {verdict['gate']} | {verdict['threshold']} | {verdict['measured']} | {verdict['status']} |"
+                f"| {verdict['gate']} | {verdict['threshold']} | {verdict['measured']} | {verdict['reads']} "
+                f"| {verdict['status']} |"
             )
+        lines += [
+            "",
+            "## Coverage",
+            "",
+            "| layers | alpha_p05 | alpha_mean | psnr_p10 | psnr_mean |",
+            "| --- | --- | --- | --- | --- |",
+        ]
+        for label, reading in (("body_only", body_only), ("delivered_pair", delivered_pair)):
+            lines.append(
+                f"| {label} ({reading['layers']}) | {reading.get('alpha_p05')} | {reading.get('alpha_mean')} "
+                f"| {reading.get('psnr_p10')} | {reading.get('psnr_mean')} |"
+            )
+        lines.append("")
+        lines.append("gates read delivered_pair for alpha/PSNR; morphology and the export count read the body alone")
         lines += ["", "## Not measured on this scene", ""]
         for knob in self.profile.unmeasured_knobs():
             why = self.profile.why(knob)
@@ -776,3 +961,80 @@ def _read_json_or_none(path: Path) -> Any:
         return json.loads(Path(path).read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return None
+
+
+def _battery_reading(path: Path, layers: str) -> dict[str, Any]:
+    """One battery's numbers, labelled with the layers it scored.
+
+    Missing or malformed batteries read as ``None`` everywhere, which the
+    gates turn into UNVERIFIED; nothing here invents a number.
+    """
+    payload = _read_json_or_none(path)
+    summary: Mapping[str, Any] = {}
+    if isinstance(payload, Mapping):
+        summary = payload.get("summary") if isinstance(payload.get("summary"), Mapping) else payload
+    return {
+        "layers": layers,
+        "battery": str(path),
+        "present": bool(summary) and summary.get("alpha_p05") is not None,
+        "views": summary.get("views"),
+        "alpha_p05": summary.get("alpha_p05"),
+        "alpha_mean": summary.get("alpha_mean"),
+        "psnr_mean": summary.get("psnr_mean"),
+        "psnr_p10": summary.get("psnr_p10"),
+        "gaussian_count": summary.get("gaussian_count"),
+    }
+
+
+def derived_paths_from_scene(scene: PreparedScene, *, repo_root: Path) -> dict[str, str]:
+    """The ``derived_paths`` block a freshly prepared scene declares.
+
+    Scene-level inputs come from the :class:`PreparedScene` fields; caches
+    from its ``caches`` record where set; the gsplat lock is this checkout's.
+    Per-tile initialisation paths are read from the tile inputs and tile
+    geometry manifests when they are readable, because those manifests are
+    the only record of the per-tile file names. Anything not resolvable is
+    left out and the plan's layout defaults (or placeholders) apply.
+    """
+    paths: dict[str, str] = {}
+    for key in ("tile_inputs_manifest", "tile_inputs_root", "tile_geometry_manifest",
+                "global_init_ply", "global_init_geometry", "lidar_cloud"):
+        value = getattr(scene, key, None)
+        if value is not None:
+            paths[key] = str(value)
+    paths["gsplat_lock"] = str(Path(repo_root) / "upstream" / "gsplat.lock.json")
+    caches = getattr(scene, "caches", None)
+    for attribute, key in (
+        ("sky_mask_manifest", "sky_mask_manifest"),
+        ("sky_mask_root", "sky_mask_root"),
+        ("sky_dome_checkpoint", "sky_dome_checkpoint"),
+        ("sky_dome_ply", "sky_dome_ply"),
+        ("global_background_manifest", "global_view_backgrounds_manifest"),
+        ("global_background_root", "global_view_backgrounds_root"),
+    ):
+        value = getattr(caches, attribute, None)
+        if value is not None:
+            paths[key] = str(value)
+    for attribute, suffixes in (
+        ("tile_ownership", ("ownership_manifest", "ownership_root")),
+        ("tile_backdrops", ("backdrop_manifest", "backdrop_root")),
+    ):
+        mapping = getattr(caches, attribute, None) or {}
+        for tile_id, pair in mapping.items():
+            for suffix, value in zip(suffixes, tuple(pair)):
+                paths[tile_key(int(tile_id), suffix)] = str(value)
+    tile_inputs = _read_json_or_none(Path(paths["tile_inputs_manifest"])) if "tile_inputs_manifest" in paths else None
+    if isinstance(tile_inputs, Mapping) and "tile_inputs_root" in paths:
+        root = Path(paths["tile_inputs_root"])
+        for entry in tile_inputs.get("tiles", []):
+            init = entry.get("initialization") if isinstance(entry, Mapping) else None
+            if isinstance(init, Mapping) and init.get("path"):
+                paths[tile_key(int(entry["tile_id"]), "initialization_ply")] = str(root / str(init["path"]))
+    geometry = _read_json_or_none(Path(paths["tile_geometry_manifest"])) if "tile_geometry_manifest" in paths else None
+    if isinstance(geometry, Mapping):
+        base = Path(paths["tile_geometry_manifest"]).parent
+        for entry in geometry.get("tiles", []):
+            block = entry.get("geometry") if isinstance(entry, Mapping) else None
+            if isinstance(block, Mapping) and block.get("path"):
+                paths[tile_key(int(entry["tile_id"]), "initialization_geometry")] = str(base / str(block["path"]))
+    return paths

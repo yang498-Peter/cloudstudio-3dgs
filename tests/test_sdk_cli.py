@@ -75,7 +75,10 @@ class ParserTests(unittest.TestCase):
     def test_run_requires_dataset_and_work(self) -> None:
         args = self.parser.parse_args(["run", "--dataset", "d", "--work", "w"])
         self.assertEqual(args.command, "run")
-        self.assertEqual(args.profile, "b5fill2")
+        # The default is the recommended recipe (profile.DEFAULT_PROFILE): b5sky since the
+        # 2026-09-15 finding that the fill layer answered a measurement defect. b5fill2 stays
+        # registered for reproducing the campaign's own deliveries, but is no longer the default.
+        self.assertEqual(args.profile, "b5sky")
         self.assertEqual(args.stages, ("prepare", "train", "deliver", "report"))
         self.assertFalse(args.dry_run)
 
@@ -183,8 +186,11 @@ class DryRunTests(CliFixture):
 
     def test_dry_run_surfaces_a_checkout_that_cannot_run_the_recipe(self) -> None:
         crippled = make_repo(self.root / "crippled", fill_support=False)
+        # Only the fill-enabled profile touches --fill-checkpoint; the default profile has the
+        # fill layer off, so the block it is checking for would never be planned under it.
         code, text = self.run_cli(
             "run",
+            "--profile", "b5fill2",
             "--dataset", str(self.root / "dataset"),
             "--work", str(self.root / "work"),
             "--dry-run",

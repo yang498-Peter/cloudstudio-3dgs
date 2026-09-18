@@ -268,6 +268,28 @@ class Plan:
     def blocking_steps(self) -> tuple[PlannedStep, ...]:
         return tuple(step for step in self.steps if step.blocking)
 
+    def skippable_steps(self) -> tuple[PlannedStep, ...]:
+        """Steps whose declared outputs all exist right now.
+
+        This is the same test the stage driver applies before running a step,
+        so a dry run can say which steps a run would skip - on an adopted
+        scene that should be every cache-building step.
+        """
+        return tuple(step for step in self.steps if step_is_skippable(step))
+
+    def placeholders(self) -> tuple[str, ...]:
+        """Every ``<prepare:...>`` token still in a command or a config."""
+        found: list[str] = []
+        for step in self.steps:
+            for token in step.command:
+                if token.startswith("<prepare:"):
+                    found.append(f"{step.name}: {token}")
+            if step.config is not None:
+                for key, value in _flatten(thaw(step.config)):
+                    if isinstance(value, str) and value.startswith("<prepare:"):
+                        found.append(f"{step.name}: {key} = {value}")
+        return tuple(found)
+
     def as_json(self) -> dict[str, Any]:
         return {
             "schema_version": 1,
@@ -326,10 +348,11 @@ class Plan:
                 f"[{stage}] {len(steps)} steps, {_hms(total.seconds)}, {_gb(total.disk_bytes)} disk"
             )
             for step in steps:
-                flag = "!" if step.blocking else " "
+                flag = "!" if step.blocking else ("=" if step_is_skippable(step) else " ")
                 lines.append(
                     f" {flag} {step.name:<34} {step.resource:<8} {_hms(step.estimate.seconds):>9}"
                     f" {_gb(step.estimate.disk_bytes):>9}  [{step.estimate.confidence}]"
+                    + ("  skip: outputs present" if flag == "=" else "")
                 )
                 if step.note:
                     lines.append(f"      note: {step.note}")
@@ -346,7 +369,28 @@ class Plan:
             lines.append(f"WARNING {warning}")
         for step in self.blocking_steps():
             lines.append(f"BLOCKED {step.name}: {step.blocking}")
+        for placeholder in self.placeholders():
+            lines.append(f"UNRESOLVED {placeholder}")
         return "\n".join(lines)
+
+
+def step_is_skippable(step: PlannedStep) -> bool:
+    """Would the stage driver skip this step? True when every output exists."""
+    return bool(step.outputs) and all(Path(output).exists() for output in step.outputs)
+
+
+def _flatten(payload: Any, prefix: str = "") -> list[tuple[str, Any]]:
+    """``{"a": {"b": 1}}`` -> ``[("a.b", 1)]``; lists index like dict keys."""
+    if isinstance(payload, dict):
+        items = payload.items()
+    elif isinstance(payload, (list, tuple)):
+        items = enumerate(payload)
+    else:
+        return [(prefix, payload)]
+    out: list[tuple[str, Any]] = []
+    for key, value in items:
+        out.extend(_flatten(value, f"{prefix}.{key}" if prefix else str(key)))
+    return out
 
 
 def _hms(seconds: float) -> str:
@@ -462,11 +506,122 @@ class WorkLayout:
     def backdrop_dir(self, tile_name: str) -> Path:
         return self.caches / "backdrops" / tile_name
 
+    def backdrop_manifest(self, tile_name: str) -> Path:
+        return self.backdrop_dir(tile_name) / "background_manifest.json"
+
     def ownership_dir(self, tile_name: str) -> Path:
         return self.caches / "ownership" / tile_name
 
+    def ownership_manifest(self, tile_name: str) -> Path:
+        return self.ownership_dir(tile_name) / "tile_ownership_manifest.json"
+
+    @property
+    def sky_mask_root(self) -> Path:
+        return self.caches / "sky_masks"
+
+    @property
+    def sky_mask_manifest(self) -> Path:
+        return self.sky_mask_root / "sky_mask_train.json"
+
+    @property
+    def sky_dome_checkpoint(self) -> Path:
+        return self.caches / "sky_dome.pt"
+
+    @property
+    def sky_dome_ply(self) -> Path:
+        return self.caches / "sky_dome.ply"
+
+    @property
+    def view_backgrounds_root(self) -> Path:
+        return self.caches / "view_backgrounds"
+
+    @property
+    def view_backgrounds_manifest(self) -> Path:
+        return self.view_backgrounds_root / "view_background_manifest_train.json"
+
+    @property
+    def delivery_eval_config(self) -> Path:
+        return self.root / "delivery_eval.json"
+
     def delivery_dir(self, tag: str) -> Path:
         return self.runs / f"delivery_{tag}"
+
+
+# Keys of the prepare manifest's ``derived_paths`` block that are not per
+# tile. Per tile the block carries ``tile{N}_initialization_ply``,
+# ``tile{N}_initialization_geometry``, ``tile{N}_ownership_manifest``,
+# ``tile{N}_ownership_root``, ``tile{N}_backdrop_manifest`` and
+# ``tile{N}_backdrop_root``. ``resolve_cache_paths`` is the one place that
+# says where each of these lives when the manifest does not.
+DERIVED_SCENE_KEYS = (
+    "tile_inputs_manifest",
+    "tile_inputs_root",
+    "tile_geometry_manifest",
+    "global_init_ply",
+    "global_init_geometry",
+    "gsplat_lock",
+    "lidar_cloud",
+    "sky_mask_manifest",
+    "sky_mask_root",
+    "sky_dome_checkpoint",
+    "sky_dome_ply",
+    "global_view_backgrounds_manifest",
+    "global_view_backgrounds_root",
+    "delivery_eval_config",
+)
+DERIVED_TILE_KEYS = (
+    "initialization_ply",
+    "initialization_geometry",
+    "ownership_manifest",
+    "ownership_root",
+    "backdrop_manifest",
+    "backdrop_root",
+)
+
+
+def tile_key(tile_id: int, suffix: str) -> str:
+    return f"tile{tile_id}_{suffix}"
+
+
+def resolve_cache_paths(
+    layout: WorkLayout, dataset: DatasetSummary, bundle_paths: Mapping[str, str] | None
+) -> dict[str, str]:
+    """Every derived path the plan binds: the manifest's value, else the layout's.
+
+    The prepare manifest is the single source of truth for where a cache
+    lives. A key it does not carry falls back to the work-root layout, which
+    is the fresh-build case: the prepare steps then write there and the arm
+    configs bind the same location. Scene inputs that only prepare can
+    produce (tile inputs, the coarse initialisation, the gsplat lock) have no
+    layout default and stay ``<prepare:key>`` placeholders, so a plan built
+    before ingestion reads as unrunnable instead of quietly wrong.
+    """
+    paths = dict(bundle_paths or {})
+    defaults: dict[str, str] = {
+        "sky_mask_manifest": str(layout.sky_mask_manifest),
+        "sky_mask_root": str(layout.sky_mask_root),
+        "sky_dome_checkpoint": str(layout.sky_dome_checkpoint),
+        "sky_dome_ply": str(layout.sky_dome_ply),
+        "global_view_backgrounds_manifest": str(layout.view_backgrounds_manifest),
+        "global_view_backgrounds_root": str(layout.view_backgrounds_root),
+        "delivery_eval_config": str(layout.delivery_eval_config),
+    }
+    for tile in dataset.tiles:
+        defaults[tile_key(tile.tile_id, "ownership_manifest")] = str(layout.ownership_manifest(tile.name))
+        defaults[tile_key(tile.tile_id, "ownership_root")] = str(layout.ownership_dir(tile.name))
+        defaults[tile_key(tile.tile_id, "backdrop_manifest")] = str(layout.backdrop_manifest(tile.name))
+        defaults[tile_key(tile.tile_id, "backdrop_root")] = str(layout.backdrop_dir(tile.name))
+        defaults[tile_key(tile.tile_id, "initialization_ply")] = (
+            f"<prepare:{tile.name}/initialization_full_lidar.ply>"
+        )
+        defaults[tile_key(tile.tile_id, "initialization_geometry")] = (
+            f"<prepare:{tile.name}/initialization_geometry.npz>"
+        )
+    for key in DERIVED_SCENE_KEYS:
+        defaults.setdefault(key, f"<prepare:{key}>")
+    resolved = dict(defaults)
+    resolved.update({key: str(value) for key, value in paths.items() if key in defaults})
+    return resolved
 
 
 # --------------------------------------------------------------------------
@@ -584,6 +739,9 @@ def build_plan(
     def path_of(key: str) -> str:
         return paths.get(key, f"<prepare:{key}>")
 
+    # Where every derived cache lives: the manifest's word, else the layout.
+    cache = resolve_cache_paths(layout, dataset, paths)
+
     # ---------------- prepare ----------------
     # The cache list below is the house0305 graph written out longhand.
     # cloudstudio3dgs_sdk.ingest.plan_caches derives the same graph from the
@@ -619,6 +777,19 @@ def build_plan(
                 note="arm configs are profile + dataset paths + per-tile derivations; nothing else",
             )
         )
+        steps.append(
+            PlannedStep(
+                name="delivery_eval_config",
+                stage="prepare",
+                resource="cpu",
+                estimate=Estimate(1.0, 0, "file write", MEASURED),
+                outputs=(cache["delivery_eval_config"],),
+                note=(
+                    "evaluate_probe_views.py reads the dataset paths of a tile config, not a "
+                    "TrainerConfig: the tile-0 delivery config with run_id/output_dir changed"
+                ),
+            )
+        )
         sky_faces = dataset.train_view_count
         steps.append(
             PlannedStep(
@@ -636,10 +807,10 @@ def build_plan(
                     _tool(repo_root, "build_sky_masks.py"),
                     "--face-manifest", path_of("face_cache_manifest"),
                     "--face-cache-root", path_of("face_cache_root"),
-                    "--output-root", str(layout.caches / "sky_masks"),
+                    "--output-root", cache["sky_mask_root"],
                     "--device", "cpu",
                 ),
-                outputs=(str(layout.caches / "sky_masks" / "sky_mask_train.json"),),
+                outputs=(cache["sky_mask_manifest"],),
                 note=(
                     "SegFormer b4 ADE20k, NVIDIA non-commercial licence: supervision masks only, "
                     "nothing derived from it ships"
@@ -665,12 +836,34 @@ def build_plan(
                     "--depth-manifest", path_of("depth_manifest"),
                     "--depth-root", path_of("depth_root"),
                     "--person-mask-manifest", path_of("person_mask_manifest"),
-                    "--output", str(layout.caches / "sky_dome.pt"),
+                    "--output", cache["sky_dome_checkpoint"],
                     "--count", str(profile.backdrop["sky_dome"]["count"]),
                     "--radius-m", str(profile.backdrop["sky_dome"]["radius_m"]),
                     "--seed", str(profile.backdrop["sky_dome"]["seed"]),
                 ),
-                outputs=(str(layout.caches / "sky_dome.pt"),),
+                outputs=(cache["sky_dome_checkpoint"],),
+            )
+        )
+        steps.append(
+            PlannedStep(
+                name="sky_dome_ply",
+                stage="prepare",
+                resource="cpu",
+                estimate=Estimate(
+                    float(cost["export_seconds"]),
+                    int(profile.backdrop["sky_dome"]["count"]) * int(cost["ply_bytes_per_gaussian"]),
+                    f"{profile.backdrop['sky_dome']['count']} dome rows x {cost['ply_bytes_per_gaussian']} B",
+                    EXTRAPOLATED,
+                ),
+                command=(
+                    str(python),
+                    _tool(repo_root, "export_gaussian_ply.py"),
+                    "--checkpoint", cache["sky_dome_checkpoint"],
+                    "--output", cache["sky_dome_ply"],
+                    "--min-opacity", "0",
+                ),
+                outputs=(cache["sky_dome_ply"],),
+                note="the frozen sky layer the delivery ships beside the body PLY; every dome row, no cut",
             )
         )
         for tile in dataset.tiles:
@@ -689,12 +882,12 @@ def build_plan(
                         str(python),
                         _tool(repo_root, "build_tile_ownership_masks.py"),
                         "--config", str(layout.arm_config(_arm_name(profile, tile.tile_id, "delivery"))),
-                        "--output-root", str(layout.ownership_dir(tile.name)),
+                        "--output-root", cache[tile_key(tile.tile_id, "ownership_root")],
                         "--tile-id", str(tile.tile_id),
                         "--margin-m", str(profile.trainer_base["tile_ownership_margin_m"]),
                         "--dilation-px", str(profile.trainer_base["tile_ownership_dilation_px"]),
                     ),
-                    outputs=(str(layout.ownership_dir(tile.name) / "tile_ownership_manifest.json"),),
+                    outputs=(cache[tile_key(tile.tile_id, "ownership_manifest")],),
                 )
             )
 
@@ -718,12 +911,12 @@ def build_plan(
                     str(python),
                     _tool(repo_root, "build_view_backgrounds.py"),
                     "--config", str(layout.arm_config(coarse_arm)),
-                    "--dome", str(layout.caches / "sky_dome.pt"),
+                    "--dome", cache["sky_dome_checkpoint"],
                     "--split", "train",
-                    "--output", str(layout.caches / "view_backgrounds"),
+                    "--output", cache["global_view_backgrounds_root"],
                     "--downsample", str(profile.coarse_prior.get("background_downsample", 4)),
                 ),
-                outputs=(str(layout.caches / "view_backgrounds" / "view_background_manifest_train.json"),),
+                outputs=(cache["global_view_backgrounds_manifest"],),
             )
         )
         coarse_steps = int(profile.coarse_prior["overrides"]["controlled_stop_after_steps"])
@@ -755,7 +948,7 @@ def build_plan(
                 arm = _arm_name(profile, tile.tile_id, generation)
                 cap = caps[tile.tile_id]
                 if generation == "delivery":
-                    sources = [str(layout.caches / "sky_dome.pt")]
+                    sources = [cache["sky_dome_checkpoint"]]
                     others = [
                         prior.get(other.tile_id)
                         or str(layout.arm_checkpoint(_arm_name(profile, other.tile_id, "seed")))
@@ -771,7 +964,7 @@ def build_plan(
                     for checkpoint in [*others, str(layout.arm_checkpoint(coarse_arm))]:
                         backdrop_cmd += ["--standin-checkpoint", checkpoint]
                     backdrop_cmd += [
-                        "--output", str(layout.backdrop_dir(tile.name)),
+                        "--output", cache[tile_key(tile.tile_id, "backdrop_root")],
                         "--exclude-box-kind", str(profile.backdrop["exclude_box_kind"]),
                         "--exclude-margin-m", str(profile.backdrop["exclude_margin_m"]),
                         "--min-opacity", str(profile.backdrop["min_opacity"]),
@@ -791,7 +984,7 @@ def build_plan(
                                 MEASURED,
                             ),
                             command=tuple(backdrop_cmd),
-                            outputs=(str(layout.backdrop_dir(tile.name) / "background_manifest.json"),),
+                            outputs=(cache[tile_key(tile.tile_id, "backdrop_manifest")],),
                             note="sky dome + the other tiles' checkpoints + the coarse prior, own box excluded",
                         )
                     )
@@ -964,13 +1157,62 @@ def build_plan(
                 command=(
                     str(python),
                     _tool(repo_root, "evaluate_probe_views.py"),
-                    "--config", str(layout.root / "delivery_eval.json"),
+                    "--config", cache["delivery_eval_config"],
                     "--checkpoint", str(delivery_dir / "reimported.pt"),
                     "--views", str(profile.battery["views"]),
                     "--output", str(delivery_dir / "battery_final.json"),
                 ),
                 outputs=(str(delivery_dir / "battery_final.json"),),
-                note="alpha coverage is reported beside PSNR; a coverage gap reads as blur otherwise",
+                note="body alone; kept for comparison with earlier deliveries, not what the gate reads",
+            )
+        )
+        # The customer opens body + sky. The body's sky is transparent by design
+        # (the sky layer supplies it), so a coverage number on the body alone
+        # reads that transparency as a hole. Score the pair; keep both readings.
+        pair_checkpoint = delivery_dir / "delivery_pair.pt"
+        steps.append(
+            PlannedStep(
+                name="pair",
+                stage="deliver",
+                resource="cpu",
+                estimate=Estimate(
+                    float(cost["reimport_seconds"]),
+                    exported * int(cost["merged_bytes_per_gaussian"]),
+                    "concat of the re-imported body and the sky dome checkpoint",
+                    EXTRAPOLATED,
+                ),
+                command=(
+                    str(python),
+                    _tool(repo_root, "concat_delivery_layers.py"),
+                    "--body", str(delivery_dir / "reimported.pt"),
+                    "--sky", cache["sky_dome_checkpoint"],
+                    "--output", str(pair_checkpoint),
+                ),
+                outputs=(str(pair_checkpoint),),
+                note="the delivered model is body + sky; a DC-only sky is zero-padded to the body's SH bands (exact)",
+            )
+        )
+        steps.append(
+            PlannedStep(
+                name="battery_pair",
+                stage="deliver",
+                resource="gpu",
+                estimate=Estimate(
+                    float(cost["battery_seconds"]),
+                    0,
+                    f"{profile.battery['views']} probe views on the delivered pair",
+                    MEASURED,
+                ),
+                command=(
+                    str(python),
+                    _tool(repo_root, "evaluate_probe_views.py"),
+                    "--config", cache["delivery_eval_config"],
+                    "--checkpoint", str(pair_checkpoint),
+                    "--views", str(profile.battery["views"]),
+                    "--output", str(delivery_dir / "battery_final_pair.json"),
+                ),
+                outputs=(str(delivery_dir / "battery_final_pair.json"),),
+                note="what the acceptance gates read for alpha and PSNR",
             )
         )
         steps.append(
@@ -984,8 +1226,10 @@ def build_plan(
                     _tool(repo_root, "checkpoint_morphology.py"),
                     str(delivery_dir / "reimported.pt"),
                     "--label", f"final_{tag}",
+                    "--json", str(delivery_dir / "morph_final.json"),
                 ),
-                outputs=(str(delivery_dir / "morph_final.txt"),),
+                outputs=(str(delivery_dir / "morph_final.json"),),
+                note="body alone: a shape comparison against the competitor; dome rows would distort it",
             )
         )
         if dataset.has_reference_model:
@@ -1103,6 +1347,7 @@ def tile_config(
     """The trainer config for one tile arm: profile + paths + derivations."""
     arm = _arm_name(profile, tile.tile_id, generation)
     max_steps = tile_max_steps(profile, tile.view_count)
+    cache = resolve_cache_paths(layout, dataset, bundle_paths)
     config = thaw(profile.trainer_base)
     if generation == "seed":
         config = _merge_dicts(config, profile.tile_rules["seed_generation_overrides"])
@@ -1115,39 +1360,29 @@ def tile_config(
             "mipmap_tile_id": tile.tile_id,
             "max_steps": max_steps,
             "cap_max": cap_max,
-            "tile_inputs_manifest": bundle_paths.get("tile_inputs_manifest", "<prepare:tile_inputs_manifest>"),
-            "tile_inputs_root": bundle_paths.get("tile_inputs_root", "<prepare:tile_inputs_root>"),
-            "initialization_ply": bundle_paths.get(
-                f"tile{tile.tile_id}_initialization_ply", f"<prepare:{tile.name}/initialization_full_lidar.ply>"
-            ),
-            "initialization_geometry": bundle_paths.get(
-                f"tile{tile.tile_id}_initialization_geometry", f"<prepare:{tile.name}/initialization_geometry.npz>"
-            ),
-            "initialization_geometry_manifest": bundle_paths.get(
-                "tile_geometry_manifest", "<prepare:tile_geometry_manifest>"
-            ),
+            "tile_inputs_manifest": cache["tile_inputs_manifest"],
+            "tile_inputs_root": cache["tile_inputs_root"],
+            "initialization_ply": cache[tile_key(tile.tile_id, "initialization_ply")],
+            "initialization_geometry": cache[tile_key(tile.tile_id, "initialization_geometry")],
+            "initialization_geometry_manifest": cache["tile_geometry_manifest"],
         }
     )
     config["default_strategy"] = dict(config["default_strategy"])
     config["default_strategy"]["prune_switch_step"] = prune_switch_step(profile, max_steps)
     if config.get("tile_ownership_masking"):
-        config["tile_ownership_cache_manifest"] = str(
-            layout.ownership_dir(tile.name) / "tile_ownership_manifest.json"
-        )
-        config["tile_ownership_cache_root"] = str(layout.ownership_dir(tile.name))
+        config["tile_ownership_cache_manifest"] = cache[tile_key(tile.tile_id, "ownership_manifest")]
+        config["tile_ownership_cache_root"] = cache[tile_key(tile.tile_id, "ownership_root")]
     if config.get("sky_supervision", {}).get("enabled"):
         config["sky_supervision"] = dict(config["sky_supervision"])
-        config["sky_supervision"]["mask_manifest"] = str(layout.caches / "sky_masks" / "sky_mask_train.json")
-        config["sky_supervision"]["mask_root"] = str(layout.caches / "sky_masks")
+        config["sky_supervision"]["mask_manifest"] = cache["sky_mask_manifest"]
+        config["sky_supervision"]["mask_root"] = cache["sky_mask_root"]
     if generation == "delivery" and profile.backdrop["enabled"]:
-        config["background_image_manifest"] = str(layout.backdrop_dir(tile.name) / "background_manifest.json")
-        config["background_image_root"] = str(layout.backdrop_dir(tile.name))
+        config["background_image_manifest"] = cache[tile_key(tile.tile_id, "backdrop_manifest")]
+        config["background_image_root"] = cache[tile_key(tile.tile_id, "backdrop_root")]
     else:
-        config["background_image_manifest"] = str(
-            layout.caches / "view_backgrounds" / "view_background_manifest_train.json"
-        )
-        config["background_image_root"] = str(layout.caches / "view_backgrounds")
-    config["gsplat_lock"] = bundle_paths.get("gsplat_lock", "<prepare:gsplat_lock>")
+        config["background_image_manifest"] = cache["global_view_backgrounds_manifest"]
+        config["background_image_root"] = cache["global_view_backgrounds_root"]
+    config["gsplat_lock"] = cache["gsplat_lock"]
     config["lineage"] = {
         "profile": profile.name,
         "profile_version": profile.version,
@@ -1171,6 +1406,7 @@ def coarse_config(
     """The trainer config for the coarse whole-scene prior."""
     arm = _coarse_arm(profile)
     max_steps = tile_max_steps(profile, dataset.train_view_count)
+    cache = resolve_cache_paths(layout, dataset, bundle_paths)
     config = _merge_dicts(profile.trainer_base, profile.coarse_prior["overrides"])
     for key in profile.coarse_prior["drop_keys"]:
         config.pop(key, None)
@@ -1183,13 +1419,11 @@ def coarse_config(
             "output_dir": str(layout.arm_dir(arm)),
             "device": "cuda:0",
             "max_steps": max_steps,
-            "initialization_ply": bundle_paths.get("global_init_ply", "<prepare:global_init_ply>"),
-            "initialization_geometry": bundle_paths.get("global_init_geometry", "<prepare:global_init_geometry>"),
-            "background_image_manifest": str(
-                layout.caches / "view_backgrounds" / "view_background_manifest_train.json"
-            ),
-            "background_image_root": str(layout.caches / "view_backgrounds"),
-            "gsplat_lock": bundle_paths.get("gsplat_lock", "<prepare:gsplat_lock>"),
+            "initialization_ply": cache["global_init_ply"],
+            "initialization_geometry": cache["global_init_geometry"],
+            "background_image_manifest": cache["global_view_backgrounds_manifest"],
+            "background_image_root": cache["global_view_backgrounds_root"],
+            "gsplat_lock": cache["gsplat_lock"],
         }
     )
     config["default_strategy"] = dict(config["default_strategy"])

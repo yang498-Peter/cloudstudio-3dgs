@@ -42,6 +42,7 @@ PLAN_TOOLS = (
     "merge_v28_tile_checkpoints.py",
     "export_gaussian_ply.py",
     "import_gaussian_ply.py",
+    "concat_delivery_layers.py",
     "evaluate_probe_views.py",
     "checkpoint_morphology.py",
     "freeze_run_identity.py",
@@ -201,7 +202,16 @@ class StepListTests(TempRootTestCase):
         self.assertEqual(plan.generations, ("delivery",))
         self.assertEqual(
             [step.name for step in plan.stage_steps("prepare")],
-            ["ingest_dataset", "write_arm_configs", "sky_masks", "sky_dome", "ownership_Tile_0", "ownership_Tile_1"],
+            [
+                "ingest_dataset",
+                "write_arm_configs",
+                "delivery_eval_config",
+                "sky_masks",
+                "sky_dome",
+                "sky_dome_ply",
+                "ownership_Tile_0",
+                "ownership_Tile_1",
+            ],
         )
         self.assertEqual(
             [step.name for step in plan.stage_steps("train")],
@@ -222,6 +232,8 @@ class StepListTests(TempRootTestCase):
                 "threshold_control",
                 "reimport_ply",
                 "battery",
+                "pair",
+                "battery_pair",
                 "morphology",
                 "freeze_identity",
             ],

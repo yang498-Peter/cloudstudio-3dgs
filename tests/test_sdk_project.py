@@ -15,8 +15,10 @@ import tempfile
 import time
 import unittest
 from pathlib import Path
+from unittest import mock
 
-from cloudstudio3dgs_sdk.bundle import INGEST_PACKAGE, DerivedCaches, PreparedScene
+from cloudstudio3dgs_sdk.bundle import DerivedCaches, PreparedScene
+from cloudstudio3dgs_sdk.ingest.errors import GpuStepRequired
 from cloudstudio3dgs_sdk.plan import PlannedStep
 from cloudstudio3dgs_sdk.profile import PROFILE_B5FILL2, Provenance, make_profile
 from cloudstudio3dgs_sdk.project import (
@@ -79,11 +81,19 @@ def good_probes(*, free_bytes: int = 10 ** 15) -> Probes:
 
 
 def fake_scene(root: Path) -> PreparedScene:
+    """A prepared scene whose files exist: adopting a manifest verifies them."""
     fields = {}
+    root.mkdir(parents=True, exist_ok=True)
     for name in PreparedScene.__dataclass_fields__:
         if name in ("scene_tag", "caches"):
             continue
-        fields[name] = root / f"{name}.json"
+        if name == "dataset_root" or name.endswith("_root"):
+            target = root / name
+            target.mkdir(parents=True, exist_ok=True)
+        else:
+            target = root / f"{name}.json"
+            target.write_text(json.dumps({"stub": name}), encoding="utf-8")
+        fields[name] = target
     return PreparedScene(scene_tag="synth", caches=DerivedCaches(), **fields)
 
 
@@ -178,13 +188,44 @@ class StageStateTests(ProjectFixture):
 
 
 class PrepareTests(ProjectFixture):
-    def test_ingestion_is_delegated_and_says_so(self) -> None:
-        project = self.project()
-        with self.assertRaises(NotImplementedError) as caught:
-            project.prepare()
+    def test_ingestion_is_delegated_with_the_bundle_signature(self) -> None:
+        """No manifest: prepare calls the ingestion glue with python and repo root."""
+        seen: dict[str, object] = {}
+        scene = fake_scene(self.dataset_root)
+
+        def fake_load(dataset_root, profile, work_root, *, python, repo_root):
+            seen.update(dataset_root=dataset_root, profile=profile, work_root=work_root, python=python, repo_root=repo_root)
+            return scene
+
+        with mock.patch("cloudstudio3dgs_sdk.project.load_dataset_bundle", fake_load):
+            project = self.project()
+            result = project.prepare()
+        self.assertEqual(result.action, "ran")
+        self.assertIn("ingest_dataset", result.steps_run)
+        self.assertEqual(seen["dataset_root"], self.dataset_root)
+        self.assertEqual(seen["work_root"], self.work)
+        self.assertEqual(seen["python"], Path("python.exe"))
+        self.assertEqual(seen["repo_root"], self.repo)
+        self.assertIs(seen["profile"], PROFILE_B5FILL2)
+        payload = json.loads((self.work / "prepare" / "prepare_manifest.json").read_text(encoding="utf-8"))
+        self.assertEqual(payload["trainer_paths"], scene.trainer_paths())
+        self.assertIn("derived_paths", payload)
+
+    def test_a_gpu_step_required_by_ingestion_is_a_refusal_with_the_command(self) -> None:
+        error = GpuStepRequired("view_backgrounds_0 needs CUDA")
+        error.command = ["python.exe", "tools/build_view_backgrounds.py", "--config", "x.json"]
+
+        def fake_load(*args, **kwargs):
+            raise error
+
+        with mock.patch("cloudstudio3dgs_sdk.project.load_dataset_bundle", fake_load):
+            project = self.project()
+            with self.assertRaises(StageRefused) as caught:
+                project.prepare()
         message = str(caught.exception)
-        self.assertIn(INGEST_PACKAGE, message)
-        self.assertIn("prepare_manifest.json", message)
+        self.assertIn("needs a GPU", message)
+        self.assertIn("build_view_backgrounds.py --config x.json", message)
+        self.assertEqual(self.project().stage_state("prepare").state, FAILED)
 
     def test_an_existing_manifest_is_adopted(self) -> None:
         project = self.project()
@@ -194,7 +235,50 @@ class PrepareTests(ProjectFixture):
         # Adopting is skipping: the manifest is already the step's output.
         self.assertIn("ingest_dataset", result.steps_skipped)
         self.assertIn("write_arm_configs", result.steps_run)
+        self.assertIn("delivery_eval_config", result.steps_run)
         self.assertEqual(self.project().stage_state("prepare").state, COMPLETE)
+
+    def test_an_existing_manifest_is_verified_not_trusted(self) -> None:
+        project = self.project()
+        manifest = self.seed_prepare_manifest(project)
+        payload = json.loads(manifest.read_text(encoding="utf-8"))
+        Path(payload["trainer_paths"]["split_manifest"]).unlink()
+        with self.assertRaises(StageRefused) as caught:
+            project.prepare()
+        self.assertIn("split_manifest", str(caught.exception))
+        self.assertEqual(self.project().stage_state("prepare").state, FAILED)
+        self.assertEqual(self.runner.calls, [])
+
+    def test_delivery_eval_config_is_the_tile0_config_with_its_identity_changed(self) -> None:
+        project = self.project()
+        self.seed_prepare_manifest(project)
+        project.prepare()
+        eval_config = json.loads((self.work / "delivery_eval.json").read_text(encoding="utf-8"))
+        tile0 = json.loads((self.work / "runs" / "tile0_b5fill2_delivery.json").read_text(encoding="utf-8"))
+        self.assertEqual(eval_config["run_id"], "synth-delivery-eval")
+        self.assertNotEqual(eval_config["output_dir"], tile0["output_dir"])
+        for key in (
+            "background_image_manifest", "background_image_root", "dataset_manifest", "device",
+            "face_cache_manifest", "face_cache_root", "face_lidar_geometry_manifest",
+            "face_lidar_geometry_root", "mipmap_tile_id", "renderer_mask_manifest", "tile_inputs_manifest",
+            "tile_ownership_dilation_px", "tile_ownership_margin_m", "sh_degree",
+        ):
+            self.assertEqual(eval_config[key], tile0[key], key)
+        pipeline = json.loads((self.work / "pipeline.json").read_text(encoding="utf-8"))
+        self.assertEqual(pipeline["delivery_eval_config"], str(self.work / "delivery_eval.json"))
+        self.assertEqual(pipeline["sky_ply"], str(self.work / "caches" / "sky_dome.ply"))
+
+    def test_sky_dome_ply_and_eval_config_skip_when_their_outputs_exist(self) -> None:
+        project = self.project()
+        self.seed_prepare_manifest(project)
+        (self.work / "caches").mkdir(parents=True, exist_ok=True)
+        (self.work / "caches" / "sky_dome.ply").write_bytes(PLY_STUB)
+        (self.work / "delivery_eval.json").write_text("{}", encoding="utf-8")
+        result = project.prepare()
+        self.assertIn("sky_dome_ply", result.steps_skipped)
+        self.assertIn("delivery_eval_config", result.steps_skipped)
+        self.assertNotIn("sky_dome_ply", self.runner.calls)
+        self.assertIn("sky_dome", self.runner.calls)
 
     def test_prepare_writes_every_arm_config_and_the_pipeline_config(self) -> None:
         project = self.project()
@@ -410,6 +494,72 @@ class FullRunTests(ProjectFixture):
         for variant in record["variants"]:
             self.assertEqual(variant["vertex_count"], 7)
             self.assertEqual(variant["removed_vs_zero"], 0)
+
+    def test_the_delivered_pair_is_scored_and_the_report_reads_it(self) -> None:
+        """Both batteries are kept; the alpha/PSNR gates read the pair, morphology the body."""
+
+        class ScoringRunner(RecordingRunner):
+            def __call__(self, step: PlannedStep, *, log: Path) -> int:
+                code = super().__call__(step, log=log)
+                if step.name == "battery":
+                    Path(step.outputs[0]).write_text(
+                        json.dumps({"alpha_p05": 0.19, "alpha_mean": 0.61, "psnr_p10": 16.4, "psnr_mean": 18.9, "views": 48}),
+                        encoding="utf-8",
+                    )
+                elif step.name == "battery_pair":
+                    Path(step.outputs[0]).write_text(
+                        json.dumps({"alpha_p05": 0.90, "alpha_mean": 0.95, "psnr_p10": 16.7, "psnr_mean": 19.1, "views": 48}),
+                        encoding="utf-8",
+                    )
+                elif step.name == "morphology":
+                    Path(step.outputs[0]).write_text(
+                        json.dumps({"stats": {"short_p50_mm": 0.47, "max_min_p50": 12.0}}), encoding="utf-8"
+                    )
+                return code
+
+        self.runner = ScoringRunner()
+        project = self.project()
+        self.seed_prepare_manifest(project)
+        results = project.run_all()
+        self.assertTrue(all(r.ok for r in results))
+        names = self.runner.calls
+        self.assertLess(names.index("reimport_ply"), names.index("pair"))
+        self.assertLess(names.index("pair"), names.index("battery_pair"))
+        pair = next(s for s in project.plan().steps if s.name == "pair")
+        self.assertIn(str(self.work / "caches" / "sky_dome.pt"), pair.command)
+        self.assertTrue((self.work / "runs" / "delivery_b5fill2" / "delivery_pair.pt").is_file())
+        report = json.loads((self.work / "report" / "b5fill2_report.json").read_text(encoding="utf-8"))
+        self.assertEqual(report["coverage"]["body_only"]["layers"], "body")
+        self.assertEqual(report["coverage"]["delivered_pair"]["layers"], "body+sky")
+        self.assertEqual(report["coverage"]["body_only"]["alpha_p05"], 0.19)
+        self.assertEqual(report["coverage"]["delivered_pair"]["alpha_p05"], 0.90)
+        self.assertEqual(report["gate"]["reads"], "delivered_pair")
+        self.assertEqual(report["gate"]["alpha_p05"], 0.90)
+        self.assertEqual(report["gate"]["body_only_alpha_p05"], 0.19)
+        self.assertEqual(report["measured"]["battery_psnr_p10"], 16.7)
+        self.assertEqual(report["measured"]["body_only_psnr_p10"], 16.4)
+        self.assertEqual(report["measured"]["morphology_short_axis_p50_mm"], 0.47)
+        self.assertEqual(report["measured"]["export_gaussian_count"], 7)
+        gates = {g["gate"]: g for g in report["gates"]}
+        for key in ("battery_alpha_p05_min", "battery_psnr_p10_min", "offtrajectory_sharpness_min",
+                    "export_gaussian_count_max", "morphology_short_axis_p50_mm_max"):
+            self.assertIn(key, gates)
+        self.assertEqual(gates["battery_psnr_p10_min"]["reads"], "delivered_pair")
+        self.assertEqual(gates["battery_psnr_p10_min"]["measured"], 16.7)
+        self.assertEqual(gates["battery_alpha_p05_min"]["measured"], 0.90)
+        self.assertEqual(gates["morphology_short_axis_p50_mm_max"]["reads"], "body_only")
+        self.assertEqual(gates["export_gaussian_count_max"]["reads"], "body_only")
+        # a gate whose profile threshold or measurement is absent stays UNVERIFIED
+        self.assertEqual(gates["offtrajectory_sharpness_min"]["status"], "UNVERIFIED")
+        for key, gate in gates.items():
+            threshold = PROFILE_B5FILL2.acceptance.get(key)
+            if threshold is None or gate["measured"] is None:
+                self.assertEqual(gate["status"], "UNVERIFIED", key)
+            else:
+                self.assertIn(gate["status"], ("PASS", "FAIL"), key)
+        markdown = (self.work / "report" / "b5fill2_report.md").read_text(encoding="utf-8")
+        self.assertIn("delivered_pair", markdown)
+        self.assertIn("body_only", markdown)
 
     def test_dataset_summary_requires_prepare_or_an_injection(self) -> None:
         project = Project(self.dataset_root, self.work, PROFILE_B5FILL2, repo_root=self.repo)
