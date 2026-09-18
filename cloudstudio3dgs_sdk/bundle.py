@@ -194,9 +194,18 @@ _SCENE_FIELD_BY_CACHE: Mapping[str, tuple[str, str | None]] = MappingProxyType(
     }
 )
 
+#: The readiness gate chain, in order, as house0305's gates_v9 recorded it. The frontend gate
+#: needs the aerotriangulation campaign's artefacts (time-sync report, feature and
+#: triangulation runtimes, AT report, candidate model), which is why ingestion cannot
+#: produce it: the pose pipeline is a separate SOP that runs before any of this.
 GATE_TOOLS = (
+    "tools/build_mipmap_frontend_gate.py",
+    "tools/advance_mipmap_renderer_mask_gate.py",
+    "tools/advance_mipmap_lidar_depth_gate.py",
     "tools/advance_mipmap_da2_gate.py",
-    "tools/advance_mipmap_sky_gate.py",
+    "tools/advance_mipmap_tile_gate.py",
+    "tools/promote_surface_frozen_training_gate.py",
+    "tools/bind_monocular_depth_gate.py",
 )
 
 
