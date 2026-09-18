@@ -14,10 +14,12 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from cloudstudio3dgs_sdk.__main__ import (
     EXIT_OK,
     EXIT_REFUSED,
+    _project,
     build_parser,
     main,
     parse_prior_checkpoints,
@@ -86,6 +88,27 @@ class ParserTests(unittest.TestCase):
         with self.assertRaises(SystemExit) as caught:
             self.parser.parse_args(["run", "--dataset", "d"])
         self.assertEqual(caught.exception.code, 2)
+
+    def test_fresh_dataset_flags_default_to_nothing_and_reach_the_project(self) -> None:
+        args = self.parser.parse_args(["run", "--dataset", "d", "--work", "w"])
+        self.assertIsNone(args.adapter)
+        self.assertIsNone(args.run_dir)
+        self.assertIsNone(args.pipeline_gate)
+        args = self.parser.parse_args(
+            ["run", "--dataset", "raw", "--work", "w", "--adapter", "s1_fisheye",
+             "--run-dir", "processed", "--pipeline-gate", "w/gate/pipeline_gate.json"]
+        )
+        seen: dict[str, object] = {}
+
+        class FakeProject:
+            def __init__(self, dataset_root, work_root, profile, **kwargs):
+                seen.update(kwargs)
+
+        with mock.patch("cloudstudio3dgs_sdk.__main__.Project", FakeProject):
+            _project(args, stream=io.StringIO())
+        self.assertEqual(seen["adapter"], "s1_fisheye")
+        self.assertEqual(seen["run_dir"], Path("processed"))
+        self.assertEqual(seen["pipeline_gate"], Path("w/gate/pipeline_gate.json"))
 
     def test_unknown_profile_exits_2(self) -> None:
         with self.assertRaises(SystemExit) as caught:

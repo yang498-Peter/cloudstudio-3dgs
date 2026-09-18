@@ -248,6 +248,9 @@ class Project:
         prior_tile_checkpoints: Mapping[int, str] | None = None,
         vram_gib: float | None = None,
         stream: Any = None,
+        adapter: str | None = None,
+        run_dir: Path | str | None = None,
+        pipeline_gate: Path | str | None = None,
     ) -> None:
         self.dataset_root = Path(dataset_root)
         self.work_root = Path(work_root)
@@ -257,6 +260,10 @@ class Project:
         self.layout = WorkLayout(self.work_root)
         self.scene_tag = scene_tag
         self.delivery_tag = delivery_tag
+        # Fresh-dataset inputs only; an adopted scene never reads them.
+        self.adapter = adapter
+        self.run_dir = Path(run_dir) if run_dir else None
+        self.pipeline_gate = Path(pipeline_gate) if pipeline_gate else None
         self.runner = runner or SubprocessRunner(repo_root=self.repo_root)
         self.probes = probes
         self.vram_gib = vram_gib
@@ -591,6 +598,10 @@ class Project:
                 self.work_root,
                 python=self.python,
                 repo_root=self.repo_root,
+                adapter=self.adapter,
+                run_dir=self.run_dir,
+                pipeline_gate=self.pipeline_gate,
+                log=self.say,
             )
         except GpuStepRequired as error:
             # prepare is the CPU stage. A cache that needs CUDA is not built

@@ -116,6 +116,24 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     run.add_argument("--plan-json", type=Path, default=None, help="also write the plan as JSON here")
+    fresh = run.add_argument_group("fresh dataset (ignored when <work>/prepare/prepare_manifest.json exists)")
+    fresh.add_argument(
+        "--adapter",
+        default=None,
+        help="ingest adapter name (s1_fisheye, colmap, pinhole_folder); default: detect from the dataset",
+    )
+    fresh.add_argument(
+        "--run-dir",
+        type=Path,
+        default=None,
+        help="the processed half of a split capture (poses + colourised cloud), when it is not under --dataset",
+    )
+    fresh.add_argument(
+        "--pipeline-gate",
+        type=Path,
+        default=None,
+        help="signed mipmap readiness gate produced by the gate tool chain against this work root's caches",
+    )
 
     pre = sub.add_parser("preflight", help="host report only; runs nothing")
     pre.add_argument("--dataset", required=True, type=Path)
@@ -213,6 +231,9 @@ def _project(args: argparse.Namespace, stream) -> Project:
         vram_gib=getattr(args, "vram_gib", None),
         prior_tile_checkpoints=parse_prior_checkpoints(getattr(args, "prior_checkpoint", [])),
         stream=stream,
+        adapter=getattr(args, "adapter", None),
+        run_dir=getattr(args, "run_dir", None),
+        pipeline_gate=getattr(args, "pipeline_gate", None),
     )
 
 

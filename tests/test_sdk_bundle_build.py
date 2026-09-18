@@ -140,14 +140,30 @@ class LoadDatasetBundleTest(unittest.TestCase):
             (out / "lidar_init_geometry.npz").write_bytes(b"npz")
         return 0
 
-    def _run(self, plan, *, cloud=True, gate=None):
-        with mock.patch("cloudstudio3dgs_sdk.ingest.load_dataset", return_value=_bundle(self.root, cloud=cloud)), \
+    def _run(self, plan, *, cloud=True, gate=None, **extra):
+        self.load_calls = []
+
+        def fake_load(path, *, adapter=None, **kwargs):
+            self.load_calls.append((path, adapter, kwargs))
+            return _bundle(self.root, cloud=cloud)
+
+        with mock.patch("cloudstudio3dgs_sdk.ingest.load_dataset", fake_load), \
              mock.patch("cloudstudio3dgs_sdk.ingest.plan_caches", return_value=plan), \
              mock.patch("cloudstudio_3dgs.pipeline.mipmap_gate.load_and_verify_gate", return_value=({}, "sha")):
             return load_dataset_bundle(
                 self.root / "capture", PROFILE_B5SKY, self.work,
                 python="python", repo_root=self.root / "repo", pipeline_gate=gate, runner=self._runner,
+                **extra,
             )
+
+    def test_the_adapter_is_detected_unless_named_and_run_dir_is_passed_only_when_given(self):
+        specs = _graph(self.work)
+        plan = FakePlan(specs, present=[s.name for s in specs])
+        self._run(plan, gate=self.root / "gate.json")
+        self.assertEqual(self.load_calls, [(self.root / "capture", None, {})],
+                         "no run_dir kwarg at all when none was given: adapters without one must not see it")
+        self._run(plan, gate=self.root / "gate.json", adapter="s1_fisheye", run_dir=self.root / "processed")
+        self.assertEqual(self.load_calls, [(self.root / "capture", "s1_fisheye", {"run_dir": self.root / "processed"})])
 
     def test_a_capture_without_a_cloud_is_refused_by_name(self):
         plan = FakePlan(_graph(self.work))

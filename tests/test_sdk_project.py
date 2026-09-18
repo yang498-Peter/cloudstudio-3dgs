@@ -193,8 +193,12 @@ class PrepareTests(ProjectFixture):
         seen: dict[str, object] = {}
         scene = fake_scene(self.dataset_root)
 
-        def fake_load(dataset_root, profile, work_root, *, python, repo_root):
-            seen.update(dataset_root=dataset_root, profile=profile, work_root=work_root, python=python, repo_root=repo_root)
+        def fake_load(dataset_root, profile, work_root, *, python, repo_root, adapter, run_dir, pipeline_gate, log):
+            seen.update(
+                dataset_root=dataset_root, profile=profile, work_root=work_root, python=python,
+                repo_root=repo_root, adapter=adapter, run_dir=run_dir, pipeline_gate=pipeline_gate,
+            )
+            log("[prepare] fake adapter says hello")
             return scene
 
         with mock.patch("cloudstudio3dgs_sdk.project.load_dataset_bundle", fake_load):
@@ -207,9 +211,34 @@ class PrepareTests(ProjectFixture):
         self.assertEqual(seen["python"], Path("python.exe"))
         self.assertEqual(seen["repo_root"], self.repo)
         self.assertIs(seen["profile"], PROFILE_B5FILL2)
+        # Nothing fresh-dataset-specific was given, so nothing is invented for the adapter.
+        self.assertIsNone(seen["adapter"])
+        self.assertIsNone(seen["run_dir"])
+        self.assertIsNone(seen["pipeline_gate"])
         payload = json.loads((self.work / "prepare" / "prepare_manifest.json").read_text(encoding="utf-8"))
         self.assertEqual(payload["trainer_paths"], scene.trainer_paths())
         self.assertIn("derived_paths", payload)
+
+    def test_fresh_dataset_inputs_reach_the_ingestion_glue(self) -> None:
+        """--adapter / --run-dir / --pipeline-gate are the SDK's whole fresh-dataset surface;
+        a Project that took them must hand them on, or a split capture can never be prepared."""
+        seen: dict[str, object] = {}
+        scene = fake_scene(self.dataset_root)
+
+        def fake_load(dataset_root, profile, work_root, **kwargs):
+            seen.update(kwargs)
+            return scene
+
+        with mock.patch("cloudstudio3dgs_sdk.project.load_dataset_bundle", fake_load):
+            project = self.project(
+                adapter="s1_fisheye",
+                run_dir=self.dataset_root / "processed",
+                pipeline_gate=self.work / "gate" / "pipeline_gate.json",
+            )
+            project.prepare()
+        self.assertEqual(seen["adapter"], "s1_fisheye")
+        self.assertEqual(seen["run_dir"], self.dataset_root / "processed")
+        self.assertEqual(seen["pipeline_gate"], self.work / "gate" / "pipeline_gate.json")
 
     def test_a_gpu_step_required_by_ingestion_is_a_refusal_with_the_command(self) -> None:
         error = GpuStepRequired("view_backgrounds_0 needs CUDA")

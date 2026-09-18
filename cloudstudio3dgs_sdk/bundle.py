@@ -238,10 +238,16 @@ def load_dataset_bundle(
     python: Path | str | None = None,
     repo_root: Path | str | None = None,
     pipeline_gate: Path | str | None = None,
+    adapter: str | None = None,
+    run_dir: Path | str | None = None,
     runner: Callable[[Sequence[str]], int] | None = None,
     log: Callable[[str], None] | None = None,
 ) -> PreparedScene:
     """Ingest a capture and build every CPU cache it needs into ``work_root``.
+
+    ``adapter`` names the ingest adapter instead of detecting it; ``run_dir`` is for captures
+    whose processed half (poses, colourised cloud) lives in a second directory, as the
+    S1Mapper "Raw_Data" / "Processed_by_S1Mapper" pair does.
 
     This is the fresh-dataset path: the adapter reads the capture, the ingest layer derives
     the signed cache graph, and this runs the graph's CPU half in dependency order. Two
@@ -274,7 +280,10 @@ def load_dataset_bundle(
     repo = Path(repo_root) if repo_root else Path(__file__).resolve().parents[1]
     interpreter = str(python) if python else sys.executable
 
-    bundle = load_dataset(dataset_root)
+    load_kwargs: dict[str, Any] = {}
+    if run_dir is not None:
+        load_kwargs["run_dir"] = Path(run_dir)
+    bundle = load_dataset(dataset_root, adapter=adapter, **load_kwargs)
     say(f"[prepare] adapter {bundle.adapter}: {len(bundle.images)} images, "
         f"cloud {'present' if bundle.point_cloud else 'absent'}")
     if bundle.point_cloud is None:
