@@ -962,6 +962,12 @@ def _derive_b5sky() -> Profile:
     pair. Everything else is inherited verbatim so the two profiles stay comparable.
     """
     base = PROFILE_B5FILL2
+    runtime = thaw(base.runtime)
+    # b5fill2 wrote the card's nominal 16 GiB here. The card every arm of this campaign
+    # trained on reports 15.9 GiB usable (16303 MiB), so that value refused the very hardware
+    # the recipe was measured on. What the recipe actually needs is what the vram_headroom
+    # check computes from the largest cap; this floor only has to admit the measured card.
+    runtime["min_vram_gib"] = 15.5
     trainer_base = thaw(base.trainer_base)
     # 37.7% faster (335.2 -> 208.8 ms/step, two draws each); at 20k the result sits inside the
     # three-run B5 band on every paired ROI comparison (sign tests 31% / 53% / 47%). It does
@@ -1023,6 +1029,13 @@ def _derive_b5sky() -> Profile:
         "research/quality_recovery_v2/16_fill_tradeoff_is_structural.zh-CN.md section 4",
         MEASURED,
     )
+    provenance["runtime.min_vram_gib"] = Provenance(
+        "The campaign's card, an RTX 5070 Ti, reports 15.9 GiB usable (16303 MiB) and trained "
+        "every arm; b5fill2's nominal 16.0 refused it at preflight. 15.5 admits the measured "
+        "card; the real capacity check is vram_headroom, computed from the largest planned cap.",
+        "nvidia-smi on the campaign machine; cloudstudio3dgs_sdk preflight of 2026-09-18",
+        MEASURED,
+    )
     provenance["acceptance"] = Provenance(
         "Gates read the delivered pair. Body-only scoring counted correctly transparent sky "
         "as a coverage failure (0.189 vs 0.898 for the same model) and drove a whole line of "
@@ -1064,7 +1077,7 @@ def _derive_b5sky() -> Profile:
             "fill layer and shipped with the frozen sky layer. Scored and gated as that pair. "
             "Sample prefetch on (37% faster, inside the rerun band at 20k)."
         ),
-        runtime=thaw(base.runtime),
+        runtime=runtime,
         dataset_contract=thaw(base.dataset_contract),
         tiling=thaw(base.tiling),
         trainer_base=trainer_base,
