@@ -948,7 +948,147 @@ PROFILE_B5FILL2 = make_profile(
 )
 
 
-PROFILES: Mapping[str, Profile] = MappingProxyType({PROFILE_B5FILL2.name: PROFILE_B5FILL2})
+def _derive_b5sky() -> Profile:
+    """B5 without the fill layer, scored as the pair the customer receives.
+
+    On 2026-09-15 the coverage gap the fill layer existed to close turned out to be the sky
+    layer missing from the measurement: a delivery ships body + sky, nothing composited them,
+    and the body's correctly transparent sky read as a coverage failure. Composited, the
+    no-fill body reads alpha p05 0.898 against the 0.70 bar with sharpness 0.453 against 0.42 -
+    the only configuration that passes both - and every fill variant clears coverage while
+    failing sharpness, because its one real effect was painting sky into the body.
+
+    So this profile is B5FILL2 with three changes and the acceptance rewritten to read the
+    pair. Everything else is inherited verbatim so the two profiles stay comparable.
+    """
+    base = PROFILE_B5FILL2
+    trainer_base = thaw(base.trainer_base)
+    # 37.7% faster (335.2 -> 208.8 ms/step, two draws each); at 20k the result sits inside the
+    # three-run B5 band on every paired ROI comparison (sign tests 31% / 53% / 47%). It does
+    # move the trajectory (step-2000 populations of the two conditions do not overlap), and
+    # that move produces no quality difference the protocol can see.
+    trainer_base["prefetch_training_samples"] = True
+
+    merge = thaw(base.merge)
+    merge["fill"] = dict(merge["fill"])
+    merge["fill"]["enabled"] = False
+    merge["fill"]["why_disabled"] = (
+        "the gap it filled was the sky layer missing from the measurement; with the pair "
+        "scored it buys 1.7-3.1 points of alpha p05 above an already-passing 0.898 for 8-20% "
+        "of novel-view sharpness"
+    )
+
+    acceptance = {
+        # Every gate below reads the DELIVERED PAIR (body + sky) battery, never the body alone.
+        # Reference values are the no-fill B5 delivery of 2026-09-15, composited with its
+        # frozen sky layer, on the 48-view battery and the 18-frame off-trajectory strips.
+        "scored_layers": "body+sky",
+        "battery_alpha_p05_min": 0.70,
+        # 15.048 measured; the tile-scale rerun band on p10 is about +-0.16 and the merged
+        # delivery has only been measured once, so the floor sits half a dB under the reference
+        # rather than at it.
+        "battery_psnr_p10_min": 14.50,
+        "offtrajectory_sharpness_min": 0.42,
+        "morphology_short_axis_p50_mm_max": 0.60,
+        "export_gaussian_count_max": 20000000,
+        "reference": {
+            "battery_psnr_mean": 18.031,
+            "battery_psnr_p10": 15.048,
+            "battery_alpha_mean": 0.978,
+            "battery_alpha_p05": 0.898,
+            "battery_alpha_p05_body_only": 0.189,
+            "offtrajectory_psnr_18f": 16.73,
+            "offtrajectory_sharpness_ours_over_ref": 0.453,
+            "offtrajectory_sharpness_body_only": 0.454,
+            "morphology_short_axis_p50_mm": 0.452,
+            "morphology_axis_ratio": 12.07,
+            "export_gaussian_count": 16719228,
+            "sky_layer_gaussian_count": 100000,
+        },
+    }
+
+    provenance = dict(base.provenance)
+    provenance["trainer_base.prefetch_training_samples"] = Provenance(
+        "Two draws per condition at 2000 steps: 334.9 / 335.6 ms per step without, 207.0 / "
+        "210.5 with. A full 20k arm ran 74.2 min against 119.0 / 119.8 / 115.8 for the three "
+        "B5 reruns; all three paired ROI comparisons within the rerun band.",
+        "research/quality_recovery_v2/README.zh-CN.md rows of 2026-09-15 05:40 and 07:05; "
+        "17_prefetch_band_run{1,2,3}.json",
+        MEASURED,
+    )
+    provenance["merge.fill"] = Provenance(
+        "With the sky layer composited the no-fill body reads alpha p05 0.898 and sharpness "
+        "0.453; sharpc1 0.915 / 0.409; sharpc0 0.929 / 0.354. The fill layer clears coverage "
+        "and fails sharpness in every variant because it paints sky into the body.",
+        "research/quality_recovery_v2/16_fill_tradeoff_is_structural.zh-CN.md section 4",
+        MEASURED,
+    )
+    provenance["acceptance"] = Provenance(
+        "Gates read the delivered pair. Body-only scoring counted correctly transparent sky "
+        "as a coverage failure (0.189 vs 0.898 for the same model) and drove a whole line of "
+        "fill-layer work at a hole that existed only in the measurement.",
+        "tools/pipeline.py commit 63bec94 (pair battery, coverage.body_only / delivered_pair); "
+        "delivery_B5/battery_with_sky.json",
+        MEASURED,
+    )
+
+    open_questions = [dict(item) for item in base.open_questions]
+    for item in open_questions:
+        if item["id"] == "fill-vs-sharpness":
+            item["what"] = (
+                "Resolved against the fill layer. The trade it offered was 1.7-3.1 points of "
+                "alpha p05 above an already-passing 0.898 for 8-20% of novel-view sharpness, "
+                "and its coverage was sky painted into the body. The knobs stay in the merge "
+                "tool, unused by this profile."
+            )
+            item["status"] = "closed 2026-09-15: fill disabled; the measurement was the defect"
+    open_questions.append(
+        {
+            "id": "sky-layer-detail",
+            "what": (
+                "With the dome actually visible, off-trajectory PSNR against the competitor drops "
+                "17.07 -> 16.73 because our sky layer is a flat 100k-gaussian dome where their sky "
+                "has detail. Not a gate; a real quality gap in the sky layer itself."
+            ),
+            "expressed_as": "backdrop.sky_dome (count, radius); nothing here improves its appearance",
+            "status": "open; separate work item",
+        }
+    )
+
+    return make_profile(
+        name="b5sky",
+        version="2026.09.18",
+        summary=(
+            "house0305 delivery of 2026-09-15: four LiDAR-initialised tiles at 20k steps with "
+            "ownership masking, sky supervision and per-view stand-in backdrops, merged with NO "
+            "fill layer and shipped with the frozen sky layer. Scored and gated as that pair. "
+            "Sample prefetch on (37% faster, inside the rerun band at 20k)."
+        ),
+        runtime=thaw(base.runtime),
+        dataset_contract=thaw(base.dataset_contract),
+        tiling=thaw(base.tiling),
+        trainer_base=trainer_base,
+        tile_rules=thaw(base.tile_rules),
+        coarse_prior=thaw(base.coarse_prior),
+        backdrop=thaw(base.backdrop),
+        merge=merge,
+        export=thaw(base.export),
+        battery=thaw(base.battery),
+        acceptance=acceptance,
+        cost_model=thaw(base.cost_model),
+        external_assets=thaw(base.external_assets),
+        open_questions=tuple(open_questions),
+        provenance=provenance,
+    )
+
+
+PROFILE_B5SKY = _derive_b5sky()
+
+# The recommended recipe comes first; b5fill2 stays so the campaign's own deliveries reproduce.
+PROFILES: Mapping[str, Profile] = MappingProxyType(
+    {PROFILE_B5SKY.name: PROFILE_B5SKY, PROFILE_B5FILL2.name: PROFILE_B5FILL2}
+)
+DEFAULT_PROFILE = PROFILE_B5SKY.name
 
 
 def get_profile(name: str) -> Profile:

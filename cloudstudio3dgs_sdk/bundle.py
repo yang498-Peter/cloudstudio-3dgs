@@ -26,9 +26,11 @@ raises :class:`NotImplementedError` naming the entry points that owe it.
 
 from __future__ import annotations
 
+import sys
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import Any, Mapping
+from types import MappingProxyType
+from typing import Any, Callable, Mapping, Sequence
 
 # The parallel task's package and the two calls that produce a prepared scene:
 # an adapter run, then the signed cache graph built on top of it.
@@ -172,25 +174,215 @@ class PreparedScene:
         return payload
 
 
-def load_dataset_bundle(dataset_root: Path, profile: Any, work_root: Path) -> PreparedScene:
-    """Ingest ``dataset_root`` and build its caches into a :class:`PreparedScene`.
+#: Which ingest cache feeds which :class:`PreparedScene` field. The ingest layer names caches
+#: by what they are; the trainer names paths by the config key that binds them. This is the
+#: one place the two vocabularies meet, so a rename on either side fails here, loudly.
+_SCENE_FIELD_BY_CACHE: Mapping[str, tuple[str, str | None]] = MappingProxyType(
+    {
+        # cache name: (manifest field, root field or None)
+        "dataset_manifest": ("dataset_manifest", None),
+        "split_manifest": ("split_manifest", None),
+        "mask_manifest": ("mask_manifest", "mask_root"),
+        "person_mask_manifest": ("person_mask_manifest", "person_mask_root"),
+        "depth_cache": ("depth_manifest", "depth_root"),
+        "face_cache": ("face_cache_manifest", "face_cache_root"),
+        "renderer_mask": ("renderer_mask_manifest", None),
+        "face_lidar_geometry": ("face_lidar_geometry_manifest", "face_lidar_geometry_root"),
+        "mono_depth": ("mono_depth_manifest", "mono_depth_root"),
+        "tile_inputs": ("tile_inputs_manifest", "tile_inputs_root"),
+        "tile_geometry": ("tile_geometry_manifest", None),
+    }
+)
 
-    Not implemented here. The adapters, the signed cache graph and the
-    automatic tiling rule are the ingestion task's deliverable and already
-    live in :mod:`cloudstudio3dgs_sdk.ingest`; what is missing is the glue
-    that runs them for a work root and projects the result onto the path
-    contract above.
+GATE_TOOLS = (
+    "tools/advance_mipmap_da2_gate.py",
+    "tools/advance_mipmap_sky_gate.py",
+)
 
-    A caller that already has a prepared scene - house0305, or a dataset an
-    earlier SDK run prepared - does not need this at all:
-    ``Project.prepare()`` adopts an existing ``prepare_manifest.json`` and
-    verifies it instead.
+
+class FreshBuildBlocked(Exception):
+    """A fresh build stopped at a step this process must not run itself.
+
+    Carries the exact command so the caller (or a human) can run it where it belongs. Raised
+    for GPU caches - this process must never take a CUDA context - and re-raised as the ingest
+    layer's own :class:`GpuStepRequired` so callers that already catch that keep working.
     """
-    raise NotImplementedError(
-        "dataset ingestion is not implemented in this module. The pieces exist in "
-        f"{INGEST_PACKAGE}: call {INGEST_LOAD}(dataset_root) for the capture bundle, then "
-        f"{INGEST_PLAN_CACHES}(bundle, profile, cache_root=..., run_root=...) and build the "
-        "plan; the remaining work is projecting that onto PreparedScene and writing "
-        f"{Path(work_root) / 'prepare' / 'prepare_manifest.json'}. Until that glue lands, place "
-        "a verified prepare_manifest.json there and Project.prepare() will adopt it."
+
+    def __init__(self, cache: str, command: tuple[str, ...], reason: str) -> None:
+        self.cache = cache
+        self.command = command
+        self.reason = reason
+        super().__init__(f"{cache}: {reason}\n  " + " ".join(command))
+
+
+def _subprocess_runner(command: Sequence[str]) -> int:
+    import subprocess
+
+    return subprocess.run(list(command)).returncode
+
+
+def load_dataset_bundle(
+    dataset_root: Path,
+    profile: Any,
+    work_root: Path,
+    *,
+    python: Path | str | None = None,
+    repo_root: Path | str | None = None,
+    pipeline_gate: Path | str | None = None,
+    runner: Callable[[Sequence[str]], int] | None = None,
+    log: Callable[[str], None] | None = None,
+) -> PreparedScene:
+    """Ingest a capture and build every CPU cache it needs into ``work_root``.
+
+    This is the fresh-dataset path: the adapter reads the capture, the ingest layer derives
+    the signed cache graph, and this runs the graph's CPU half in dependency order. Two
+    things it deliberately does NOT do:
+
+    * take a CUDA context. The first GPU cache whose inputs are ready raises
+      :class:`GpuStepRequired` with the exact command; the SDK's stage runner, which holds the
+      GPU lease, runs it and calls back in. Caches that do not depend on the GPU one are
+      built first, so one call does as much as it can.
+    * build the mipmap pipeline gate. The gate is a thirteen-stage signed readiness contract
+      the trainer refuses to start without on fisheye data, and its chain lives in the gate
+      tools, not in ingestion. Pass ``pipeline_gate`` to a gate that chain produced; without
+      one this raises :class:`DatasetIncompleteError` naming the tools.
+
+    The whole-scene initialisation the coarse prior starts from is built here too
+    (``tools/build_lidar_init.py`` at the profile's decimation), because nothing in the cache
+    graph produces it and every prepared scene needs it.
+
+    A scene that was already prepared by hand - house0305 - does not come through here;
+    ``Project.prepare()`` adopts its manifest instead.
+    """
+    from cloudstudio3dgs_sdk.ingest import load_dataset, plan_caches
+    from cloudstudio3dgs_sdk.ingest.errors import DatasetIncompleteError, GpuStepRequired
+    from cloudstudio3dgs_sdk.ingest.caches import GPU, STATUS_BLOCKED
+
+    say = log or (lambda line: None)
+    run = runner or _subprocess_runner
+    dataset_root = Path(dataset_root)
+    work = Path(work_root)
+    repo = Path(repo_root) if repo_root else Path(__file__).resolve().parents[1]
+    interpreter = str(python) if python else sys.executable
+
+    bundle = load_dataset(dataset_root)
+    say(f"[prepare] adapter {bundle.adapter}: {len(bundle.images)} images, "
+        f"cloud {'present' if bundle.point_cloud else 'absent'}")
+    if bundle.point_cloud is None:
+        raise DatasetIncompleteError(
+            f"{dataset_root}: no LiDAR point cloud. The recipe initialises every tile from LiDAR "
+            "and reads range/normal supervision from it; a capture without one cannot run it."
+        )
+
+    plan = plan_caches(
+        bundle,
+        profile,
+        dataset_root=work / "dataset",
+        cache_root=work / "caches",
+        run_root=work / "runs",
+        recording_root=bundle.source_root,
+        source_run_dir=bundle.source_root,
+        repo_root=repo,
+        python=interpreter,
+    )
+
+    # Run the CPU half in dependency order. A GPU cache is not an error until something that
+    # is not yet built depends on it; everything else keeps going so the caller gets the
+    # longest possible run out of one call.
+    built: set[str] = set()
+    pending_gpu: tuple[str, tuple[str, ...]] | None = None
+    for status in plan.statuses():
+        spec = status.spec
+        if status.status == STATUS_BLOCKED:
+            raise DatasetIncompleteError(f"{spec.name}: {status.reason}; this dataset cannot produce it")
+        if not status.must_build:
+            say(f"[prepare] {spec.name}: present")
+            built.add(spec.name)
+            continue
+        unmet = [dep for dep in spec.depends_on if dep not in built]
+        if unmet:
+            say(f"[prepare] {spec.name}: waiting on {', '.join(unmet)}")
+            continue
+        if spec.device == GPU:
+            if pending_gpu is None:
+                pending_gpu = (spec.name, tuple(spec.command))
+            say(f"[prepare] {spec.name}: needs the GPU")
+            continue
+        say(f"[prepare] {spec.name}: building")
+        plan.build(dry_run=False, only=[spec.name], runner=run)
+        built.add(spec.name)
+
+    if pending_gpu is not None:
+        name, command = pending_gpu
+        raise GpuStepRequired(
+            f"{name} needs the GPU; run it under the SDK's GPU lease, then call prepare again:\n  "
+            + " ".join(command)
+        )
+
+    # The coarse prior's whole-scene initialisation. Not part of the cache graph, needed by
+    # every scene; built at the profile's decimation so its density is the profile's, not the
+    # capture's.
+    global_init_dir = work / "caches" / "global_init"
+    global_init_ply = global_init_dir / "sparse_pc.ply"
+    global_init_geometry = global_init_dir / "lidar_init_geometry.npz"
+    if not (global_init_ply.is_file() and global_init_geometry.is_file()):
+        say("[prepare] global_init: building")
+        global_init_dir.mkdir(parents=True, exist_ok=True)
+        decimation = float(profile.coarse_prior["init_decimation_m"])
+        command = (
+            interpreter, str(repo / "tools" / "build_lidar_init.py"),
+            "--run", str(bundle.source_root),
+            "--output", str(global_init_dir),
+            "--voxel-size", str(decimation),
+            "--with-pca",
+            "--seed", "42",
+        )
+        code = run(command)
+        if code != 0 or not (global_init_ply.is_file() and global_init_geometry.is_file()):
+            raise FreshBuildBlocked("global_init", command, f"build_lidar_init.py exited {code}")
+    else:
+        say("[prepare] global_init: present")
+
+    # The readiness gate. Outside ingestion by design; refuse rather than forge one.
+    if pipeline_gate is None:
+        raise DatasetIncompleteError(
+            "no mipmap pipeline gate. The trainer refuses fisheye data without the signed "
+            "thirteen-stage readiness gate, and its chain is not part of ingestion. Produce it "
+            "with " + " then ".join(GATE_TOOLS) + " against this work root's caches, then pass "
+            "--pipeline-gate PATH."
+        )
+    gate_path = Path(pipeline_gate)
+    from cloudstudio_3dgs.pipeline.mipmap_gate import load_and_verify_gate
+
+    load_and_verify_gate(gate_path)  # raises on a bad signature
+
+    # Project the built graph onto the trainer's path contract.
+    specs = {status.spec.name: status.spec for status in plan.statuses()}
+    fields: dict[str, Any] = {}
+    for cache, (manifest_field, root_field) in _SCENE_FIELD_BY_CACHE.items():
+        spec = specs[cache]
+        fields[manifest_field] = spec.manifest
+        if root_field:
+            fields[root_field] = spec.root
+    tile_ownership = {
+        spec.tile_id: (spec.manifest, spec.root)
+        for spec in specs.values()
+        if spec.name.startswith("tile_ownership_") and spec.tile_id is not None
+    }
+    sky = specs["sky_masks"]
+    caches = DerivedCaches(
+        sky_mask_manifest=sky.manifest,
+        sky_mask_root=sky.root,
+        tile_ownership=tile_ownership,
+    )
+    return PreparedScene(
+        scene_tag=str(bundle.dataset_id),
+        dataset_root=dataset_root,
+        recording_root=Path(bundle.source_root),
+        lidar_cloud=Path(bundle.point_cloud.path),
+        global_init_ply=global_init_ply,
+        global_init_geometry=global_init_geometry,
+        pipeline_gate=gate_path,
+        caches=caches,
+        **fields,
     )
