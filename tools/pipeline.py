@@ -1301,7 +1301,10 @@ class Step:
     and never force downstream work to repeat. ``independent`` steps (the
     per-tile trainings of a delivery) still anchor - a missing tile must
     invalidate the merge - but are never repeated once done, because they do
-    not consume anything an earlier step produced.
+    not consume anything an earlier step produced. ``skip_when`` names a step that
+    does not apply to this run at all (a strip with no competitor to score against):
+    a non-empty reason means the step is reported skipped with that reason, never
+    runs, and never moves the resume point, whatever the resume rule would say.
     """
 
     name: str
@@ -1310,8 +1313,14 @@ class Step:
     done: Callable[[], bool] | None = None
     anchor: bool = True
     independent: bool = False
+    skip_when: Callable[[], str | None] | None = None
+
+    def skip_reason(self) -> str | None:
+        return self.skip_when() if self.skip_when is not None else None
 
     def is_done(self) -> bool:
+        if self.skip_reason():
+            return True
         if self.done is not None:
             return bool(self.done())
         return bool(self.artifacts) and all(path.exists() for path in self.artifacts)
@@ -1334,7 +1343,9 @@ def plan_steps(steps: Sequence[Step], *, force: bool = False) -> list[tuple[Step
                 break
     plan: list[tuple[Step, bool]] = []
     for index, step in enumerate(steps):
-        if force:
+        if step.skip_reason():
+            will_run = False
+        elif force:
             will_run = True
         elif index >= resume_from:
             will_run = not (step.independent and step.is_done())
@@ -1354,8 +1365,9 @@ def run_steps(
     reports: list[StepReport] = []
     for step, will_run in plan_steps(steps, force=force):
         if not will_run:
-            status(f"skip {step.name} (already done)")
-            reports.append(StepReport(step.name, "skip"))
+            reason = step.skip_reason() or "already done"
+            status(f"skip {step.name} ({reason})")
+            reports.append(StepReport(step.name, "skip", "" if reason == "already done" else reason))
             continue
         status(f"start {step.name}")
         try:
@@ -1564,6 +1576,32 @@ class PipelineContext:
 # --------------------------------------------------------------------------
 
 
+NO_REFERENCE_SCORES_NOTE = (
+    "[no reference model] compare/offtraj strips were not built or scored: "
+    "reference_ply or reference_alignment is absent; morphology and battery follow\n"
+)
+
+
+def reference_model_present(cfg: PipelineConfig) -> bool:
+    """Both halves of the competitor reference exist: the PLY and its rigid alignment."""
+    return Path(cfg.reference_ply).is_file() and Path(cfg.reference_alignment).is_file()
+
+
+def missing_reference_reason(cfg: PipelineConfig) -> str | None:
+    """``Step.skip_when`` for the strips that score against the competitor model.
+
+    A first delivery of a new scene has no competitor to compare against, and failing
+    there would throw away a full training run; the strip steps are reported skipped
+    with this reason instead. With a reference present the ordinary resume rule applies.
+    """
+    if reference_model_present(cfg):
+        return None
+    return (
+        f"no reference model at {cfg.reference_ply} (or its alignment); "
+        "the strip that scores against the competitor is not produced"
+    )
+
+
 def arm_steps(ctx: PipelineContext, arm: str) -> list[Step]:
     cfg = ctx.config
     out = cfg.arm_dir(arm)
@@ -1675,10 +1713,14 @@ def arm_steps(ctx: PipelineContext, arm: str) -> list[Step]:
     def score() -> None:
         gate()
         log = out / "scores.log"
-        ctx.run_capture_or_fail(ctx.python_tool("score_compare_sharpness.py", compare_dir), capture=scores, log=log)
-        ctx.run_capture_or_fail(
-            ctx.python_tool("score_offtrajectory_strips.py", f"{arm}={offtraj_dir}"), capture=scores, log=log, append=True
-        )
+        if reference_model_present(cfg):
+            ctx.run_capture_or_fail(ctx.python_tool("score_compare_sharpness.py", compare_dir), capture=scores, log=log)
+            ctx.run_capture_or_fail(
+                ctx.python_tool("score_offtrajectory_strips.py", f"{arm}={offtraj_dir}"), capture=scores, log=log, append=True
+            )
+        else:
+            # The strips were skipped above; scoring their empty directories would fail here.
+            _write_text_atomic(scores, NO_REFERENCE_SCORES_NOTE)
         _append_text(scores, morph.read_text(encoding="utf-8"))
         _append_text(scores_file, f"[{arm}] scores {_timestamp()}\n" + scores.read_text(encoding="utf-8"))
         ctx.arm_job(arm).set(STATE_EVALUATED, "strips scored")
@@ -1694,8 +1736,17 @@ def arm_steps(ctx: PipelineContext, arm: str) -> list[Step]:
             anchor=False,
         ),
         Step("morph", morph_run, artifacts=(morph,)),
-        Step("offtraj", offtraj, artifacts=(offtraj_dir / "offtraj_summary.json",)),
-        Step("compare", compare, artifacts=(compare_dir / "compare_summary.json",)),
+        # Both strips score against the competitor model. A first delivery of a new scene has
+        # none, and the SDK's first real run would have trained a prior for forty minutes and
+        # then died here; without a reference these two report as skipped, by name, instead.
+        Step(
+            "offtraj", offtraj, artifacts=(offtraj_dir / "offtraj_summary.json",),
+            skip_when=lambda: missing_reference_reason(cfg),
+        ),
+        Step(
+            "compare", compare, artifacts=(compare_dir / "compare_summary.json",),
+            skip_when=lambda: missing_reference_reason(cfg),
+        ),
         Step("identity", freeze, artifacts=(identity,)),
         Step("scores", score, artifacts=(scores,)),
     ]
@@ -1965,11 +2016,22 @@ def deliver_steps(
         return [
             Step(f"{prefix}morph", morph_run, artifacts=(morph_out,)),
             Step(f"{prefix}battery", battery_run, artifacts=(battery_out,)),
-            Step(f"{prefix}compare_matched", compare, artifacts=(compare_out / "compare_summary.json",)),
-            Step(f"{prefix}offtraj_matched", offtraj, artifacts=(offtraj_out / "offtraj_summary.json",)),
+            Step(
+                f"{prefix}compare_matched", compare, artifacts=(compare_out / "compare_summary.json",),
+                skip_when=lambda: missing_reference_reason(cfg),
+            ),
+            Step(
+                f"{prefix}offtraj_matched", offtraj, artifacts=(offtraj_out / "offtraj_summary.json",),
+                skip_when=lambda: missing_reference_reason(cfg),
+            ),
         ]
 
     def score_strips(capture: Path, compare_out: Path, offtraj_out: Path, morph_out: Path, score_log: Path) -> None:
+        if not reference_model_present(cfg):
+            # The matched strips were skipped; the morphology and battery still score.
+            _write_text_atomic(capture, NO_REFERENCE_SCORES_NOTE)
+            _append_text(capture, morph_out.read_text(encoding="utf-8"))
+            return
         compare_dirs = [*cfg.delivery_baselines["compare"], compare_out]
         ctx.run_capture_or_fail(ctx.python_tool("score_compare_sharpness.py", *compare_dirs), capture=capture, log=score_log)
         pairs = [f"{name}={path}" for name, path in cfg.delivery_baselines["offtraj"].items()]
@@ -2584,7 +2646,8 @@ def run_state(ctx: PipelineContext, names: Sequence[str]) -> int:
 
 def _print_plan(ctx: PipelineContext, steps: Sequence[Step], *, force: bool) -> None:
     for step, will_run in plan_steps(steps, force=force):
-        print(f"  {'RUN ' if will_run else 'skip'} {step.name}", file=ctx.stream)
+        reason = step.skip_reason()
+        print(f"  {'RUN ' if will_run else 'skip'} {step.name}" + (f"  ({reason})" if reason else ""), file=ctx.stream)
 
 
 def main(argv: Sequence[str] | None = None) -> int:

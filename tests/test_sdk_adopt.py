@@ -25,6 +25,7 @@ from cloudstudio3dgs_sdk.adopt import adopt_scene, self_sha256, verify_prepare_m
 from cloudstudio3dgs_sdk.plan import (
     DERIVED_SCENE_KEYS,
     DERIVED_TILE_KEYS,
+    OPTIONAL_SCENE_KEYS,
     DatasetSummary,
     TileSummary,
     WorkLayout,
@@ -331,7 +332,9 @@ class AdoptSucceedsTests(AdoptFixture):
     def test_every_derived_key_is_bound_and_verified(self) -> None:
         adopted = self.scene.adopt()
         for key in DERIVED_SCENE_KEYS:
-            if key == "delivery_eval_config":
+            if key == "delivery_eval_config" or key in OPTIONAL_SCENE_KEYS:
+                # prepare writes the eval config; the competitor reference is optional and
+                # this fixture declares none
                 continue
             self.assertIn(key, adopted.derived_paths, key)
         for tile_id, _, _, _ in TILES:

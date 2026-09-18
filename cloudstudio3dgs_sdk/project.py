@@ -778,7 +778,12 @@ class Project:
             "merge_policy": str(self.profile.merge["policy"]),
             "harmonize_exposure": bool(self.profile.merge["harmonize_exposure"]),
             "delivery_tiles": [tile.tile_id for tile in plan.dataset.tiles if tile.tile_id != 0],
-            "delivery_tile_arm_pattern": "tile{tile}_" + f"{self.profile.name}_delivery",
+            # tools/pipeline.py validates that both {tile} and {tag} appear. The SDK's arm names
+            # are tile{N}_{profile}_{generation} and its delivery tag defaults to the profile
+            # name, so with {tag} = profile the pattern expands to exactly the arms the plan
+            # trained. The first real SDK run died here: the pattern carried the profile name
+            # literally and no {tag}, and the pipeline refused it before training anything.
+            "delivery_tile_arm_pattern": "tile{tile}_{tag}_delivery",
             "gpu_device": "cuda:0",
             "env": {"PYTHONIOENCODING": "utf-8"},
         }

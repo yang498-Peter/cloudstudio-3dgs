@@ -214,6 +214,12 @@ class PipelineFixture(unittest.TestCase):
         self.exports.mkdir()
         self.sky = self.exports / "sky.ply"
         self.sky.write_bytes(b"sky")
+        # The competitor reference the strips score against. Present in this fixture so the
+        # historical step sequences hold; NoReferenceTests removes it to pin the skip path.
+        self.reference_ply = self.base / "ref.ply"
+        self.reference_alignment = self.base / "align.json"
+        self.reference_ply.write_bytes(b"ref")
+        self.reference_alignment.write_text("{}", encoding="utf-8")
         raw = {
             "run_root": str(self.run_root),
             "repo_root": str(self.repo_root),
@@ -599,6 +605,84 @@ class StepExecutorTests(unittest.TestCase):
 
         reports = run_steps([Step("x", boom, done=lambda: False)], status=lambda _: None)
         self.assertEqual(reports[0].detail, "exit 3; see log")
+
+
+class NoReferenceTests(PipelineFixture):
+    """A scene with no competitor model skips the strips instead of failing after training.
+
+    The SDK's first real run would have trained the coarse prior for forty minutes and then
+    died in the arm pipeline's off-trajectory step, because the SDK points reference_ply at a
+    file a first delivery of a new scene does not have. The two reference-scored steps now
+    report themselves skipped, by name, and everything after them still runs.
+    """
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.reference_ply.unlink()
+        self.reference_alignment.unlink()
+
+    def test_arm_skips_both_strips_and_still_freezes_and_scores(self) -> None:
+        self.write_arm_config("armA")
+        lines: list[str] = []
+        reports = run_steps(arm_steps(self.ctx, "armA"), status=lines.append)
+        by_name = {report.name: report.action for report in reports}
+        self.assertEqual(by_name["offtraj"], "skip")
+        self.assertEqual(by_name["compare"], "skip")
+        self.assertEqual(by_name["identity"], "done")
+        self.assertEqual(by_name["scores"], "done")
+        tools = self.runner.tools_called()
+        self.assertNotIn("build_offtrajectory_compare.py", tools)
+        self.assertNotIn("build_three_way_compare.py", tools)
+        self.assertNotIn("score_compare_sharpness.py", tools, "nothing to score without the strips")
+        self.assertNotIn("score_offtrajectory_strips.py", tools)
+        self.assertIn("freeze_run_identity.py", tools)
+        scores = (self.config.arm_dir("armA") / "scores.txt").read_text(encoding="utf-8")
+        self.assertIn("[no reference model]", scores)
+        self.assertIn("checkpoint_morphology.py ran", scores, "morphology still scores without a reference")
+
+    def test_delivery_skips_the_matched_strips_and_their_scorers(self) -> None:
+        self.write_arm_config("tile0_R1")
+        self.plant_checkpoint("tile0_R1")
+        for tile in (1, 2, 3):
+            arm = self.config.delivery_tile_arm("r1d", tile)
+            self.write_arm_config(arm)
+            self.plant_checkpoint(arm)
+        (self.run_root / "delivery_eval.json").write_text("{}", encoding="utf-8")
+        reports = run_steps(deliver_steps(self.ctx, "r1d", "tile0_R1"), status=lambda _: None)
+        by_name = {report.name: report.action for report in reports}
+        for name in ("compare_matched", "offtraj_matched", "final_compare_matched", "final_offtraj_matched"):
+            self.assertEqual(by_name[name], "skip", name)
+        self.assertEqual(by_name["final_battery_pair"], "done")
+        self.assertEqual(by_name["scores"], "done")
+        tools = self.runner.tools_called()
+        self.assertNotIn("score_compare_sharpness.py", tools)
+        self.assertNotIn("score_offtrajectory_strips.py", tools)
+        self.assertIn("evaluate_probe_views.py", tools)
+        self.assertEqual(self.ctx.delivery_job("r1d").state, STATE_QUALITY_ACCEPTED)
+
+    def test_the_skip_is_announced_with_its_reason(self) -> None:
+        self.write_arm_config("armA")
+        # The plan view says it before anything runs: the strips are out, training is in.
+        planned = {step.name: will_run for step, will_run in plan_steps(arm_steps(self.ctx, "armA"))}
+        self.assertFalse(planned["offtraj"])
+        self.assertFalse(planned["compare"])
+        self.assertTrue(planned["train"])
+        lines: list[str] = []
+        reports = run_steps(arm_steps(self.ctx, "armA"), status=lines.append)
+        self.assertTrue(any(line.startswith("skip offtraj (no reference model at ") for line in lines), lines)
+        self.assertTrue(any(line.startswith("skip compare (no reference model at ") for line in lines), lines)
+        detail = {report.name: report.detail for report in reports}
+        self.assertIn("no reference model", detail["offtraj"])
+        self.assertEqual(detail["identity"], "")
+
+    def test_with_the_reference_restored_the_strips_run_again(self) -> None:
+        self.reference_ply.write_bytes(b"ref")
+        self.reference_alignment.write_text("{}", encoding="utf-8")
+        self.write_arm_config("armA")
+        reports = run_steps(arm_steps(self.ctx, "armA"), status=lambda _: None)
+        by_name = {report.name: report.action for report in reports}
+        self.assertEqual(by_name["offtraj"], "done")
+        self.assertEqual(by_name["compare"], "done")
 
 
 if __name__ == "__main__":

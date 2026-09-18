@@ -291,7 +291,10 @@ class PrepareTests(ProjectFixture):
         pipeline = json.loads((self.work / "pipeline.json").read_text(encoding="utf-8"))
         self.assertEqual(pipeline["run_root"], str(runs))
         self.assertEqual(pipeline["battery_views"], 48)
-        self.assertEqual(pipeline["delivery_tile_arm_pattern"], "tile{tile}_b5fill2_delivery")
+        # tools/pipeline.py validates that the pattern carries both {tile} and {tag}; the literal
+        # profile-name form this used to assert was refused by the pipeline on the first real
+        # SDK run, before any training. With {tag} = profile it expands to the same arm names.
+        self.assertEqual(pipeline["delivery_tile_arm_pattern"], "tile{tile}_{tag}_delivery")
 
     def test_a_completed_stage_is_skipped(self) -> None:
         project = self.project()

@@ -568,7 +568,12 @@ DERIVED_SCENE_KEYS = (
     "global_view_backgrounds_manifest",
     "global_view_backgrounds_root",
     "delivery_eval_config",
+    # optional: the competitor model the strips are scored against; absent on a first delivery
+    "reference_ply",
+    "reference_alignment",
 )
+#: Keys in DERIVED_SCENE_KEYS a scene may legitimately lack. They never become placeholders.
+OPTIONAL_SCENE_KEYS = ("reference_ply", "reference_alignment")
 DERIVED_TILE_KEYS = (
     "initialization_ply",
     "initialization_geometry",
@@ -618,9 +623,20 @@ def resolve_cache_paths(
             f"<prepare:{tile.name}/initialization_geometry.npz>"
         )
     for key in DERIVED_SCENE_KEYS:
+        if key in OPTIONAL_SCENE_KEYS:
+            # An optional input is simply absent, not unresolved: a first delivery of a new
+            # scene has no competitor model, and a placeholder here would read as a plan that
+            # cannot run when the plan runs fine without the comparison.
+            continue
         defaults.setdefault(key, f"<prepare:{key}>")
     resolved = dict(defaults)
-    resolved.update({key: str(value) for key, value in paths.items() if key in defaults})
+    resolved.update(
+        {
+            key: str(value)
+            for key, value in paths.items()
+            if key in defaults or key in OPTIONAL_SCENE_KEYS
+        }
+    )
     return resolved
 
 

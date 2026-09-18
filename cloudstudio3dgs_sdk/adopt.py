@@ -212,8 +212,16 @@ def adopt_scene(
     sky_ply: Path | str | None = None,
     sky_dome: Path | str | None = None,
     dataset_root: Path | str | None = None,
+    reference_ply: Path | str | None = None,
+    reference_alignment: Path | str | None = None,
 ) -> AdoptedScene:
-    """Build the prepared scene from as-run configs, verifying every artefact."""
+    """Build the prepared scene from as-run configs, verifying every artefact.
+
+    ``reference_ply`` / ``reference_alignment`` name the competitor model the campaign's
+    three-way and off-trajectory comparisons score against. A scene that has one gets those
+    comparisons; a first delivery of a new scene has none, and the pipeline's arm steps skip
+    them by name rather than fail after a full training run.
+    """
     if not tile_configs:
         raise StageRefused("adopt needs at least one tile config")
     ledger = _Ledger()
@@ -356,6 +364,29 @@ def adopt_scene(
     lock = ledger.file(_agree(everything, "gsplat_lock", what="gsplat lock"), what="gsplat_lock")
     ledger.record("gsplat_lock", lock, file_sha256(lock))
     derived["gsplat_lock"] = str(lock)
+
+    # -- competitor reference model (optional) --------------------------------
+    # The campaign scores three-way and off-trajectory strips against a competitor delivery.
+    # A scene that has one records it here; the pipeline skips those comparisons by name for
+    # a scene that does not, instead of failing after a full training run.
+    if (reference_ply is None) != (reference_alignment is None):
+        raise StageRefused(
+            "give both --reference-ply and --reference-alignment or neither; a reference model "
+            "without its rigid alignment (or the reverse) cannot be scored against"
+        )
+    if reference_ply is not None:
+        ref = ledger.file(reference_ply, what="reference PLY")
+        align = ledger.file(reference_alignment, what="reference alignment")
+        ledger.record("reference_ply", ref, file_sha256(ref))
+        ledger.record("reference_alignment", align, file_sha256(align))
+        derived["reference_ply"] = str(ref)
+        derived["reference_alignment"] = str(align)
+        ledger.verified.append(f"reference model: {ref.name} + {align.name}")
+    else:
+        notes.append(
+            "no reference (competitor) model given: the three-way and off-trajectory "
+            "comparisons will be skipped, and the report's sharpness gate stays UNVERIFIED"
+        )
     global_ply = ledger.file(coarse.get("initialization_ply", ""), what="coarse initialization_ply")
     global_init_point_count = read_ply_vertex_count(global_ply)
     ledger.record("global_init_ply", global_ply, file_sha256(global_ply))

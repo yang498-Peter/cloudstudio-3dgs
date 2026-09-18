@@ -162,6 +162,19 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="the sky dome checkpoint (default: dome_source recorded in the backdrop manifests)",
     )
+    adopt.add_argument(
+        "--reference-ply",
+        type=Path,
+        default=None,
+        help="competitor model PLY the three-way and off-trajectory strips score against (optional; "
+        "give it with --reference-alignment or not at all)",
+    )
+    adopt.add_argument(
+        "--reference-alignment",
+        type=Path,
+        default=None,
+        help="JSON with the rigid transform bringing --reference-ply into this scene's frame",
+    )
     adopt.add_argument("--repo-root", type=Path, default=None)
     adopt.add_argument("--python", type=Path, default=None)
     return parser
@@ -213,6 +226,8 @@ def _adopt(args: argparse.Namespace, stream) -> int:
         sky_ply=args.sky_ply,
         sky_dome=args.sky_dome,
         dataset_root=args.dataset,
+        reference_ply=args.reference_ply,
+        reference_alignment=args.reference_alignment,
     )
     project = Project(
         adopted.scene.dataset_root,
