@@ -350,7 +350,8 @@ python -m cloudstudio3dgs_sdk adopt --work <work> --profile b5sky --scene-tag ho
     --tile-config <runs>/tile0_.../config_as_run.json  (每个切片一份) \
     --coarse-config <runs>/house0305_global_coarse_B0_10k.json \
     --sky-dome <probes>/sky_house0305.pt --sky-ply <exports>/house0305_f5_sky_20260903.ply \
-    --reference-ply <竞品.ply> --reference-alignment <刚体对齐.json>
+    --reference-ply <竞品.ply> --reference-alignment <刚体对齐.json> \
+    --eval-config <runs>/house0305_sop/delivery_eval.json
 
 # 先干跑：输出里不能出现 "<prepare:" 占位符，否则清单不完整
 python -m cloudstudio3dgs_sdk run --dataset <数据集> --work <work> --profile b5sky --vram-gib 15.9 \
@@ -371,6 +372,20 @@ python -m cloudstudio3dgs_sdk run --dataset <数据集> --work <work> --profile 
 * **不要**把整个 `run` 再包一层 `tools/gpu_lease.py`：流水线自己对 `<work>/runs/gpu.lock` 逐训练步取租约，
   外层同文件的租约会让第一个训练步拒绝自己的祖先进程（2026-09-18 实测）。
 * 配方 sha 变了（改任何旋钮）就换一个新的 `--work`，旧工作根不会被续跑。
+* **`--eval-config` 对 house0305 是必须的。** battery 的验证缓存不是配置里的路径，是评估器按名字从训练缓存
+  派生的（`face4`→`face4_val`、`_train`→`_val`，规则在 `cloudstudio_3dgs/training/validation_paths.py`）。
+  house0305 用 v9 缓存训练，但 v9 没有 `face4_lidar_val_vis6`；历次交付都是拿 v8 的 `delivery_eval.json`
+  评的。不传时 prepare 会按派生规则预查验证缓存，缺了就在训练前拒绝，而不是训练 7 小时后死在 battery。
+* 续跑时预检只按**还没跑的步骤**要磁盘（`Plan.pending()`），报告里同时给整计划数字；已存在的产物不再计费。
+* `write_arm_configs` / `delivery_eval_config` / `acceptance_report` 是 `refresh` 步骤：每次 prepare/report 都重写
+  （内容不变则字节相同），不会因为"输出已存在"而留下过期的评估配置或报告。
+* 采纳了参考模型后，交付阶段会多出 `compare_matched` / `offtrajectory` / `offtrajectory_score` 三步（argv 与
+  `tools/pipeline.py deliver` 一致），报告的离轨锐度门禁读 `offtrajectory_scores.json` 的中位 `sharp_ratio`。
+  交付完成后才补上参考模型也行：计划多出的步骤会让 deliver 只跑这三步，然后重开 report。
+
+house0305 首跑结果（2026-09-19，eng `749b34a`）：五项门禁全部 PASS——成对 alpha p05 0.907 / PSNR p10 15.08 /
+离轨锐度 0.468 / 16.08M 高斯 / 短轴 p50 0.456 mm；与手工 B5 交付（0.898 / 15.05 / 0.454 / 16.72M）同量级。
+GPU 总耗时约 6.5 h（粗先验 31 min，四切片 77–110 min，交付评分 < 3 min）。
 
 ### 9.2 换一套新数据
 
