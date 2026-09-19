@@ -298,7 +298,8 @@ def score_ladder(spec: Mapping[str, Any], *, run_root: Path, out_dir: Path, pyth
     base_tag = "base"
     status = {"base": ensure_arm_scores(base_dir, base_tag, scoring, python=python, repo_root=repo_root, run=run)}
     base_off = _read_json(base_dir / "offtraj_scores.json") or {}
-    base_rows = {r["file"]: r for r in base_off.get(base_tag, [])}
+    # One strip set per file; accept whatever tag wrote it (a peek script, an older scorer).
+    base_rows = {r["file"]: r for r in (base_off.get(base_tag) or next(iter(base_off.values()), []))}
     base_batt = _read_json(base_dir / "battery_tile_owned.json") or {}
     summary: dict[str, Any] = {
         "ladder": spec["name"],
@@ -333,7 +334,7 @@ def score_ladder(spec: Mapping[str, Any], *, run_root: Path, out_dir: Path, pyth
             roi_stat = band_doc.get("paired_statistic") or {}
             panel = band_doc.get("panel_statistic") or {}
         off = _read_json(arm_dir / "offtraj_scores.json") or {}
-        rows = {r["file"]: r for r in off.get(tag, [])}
+        rows = {r["file"]: r for r in (off.get(tag) or next(iter(off.values()), []))}
         sharp = paired_stats(base_rows, rows, "sharp_ratio") if rows and base_rows else {"n": 0}
         psnrq = paired_stats(base_rows, rows, "psnr_q") if rows and base_rows else {"n": 0}
         batt = _read_json(arm_dir / "battery_tile_owned.json") or {}

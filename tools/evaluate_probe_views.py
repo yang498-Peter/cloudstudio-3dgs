@@ -196,6 +196,11 @@ def main() -> int:
         }
         step = -1
         source = str(args.reference_ply)
+        # A delivery PLY carries exactly the coefficients it was exported with; the
+        # competitor's has none beyond DC. Render it at its own degree: an eval config
+        # that says 1 (a tile config) asserts inside the rasterizer on a DC-only PLY,
+        # and one that says 3 would read coefficients that are not there.
+        backend.sh_degree = model_sh_degree(params)
         # A PLY carries no merge report, so whether its colours hold baked
         # per-tile gains stays unknown; the spec marks exposure unpropagated.
         spec_checkpoint_meta = None
