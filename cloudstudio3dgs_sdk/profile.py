@@ -1097,9 +1097,98 @@ def _derive_b5sky() -> Profile:
 
 PROFILE_B5SKY = _derive_b5sky()
 
-# The recommended recipe comes first; b5fill2 stays so the campaign's own deliveries reproduce.
+
+def _derive_b6reset() -> Profile:
+    """b5sky with the opacity reset every 3000 steps instead of every 300.
+
+    The competitor comparison of 2026-09-19 left one gap, novel-view detail at about half
+    of theirs, and ladders L28-L31 on Tile_1 showed why: the recipe turns over ~18% births /
+    ~15% deaths of its population every 100-step refine cycle and pushes every opacity back
+    under 0.2 every 300 steps, so a gaussian lives a few hundred steps and never converges.
+    Loss terms, colour degree, growth threshold and window did nothing (L28); the reset cadence
+    did everything at once: door-ROI brightness-matched sharpness 0.461 -> 0.592 against the
+    competitor (paired +25%, sign test 0.95, gradient agreement up so it is texture, not
+    needles), off-trajectory sharpness +18% (17 of 18 strips), churn 2%, transparent share
+    49% -> 26%, mid axis 2.62 -> 2.20 mm - every morphology figure toward the competitor - and
+    the gain survives export at min_opacity 0.05 (4.87M gaussians, +25.3%, 42 of 44).
+
+    Everything else is b5sky verbatim. The vendor order honours this cadence through its own
+    profile name (deferred_every3000_compatibility); the exact-MipMap contract accepts it.
+    Acceptance stays b5sky's: the gates were passed by b5sky and must not move because of a
+    candidate. Not the default until a full four-tile delivery has been scored as the pair.
+    """
+    base = PROFILE_B5SKY
+    trainer_base = thaw(base.trainer_base)
+    strategy = dict(trainer_base["default_strategy"])
+    strategy["reset_every"] = 3000
+    strategy["vendor_opacity_reset_profile"] = "deferred_every3000_compatibility"
+    trainer_base["default_strategy"] = strategy
+
+    provenance = dict(base.provenance)
+    provenance["trainer_base.default_strategy.reset_every"] = Provenance(
+        "Tile_1 ladder L31a (base tile1_b5sky_delivery, one change): door-ROI brightness-matched "
+        "sharpness ours/competitor 0.461 -> 0.592, paired +25.1% with sign test 0.95 (42 of 44), "
+        "gradient energy +6.2% and agreement +6.9% (texture, not needles); off-trajectory strips "
+        "+18.2% (17 of 18); tile-owned battery +0.21 / +0.09 dB; churn 17.6%/14.5% -> 1.9%/1.9% "
+        "per cycle; opacity < 0.1 share 0.49 -> 0.26; mid axis 2.62 -> 2.20 mm. Exported at "
+        "min_opacity 0.05 the gain is unchanged (+25.3%, 42 of 44).",
+        "research/quality_recovery_v2/18_ladder28_detail_gap.zh-CN.md 4.12-4.16; ladders/L31.json; "
+        "ladders/out/ladder_L31_summary.md; tile1_L31a_reset3000_20k/export_check/summary.json",
+        MEASURED,
+    )
+    provenance["trainer_base.default_strategy.vendor_opacity_reset_profile"] = Provenance(
+        "The profile name the vendor execution order derives its expected reset interval from; "
+        "3000 is only admitted through it.",
+        "cloudstudio_3dgs/training/trainer.py TrainerConfig.validate (pre_optimizer_vendor branch)",
+        MEASURED,
+    )
+    open_questions = [dict(item) for item in base.open_questions]
+    open_questions.append(
+        {
+            "id": "lifecycle-churn",
+            "what": (
+                "With the reset every 3000 the population still turns over 2% per cycle and 26% of "
+                "it sits below opacity 0.1; the competitor carries 18%. The cull threshold (L31b) "
+                "and the local coverage cull (L30c) each read sharper on their own; whether they "
+                "stack on top of this cadence is unmeasured."
+            ),
+            "expressed_as": "trainer_base.default_strategy.reset_every / prune_opa / opacity_cull_policy",
+            "status": "open; next ladder",
+        }
+    )
+    return make_profile(
+        name="b6reset",
+        version="2026.09.19",
+        summary=(
+            "b5sky with the opacity reset every 3000 steps (was 300): the one change that moved "
+            "novel-view detail toward the competitor on Tile_1 (door ROI 0.461 -> 0.592, "
+            "off-trajectory +18%) with every morphology figure following. Candidate: not scored "
+            "as a four-tile delivery yet."
+        ),
+        runtime=thaw(base.runtime),
+        dataset_contract=thaw(base.dataset_contract),
+        tiling=thaw(base.tiling),
+        trainer_base=trainer_base,
+        tile_rules=thaw(base.tile_rules),
+        coarse_prior=thaw(base.coarse_prior),
+        backdrop=thaw(base.backdrop),
+        merge=thaw(base.merge),
+        export=thaw(base.export),
+        battery=thaw(base.battery),
+        acceptance=thaw(base.acceptance),
+        cost_model=thaw(base.cost_model),
+        external_assets=thaw(base.external_assets),
+        open_questions=tuple(open_questions),
+        provenance=provenance,
+    )
+
+
+PROFILE_B6RESET = _derive_b6reset()
+
+# The recommended recipe comes first; b5fill2 stays so the campaign's own deliveries reproduce;
+# b6reset is the candidate under delivery-scale validation.
 PROFILES: Mapping[str, Profile] = MappingProxyType(
-    {PROFILE_B5SKY.name: PROFILE_B5SKY, PROFILE_B5FILL2.name: PROFILE_B5FILL2}
+    {PROFILE_B5SKY.name: PROFILE_B5SKY, PROFILE_B6RESET.name: PROFILE_B6RESET, PROFILE_B5FILL2.name: PROFILE_B5FILL2}
 )
 DEFAULT_PROFILE = PROFILE_B5SKY.name
 
