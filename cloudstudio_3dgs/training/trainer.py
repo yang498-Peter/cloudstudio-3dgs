@@ -1311,7 +1311,12 @@ class TrainerConfig:
             vendor_cull_warmup_profile = None
             vendor_opacity_reset_profile = "exact_every300"
             expected_reset_every = 300
-            if execution_order == "pre_optimizer_vendor":
+            # The cull warm-up and reset profiles are the only admitted thresholds and
+            # intervals. Reading them under the vendor order alone hard-wired 300 and
+            # 0.10/0.05 into the post-optimizer order, so "reset every 3000 + local coverage
+            # cull" could not be declared at all (ladders L30/L31, 2026-09-19). Both orders
+            # read the profiles; the vendor order still enforces its full table below.
+            if execution_order in ("pre_optimizer_vendor", "post_optimizer_gsplat"):
                 vendor_cull_warmup_profile = self.default_strategy.get(
                     "vendor_cull_warmup_profile", "exact_0p10_to_0p05"
                 )
