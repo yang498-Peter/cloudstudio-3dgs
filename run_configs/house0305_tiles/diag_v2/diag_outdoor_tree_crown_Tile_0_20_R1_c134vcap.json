@@ -1,0 +1,802 @@
+{
+ "trainer_preset": "custom",
+ "seed": 42,
+ "factor": 1,
+ "require_person_masks": true,
+ "checkpoint_every": 5000,
+ "checkpoint_keep_every": 1000000,
+ "sh_degree": 1,
+ "sh_degree_interval": 0,
+ "color_model": "sh",
+ "background_color": [
+  1.0,
+  1.0,
+  1.0
+ ],
+ "pinhole_rasterize_mode": "classic",
+ "pinhole_with_ut": false,
+ "view_sampling_mode": "fisher_yates_without_replacement_per_epoch",
+ "surface_initialization": {
+  "enabled": true,
+  "mode": "mipmap_k7_k30",
+  "planarity_gate": 0.6,
+  "normal_scale_ratio": 0.5
+ },
+ "metric_scale_calibration": {
+  "mode": "precomputed",
+  "knn_neighbors": 7,
+  "knn_reduction": "arithmetic_mean",
+  "scale_multiplier": 1.0,
+  "means_step_fraction": null
+ },
+ "rgb_l1_weight": 0.6,
+ "rgb_ssim_weight": 0.4,
+ "rgb_ssim_mode": "local_gaussian",
+ "lidar_range_weight": 0.0,
+ "lidar_range_loss_mode": "robust_log_huber",
+ "lidar_log_range_huber_delta": 0.05,
+ "da2_depth_weight": 0.15,
+ "da2_depth_space": "compressed",
+ "mono_depth_max_range_m": 30.0,
+ "lidar_alpha_weight": 0.1,
+ "lidar_alpha_target": 0.95,
+ "lidar_alpha_dilation_radius_px": 6,
+ "surface_alpha_floor_profile": true,
+ "lidar_normal_alignment": {
+  "enabled": true,
+  "weight_align": 0.05,
+  "weight_flatten": 0.05,
+  "weight_tangent_isotropy": 0.1,
+  "planarity_gate": 0.6,
+  "flatten_mode": "tangent_ratio",
+  "flatten_ratio_target": 0.33,
+  "tangent_isotropy_max_ratio": 60.0
+ },
+ "geometry_regularization": {
+  "enabled": true,
+  "opacity_sparsity_weight": 0.0,
+  "scale_upper_weight": 0.0,
+  "anisotropy_weight": 0.01,
+  "max_world_size_m": 0.2,
+  "world_shrink_factor": 0.8,
+  "max_anisotropy": 80.0
+ },
+ "topology_policy": {
+  "mode": "adaptive_growth"
+ },
+ "densification_strategy": "default_3dgs",
+ "densification_gradient_source": "total_loss",
+ "mcmc_noise_lr": 0.0,
+ "mcmc_noise_injection_stop_iter": 0,
+ "mcmc_refine_start_iter": 500,
+ "mcmc_refine_stop_iter": 6300,
+ "mcmc_refine_every": 100,
+ "learning_rates": {
+  "means": 2.4857029318809512e-05,
+  "scales": 0.005,
+  "quats": 0.001,
+  "opacities": 0.05,
+  "colors": 0.0025
+ },
+ "means_lr_final_factor": 0.01,
+ "exposure_compensation": {
+  "enabled": true,
+  "learning_rate": 0.005
+ },
+ "golden_evaluation": {
+  "enabled": false
+ },
+ "final_evaluation_artifacts": false,
+ "default_strategy": {
+  "exact_mipmap_lifecycle": true,
+  "lifecycle_execution_order": "pre_optimizer_vendor",
+  "detail_split_policy": "lidar_surface_screen_detail",
+  "absgrad": false,
+  "grow_grad2d": 5e-05,
+  "split_scale_m": 0.2,
+  "prune_scale_m": 0.2,
+  "prune_opa": 0.1,
+  "prune_opa_late": 0.05,
+  "prune_scale2d": 0.15,
+  "reset_every": 3000,
+  "reset_opacity_cap": 0.2,
+  "refine_scale2d_stop_iter": 6300,
+  "refine_start_iter": 500,
+  "refine_stop_iter": 6300,
+  "refine_every": 100,
+  "capacity_conserving_clone_opacity": false,
+  "relaxed_cull_when_no_growth": true,
+  "revised_opacity": true,
+  "growth_metric": "footprint_weighted",
+  "relaxed_cull_at_capacity": false,
+  "opacity_cull_policy": "immediate",
+  "vendor_cull_warmup_profile": "exact_0p10_to_0p05",
+  "vendor_opacity_reset_profile": "deferred_every3000_compatibility",
+  "reset_optimizer_state": "keep",
+  "reset_before_cull": true,
+  "detail_split_scale_m": 0.005,
+  "detail_split_screen_radius": 0.0035,
+  "prune_switch_step": 4500
+ },
+ "sky_supervision": {
+  "enabled": true,
+  "alpha_weight": 0.5,
+  "alpha_target": 0.0,
+  "exclude_photometric": true,
+  "exclude_mono_depth": true,
+  "growth_block": true,
+  "mask_erosion_px": 4,
+  "require_no_lidar_within_px": 6,
+  "mask_manifest": "C:\\Peter\\3dgs-datasets\\house0305_sop_v9\\sky_mask_train\\sky_mask_train.json",
+  "mask_root": "C:\\Peter\\3dgs-datasets\\house0305_sop_v9\\sky_mask_train"
+ },
+ "tile_ownership_masking": false,
+ "tile_ownership_margin_m": 0.5,
+ "tile_ownership_dilation_px": 15,
+ "prefetch_training_samples": true,
+ "dataset_manifest": "C:\\Peter\\3dgs-datasets\\house0305_sop_v8\\dataset_manifest.json",
+ "split_manifest": "C:\\Peter\\3dgs-datasets\\house0305_sop_v9\\split_manifest.json",
+ "mask_manifest": "C:\\Peter\\3dgs-datasets\\house0305_sop_v8\\masks\\mask_manifest.json",
+ "mask_root": "C:\\Peter\\3dgs-datasets\\house0305_sop_v8\\masks",
+ "person_mask_manifest": "C:\\Peter\\3dgs-datasets\\house0305_sop_v8\\person_mask_manifest.json",
+ "person_mask_root": "C:\\Peter\\3dgs-datasets\\house0305_person_masks",
+ "recording_root": "C:\\Peter\\testdata\\S1\\house0305",
+ "face_cache_manifest": "C:\\Peter\\3dgs-datasets\\house0305_sop_v9\\face4_train\\face_manifest.json",
+ "face_cache_root": "C:\\Peter\\3dgs-datasets\\house0305_sop_v9\\face4_train",
+ "renderer_mask_manifest": "C:\\Peter\\3dgs-datasets\\house0305_sop_v9\\renderer_mask_train.json",
+ "depth_manifest": "C:\\Peter\\3dgs-datasets\\house0305_sop_v8\\depth\\depth_manifest.json",
+ "depth_root": "C:\\Peter\\3dgs-datasets\\house0305_sop_v8\\depth",
+ "mono_depth_manifest": "C:\\Peter\\3dgs-datasets\\house0305_sop_v9\\da2_train\\mono_depth_manifest.json",
+ "mono_depth_root": "C:\\Peter\\3dgs-datasets\\house0305_sop_v9\\da2_train",
+ "face_lidar_geometry_manifest": "C:\\Peter\\3dgs-datasets\\house0305_sop_v9\\face4_lidar_train_vis6\\face_lidar_geometry_manifest.json",
+ "face_lidar_geometry_root": "C:\\Peter\\3dgs-datasets\\house0305_sop_v9\\face4_lidar_train_vis6",
+ "mipmap_pipeline_gate": "C:\\Peter\\3dgs-runs\\house0305_sop\\gates_v9\\gate_17_training_da2.json",
+ "run_id": "diag_outdoor_tree_crown_Tile_0_20_R1_c134v_cap",
+ "output_dir": "C:\\Peter\\3dgs-runs\\house0305_sop\\diag_outdoor_tree_crown_Tile_0_20_R1_c134vcap",
+ "device": "cuda:0",
+ "mipmap_tile_id": 0,
+ "max_steps": 9000,
+ "cap_max": 11500000,
+ "tile_inputs_manifest": "C:\\Peter\\3dgs-runs\\house0305_sop\\diag_v2\\outdoor_tree_crown_Tile_0\\V20_20\\tile_inputs_manifest.json",
+ "tile_inputs_root": "C:\\Peter\\3dgs-runs\\house0305_sop\\tile_inputs_v9",
+ "initialization_ply": "C:\\Peter\\3dgs-runs\\house0305_sop\\tile_inputs_v9\\Tile_0\\initialization_full_lidar.ply",
+ "initialization_geometry": "C:\\Peter\\3dgs-runs\\house0305_sop\\tile_geometry_v9\\Tile_0\\initialization_geometry_k7_k30.npz",
+ "initialization_geometry_manifest": "C:\\Peter\\3dgs-runs\\house0305_sop\\diag_v2\\outdoor_tree_crown_Tile_0\\V20_20\\tile_geometry_manifest.json",
+ "background_image_manifest": "C:\\Peter\\3dgs-runs\\house0305_sop\\tile_backgrounds_B1\\Tile_0\\background_manifest.json",
+ "background_image_root": "C:\\Peter\\3dgs-runs\\house0305_sop\\tile_backgrounds_B1\\Tile_0",
+ "gsplat_lock": "C:\\Peter\\cloudstudio-3dgs-gate1\\upstream\\gsplat.lock.json",
+ "lineage": {
+  "base": "diag_outdoor_tree_crown_Tile_0_20_R1_c134v",
+  "single_change": "cap_max 9440001 -> 11500000"
+ },
+ "schedule_contract": "research_rescaled_horizon_v1",
+ "schedule_contract_fields": {
+  "arm": "R1",
+  "role": "wp03_diagnostic_short_horizon",
+  "horizon_steps": 9000,
+  "refine_stop_fraction_max": 0.7,
+  "resolved": {
+   "horizon_steps": 9000,
+   "refine_start_iter": 500,
+   "refine_stop_iter": 6300,
+   "refine_every": 100,
+   "refine_scale2d_stop_iter": 6300,
+   "prune_switch_step": 4500,
+   "reset_every": 3000,
+   "sh_degree": 1,
+   "sh_degree_interval": 0,
+   "means_lr_base": 2.4857029318809512e-05,
+   "means_lr_final_factor": 0.01
+  },
+  "horizon_fractions": {
+   "refine_start": 0.05555555555555555,
+   "refine_stop": 0.7,
+   "refine_stop_max": 0.7,
+   "refine_scale2d_stop": 0.7,
+   "prune_switch": 0.5,
+   "reset_every": 0.3333333333333333,
+   "sh_full_degree_step": 0.0
+  },
+  "linked_fields": [
+   "controlled_stop_after_steps",
+   "default_strategy.prune_switch_step",
+   "default_strategy.refine_every",
+   "default_strategy.refine_scale2d_stop_iter",
+   "default_strategy.refine_start_iter",
+   "default_strategy.refine_stop_iter",
+   "default_strategy.reset_every",
+   "learning_rates.means",
+   "max_steps",
+   "mcmc_refine_every",
+   "mcmc_refine_start_iter",
+   "mcmc_refine_stop_iter",
+   "means_lr_final_factor",
+   "metric_scale_calibration.means_step_fraction",
+   "output_dir",
+   "run_id",
+   "sh_degree_interval"
+  ],
+  "changed_fields": [
+   "controlled_stop_after_steps",
+   "default_strategy.prune_switch_step",
+   "default_strategy.refine_scale2d_stop_iter",
+   "default_strategy.refine_stop_iter",
+   "learning_rates.means",
+   "max_steps",
+   "mcmc_refine_stop_iter",
+   "metric_scale_calibration.means_step_fraction",
+   "output_dir",
+   "run_id"
+  ],
+  "moved_from_base": {
+   "run_id": {
+    "base": "house0305-t0-b6reset",
+    "s1": "diag_outdoor_tree_crown_Tile_0_20_R1_c134v",
+    "changed": true
+   },
+   "output_dir": {
+    "base": "C:\\Peter\\3dgs-runs\\house0305_sop\\tile0_b6reset_20k",
+    "s1": "C:\\Peter\\3dgs-runs\\house0305_sop\\diag_v2\\outdoor_tree_crown_Tile_0\\runs\\diag_outdoor_tree_crown_Tile_0_20_R1_c134v",
+    "changed": true
+   },
+   "max_steps": {
+    "base": 42640,
+    "s1": 9000,
+    "changed": true
+   },
+   "controlled_stop_after_steps": {
+    "base": 20000,
+    "s1": "<absent>",
+    "changed": true
+   },
+   "mcmc_refine_stop_iter": {
+    "base": 14000,
+    "s1": 6300,
+    "changed": true
+   },
+   "default_strategy.refine_stop_iter": {
+    "base": 14000,
+    "s1": 6300,
+    "changed": true
+   },
+   "default_strategy.refine_scale2d_stop_iter": {
+    "base": 14000,
+    "s1": 6300,
+    "changed": true
+   },
+   "default_strategy.prune_switch_step": {
+    "base": 21320,
+    "s1": 4500,
+    "changed": true
+   },
+   "metric_scale_calibration.means_step_fraction": {
+    "base": "<absent>",
+    "s1": null,
+    "changed": true
+   },
+   "learning_rates.means": {
+    "base": 1.6e-05,
+    "s1": 2.4857029318809512e-05,
+    "changed": true
+   },
+   "mcmc_refine_start_iter": {
+    "base": 500,
+    "s1": 500,
+    "changed": false
+   },
+   "mcmc_refine_every": {
+    "base": 100,
+    "s1": 100,
+    "changed": false
+   },
+   "default_strategy.refine_start_iter": {
+    "base": 500,
+    "s1": 500,
+    "changed": false
+   },
+   "default_strategy.refine_every": {
+    "base": 100,
+    "s1": 100,
+    "changed": false
+   },
+   "default_strategy.reset_every": {
+    "base": 3000,
+    "s1": 3000,
+    "changed": false
+   },
+   "sh_degree_interval": {
+    "base": 0,
+    "s1": 0,
+    "changed": false
+   },
+   "means_lr_final_factor": {
+    "base": 0.01,
+    "s1": 0.01,
+    "changed": false
+   }
+  },
+  "policy": {
+   "refine_stop": "base refine_stop / base executed stop_step = 0.700000, x H snapped to refine_every=100",
+   "prune_switch_step": "H // 2 (trainer exact-lifecycle rule); reachable because refine_stop > H / 2",
+   "reset_every": "unchanged cadence (multiple of refine_every, vendor profile exact_every300)",
+   "refine_start_iter": "unchanged (trainer exact-lifecycle rule start=500)",
+   "sh_degree_interval": "unchanged (0 = full degree from step 0)",
+   "controlled_stop_after_steps": "removed: the run completes at H and writes run_manifest.json",
+   "means_lr": "frozen to the base arm's effective optimizer base: means_step_fraction 0.0032 x reference_scale_m 0.007767821662127972 (runtime fact supplied via --reference-scale-m)"
+  },
+  "provenance": {
+   "base_config": "C:\\Peter\\3dgs-runs\\house0305_sop\\tile0_b6reset_20k\\config_as_run.json",
+   "base_config_sha256": "b877b3c64b8f5edf5d2d12f0cf4ae95d20eafc93cb4c6b328a7502aa353ad8ad",
+   "base_run_id": "house0305-t0-b6reset",
+   "generator": "tools/make_diagnostic_arm_config.py",
+   "reference_scale_m": 0.007767821662127972,
+   "diagnostic_preset": "V20",
+   "diagnostic_region": "outdoor_tree_crown_Tile_0"
+  }
+ },
+ "diag": {
+  "schema_version": 1,
+  "generator": "tools/make_diagnostic_arm_config.py",
+  "region": {
+   "label": "outdoor_tree_crown_Tile_0",
+   "tile": "Tile_0",
+   "tile_id": 0,
+   "status": "provisional",
+   "world_box": [
+    [
+     -1.58,
+     -13.77,
+     6.35
+    ],
+    [
+     2.43,
+     -8.76,
+     9.59
+    ]
+   ]
+  },
+  "preset": "V20",
+  "count": 20,
+  "variant": "R1_c134v_cap",
+  "variant_fields": {
+   "checkpoint_every": {
+    "base": 5000,
+    "diag": 5000
+   },
+   "cap_max": {
+    "base": 10900000,
+    "diag": 9440001
+   }
+  },
+  "horizon_steps": 9000,
+  "base_config": "C:\\Peter\\3dgs-runs\\house0305_sop\\tile0_b6reset_20k\\config_as_run.json",
+  "base_config_sha256": "b877b3c64b8f5edf5d2d12f0cf4ae95d20eafc93cb4c6b328a7502aa353ad8ad",
+  "tile_inputs_manifest": "C:\\Peter\\3dgs-runs\\house0305_sop\\diag_v2\\outdoor_tree_crown_Tile_0\\V20_20\\tile_inputs_manifest.json",
+  "tile_inputs_manifest_sha256": "9f1d3c78d5343fb5c7e2d96819e2dd04eff4735a842678e22195b928d4e36018",
+  "tile_geometry_manifest": "C:\\Peter\\3dgs-runs\\house0305_sop\\diag_v2\\outdoor_tree_crown_Tile_0\\V20_20\\tile_geometry_manifest.json",
+  "tile_geometry_manifest_sha256": "804a46fc6aa607a3e1dfe6ab9448e6d6a5cbec006f271572f90b0eeb936dba2e",
+  "rebound_fields": {
+   "tile_inputs_manifest": {
+    "base": "C:\\Peter\\3dgs-runs\\house0305_sop\\tile_inputs_v9\\tile_inputs_manifest.json",
+    "diag": "C:\\Peter\\3dgs-runs\\house0305_sop\\diag_v2\\outdoor_tree_crown_Tile_0\\V20_20\\tile_inputs_manifest.json"
+   },
+   "initialization_geometry_manifest": {
+    "base": "C:\\Peter\\3dgs-runs\\house0305_sop\\tile_geometry_v9\\tile_geometry_manifest.json",
+    "diag": "C:\\Peter\\3dgs-runs\\house0305_sop\\diag_v2\\outdoor_tree_crown_Tile_0\\V20_20\\tile_geometry_manifest.json"
+   }
+  },
+  "verbatim_fields": [
+   "tile_inputs_root",
+   "initialization_ply",
+   "initialization_geometry",
+   "background_image_manifest",
+   "background_image_root",
+   "face_cache_manifest",
+   "mipmap_tile_id"
+  ],
+  "parent_image_ids": [
+   "img_dfbaef61d9e8160adafd7543",
+   "img_a70b864456069a8a04299a32",
+   "img_c1e12f0629dd3d406e51c28a",
+   "img_4d9c2a8e76e687e5179a2990",
+   "img_738d35da53c08f4a598d2f51",
+   "img_654224d56a5a5fc52b21d876",
+   "img_103dec49eddc71b8b42bba6d",
+   "img_304b50c95ed848aecc410e2d",
+   "img_72b0880469760869c633c6c8",
+   "img_ace39114ea6e3dc2c06be34b",
+   "img_017105047612fa06bd54d2a9",
+   "img_f029e0f1f983d146f96286a0",
+   "img_bce41815c3435d5918fa786f",
+   "img_1b406da0e87bb6871507e4a4",
+   "img_29f0cdf6a31f8207e452d529",
+   "img_3a67c36eb4b7f4b5eacf371d",
+   "img_2a571292a4944bb3c65b1e06",
+   "img_322efdb132cc0b10097d5d2f",
+   "img_49cecc6b7a7ebcfb56922fe8",
+   "img_75a30ee17616282a88941ad2"
+  ],
+  "view_sample_ids": [
+   "img_017105047612fa06bd54d2a9::pitch_down_56",
+   "img_017105047612fa06bd54d2a9::pitch_up_56",
+   "img_017105047612fa06bd54d2a9::yaw_minus_35",
+   "img_017105047612fa06bd54d2a9::yaw_plus_35",
+   "img_103dec49eddc71b8b42bba6d::pitch_down_56",
+   "img_103dec49eddc71b8b42bba6d::pitch_up_56",
+   "img_103dec49eddc71b8b42bba6d::yaw_minus_35",
+   "img_103dec49eddc71b8b42bba6d::yaw_plus_35",
+   "img_1b406da0e87bb6871507e4a4::pitch_down_56",
+   "img_1b406da0e87bb6871507e4a4::pitch_up_56",
+   "img_1b406da0e87bb6871507e4a4::yaw_minus_35",
+   "img_1b406da0e87bb6871507e4a4::yaw_plus_35",
+   "img_29f0cdf6a31f8207e452d529::pitch_down_56",
+   "img_29f0cdf6a31f8207e452d529::pitch_up_56",
+   "img_29f0cdf6a31f8207e452d529::yaw_minus_35",
+   "img_29f0cdf6a31f8207e452d529::yaw_plus_35",
+   "img_2a571292a4944bb3c65b1e06::pitch_up_56",
+   "img_2a571292a4944bb3c65b1e06::yaw_minus_35",
+   "img_2a571292a4944bb3c65b1e06::yaw_plus_35",
+   "img_304b50c95ed848aecc410e2d::pitch_down_56",
+   "img_304b50c95ed848aecc410e2d::pitch_up_56",
+   "img_304b50c95ed848aecc410e2d::yaw_minus_35",
+   "img_304b50c95ed848aecc410e2d::yaw_plus_35",
+   "img_322efdb132cc0b10097d5d2f::pitch_down_56",
+   "img_322efdb132cc0b10097d5d2f::pitch_up_56",
+   "img_322efdb132cc0b10097d5d2f::yaw_minus_35",
+   "img_322efdb132cc0b10097d5d2f::yaw_plus_35",
+   "img_3a67c36eb4b7f4b5eacf371d::pitch_up_56",
+   "img_3a67c36eb4b7f4b5eacf371d::yaw_minus_35",
+   "img_3a67c36eb4b7f4b5eacf371d::yaw_plus_35",
+   "img_49cecc6b7a7ebcfb56922fe8::pitch_down_56",
+   "img_49cecc6b7a7ebcfb56922fe8::pitch_up_56",
+   "img_49cecc6b7a7ebcfb56922fe8::yaw_minus_35",
+   "img_49cecc6b7a7ebcfb56922fe8::yaw_plus_35",
+   "img_4d9c2a8e76e687e5179a2990::pitch_down_56",
+   "img_4d9c2a8e76e687e5179a2990::pitch_up_56",
+   "img_4d9c2a8e76e687e5179a2990::yaw_minus_35",
+   "img_4d9c2a8e76e687e5179a2990::yaw_plus_35",
+   "img_654224d56a5a5fc52b21d876::pitch_down_56",
+   "img_654224d56a5a5fc52b21d876::pitch_up_56",
+   "img_654224d56a5a5fc52b21d876::yaw_minus_35",
+   "img_654224d56a5a5fc52b21d876::yaw_plus_35",
+   "img_72b0880469760869c633c6c8::pitch_down_56",
+   "img_72b0880469760869c633c6c8::pitch_up_56",
+   "img_72b0880469760869c633c6c8::yaw_minus_35",
+   "img_72b0880469760869c633c6c8::yaw_plus_35",
+   "img_738d35da53c08f4a598d2f51::pitch_down_56",
+   "img_738d35da53c08f4a598d2f51::pitch_up_56",
+   "img_738d35da53c08f4a598d2f51::yaw_minus_35",
+   "img_738d35da53c08f4a598d2f51::yaw_plus_35",
+   "img_75a30ee17616282a88941ad2::pitch_down_56",
+   "img_75a30ee17616282a88941ad2::pitch_up_56",
+   "img_75a30ee17616282a88941ad2::yaw_minus_35",
+   "img_75a30ee17616282a88941ad2::yaw_plus_35",
+   "img_a70b864456069a8a04299a32::pitch_down_56",
+   "img_a70b864456069a8a04299a32::pitch_up_56",
+   "img_a70b864456069a8a04299a32::yaw_minus_35",
+   "img_a70b864456069a8a04299a32::yaw_plus_35",
+   "img_ace39114ea6e3dc2c06be34b::pitch_down_56",
+   "img_ace39114ea6e3dc2c06be34b::pitch_up_56",
+   "img_ace39114ea6e3dc2c06be34b::yaw_minus_35",
+   "img_ace39114ea6e3dc2c06be34b::yaw_plus_35",
+   "img_bce41815c3435d5918fa786f::pitch_down_56",
+   "img_bce41815c3435d5918fa786f::pitch_up_56",
+   "img_bce41815c3435d5918fa786f::yaw_minus_35",
+   "img_bce41815c3435d5918fa786f::yaw_plus_35",
+   "img_c1e12f0629dd3d406e51c28a::pitch_down_56",
+   "img_c1e12f0629dd3d406e51c28a::pitch_up_56",
+   "img_c1e12f0629dd3d406e51c28a::yaw_minus_35",
+   "img_c1e12f0629dd3d406e51c28a::yaw_plus_35",
+   "img_dfbaef61d9e8160adafd7543::pitch_down_56",
+   "img_dfbaef61d9e8160adafd7543::pitch_up_56",
+   "img_dfbaef61d9e8160adafd7543::yaw_minus_35",
+   "img_dfbaef61d9e8160adafd7543::yaw_plus_35",
+   "img_f029e0f1f983d146f96286a0::pitch_down_56",
+   "img_f029e0f1f983d146f96286a0::pitch_up_56",
+   "img_f029e0f1f983d146f96286a0::yaw_minus_35",
+   "img_f029e0f1f983d146f96286a0::yaw_plus_35"
+  ],
+  "view_count": 78,
+  "selection_policy": {
+   "preset": "V20",
+   "min_support_fraction_requested": 0.5,
+   "min_support_fraction_applied": 0.43,
+   "min_support_fraction_floor": 0.2,
+   "threshold_relaxed": true,
+   "candidate_count": 34,
+   "table_rows": 694,
+   "rule": "top 20 DIAG_40 parents by support_fraction, nested",
+   "selected_count": 20,
+   "short_by": 0,
+   "cameras_represented": [
+    "left"
+   ],
+   "reused_selection": true
+  },
+  "selected_coverage": [
+   {
+    "image_id": "img_dfbaef61d9e8160adafd7543",
+    "camera_id": "left",
+    "rig_frame_id": "rig_ddb2dc46864d9ccf8bbf6717",
+    "support_fraction": 0.5025,
+    "n_effective": 201,
+    "n_samples": 400,
+    "range_min_m": 8.10577,
+    "range_median_m": 9.21594,
+    "sharpness_lapvar_median": 5580.63,
+    "luma_median": 154.843,
+    "selection_rank": 1
+   },
+   {
+    "image_id": "img_a70b864456069a8a04299a32",
+    "camera_id": "left",
+    "rig_frame_id": "rig_d87764c773928f6cedabc5b1",
+    "support_fraction": 0.505,
+    "n_effective": 202,
+    "n_samples": 400,
+    "range_min_m": 8.63206,
+    "range_median_m": 9.7112,
+    "sharpness_lapvar_median": 5979.51,
+    "luma_median": 156.421,
+    "selection_rank": 2
+   },
+   {
+    "image_id": "img_c1e12f0629dd3d406e51c28a",
+    "camera_id": "left",
+    "rig_frame_id": "rig_ff90e80b9b81ea3540b051b3",
+    "support_fraction": 0.5225,
+    "n_effective": 209,
+    "n_samples": 400,
+    "range_min_m": 8.86337,
+    "range_median_m": 9.95997,
+    "sharpness_lapvar_median": 5814.34,
+    "luma_median": 153.911,
+    "selection_rank": 3
+   },
+   {
+    "image_id": "img_4d9c2a8e76e687e5179a2990",
+    "camera_id": "left",
+    "rig_frame_id": "rig_76ea8904683bf37063ee2987",
+    "support_fraction": 0.5625,
+    "n_effective": 225,
+    "n_samples": 400,
+    "range_min_m": 9.0535,
+    "range_median_m": 10.1815,
+    "sharpness_lapvar_median": 5564.33,
+    "luma_median": 153.48,
+    "selection_rank": 4
+   },
+   {
+    "image_id": "img_738d35da53c08f4a598d2f51",
+    "camera_id": "left",
+    "rig_frame_id": "rig_a14eac5361ec93600b1d4f72",
+    "support_fraction": 0.5275,
+    "n_effective": 211,
+    "n_samples": 400,
+    "range_min_m": 9.21083,
+    "range_median_m": 10.2986,
+    "sharpness_lapvar_median": 5833.36,
+    "luma_median": 152.635,
+    "selection_rank": 5
+   },
+   {
+    "image_id": "img_654224d56a5a5fc52b21d876",
+    "camera_id": "left",
+    "rig_frame_id": "rig_ba5318699c629cc66af87c63",
+    "support_fraction": 0.535,
+    "n_effective": 214,
+    "n_samples": 400,
+    "range_min_m": 9.3872,
+    "range_median_m": 10.5032,
+    "sharpness_lapvar_median": 5820.1,
+    "luma_median": 152.074,
+    "selection_rank": 6
+   },
+   {
+    "image_id": "img_103dec49eddc71b8b42bba6d",
+    "camera_id": "left",
+    "rig_frame_id": "rig_1ab5226f8da5570f953ba492",
+    "support_fraction": 0.5225,
+    "n_effective": 209,
+    "n_samples": 400,
+    "range_min_m": 9.64154,
+    "range_median_m": 10.7131,
+    "sharpness_lapvar_median": 5649.61,
+    "luma_median": 152.136,
+    "selection_rank": 7
+   },
+   {
+    "image_id": "img_304b50c95ed848aecc410e2d",
+    "camera_id": "left",
+    "rig_frame_id": "rig_137f7ca11f3ce7fff3502d2f",
+    "support_fraction": 0.5125,
+    "n_effective": 205,
+    "n_samples": 400,
+    "range_min_m": 9.69453,
+    "range_median_m": 10.7544,
+    "sharpness_lapvar_median": 5492.46,
+    "luma_median": 151.167,
+    "selection_rank": 8
+   },
+   {
+    "image_id": "img_72b0880469760869c633c6c8",
+    "camera_id": "left",
+    "rig_frame_id": "rig_ffd93b45a7c8eb804dca964f",
+    "support_fraction": 0.515,
+    "n_effective": 206,
+    "n_samples": 400,
+    "range_min_m": 9.67835,
+    "range_median_m": 10.7549,
+    "sharpness_lapvar_median": 5097.71,
+    "luma_median": 149.448,
+    "selection_rank": 9
+   },
+   {
+    "image_id": "img_ace39114ea6e3dc2c06be34b",
+    "camera_id": "left",
+    "rig_frame_id": "rig_5b86fc4cc527019cc1bbe3e0",
+    "support_fraction": 0.51,
+    "n_effective": 204,
+    "n_samples": 400,
+    "range_min_m": 9.60027,
+    "range_median_m": 10.7679,
+    "sharpness_lapvar_median": 5739.22,
+    "luma_median": 148.663,
+    "selection_rank": 10
+   },
+   {
+    "image_id": "img_017105047612fa06bd54d2a9",
+    "camera_id": "left",
+    "rig_frame_id": "rig_953c741586a8c1e2764492f2",
+    "support_fraction": 0.505,
+    "n_effective": 202,
+    "n_samples": 400,
+    "range_min_m": 9.65804,
+    "range_median_m": 10.7736,
+    "sharpness_lapvar_median": 5548.02,
+    "luma_median": 149.456,
+    "selection_rank": 11
+   },
+   {
+    "image_id": "img_f029e0f1f983d146f96286a0",
+    "camera_id": "left",
+    "rig_frame_id": "rig_9fa7fdd6dfcf10b571e64ed2",
+    "support_fraction": 0.5125,
+    "n_effective": 205,
+    "n_samples": 400,
+    "range_min_m": 9.7156,
+    "range_median_m": 10.7873,
+    "sharpness_lapvar_median": 5531.09,
+    "luma_median": 151.361,
+    "selection_rank": 12
+   },
+   {
+    "image_id": "img_bce41815c3435d5918fa786f",
+    "camera_id": "left",
+    "rig_frame_id": "rig_a76b62550f78b1898ad49484",
+    "support_fraction": 0.525,
+    "n_effective": 210,
+    "n_samples": 400,
+    "range_min_m": 9.72413,
+    "range_median_m": 10.8139,
+    "sharpness_lapvar_median": 5318.97,
+    "luma_median": 148.972,
+    "selection_rank": 13
+   },
+   {
+    "image_id": "img_1b406da0e87bb6871507e4a4",
+    "camera_id": "left",
+    "rig_frame_id": "rig_f6c0a409ad2a6f05349ec701",
+    "support_fraction": 0.535,
+    "n_effective": 214,
+    "n_samples": 400,
+    "range_min_m": 9.72961,
+    "range_median_m": 10.8163,
+    "sharpness_lapvar_median": 5298.52,
+    "luma_median": 149.57,
+    "selection_rank": 14
+   },
+   {
+    "image_id": "img_29f0cdf6a31f8207e452d529",
+    "camera_id": "left",
+    "rig_frame_id": "rig_e8f612a2355b17f8b3c2c37d",
+    "support_fraction": 0.5325,
+    "n_effective": 213,
+    "n_samples": 400,
+    "range_min_m": 9.52243,
+    "range_median_m": 11.1409,
+    "sharpness_lapvar_median": 5124.47,
+    "luma_median": 124.721,
+    "selection_rank": 15
+   },
+   {
+    "image_id": "img_3a67c36eb4b7f4b5eacf371d",
+    "camera_id": "left",
+    "rig_frame_id": "rig_b6c28fb60084e876cb1574da",
+    "support_fraction": 0.505,
+    "n_effective": 202,
+    "n_samples": 400,
+    "range_min_m": 9.77949,
+    "range_median_m": 11.326,
+    "sharpness_lapvar_median": 5052.68,
+    "luma_median": 126.219,
+    "selection_rank": 16
+   },
+   {
+    "image_id": "img_2a571292a4944bb3c65b1e06",
+    "camera_id": "left",
+    "rig_frame_id": "rig_7f2588eb25297d7f69e812fc",
+    "support_fraction": 0.51,
+    "n_effective": 204,
+    "n_samples": 400,
+    "range_min_m": 10.0718,
+    "range_median_m": 11.6586,
+    "sharpness_lapvar_median": 4966.75,
+    "luma_median": 127.82,
+    "selection_rank": 17
+   },
+   {
+    "image_id": "img_322efdb132cc0b10097d5d2f",
+    "camera_id": "left",
+    "rig_frame_id": "rig_ae4998da7d29fe3cf72badee",
+    "support_fraction": 0.495,
+    "n_effective": 198,
+    "n_samples": 400,
+    "range_min_m": 6.84525,
+    "range_median_m": 8.72568,
+    "sharpness_lapvar_median": 6032.99,
+    "luma_median": 157.51,
+    "selection_rank": 18
+   },
+   {
+    "image_id": "img_49cecc6b7a7ebcfb56922fe8",
+    "camera_id": "left",
+    "rig_frame_id": "rig_4913278e27738ee2d6dd6368",
+    "support_fraction": 0.4975,
+    "n_effective": 199,
+    "n_samples": 400,
+    "range_min_m": 7.89639,
+    "range_median_m": 9.01251,
+    "sharpness_lapvar_median": 5487.79,
+    "luma_median": 154.248,
+    "selection_rank": 19
+   },
+   {
+    "image_id": "img_75a30ee17616282a88941ad2",
+    "camera_id": "left",
+    "rig_frame_id": "rig_522ee9fc76480605b197e81b",
+    "support_fraction": 0.4975,
+    "n_effective": 199,
+    "n_samples": 400,
+    "range_min_m": 8.36547,
+    "range_median_m": 9.46172,
+    "sharpness_lapvar_median": 5995.13,
+    "luma_median": 156.605,
+    "selection_rank": 20
+   }
+  ],
+  "notes": [
+   "views outside the selection never receive gradients; opacity resets + culls will remove unseen Gaussians of the full-Tile initialization over the run (expected, the arm is a region diagnostic, not a delivery)",
+   "H = max_steps; controlled_stop_after_steps removed so the run completes and writes run_manifest.json",
+   "view-count ladder for the crown: 1 / 5 / 10 / 20 / 34 parents, same recipe, to map where thin branches die",
+   "tile_ownership_masking off, as with the other crown arms",
+   "cap_max 9,440,001 -> 11,500,000: every arm of the view-count ladder ends AT the cap (9.34-9.39M) and the crown-box density falls 170,746 -> 150,869 gaussians from 10 to 20 parents while sharpness falls 0.814 -> 0.702. This arm gives the 20-parent view set the density the 10-parent one had, to separate capacity dilution from view disagreement."
+  ],
+  "cap_policy": "cap_max = 1.34 x tile initialization count (9440001), the stager's rule; the cap-15M 5-view arm ballooned to 14.5M gaussians and the trainer rejects cap == initialization count",
+  "cap_rule": {
+   "multiplier": 1.34,
+   "initialization_point_count": 7044777,
+   "cap_max": 9440001
+  },
+  "data_variant": {
+   "preset_dir": "V20_20",
+   "reused_selection": {
+    "path": "C:\\Users\\Remot\\AppData\\Local\\Temp\\claude\\C--Peter-CLOUDSUTDIO-WINDOWS\\bc34593d-63df-4360-92a3-ca90833b6b64\\scratchpad\\crown_V20_selection.json",
+    "sha256": "e46d8bba524e1d78ba2bbd30884e2e347a620043a1ef5c4a4bbaa6e346e6d280",
+    "tile_inputs_manifest_sha256": "9069e9ff664f66fd8f66af5ead8dab2e416ea4337dce0a86c2b0a72189b6a891",
+    "view_count": 127,
+    "parent_image_ids_identical": true
+   }
+  }
+ }
+}
