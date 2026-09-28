@@ -311,6 +311,14 @@ class TrainerConfig:
     # where the returns in its window agree on one surface, so silhouettes
     # are not pushed across depth discontinuities. See alpha_support.py.
     lidar_alpha_support_mode: str = "dilated"
+    # Research knob: drop the pixels the (refined) sky label marks as sky from
+    # the alpha-coverage support. The label reaches this term before the sky
+    # term's LiDAR guard, so the sky gaps of a canopy that surround every branch
+    # return stop being told to be opaque (house0305: 47-57% of the strict
+    # demand at 8-40 m sits inside the label, 1.5% at 0-8 m). Needs
+    # sky_supervision, which carries the label; off keeps every existing
+    # contract byte-identical.
+    lidar_alpha_exclude_sky_label: bool = False
     da2_depth_weight: float = 0.0
     # Monocular depth supervision: pixels whose aligned target is at or beyond
     # this range are excluded (sky and far background saturate the relative
@@ -615,6 +623,7 @@ class TrainerConfig:
                 "lidar_alpha_target",
                 "lidar_alpha_dilation_radius_px",
                 "lidar_alpha_support_mode",
+                "lidar_alpha_exclude_sky_label",
                 "da2_depth_weight",
                 "mono_depth_max_range_m",
                 "da2_depth_space",
@@ -1046,6 +1055,15 @@ class TrainerConfig:
         ):
             raise ValueError(
                 "lidar_alpha_support_mode requires positive lidar_alpha_weight"
+            )
+        if not isinstance(self.lidar_alpha_exclude_sky_label, bool):
+            raise ValueError("lidar_alpha_exclude_sky_label must be a boolean")
+        if self.lidar_alpha_exclude_sky_label and (
+            self.lidar_alpha_weight <= 0.0 or not self.sky_supervision.enabled
+        ):
+            raise ValueError(
+                "lidar_alpha_exclude_sky_label requires positive lidar_alpha_weight "
+                "and sky_supervision (the sky label travels with it)"
             )
         if (
             self.lidar_linear_aux_weight > 0.0
@@ -2487,6 +2505,11 @@ class TrainerConfig:
                         if self.lidar_alpha_support_mode != "dilated"
                         else {}
                     ),
+                    **(
+                        {"sky_label_excluded": True}
+                        if self.lidar_alpha_exclude_sky_label
+                        else {}
+                    ),
                 },
             },
             "dynamic_person_mask": {
@@ -3439,6 +3462,14 @@ def _render_supervision_loss(
         lidar_alpha_valid = alpha_support.support
         lidar_alpha_confidence = alpha_support.weights
         lidar_alpha_mask = tensors["rgb_mask"] & lidar_alpha_valid
+        if config.lidar_alpha_exclude_sky_label:
+            if "sky_mask" not in tensors:
+                raise ValueError(
+                    "lidar_alpha_exclude_sky_label needs the sample sky mask"
+                )
+            lidar_alpha_mask = lidar_alpha_mask & ~tensors["sky_mask"].to(
+                dtype=backend.torch.bool
+            )
         lidar_alpha_support_fraction = lidar_alpha_mask.to(
             dtype=rendered.dtype
         ).mean()
