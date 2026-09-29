@@ -25,6 +25,12 @@ class GeometryRegularizationConfig:
     screen_clip_opacity_bump: float = 3.0
     max_world_size_m: float | None = None
     world_shrink_factor: float | None = None
+    # Hard ceiling on a single gaussian's opacity, applied every step with the
+    # other in-place clamps. house0305 (2026-09-29): 34% of our delivered
+    # gaussians sit above 0.9 against 2% in the competitor, whose solid surfaces
+    # are stacks of 0.1-0.4 layers; opaque blades show their outlines, which is
+    # what reads as "gaussian texture". None keeps every contract unchanged.
+    max_opacity: float | None = None
 
     def validate(self) -> None:
         weights = (
@@ -52,6 +58,8 @@ class GeometryRegularizationConfig:
             raise ValueError("screen_clip_opacity_bump must be non-negative")
         if self.max_world_size_m is not None and self.max_world_size_m <= 0.0:
             raise ValueError("max_world_size_m must be positive")
+        if self.max_opacity is not None and not 0.0 < float(self.max_opacity) < 1.0:
+            raise ValueError("max_opacity must be within (0, 1)")
         if self.world_shrink_factor is not None:
             if not 0.0 < self.world_shrink_factor < 1.0:
                 raise ValueError("world_shrink_factor must be within (0, 1)")
@@ -83,6 +91,8 @@ class GeometryRegularizationConfig:
         # still explicit and signed.
         if self.scale_upper_tail_fraction != 1.0:
             result["scale_upper_tail_fraction"] = self.scale_upper_tail_fraction
+        if self.max_opacity is not None:
+            result["max_opacity"] = float(self.max_opacity)
         return result
 
 
@@ -258,4 +268,14 @@ def clip_oversized_gaussians(
                         config.world_shrink_factor
                     )
                 report["world_shrunk_count"] = shrunk
+        if config.max_opacity is not None:
+            # Opacities are stored as logits; clamp the logit so no single
+            # gaussian can exceed the ceiling. Adam state is left alone, as for
+            # the scale clamps above.
+            bound = math.log(float(config.max_opacity) / (1.0 - float(config.max_opacity)))
+            over = params["opacities"] > bound
+            capped = int(over.sum())
+            report["opacity_capped_count"] = capped
+            if capped:
+                params["opacities"].clamp_(max=bound)
     return report
