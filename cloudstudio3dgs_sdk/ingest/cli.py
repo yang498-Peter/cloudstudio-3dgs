@@ -45,8 +45,15 @@ def _detect(args: argparse.Namespace) -> int:
     return 0
 
 
+def _load(args: argparse.Namespace):
+    # run_dir only reaches adapters that take one; a split capture (recording and S1Mapper
+    # output in two folders) cannot be loaded without it.
+    extra = {"run_dir": Path(args.run_dir)} if getattr(args, "run_dir", None) else {}
+    return load_dataset(Path(args.dataset), adapter=args.adapter, **extra)
+
+
 def _bundle(args: argparse.Namespace) -> int:
-    bundle = load_dataset(Path(args.dataset), adapter=args.adapter)
+    bundle = _load(args)
     print(f"adapter: {bundle.adapter}")
     print(f"images: {len(bundle.images)} from {len(bundle.cameras)} cameras")
     for line in describe_capabilities(bundle):
@@ -90,7 +97,7 @@ def _tile(args: argparse.Namespace) -> int:
 
 
 def _plan(args: argparse.Namespace) -> int:
-    bundle = load_dataset(Path(args.dataset), adapter=args.adapter)
+    bundle = _load(args)
     profile = CacheProfile.from_any(
         {
             "dataset_root": args.dataset_root,
@@ -121,6 +128,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     bundle = sub.add_parser("bundle", help="load a dataset and report its capabilities")
     bundle.add_argument("dataset")
     bundle.add_argument("--adapter", default=None)
+    bundle.add_argument("--run-dir", default=None, help="processed run folder when it is not the dataset folder")
     bundle.add_argument("--output", default=None, help="write bundle_manifest.json here")
     bundle.add_argument("--skip-image-hashes", action="store_true")
     bundle.set_defaults(handler=_bundle)

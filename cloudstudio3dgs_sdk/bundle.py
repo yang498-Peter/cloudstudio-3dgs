@@ -292,6 +292,9 @@ def load_dataset_bundle(
             "and reads range/normal supervision from it; a capture without one cannot run it."
         )
 
+    # A split capture (recording and S1Mapper output in two folders, house0614) keeps the poses
+    # and the cloud in the run folder; a single-folder capture keeps them next to the images.
+    source_run_dir = Path(run_dir) if run_dir is not None else Path(bundle.source_root)
     plan = plan_caches(
         bundle,
         profile,
@@ -299,7 +302,7 @@ def load_dataset_bundle(
         cache_root=work / "caches",
         run_root=work / "runs",
         recording_root=bundle.source_root,
-        source_run_dir=bundle.source_root,
+        source_run_dir=source_run_dir,
         repo_root=repo,
         python=interpreter,
     )
@@ -349,7 +352,7 @@ def load_dataset_bundle(
         decimation = float(profile.coarse_prior["init_decimation_m"])
         command = (
             interpreter, str(repo / "tools" / "build_lidar_init.py"),
-            "--run", str(bundle.source_root),
+            "--run", str(source_run_dir),
             "--output", str(global_init_dir),
             "--voxel-size", str(decimation),
             "--with-pca",

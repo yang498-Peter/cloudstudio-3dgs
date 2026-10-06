@@ -165,6 +165,33 @@ class LoadDatasetBundleTest(unittest.TestCase):
         self._run(plan, gate=self.root / "gate.json", adapter="s1_fisheye", run_dir=self.root / "processed")
         self.assertEqual(self.load_calls, [(self.root / "capture", "s1_fisheye", {"run_dir": self.root / "processed"})])
 
+    def test_a_split_capture_reads_poses_and_lidar_from_the_run_dir(self):
+        # house0614 ships the recording (camera/, info/) and the S1Mapper output (ImgPose.txt,
+        # colorized.las) as two folders. The cache graph and the global initialisation must read
+        # the processed folder, not the recording, or the LiDAR init points at a folder with no
+        # cloud in it.
+        specs = _graph(self.work)
+        plan = FakePlan(specs, present=[s.name for s in specs])
+        processed = self.root / "processed"
+
+        def fake_load(path, *, adapter=None, **kwargs):
+            return _bundle(self.root / "capture")
+
+        with mock.patch("cloudstudio3dgs_sdk.ingest.plan_caches", return_value=plan) as plan_caches, \
+             mock.patch("cloudstudio3dgs_sdk.ingest.load_dataset", fake_load), \
+             mock.patch("cloudstudio_3dgs.pipeline.mipmap_gate.load_and_verify_gate", return_value=({}, "sha")):
+            load_dataset_bundle(
+                self.root / "capture", PROFILE_B5SKY, self.work,
+                python="python", repo_root=self.root / "repo", pipeline_gate=self.root / "gate.json",
+                runner=self._runner, adapter="s1_fisheye", run_dir=processed,
+            )
+        kwargs = plan_caches.call_args.kwargs
+        self.assertEqual(kwargs["recording_root"], self.root / "capture")
+        self.assertEqual(kwargs["source_run_dir"], processed)
+        init = [c for c in self.calls if "build_lidar_init.py" in c[1]]
+        self.assertEqual(len(init), 1)
+        self.assertEqual(init[0][init[0].index("--run") + 1], str(processed))
+
     def test_a_capture_without_a_cloud_is_refused_by_name(self):
         plan = FakePlan(_graph(self.work))
         with self.assertRaises(DatasetIncompleteError) as caught:
