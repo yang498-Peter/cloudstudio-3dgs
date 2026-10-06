@@ -109,6 +109,9 @@ class CacheProfile:
     tile_ownership: bool = True
     view_backgrounds: bool = True
     fov_deg: float = 190.0
+    # The recipe trains on the four MipMap-aligned faces; build_face_cache.py defaults to
+    # adaptive_full_fov, a different face layout the trainer's caches do not match.
+    face_plan: str = "mipmap_face4"
     visibility_cell_px: int = 6
     workers: int = 10
     threads: int = 6
@@ -383,6 +386,8 @@ def build_cache_specs(bundle: DatasetBundle, profile: CacheProfile) -> list[Cach
                 str(depth_root),
                 "--fov-deg",
                 str(profile.fov_deg),
+                "--face-plan",
+                profile.face_plan,
                 "--split",
                 split,
                 "--output",
