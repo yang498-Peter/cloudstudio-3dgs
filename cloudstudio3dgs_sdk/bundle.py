@@ -38,6 +38,13 @@ INGEST_PACKAGE = "cloudstudio3dgs_sdk.ingest"
 INGEST_LOAD = f"{INGEST_PACKAGE}.load_dataset"
 INGEST_PLAN_CACHES = f"{INGEST_PACKAGE}.plan_caches"
 
+# Where the training poses come from. The readiness gate chain starts from an independent
+# AT report (tools/build_mipmap_frontend_gate.py), and the trainer requires the gate only for
+# data with that lineage (TrainerConfig.validate). A capture trained on its own S1Mapper poses
+# therefore has no gate - a weaker route, recorded as such, never a silently skipped check.
+POSE_ROUTE_AT = "independent_at"
+POSE_ROUTE_RAW = "raw_capture_poses"
+
 
 @dataclass(frozen=True)
 class DerivedCaches:
@@ -107,7 +114,9 @@ class PreparedScene:
 
     gate
         ``pipeline_gate`` is the signed readiness gate the trainer refuses to
-        start without.
+        start without on independent-AT data. It is ``None`` only on the
+        ``raw_capture_poses`` route (``pose_route``), where the trainer does not
+        ask for one.
     """
 
     scene_tag: str
@@ -134,10 +143,11 @@ class PreparedScene:
     tile_geometry_manifest: Path
     global_init_ply: Path
     global_init_geometry: Path
-    pipeline_gate: Path
+    pipeline_gate: Path | None
     caches: DerivedCaches = field(default_factory=DerivedCaches)
+    pose_route: str = POSE_ROUTE_AT
 
-    def trainer_paths(self) -> dict[str, str]:
+    def trainer_paths(self) -> dict[str, str | None]:
         """The scene-level path block every arm config carries verbatim.
 
         The keys are trainer config keys, and the profile lists them in
@@ -161,7 +171,8 @@ class PreparedScene:
             "mono_depth_root": str(self.mono_depth_root),
             "face_lidar_geometry_manifest": str(self.face_lidar_geometry_manifest),
             "face_lidar_geometry_root": str(self.face_lidar_geometry_root),
-            "mipmap_pipeline_gate": str(self.pipeline_gate),
+            # JSON null on the raw-pose route: the trainer reads a missing gate as "none".
+            "mipmap_pipeline_gate": str(self.pipeline_gate) if self.pipeline_gate is not None else None,
         }
 
     def as_json(self) -> dict[str, Any]:
@@ -364,21 +375,35 @@ def load_dataset_bundle(
     else:
         say("[prepare] global_init: present")
 
-    # The readiness gate. Outside ingestion by design; refuse rather than forge one.
-    if pipeline_gate is None:
-        raise DatasetIncompleteError(
-            "no mipmap pipeline gate. The trainer refuses fisheye data without the signed "
-            "thirteen-stage readiness gate, and its chain is not part of ingestion. Produce it "
-            "with " + " then ".join(GATE_TOOLS) + " against this work root's caches, then pass "
-            "--pipeline-gate PATH."
-        )
-    gate_path = Path(pipeline_gate)
-    from cloudstudio_3dgs.pipeline.mipmap_gate import load_and_verify_gate
+    specs = {status.spec.name: status.spec for status in plan.statuses()}
 
-    load_and_verify_gate(gate_path)  # raises on a bad signature
+    # The readiness gate. Outside ingestion by design; refuse rather than forge one. It is
+    # owed exactly when the trainer will ask for it: on independent-AT data. A manifest that
+    # cannot be read counts as AT data, so an unknown lineage still needs a gate.
+    at_lineage = _has_independent_at_lineage(specs["dataset_manifest"].manifest)
+    if pipeline_gate is None:
+        if at_lineage is not False:
+            raise DatasetIncompleteError(
+                "no mipmap pipeline gate. The trainer refuses independent-AT fisheye data without "
+                "the signed thirteen-stage readiness gate, and its chain is not part of ingestion. "
+                "Produce it with " + " then ".join(GATE_TOOLS) + " against this work root's "
+                "caches, then pass --pipeline-gate PATH."
+            )
+        gate_path = None
+        pose_route = POSE_ROUTE_RAW
+        say(
+            "[prepare] the dataset manifest carries no independent AT lineage: training on the "
+            "capture's own poses with no readiness gate (the trainer asks for one only on AT "
+            "data). Quality is bounded by those poses; run the AT chain for a delivery."
+        )
+    else:
+        gate_path = Path(pipeline_gate)
+        from cloudstudio_3dgs.pipeline.mipmap_gate import load_and_verify_gate
+
+        load_and_verify_gate(gate_path)  # raises on a bad signature
+        pose_route = POSE_ROUTE_AT if at_lineage else POSE_ROUTE_RAW
 
     # Project the built graph onto the trainer's path contract.
-    specs = {status.spec.name: status.spec for status in plan.statuses()}
     fields: dict[str, Any] = {}
     for cache, (manifest_field, root_field) in _SCENE_FIELD_BY_CACHE.items():
         spec = specs[cache]
@@ -405,5 +430,20 @@ def load_dataset_bundle(
         global_init_geometry=global_init_geometry,
         pipeline_gate=gate_path,
         caches=caches,
+        pose_route=pose_route,
         **fields,
     )
+
+
+def _has_independent_at_lineage(dataset_manifest: Path) -> bool | None:
+    """True / False from the built dataset manifest, ``None`` when it cannot be read."""
+    import json
+
+    try:
+        payload = json.loads(Path(dataset_manifest).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    from cloudstudio_3dgs.pipeline.mipmap_gate import INDEPENDENT_AT_ALGORITHM
+
+    lineage = payload.get("training_lineage") or {}
+    return lineage.get("independent_at_algorithm_version") == INDEPENDENT_AT_ALGORITHM

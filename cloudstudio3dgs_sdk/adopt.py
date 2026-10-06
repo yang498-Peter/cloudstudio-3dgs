@@ -45,7 +45,7 @@ from typing import Any, Mapping, Sequence
 
 from tools.pipeline import file_sha256, read_ply_vertex_count
 
-from cloudstudio3dgs_sdk.bundle import DerivedCaches, PreparedScene
+from cloudstudio3dgs_sdk.bundle import POSE_ROUTE_RAW, DerivedCaches, PreparedScene
 from cloudstudio3dgs_sdk.plan import DERIVED_SCENE_KEYS, DERIVED_TILE_KEYS, DatasetSummary, tile_key
 from cloudstudio3dgs_sdk.profile import Profile
 from cloudstudio3dgs_sdk.project import StageRefused, digest_matches
@@ -594,7 +594,10 @@ def adopt_scene(
     root = Path(str(dataset_root)) if dataset_root is not None else Path(trainer_paths["recording_root"])
     scene_fields: dict[str, Any] = {"scene_tag": tag, "dataset_root": root}
     for key, value in trainer_paths.items():
-        scene_fields[SCENE_FIELD_BY_TRAINER_KEY.get(key, key)] = Path(value)
+        scene_fields[SCENE_FIELD_BY_TRAINER_KEY.get(key, key)] = Path(value) if value is not None else None
+    if trainer_paths.get("mipmap_pipeline_gate") is None:
+        # as-run configs trained on the capture's own poses carry no gate
+        scene_fields["pose_route"] = POSE_ROUTE_RAW
     for key in ("lidar_cloud", "tile_inputs_manifest", "tile_inputs_root", "tile_geometry_manifest",
                 "global_init_ply", "global_init_geometry"):
         scene_fields[key] = Path(derived[key])
@@ -689,7 +692,15 @@ def verify_prepare_manifest(payload: Mapping[str, Any], *, manifest_path: Path |
     if not isinstance(trainer_paths, Mapping) or not isinstance(derived, Mapping) or not isinstance(digests, Mapping):
         raise StageRefused(f"{where}: trainer_paths, derived_paths and digests must be objects")
     checked: list[str] = []
+    raw_route = (payload.get("scene") or {}).get("pose_route") == POSE_ROUTE_RAW
     for key, value in sorted(trainer_paths.items()):
+        if value is None:
+            # The only path allowed to be empty is the readiness gate, and only on a scene
+            # recorded as trained on its own capture poses.
+            if key == "mipmap_pipeline_gate" and raw_route:
+                checked.append(key)
+                continue
+            raise StageRefused(f"{where}: trainer path {key} is empty")
         target = Path(str(value))
         if key.endswith("_root"):
             if not target.is_dir():
