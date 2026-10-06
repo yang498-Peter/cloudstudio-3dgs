@@ -71,6 +71,45 @@ def _bundle(args: argparse.Namespace) -> int:
     return 0
 
 
+def _observations(args: argparse.Namespace, output: Path):
+    """Project the LiDAR depth into the Face4 views so each slab tile knows which views see it.
+
+    Needs no readiness gate: the table is built from the signed dataset, depth and face
+    manifests alone, which is what lets a capture without independent AT (raw S1Mapper
+    poses) be tiled. Returns ``None`` when no binding inputs were given.
+    """
+    wanted = (args.dataset_manifest, args.depth_manifest, args.depth_root, args.face)
+    if not any(wanted):
+        return None
+    if not all(wanted):
+        raise SystemExit(
+            "binding views needs --dataset-manifest, --depth-manifest, --depth-root and at "
+            "least one --face MANIFEST ROOT"
+        )
+    from cloudstudio_3dgs.pipeline.lidar_face4_observations import (
+        build_lidar_face4_projected_observations,
+        load_lidar_face4_projected_observations,
+    )
+
+    path = output.parent / "lidar_face4_projected_observations.npz"
+    manifest = build_lidar_face4_projected_observations(
+        Path(args.dataset_manifest),
+        Path(args.depth_manifest),
+        Path(args.depth_root),
+        [(Path(face), Path(root)) for face, root in args.face],
+        path,
+        samples_per_raw_view=args.samples_per_raw_view,
+        force=args.force,
+    )
+    _, train_table = load_lidar_face4_projected_observations(path)
+    bindings = {
+        "dataset_manifest_sha256": str(manifest["dataset_manifest_sha256"]),
+        "lidar_depth_manifest_sha256": str(manifest["lidar_depth_manifest_sha256"]),
+        "face4_observation_manifest_sha256": str(manifest["face4_observation_manifest_sha256"]),
+    }
+    return train_table, list(manifest["train_view_ids"]), str(manifest["point_cloud_sha256"]), bindings
+
+
 def _tile(args: argparse.Namespace) -> int:
     rule = TilingRule(
         tile_count=args.tile_count,
@@ -80,19 +119,39 @@ def _tile(args: argparse.Namespace) -> int:
         overlap_margin_m=args.overlap_margin_m,
         histogram_bins=args.histogram_bins,
     )
+    output = Path(args.output)
     histogram = histogram_from_las(Path(args.point_cloud), bins=rule.histogram_bins)
     slab = slab_split(histogram, rule)
-    plan = build_slab_tile_plan(slab)
-    _write_json(Path(args.output), plan, force=args.force)
+    bound = _observations(args, output)
+    if bound is None:
+        plan = build_slab_tile_plan(slab)
+    else:
+        table, view_ids, cloud_sha, bindings = bound
+        plan = build_slab_tile_plan(
+            slab,
+            observations=table,
+            view_ids=view_ids,
+            source_bindings=bindings,
+            point_cloud_sha256=cloud_sha,
+        )
+        empty = [tile["name"] for tile in plan["tiles"] if not tile["valid_view_count"]]
+        if empty:
+            # A tile no training view sees cannot be trained; refuse before writing a plan
+            # the materializer would turn into an empty crop.
+            raise SystemExit(f"no training view sees {', '.join(empty)}; fewer tiles or a different axis")
+    _write_json(output, plan, force=args.force)
     print(
         f"slab tile plan: axis={slab.axis_name} tiles={rule.tile_count} "
         f"cuts={list(slab.cuts)} balance={slab.balance():.3f} "
         f"sha256={plan['tile_plan_manifest_sha256']} -> {args.output}"
     )
-    print(
-        "views_source=deferred: bind a projected observation table before "
-        "materializing tile inputs"
-    )
+    if bound is None:
+        print(
+            "views_source=deferred: bind a projected observation table before "
+            "materializing tile inputs"
+        )
+    else:
+        print("views per tile: " + ", ".join(f"{t['name']}={t['valid_view_count']}" for t in plan["tiles"]))
     return 0
 
 
@@ -136,6 +195,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     tile = sub.add_parser("tile", help="derive slab tile boxes from a point cloud")
     tile.add_argument("--point-cloud", required=True)
     tile.add_argument("--output", required=True)
+    tile.add_argument("--dataset-manifest", default=None, help="with the depth and face caches: bind views per tile")
+    tile.add_argument("--depth-manifest", default=None)
+    tile.add_argument("--depth-root", default=None)
+    tile.add_argument("--face", nargs=2, action="append", metavar=("MANIFEST", "ROOT"), default=None,
+                      help="a Face4 manifest and its root; repeat for train and val")
+    tile.add_argument("--samples-per-raw-view", type=int, default=5_000)
     tile.add_argument("--tile-count", type=int, default=4)
     tile.add_argument("--axis", default="auto", choices=("auto", "x", "y"))
     tile.add_argument("--scene-padding-fraction", type=float, default=0.2)

@@ -565,6 +565,17 @@ def build_cache_specs(bundle: DatasetBundle, profile: CacheProfile) -> list[Cach
                 str(profile.tile_count),
                 "--output",
                 str(tile_plan_manifest),
+                # Bind the views: without them the plan is boxes only and every tile
+                # materializes with no training view.
+                "--dataset-manifest",
+                str(dataset_manifest),
+                "--depth-manifest",
+                str(depth_manifest),
+                "--depth-root",
+                str(depth_root),
+                "--face",
+                str(face_manifest),
+                str(face_root),
             ),
             manifest=tile_plan_manifest,
             root=tile_plan_root,
@@ -576,8 +587,9 @@ def build_cache_specs(bundle: DatasetBundle, profile: CacheProfile) -> list[Cach
             cost_basis="measured (one streaming LAS pass: 2.7 s for 18.76 M points)",
             output_gib=0.01,
             note=(
-                "Boxes only need the cloud; the view rectangles need the Face4 "
-                "observation table, which is why this sits after the face caches."
+                "Boxes only need the cloud; the view rectangles come from the LiDAR depth "
+                "projected into the Face4 views, which is why this sits after the face and "
+                "depth caches. No readiness gate is read, so raw-pose captures tile too."
             ),
         ),
         CacheSpec(

@@ -364,5 +364,91 @@ class House0305ComparisonTest(unittest.TestCase):
         )
 
 
+class TileCliViewBindingTest(unittest.TestCase):
+    """``ingest.cli tile`` binds views from the caches, with no readiness gate.
+
+    A capture without independent AT (raw S1Mapper poses) has no gate chain, so the
+    production kd planner cannot run on it; the slab rule plus the projected LiDAR/Face4
+    table is what lets such a capture be tiled at all. The projection itself is mocked:
+    it needs signed dataset, depth and face manifests.
+    """
+
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self._tmp.name)
+        self.addCleanup(self._tmp.cleanup)
+        self.points = _skewed_cloud(count=2_000)
+        self.las = _write_las(self.root / "cloud.las", self.points)
+        self.output = self.root / "tile_plan" / "adaptive_tile_plan.json"
+        self.view_ids = [f"img_{i}::yaw_minus_35" for i in range(4)]
+
+    def _run(self, table, *extra: str):
+        from unittest import mock
+
+        from cloudstudio3dgs_sdk.ingest import cli
+
+        manifest = {
+            "dataset_manifest_sha256": "d" * 64,
+            "lidar_depth_manifest_sha256": "e" * 64,
+            "face4_observation_manifest_sha256": "f" * 64,
+            "point_cloud_sha256": "c" * 64,
+            "train_view_ids": self.view_ids,
+        }
+        module = "cloudstudio_3dgs.pipeline.lidar_face4_observations"
+        with mock.patch(f"{module}.build_lidar_face4_projected_observations", return_value=manifest) as build, \
+             mock.patch(f"{module}.load_lidar_face4_projected_observations", return_value=(table, table)):
+            code = cli.main([
+                "tile", "--point-cloud", str(self.las), "--output", str(self.output), "--tile-count", "2",
+                *extra,
+            ])
+        return code, build
+
+    def _binding_args(self):
+        return (
+            "--dataset-manifest", str(self.root / "dataset_manifest.json"),
+            "--depth-manifest", str(self.root / "depth" / "depth_manifest.json"),
+            "--depth-root", str(self.root / "depth"),
+            "--face", str(self.root / "face4_train" / "face_manifest.json"), str(self.root / "face4_train"),
+        )
+
+    def test_views_are_bound_from_the_caches(self) -> None:
+        code, build = self._run(_observation_table(self.points, images=4), *self._binding_args())
+        self.assertEqual(code, 0)
+        args = build.call_args.args
+        self.assertEqual(args[3], [(self.root / "face4_train" / "face_manifest.json", self.root / "face4_train")])
+        self.assertEqual(args[4], self.output.parent / "lidar_face4_projected_observations.npz")
+        plan = json.loads(self.output.read_text(encoding="utf-8"))
+        self.assertEqual(plan["views_source"], "projected_observations")
+        self.assertEqual(plan["input"]["point_cloud_sha256"], "c" * 64)
+        self.assertEqual(plan["source_bindings"]["face4_observation_manifest_sha256"], "f" * 64)
+        for tile in plan["tiles"]:
+            self.assertGreater(tile["valid_view_count"], 0)
+            self.assertTrue({view["sample_id"] for view in tile["views"]} <= set(self.view_ids))
+        self.assertEqual(verify_adaptive_tile_plan(plan), plan["tile_plan_manifest_sha256"])
+
+    def test_partial_binding_inputs_are_refused(self) -> None:
+        with self.assertRaises(SystemExit) as caught:
+            self._run(_observation_table(self.points, images=4), "--dataset-manifest", str(self.root / "d.json"))
+        self.assertIn("--depth-manifest", str(caught.exception))
+        self.assertFalse(self.output.exists())
+
+    def test_a_tile_no_view_sees_is_refused_before_a_plan_is_written(self) -> None:
+        # only the far end (x < -25) is observed; the equal-count cut sits near x = -16.8, so
+        # the other slab gets no view at all
+        far = self.points[:, 0] < -25.0
+        table = _observation_table(self.points[far], images=4)
+        table = ProjectedObservationTable(
+            points=self.points,
+            observation_xy=table.observation_xy,
+            observation_image=table.observation_image,
+            observation_point=np.flatnonzero(far)[table.observation_point],
+            image_sizes=table.image_sizes,
+        ).validated()
+        with self.assertRaises(SystemExit) as caught:
+            self._run(table, *self._binding_args())
+        self.assertIn("no training view sees", str(caught.exception))
+        self.assertFalse(self.output.exists())
+
+
 if __name__ == "__main__":
     unittest.main()
