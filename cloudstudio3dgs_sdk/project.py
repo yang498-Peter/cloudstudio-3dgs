@@ -33,7 +33,7 @@ from tools.pipeline import _timestamp, _write_json_atomic, file_sha256, read_ply
 
 from cloudstudio3dgs_sdk.bundle import PreparedScene, load_dataset_bundle
 from cloudstudio3dgs_sdk.discover import DatasetEstimate, estimate_dataset_summary
-from cloudstudio3dgs_sdk.ingest.errors import GpuStepRequired
+from cloudstudio3dgs_sdk.ingest.errors import GpuStepRequired, IngestError
 from cloudstudio3dgs_sdk.plan import (
     step_is_skippable,
     STAGES,
@@ -665,6 +665,10 @@ class Project:
                 argv = command if isinstance(command, str) else " ".join(str(part) for part in command)
                 detail += f"\n  run on a CUDA host, then re-run prepare: {argv}"
             raise StageRefused(detail) from error
+        except IngestError as error:
+            # A capture ingestion cannot read (missing calibration, no poses, no cloud) is a
+            # refusal with ingestion's own reason - never a fallback to an estimated summary.
+            raise StageRefused(f"[prepare] ingestion refused {self.dataset_root}: {error}") from error
         # An injected summary (dataset=..., the planning hatch) wins, as in dataset_summary().
         dataset = self._dataset if self._dataset is not None else summarize_prepared_scene(scene)
         self.write_prepare_manifest(scene, dataset)

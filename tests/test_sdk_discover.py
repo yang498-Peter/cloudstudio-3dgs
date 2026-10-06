@@ -457,10 +457,18 @@ class FallbackTests(CaptureFixture):
         with self.assertRaises(StageRefused):
             project.run_all(stages=("prepare",))
 
-    def test_a_real_run_refuses_a_capture_with_no_prepare_manifest(self) -> None:
+    def test_a_real_run_ingests_a_capture_with_no_prepare_manifest(self) -> None:
+        """A real run never plans from an estimate: with no prepare manifest it ingests the
+        capture, and this synthetic one (a cloud and images, no calibration) is refused with
+        ingestion's own reason. Before 2026-10-06 it was refused outright, which left a fresh
+        capture no way in at all."""
+        project = self.project()
         with self.assertRaises(StageRefused) as caught:
-            self.project().run_all(stages=("prepare",))
-        self.assertIn("no prepared dataset", str(caught.exception))
+            project.run_all(stages=("prepare",))
+        self.assertIn("ingestion refused", str(caught.exception))
+        # the step that could not read the capture is named (its log says why)
+        self.assertIn("dataset_manifest failed", str(caught.exception))
+        self.assertFalse(project.layout.prepare_manifest.is_file())
 
     def test_a_real_run_refuses_an_estimated_summary_handed_to_it(self) -> None:
         """The estimate cannot be smuggled onto the run path by injecting it."""
