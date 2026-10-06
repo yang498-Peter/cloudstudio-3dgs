@@ -165,6 +165,34 @@ class LoadDatasetBundleTest(unittest.TestCase):
         self._run(plan, gate=self.root / "gate.json", adapter="s1_fisheye", run_dir=self.root / "processed")
         self.assertEqual(self.load_calls, [(self.root / "capture", "s1_fisheye", {"run_dir": self.root / "processed"})])
 
+    def test_the_validation_caches_the_battery_reads_are_built_too(self):
+        # evaluate_probe_views reads face4_val / renderer_mask_val / face4_lidar_val_* derived by
+        # name from the training caches; prepare used to build the train split only, so a fresh
+        # capture reached the battery with no validation caches (project.py refuses that up front).
+        train = FakePlan(_graph(self.work), present=[s.name for s in _graph(self.work)])
+        val_specs = _graph(self.work)
+        # in the val graph the shared caches are present; the split-specific ones are not
+        shared = [s.name for s in val_specs if s.name not in ("face_cache", "renderer_mask", "face_lidar_geometry")]
+        val = FakePlan(val_specs, present=shared)
+        calls = []
+
+        def fake_plan_caches(bundle, profile, **kwargs):
+            calls.append(kwargs.get("split", "train"))
+            return val if kwargs.get("split") == "val" else train
+
+        with mock.patch("cloudstudio3dgs_sdk.ingest.load_dataset", lambda path, **kw: _bundle(self.root)), \
+             mock.patch("cloudstudio3dgs_sdk.ingest.plan_caches", fake_plan_caches), \
+             mock.patch("cloudstudio_3dgs.pipeline.mipmap_gate.load_and_verify_gate", return_value=({}, "sha")):
+            load_dataset_bundle(
+                self.root / "capture", PROFILE_B5SKY, self.work, python="python",
+                repo_root=self.root / "repo", pipeline_gate=self.root / "gate.json", runner=self._runner,
+            )
+        self.assertEqual(calls, ["train", "val"])
+        self.assertEqual(train.built, [])
+        self.assertEqual(sorted(val.built), ["face_cache", "face_lidar_geometry", "renderer_mask"])
+        # dependency order inside the val graph
+        self.assertLess(val.built.index("face_cache"), val.built.index("renderer_mask"))
+
     def test_a_split_capture_reads_poses_and_lidar_from_the_run_dir(self):
         # house0614 ships the recording (camera/, info/) and the S1Mapper output (ImgPose.txt,
         # colorized.las) as two folders. The cache graph and the global initialisation must read

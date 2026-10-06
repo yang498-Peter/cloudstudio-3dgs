@@ -241,6 +241,58 @@ def _subprocess_runner(command: Sequence[str]) -> int:
     return subprocess.run(list(command)).returncode
 
 
+#: The split-specific caches the held-out battery reads (validation_paths.FACE_KEYS and
+#: TRAIN_VAL_KEYS). Masks, depth, person masks and the split itself are shared by both splits.
+VALIDATION_CACHES = ("face_cache", "renderer_mask", "face_lidar_geometry")
+
+
+def _build_cpu_half(
+    plan: Any,
+    *,
+    run: Callable[[Sequence[str]], int],
+    say: Callable[[str], None],
+    only: Sequence[str] | None = None,
+    tag: str = "",
+) -> tuple[str, tuple[str, ...]] | None:
+    """Build every CPU cache whose inputs are ready, in dependency order.
+
+    Returns the first GPU cache that is due (name, command), or ``None``. With ``only``,
+    caches outside it are inputs: present ones count as built, missing ones are not built
+    here (their own graph owns them).
+    """
+    from cloudstudio3dgs_sdk.ingest.caches import GPU, STATUS_BLOCKED
+    from cloudstudio3dgs_sdk.ingest.errors import DatasetIncompleteError
+
+    wanted = set(only) if only is not None else None
+    built: set[str] = set()
+    pending_gpu: tuple[str, tuple[str, ...]] | None = None
+    for status in plan.statuses():
+        spec = status.spec
+        if wanted is not None and spec.name not in wanted:
+            if not status.must_build:
+                built.add(spec.name)
+            continue
+        if status.status == STATUS_BLOCKED:
+            raise DatasetIncompleteError(f"{spec.name}: {status.reason}; this dataset cannot produce it")
+        if not status.must_build:
+            say(f"[prepare] {tag}{spec.name}: present")
+            built.add(spec.name)
+            continue
+        unmet = [dep for dep in spec.depends_on if dep not in built]
+        if unmet:
+            say(f"[prepare] {tag}{spec.name}: waiting on {', '.join(unmet)}")
+            continue
+        if spec.device == GPU:
+            if pending_gpu is None:
+                pending_gpu = (spec.name, tuple(spec.command))
+            say(f"[prepare] {tag}{spec.name}: needs the GPU")
+            continue
+        say(f"[prepare] {tag}{spec.name}: building")
+        plan.build(dry_run=False, only=[spec.name], runner=run)
+        built.add(spec.name)
+    return pending_gpu
+
+
 def load_dataset_bundle(
     dataset_root: Path,
     profile: Any,
@@ -282,7 +334,6 @@ def load_dataset_bundle(
     """
     from cloudstudio3dgs_sdk.ingest import load_dataset, plan_caches
     from cloudstudio3dgs_sdk.ingest.errors import DatasetIncompleteError, GpuStepRequired
-    from cloudstudio3dgs_sdk.ingest.caches import GPU, STATUS_BLOCKED
 
     say = log or (lambda line: None)
     run = runner or _subprocess_runner
@@ -306,9 +357,7 @@ def load_dataset_bundle(
     # A split capture (recording and S1Mapper output in two folders, house0614) keeps the poses
     # and the cloud in the run folder; a single-folder capture keeps them next to the images.
     source_run_dir = Path(run_dir) if run_dir is not None else Path(bundle.source_root)
-    plan = plan_caches(
-        bundle,
-        profile,
+    roots = dict(
         dataset_root=work / "dataset",
         cache_root=work / "caches",
         run_root=work / "runs",
@@ -317,32 +366,19 @@ def load_dataset_bundle(
         repo_root=repo,
         python=interpreter,
     )
+    plan = plan_caches(bundle, profile, **roots)
 
     # Run the CPU half in dependency order. A GPU cache is not an error until something that
     # is not yet built depends on it; everything else keeps going so the caller gets the
     # longest possible run out of one call.
-    built: set[str] = set()
-    pending_gpu: tuple[str, tuple[str, ...]] | None = None
-    for status in plan.statuses():
-        spec = status.spec
-        if status.status == STATUS_BLOCKED:
-            raise DatasetIncompleteError(f"{spec.name}: {status.reason}; this dataset cannot produce it")
-        if not status.must_build:
-            say(f"[prepare] {spec.name}: present")
-            built.add(spec.name)
-            continue
-        unmet = [dep for dep in spec.depends_on if dep not in built]
-        if unmet:
-            say(f"[prepare] {spec.name}: waiting on {', '.join(unmet)}")
-            continue
-        if spec.device == GPU:
-            if pending_gpu is None:
-                pending_gpu = (spec.name, tuple(spec.command))
-            say(f"[prepare] {spec.name}: needs the GPU")
-            continue
-        say(f"[prepare] {spec.name}: building")
-        plan.build(dry_run=False, only=[spec.name], runner=run)
-        built.add(spec.name)
+    pending_gpu = _build_cpu_half(plan, run=run, say=say)
+    # The held-out battery reads validation caches derived by name from the training ones
+    # (face4_train -> face4_val, renderer_mask_train -> renderer_mask_val, ...; see
+    # cloudstudio_3dgs/training/validation_paths.py). The same graph at split="val" names
+    # exactly those; everything they depend on is shared and already present.
+    val_plan = plan_caches(bundle, profile, split="val", **roots)
+    val_pending = _build_cpu_half(val_plan, run=run, say=say, only=VALIDATION_CACHES, tag="val ")
+    pending_gpu = pending_gpu or val_pending
 
     if pending_gpu is not None:
         name, command = pending_gpu
