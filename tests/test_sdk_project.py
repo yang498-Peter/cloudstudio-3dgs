@@ -86,7 +86,7 @@ def fake_scene(root: Path) -> PreparedScene:
     fields = {}
     root.mkdir(parents=True, exist_ok=True)
     for name in PreparedScene.__dataclass_fields__:
-        if name in ("scene_tag", "caches"):
+        if name in ("scene_tag", "caches", "pose_route"):
             continue
         if name == "dataset_root" or name.endswith("_root"):
             target = root / name
@@ -357,6 +357,65 @@ class PrepareTests(ProjectFixture):
         current, why = self.project()._stage_is_current("prepare")
         self.assertFalse(current)
         self.assertIn("no longer matches", why)
+
+
+class FreshCaptureTests(ProjectFixture):
+    """A capture nobody prepared: no prepare manifest and no injected summary.
+
+    The plan is built from the tile inventory, which only ingestion produces, so prepare
+    used to refuse before it could ingest anything (tests hid it by injecting dataset=).
+    Ingestion now runs first and the summary is measured from what it built.
+    """
+
+    def _scene(self, *, views=(40, 30)) -> PreparedScene:
+        import dataclasses
+
+        import laspy
+        import numpy as np
+
+        scene = fake_scene(self.dataset_root)
+        tiles = [
+            {"tile_id": i, "name": f"Tile_{i}", "view_count": v,
+             "initialization": {"point_count": 1000 + i, "sha256": f"{i}" * 64}}
+            for i, v in enumerate(views)
+        ]
+        Path(scene.tile_inputs_manifest).write_text(json.dumps({"tiles": tiles}), encoding="utf-8")
+        Path(scene.face_cache_manifest).write_text(
+            json.dumps({"images": [{"faces": [0, 1, 2, 3]}, {"faces": [0, 1, 2, 3]}]}), encoding="utf-8"
+        )
+        Path(scene.global_init_ply).write_bytes(
+            b"ply\nformat binary_little_endian 1.0\nelement vertex 1234\nproperty float x\nend_header\n"
+        )
+        las = self.dataset_root / "cloud.las"
+        header = laspy.LasHeader(point_format=2, version="1.2")
+        data = laspy.LasData(header)
+        data.x, data.y, data.z = np.arange(50.0), np.zeros(50), np.zeros(50)
+        data.write(str(las))
+        return dataclasses.replace(scene, lidar_cloud=las)
+
+    def test_a_fresh_capture_is_ingested_before_the_first_plan(self) -> None:
+        scene = self._scene()
+        with mock.patch("cloudstudio3dgs_sdk.project.load_dataset_bundle", lambda *a, **k: scene):
+            project = self.project(dataset=None)
+            project.prepare()
+        payload = json.loads((self.work / "prepare" / "prepare_manifest.json").read_text(encoding="utf-8"))
+        dataset = payload["dataset"]
+        self.assertEqual([tile["view_count"] for tile in dataset["tiles"]], [40, 30])
+        self.assertEqual(dataset["train_view_count"], 8)
+        self.assertEqual(dataset["global_init_point_count"], 1234)
+        self.assertEqual(dataset["lidar_point_count"], 50)
+        self.assertFalse(dataset.get("estimated", False))
+        # the arm configs were written from that summary
+        self.assertTrue(any(self.work.joinpath("runs").glob("*.json")))
+
+    def test_a_tile_no_view_sees_refuses_before_any_arm_config(self) -> None:
+        scene = self._scene(views=(40, 0))
+        with mock.patch("cloudstudio3dgs_sdk.project.load_dataset_bundle", lambda *a, **k: scene):
+            project = self.project(dataset=None)
+            with self.assertRaises(StageRefused) as caught:
+                project.prepare()
+        self.assertIn("no training view sees Tile_1", str(caught.exception))
+        self.assertFalse((self.work / "prepare" / "prepare_manifest.json").exists())
 
 
 class FailClosedTests(ProjectFixture):

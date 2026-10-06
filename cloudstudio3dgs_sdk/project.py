@@ -495,6 +495,11 @@ class Project:
             plan = self.plan()
             self.say(plan.render())
             return StageResult(stage, "planned", "dry run")
+        if stage == "prepare" and self._dataset is None and not self.layout.prepare_manifest.is_file():
+            # A fresh capture: the plan is built from the tile inventory, and only ingestion
+            # produces one. Ingest first; its measured summary is what the plan then reads.
+            self.say("[prepare] no prepare manifest: ingesting the capture before planning")
+            self.ingest_fresh()
         plan = self.plan(refresh=True)
         if not force:
             current, why = self._stage_is_current(stage)
@@ -629,6 +634,16 @@ class Project:
             # a manifest that exists is adopted, never rebuilt over.
             self.adopt_prepare_manifest()
             return
+        self.ingest_fresh()
+
+    def ingest_fresh(self) -> DatasetSummary:
+        """Ingest a capture nobody prepared yet and record what it produced.
+
+        The plan needs the tile inventory, and only ingestion produces it, so on a fresh
+        capture this runs before the first plan is built (``_run_stage``). The summary is
+        measured from the built caches - tile inputs, face cache, global initialisation,
+        LiDAR header - never estimated, which is what lets train and deliver run from it.
+        """
         try:
             scene = load_dataset_bundle(
                 self.dataset_root,
@@ -650,7 +665,15 @@ class Project:
                 argv = command if isinstance(command, str) else " ".join(str(part) for part in command)
                 detail += f"\n  run on a CUDA host, then re-run prepare: {argv}"
             raise StageRefused(detail) from error
-        self.write_prepare_manifest(scene, self.dataset_summary())
+        # An injected summary (dataset=..., the planning hatch) wins, as in dataset_summary().
+        dataset = self._dataset if self._dataset is not None else summarize_prepared_scene(scene)
+        self.write_prepare_manifest(scene, dataset)
+        self._dataset = dataset
+        self.say(
+            f"[prepare] ingested {dataset.scene_tag}: {len(dataset.tiles)} tile(s), "
+            f"{dataset.train_view_count} training views, pose route {scene.pose_route}"
+        )
+        return dataset
 
     def _native_write_arm_configs(self, step: PlannedStep, plan: Plan) -> None:
         self.write_arm_configs(plan)
@@ -1084,6 +1107,47 @@ def _battery_reading(path: Path, layers: str) -> dict[str, Any]:
         "psnr_p10": summary.get("psnr_p10"),
         "gaussian_count": summary.get("gaussian_count"),
     }
+
+
+def summarize_prepared_scene(scene: PreparedScene) -> DatasetSummary:
+    """The plan's facts, measured from what ingestion built.
+
+    Same counts ``adopt`` reads from an as-run scene: tiles and their views and
+    initialisation from the tile inputs manifest, training views from the face cache
+    (one record per face), the coarse initialisation from its PLY header, the LiDAR size
+    from the LAS header. A tile no training view sees refuses here, before an arm
+    config is written for it.
+    """
+    def read(path: Path, what: str) -> dict[str, Any]:
+        try:
+            return json.loads(Path(path).read_text(encoding="utf-8"))
+        except (OSError, ValueError) as error:
+            raise StageRefused(f"[prepare] {what} {path} is not readable JSON ({error})") from error
+
+    tile_inputs = read(scene.tile_inputs_manifest, "tile inputs manifest")
+    blind = [str(tile.get("name", tile.get("tile_id"))) for tile in tile_inputs.get("tiles", [])
+             if not int(tile.get("view_count") or 0)]
+    if blind:
+        raise StageRefused(f"[prepare] no training view sees {', '.join(blind)}; re-tile before training")
+    face = read(scene.face_cache_manifest, "face cache manifest")
+    images = face.get("images")
+    if not isinstance(images, list) or not images:
+        raise StageRefused(f"[prepare] face cache manifest {scene.face_cache_manifest} lists no images")
+    if all(isinstance(image, Mapping) and isinstance(image.get("faces"), list) for image in images):
+        train_view_count = sum(len(image["faces"]) for image in images)
+    else:
+        train_view_count = len(images)
+    import laspy
+
+    with laspy.open(str(scene.lidar_cloud)) as cloud:
+        lidar_point_count = int(cloud.header.point_count)
+    return DatasetSummary.from_tile_inputs_manifest(
+        tile_inputs,
+        scene_tag=scene.scene_tag,
+        train_view_count=train_view_count,
+        global_init_point_count=read_ply_vertex_count(Path(scene.global_init_ply)),
+        lidar_point_count=lidar_point_count,
+    )
 
 
 def derived_paths_from_scene(scene: PreparedScene, *, repo_root: Path) -> dict[str, str]:
