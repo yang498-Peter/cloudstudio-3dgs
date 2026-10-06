@@ -249,6 +249,14 @@ class CacheOrderingTest(unittest.TestCase):
             for consumer in ("renderer_mask", "face_lidar_geometry", "mono_depth", "sky_masks"):
                 self.assertLess(position["face_cache"], position[consumer])
 
+    def test_face_cache_asks_for_the_mipmap_face4_layout(self) -> None:
+        # build_face_cache.py defaults to adaptive_full_fov; the recipe's caches are the four
+        # MipMap-aligned faces (house0305 v9: --face-plan mipmap_face4, 884 images -> 3536 faces)
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            command = list(CachePlan(_bundle(root), _profile(root)).spec("face_cache").command)
+            self.assertEqual(command[command.index("--face-plan") + 1], "mipmap_face4")
+
 
 class CacheStatusTest(unittest.TestCase):
     def _plan(self, root: Path, **kwargs) -> CachePlan:
