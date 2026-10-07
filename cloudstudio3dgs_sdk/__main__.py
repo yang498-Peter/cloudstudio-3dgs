@@ -144,6 +144,13 @@ def build_parser() -> argparse.ArgumentParser:
     pre.add_argument("--repo-root", type=Path, default=None)
     pre.add_argument("--python", type=Path, default=None)
     pre.add_argument("--no-gpu", action="store_true", help="do not require a CUDA device (prepare-only host)")
+    pre.add_argument("--adapter", default=None, help="ingest adapter name; default: detect from the dataset")
+    pre.add_argument(
+        "--run-dir",
+        type=Path,
+        default=None,
+        help="the processed half of a split capture (poses + colourised cloud), when it is not under --dataset",
+    )
 
     show = sub.add_parser("profile", help="print a profile, its provenance and its open questions")
     show.add_argument("name", nargs="?", default=None, choices=[*sorted(PROFILES), None])

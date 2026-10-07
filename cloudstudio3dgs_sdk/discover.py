@@ -103,6 +103,7 @@ a cost choice, not an accuracy choice - do not tune it to make a number match.
 
 from __future__ import annotations
 
+import dataclasses
 import inspect
 from dataclasses import dataclass
 from pathlib import Path
@@ -118,7 +119,7 @@ from cloudstudio3dgs_sdk.ingest.tiling import (
     histogram_from_las,
     slab_split,
 )
-from cloudstudio3dgs_sdk.plan import DatasetSummary, TileSummary
+from cloudstudio3dgs_sdk.plan import DatasetSummary, TileSummary, tile_count_for
 from cloudstudio3dgs_sdk.profile import Profile
 
 #: Bumped whenever a rule below changes, so a recorded estimate says which one
@@ -369,22 +370,32 @@ def _face_sees(relative: np.ndarray, face: _Face, minimum_rectangle_px: int) -> 
 # --------------------------------------------------------------------------
 
 
-def load_capture(dataset_root: Path | str, *, adapter: str | None = None) -> DatasetBundle:
+def load_capture(
+    dataset_root: Path | str, *, adapter: str | None = None, run_dir: Path | str | None = None
+) -> DatasetBundle:
     """Load the capture for planning: no content hashes, nothing derived.
 
     Hashing 884 images and a 675 MB cloud is what ``prepare()`` does to bind a
     scene it will train; a cost estimate has nothing to bind, so the hashes are
-    skipped wherever the adapter offers to skip them.
+    skipped wherever the adapter offers to skip them. ``run_dir`` is the processed
+    half of a split capture (house0614 keeps poses and cloud apart from the images).
     """
     root = Path(dataset_root)
     module = adapter_by_name(adapter) if adapter else detect_adapter(root)
     parameters = inspect.signature(module.load).parameters
-    skip = {
+    kwargs: dict[str, object] = {
         name: False
         for name in ("hash_images", "hash_point_cloud")
         if name in parameters
     }
-    return module.load(root, **skip)
+    if run_dir is not None:
+        if "run_dir" not in parameters:
+            raise DiscoveryError(
+                f"adapter {getattr(module, 'NAME', module.__name__)} does not read a separate run "
+                "directory; drop --run-dir or name the adapter that does"
+            )
+        kwargs["run_dir"] = Path(run_dir)
+    return module.load(root, **kwargs)
 
 
 def estimate_dataset_summary(
@@ -393,9 +404,11 @@ def estimate_dataset_summary(
     *,
     scene_tag: str | None = None,
     adapter: str | None = None,
+    run_dir: Path | str | None = None,
     bundle: DatasetBundle | None = None,
     tiling_rule: TilingRule | None = None,
     point_sample_budget: int = DEFAULT_POINT_SAMPLE_BUDGET,
+    vram_gib: float | None = None,
 ) -> DatasetEstimate:
     """Summarise an un-prepared capture well enough to cost a delivery.
 
@@ -404,11 +417,17 @@ def estimate_dataset_summary(
     project refuse to *train* from it: it is for ``--dry-run`` and
     ``preflight`` only.
     """
-    capture = bundle if bundle is not None else load_capture(dataset_root, adapter=adapter)
+    capture = bundle if bundle is not None else load_capture(dataset_root, adapter=adapter, run_dir=run_dir)
     cloud = _point_cloud_path(capture)
 
     rule = tiling_rule or TilingRule(tile_count=int(profile.tiling["reference_tile_count"]))
     histogram = histogram_from_las(cloud, bins=rule.histogram_bins)
+    if tiling_rule is None:
+        # As many tiles as the cloud needs for the cap rule, never fewer than the reference;
+        # past the reference count one axis cannot hold them, so the cut becomes a grid.
+        count = tile_count_for(profile, int(histogram.point_count), vram_gib=vram_gib)
+        reference = int(profile.tiling["reference_tile_count"])
+        rule = dataclasses.replace(rule, tile_count=count, layout="grid" if count > reference else rule.layout)
     slab = slab_split(histogram, rule)
     plan = build_slab_tile_plan(
         slab,
@@ -494,8 +513,13 @@ def _notes(
         )
     )
     return (
-        f"tile boxes: {rule.tile_count} equal-point-count slabs along {slab_axis} "
-        f"({rule.__class__.__name__} {rule.to_dict()['rule']}), not the projected-pixel kd "
+        (
+            f"tile boxes: {rule.tile_count} grid cells (equal-point-count slabs along {slab_axis}, "
+            "then equal-point-count strips inside each) "
+            if rule.layout == "grid"
+            else f"tile boxes: {rule.tile_count} equal-point-count slabs along {slab_axis} "
+        )
+        + f"({rule.__class__.__name__} {rule.to_dict()['rule']}), not the projected-pixel kd "
         "planner prepare() runs; different boxes mean different per-tile numbers",
         "init_point_count: exact count of cloud points inside each estimated box - exact for "
         "that box, estimated only because the box is",

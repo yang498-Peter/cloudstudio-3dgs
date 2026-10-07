@@ -25,6 +25,13 @@ The rule implemented here
    ``halo_fraction_per_side`` of the box extent - 0.002, matching
    ``AdaptiveTilingConfig.spatial_halo_fraction_per_side``.
 
+With ``layout="grid"`` step 3 becomes two levels, for scenes that need more tiles than a
+single axis can hold (house0614, 100M points, ~19 tiles): the long axis is cut into slabs
+at point-count quantiles weighted by how many cells each slab holds, then each slab is cut
+along the short axis at the quantiles of *its own* points, read from a 2D occupancy
+histogram (``GRID_BINS`` per side). Cells come out near-square and near-equal in points;
+thin full-length strips, which the one-axis rule degenerates into, train badly.
+
 Core boxes stay a gap-free, non-overlapping partition of the padded root box,
 which is what ``cloudstudio_3dgs.training.tile_ownership`` requires of any tile
 set it is asked to assign core ownership for.  Only the export boxes overlap.
@@ -61,6 +68,8 @@ from .errors import IngestError
 
 AXIS_NAMES = ("x", "y", "z")
 TILING_RULE_VERSION = "slab_equal_point_count_v1"
+#: Bins per side of the 2D (x, y) occupancy histogram the grid layout cuts strips from.
+GRID_BINS = 512
 
 
 class TilingError(IngestError):
@@ -80,10 +89,14 @@ class TilingRule:
     cut_decimals: int = 6
     minimum_slab_extent_m: float = 1.0
     resolution_level: int = 1
+    # "slab": one axis (house0305's layout); "grid": slabs then strips, for many tiles
+    layout: str = "slab"
 
     def validate(self) -> None:
         if self.tile_count < 1:
             raise TilingError("tile_count must be at least 1")
+        if self.layout not in ("slab", "grid"):
+            raise TilingError("layout must be 'slab' or 'grid'")
         if self.axis not in ("auto", "x", "y"):
             raise TilingError("axis must be 'auto', 'x' or 'y' (never 'z')")
         if not 0.0 <= self.scene_padding_fraction < 1.0:
@@ -101,6 +114,13 @@ class TilingRule:
         bytes_per_pixel(self.resolution_level)
 
     def to_dict(self) -> dict[str, Any]:
+        payload = self._fields()
+        if self.layout != "slab":
+            # only recorded when it differs, so every slab plan keeps its digest
+            payload["layout"] = self.layout
+        return payload
+
+    def _fields(self) -> dict[str, Any]:
         return {
             "rule": TILING_RULE_VERSION,
             "tile_count": int(self.tile_count),
@@ -125,6 +145,9 @@ class AxisHistogram:
     maximum: np.ndarray
     counts: np.ndarray  # [3, bins]
     point_count: int
+    # [GRID_BINS, GRID_BINS] occupancy over (x, y) between the same bounds; the grid layout
+    # reads each slab's own distribution along the short axis from it
+    xy_counts: np.ndarray | None = None
 
     @property
     def bins(self) -> int:
@@ -149,8 +172,10 @@ def histogram_from_points(points: np.ndarray, *, bins: int = 4096) -> AxisHistog
     minimum = points.min(axis=0)
     maximum = points.max(axis=0)
     counts = np.zeros((3, bins), dtype=np.int64)
+    xy = np.zeros((GRID_BINS, GRID_BINS), dtype=np.int64)
     _accumulate(counts, points, minimum, maximum, bins)
-    return AxisHistogram(minimum, maximum, counts, int(len(points)))
+    _accumulate_xy(xy, points, minimum, maximum)
+    return AxisHistogram(minimum, maximum, counts, int(len(points)), xy)
 
 
 def histogram_from_las(
@@ -161,6 +186,7 @@ def histogram_from_las(
     import laspy
 
     counts = np.zeros((3, bins), dtype=np.int64)
+    xy = np.zeros((GRID_BINS, GRID_BINS), dtype=np.int64)
     total = 0
     with laspy.open(Path(path)) as reader:
         minimum = np.asarray(reader.header.mins, dtype=np.float64)
@@ -171,9 +197,10 @@ def histogram_from_las(
             points = np.column_stack([chunk.x, chunk.y, chunk.z]).astype(np.float64)
             total += len(points)
             _accumulate(counts, points, minimum, maximum, bins)
+            _accumulate_xy(xy, points, minimum, maximum)
     if total == 0:
         raise TilingError(f"point cloud is empty: {path}")
-    return AxisHistogram(minimum, maximum, counts, total)
+    return AxisHistogram(minimum, maximum, counts, total, xy)
 
 
 def _accumulate(
@@ -189,6 +216,15 @@ def _accumulate(
             ((points[:, axis] - minimum[axis]) / span * bins).astype(np.int64), 0, bins - 1
         )
         counts[axis] += np.bincount(index, minlength=bins)
+
+
+def _accumulate_xy(xy: np.ndarray, points: np.ndarray, minimum: np.ndarray, maximum: np.ndarray) -> None:
+    bins = xy.shape[0]
+    index = []
+    for axis in (0, 1):
+        span = max(float(maximum[axis] - minimum[axis]), 1e-9)
+        index.append(np.clip(((points[:, axis] - minimum[axis]) / span * bins).astype(np.int64), 0, bins - 1))
+    xy += np.bincount(index[0] * bins + index[1], minlength=bins * bins).reshape(bins, bins)
 
 
 def choose_axis(histogram: AxisHistogram, rule: TilingRule) -> int:
@@ -255,8 +291,10 @@ class SlabPlan:
         }
 
 
-def slab_split(histogram: AxisHistogram, rule: TilingRule = TilingRule()) -> SlabPlan:
+def slab_split(histogram: AxisHistogram, rule: TilingRule = TilingRule()) -> "SlabPlan | GridPlan":
     rule.validate()
+    if rule.layout == "grid":
+        return grid_split(histogram, rule)
     axis = choose_axis(histogram, rule)
     extent = histogram.extent
     if np.any(extent <= 0.0):
@@ -303,6 +341,189 @@ def slab_split(histogram: AxisHistogram, rule: TilingRule = TilingRule()) -> Sla
     )
 
 
+@dataclass(frozen=True)
+class GridPlan:
+    """Slabs along the long axis, each cut into strips along the short one."""
+
+    rule: TilingRule
+    axis: int  # the slab axis; strips run along the other horizontal axis
+    root_box: AxisAlignedBox
+    cuts: tuple[float, ...]  # slab cuts along ``axis``
+    strip_cuts: tuple[tuple[float, ...], ...]  # per slab, cuts along the other axis
+    core_boxes: tuple[AxisAlignedBox, ...]
+    export_boxes: tuple[AxisAlignedBox, ...]
+    histogram_counts: tuple[int, ...]
+
+    @property
+    def strip_axis(self) -> int:
+        return 1 - self.axis
+
+    @property
+    def axis_name(self) -> str:
+        return AXIS_NAMES[self.axis]
+
+    def balance(self) -> float:
+        low = max(min(self.histogram_counts), 1)
+        return max(self.histogram_counts) / low
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "rule": self.rule.to_dict(),
+            "split_axis": self.axis_name,
+            "strip_axis": AXIS_NAMES[self.strip_axis],
+            "root_box": self.root_box.to_list(),
+            "cuts_m": list(self.cuts),
+            "strip_cuts_m": [list(row) for row in self.strip_cuts],
+            "histogram_point_counts": list(self.histogram_counts),
+            "histogram_balance_max_over_min": self.balance(),
+        }
+
+    def tree(self, config: AdaptiveTilingConfig) -> dict[str, Any]:
+        """Slab chain along ``axis``; inside each slab a strip chain along the other axis."""
+
+        cells_per_slab = [len(row) + 1 for row in self.strip_cuts]
+        first_cell = np.concatenate([[0], np.cumsum(cells_per_slab)]).astype(int)
+
+        def leaf_row(depth: int, box: AxisAlignedBox, count: int) -> dict[str, Any]:
+            return {
+                "depth": depth,
+                "core_box": box.to_list(),
+                "export_box": box.expanded(config.spatial_halo_fraction_per_side).to_list(),
+                "anchor_count": int(count),
+                "valid_view_count": 0,
+                "pixel_load": 0,
+                "estimated_memory_gib": 0.0,
+                "split_comparison_memory_gib": 0.0,
+                "low_support": False,
+            }
+
+        def strips(depth: int, slab: int, first: int, box: AxisAlignedBox) -> dict[str, Any]:
+            last = int(first_cell[slab + 1]) - 1
+            start = int(first_cell[slab])
+            row = leaf_row(depth, box, sum(self.histogram_counts[first : last + 1]))
+            if first == last:
+                return row
+            cut = self.strip_cuts[slab][first - start]
+            left, right = box.split(self.strip_axis, cut)
+            row["split"] = {"axis": AXIS_NAMES[self.strip_axis], "position": cut,
+                            "criterion": "equal_point_count_quantile_within_slab"}
+            row["children"] = [
+                leaf_row(depth + 1, left, self.histogram_counts[first]),
+                strips(depth + 1, slab, first + 1, right),
+            ]
+            return row
+
+        def slabs(depth: int, slab: int, box: AxisAlignedBox) -> dict[str, Any]:
+            if slab == len(cells_per_slab) - 1:
+                return strips(depth, slab, int(first_cell[slab]), box)
+            row = leaf_row(depth, box, sum(self.histogram_counts[int(first_cell[slab]):]))
+            cut = self.cuts[slab]
+            left, right = box.split(self.axis, cut)
+            row["split"] = {"axis": self.axis_name, "position": cut,
+                            "criterion": "cell_weighted_point_count_quantile"}
+            row["children"] = [strips(depth + 1, slab, int(first_cell[slab]), left), slabs(depth + 1, slab + 1, right)]
+            return row
+
+        return slabs(0, 0, self.root_box)
+
+
+def _weighted_cuts(counts: np.ndarray, edges: np.ndarray, shares: Sequence[int], decimals: int) -> list[float]:
+    """Positions where the cumulative count reaches each running share of the total."""
+
+    cumulative = np.cumsum(counts)
+    total = int(cumulative[-1])
+    if total <= 0:
+        raise TilingError("no points to cut")
+    whole = sum(shares)
+    cuts: list[float] = []
+    running = 0
+    for share in shares[:-1]:
+        running += share
+        target = total * running / whole
+        index = min(int(np.searchsorted(cumulative, target, side="left")), len(counts) - 1)
+        previous = int(cumulative[index - 1]) if index > 0 else 0
+        occupancy = int(counts[index])
+        fraction = (target - previous) / occupancy if occupancy > 0 else 0.0
+        fraction = min(max(fraction, 0.0), 1.0)
+        cuts.append(round(float(edges[index] + fraction * (edges[index + 1] - edges[index])), decimals))
+    return cuts
+
+
+def grid_split(histogram: AxisHistogram, rule: TilingRule) -> GridPlan:
+    """``rule.tile_count`` near-square cells: slabs along the long axis, strips inside each."""
+
+    if histogram.xy_counts is None:
+        raise TilingError("the grid layout needs the 2D occupancy histogram; rebuild the histogram")
+    axis = choose_axis(histogram, rule)
+    other = 1 - axis
+    extent = histogram.extent
+    if np.any(extent <= 0.0):
+        raise TilingError("the point cloud does not span a 3D box")
+    padding = extent * rule.scene_padding_fraction
+    root = AxisAlignedBox(histogram.minimum - padding, histogram.maximum + padding)
+
+    count = rule.tile_count
+    slab_count = int(min(count, max(1, round(np.sqrt(count * extent[axis] / extent[other])))))
+    cells = [count // slab_count + (1 if index < count % slab_count else 0) for index in range(slab_count)]
+    cuts = _weighted_cuts(histogram.counts[axis], histogram.edges(axis), cells, rule.cut_decimals)
+    slab_bounds = [float(root.minimum[axis]), *cuts, float(root.maximum[axis])]
+
+    grid = histogram.xy_counts if axis == 0 else histogram.xy_counts.T  # rows run along ``axis``
+    bins = grid.shape[0]
+    fractions = (np.arange(bins + 1, dtype=np.float64) / bins)
+    axis_edges = histogram.minimum[axis] + fractions * extent[axis]
+    other_edges = histogram.minimum[other] + fractions * extent[other]
+    axis_centres = 0.5 * (axis_edges[:-1] + axis_edges[1:])
+    other_centres = 0.5 * (other_edges[:-1] + other_edges[1:])
+
+    strip_cuts: list[tuple[float, ...]] = []
+    core_boxes: list[AxisAlignedBox] = []
+    export_boxes: list[AxisAlignedBox] = []
+    counts: list[int] = []
+    for slab, cell_count in enumerate(cells):
+        low_a, high_a = slab_bounds[slab], slab_bounds[slab + 1]
+        inside = (axis_centres >= low_a) & (axis_centres < high_a)
+        if slab == slab_count - 1:
+            inside |= axis_centres >= high_a
+        column = grid[inside].sum(axis=0)
+        row_cuts = _weighted_cuts(column, other_edges, [1] * cell_count, rule.cut_decimals) if cell_count > 1 else []
+        strip_cuts.append(tuple(row_cuts))
+        bounds = [float(root.minimum[other]), *row_cuts, float(root.maximum[other])]
+        for index in range(cell_count):
+            for name, span in ((AXIS_NAMES[axis], high_a - low_a), (AXIS_NAMES[other], bounds[index + 1] - bounds[index])):
+                if span < rule.minimum_slab_extent_m:
+                    raise TilingError(
+                        f"cell {len(core_boxes)} would be {span:.3f} m along {name}, below "
+                        f"minimum_slab_extent_m={rule.minimum_slab_extent_m}; use fewer tiles"
+                    )
+            low = root.minimum.copy()
+            high = root.maximum.copy()
+            low[axis], high[axis] = low_a, high_a
+            low[other], high[other] = bounds[index], bounds[index + 1]
+            core = AxisAlignedBox(low, high)
+            if rule.overlap_margin_m is not None:
+                margin = float(rule.overlap_margin_m)
+                export = AxisAlignedBox(core.minimum - margin, core.maximum + margin)
+            else:
+                export = core.expanded(rule.halo_fraction_per_side)
+            core_boxes.append(core)
+            export_boxes.append(export)
+            within = (other_centres >= bounds[index]) & (other_centres < bounds[index + 1])
+            if index == cell_count - 1:
+                within |= other_centres >= bounds[index + 1]
+            counts.append(int(column[within].sum()))
+    return GridPlan(
+        rule=rule,
+        axis=axis,
+        root_box=root,
+        cuts=tuple(cuts),
+        strip_cuts=tuple(strip_cuts),
+        core_boxes=tuple(core_boxes),
+        export_boxes=tuple(export_boxes),
+        histogram_counts=tuple(counts),
+    )
+
+
 def _histogram_slab_counts(
     histogram: AxisHistogram, axis: int, bounds: Sequence[float]
 ) -> list[int]:
@@ -329,7 +550,7 @@ def exact_slab_counts(points: np.ndarray, boxes: Iterable[AxisAlignedBox]) -> li
 
 
 def build_slab_tile_plan(
-    slab: SlabPlan,
+    slab: "SlabPlan | GridPlan",
     *,
     observations: ProjectedObservationTable | None = None,
     view_ids: Sequence[str] | None = None,
@@ -407,6 +628,7 @@ def build_slab_tile_plan(
             ),
             "split_axis": slab.axis_name,
             "cuts_m": list(slab.cuts),
+            **({"strip_cuts_m": [list(row) for row in slab.strip_cuts]} if isinstance(slab, GridPlan) else {}),
         },
         "config": {**slab.rule.to_dict(), "bytes_per_pixel": bpp},
         "execution_contract": {
@@ -416,7 +638,7 @@ def build_slab_tile_plan(
             "empty_cuda_cache_after_each_tile": True,
             "halo_merge": "retain_full_tile_outputs_without_core_deduplication",
         },
-        "tree": _slab_tree(slab, config),
+        "tree": slab.tree(config) if isinstance(slab, GridPlan) else _slab_tree(slab, config),
         "leaf_count": len(tiles),
         "retained_tile_count": len(tiles),
         "tiles": tiles,
@@ -499,6 +721,8 @@ def signed_plan_copy(plan: Mapping[str, Any]) -> dict[str, Any]:
 __all__ = [
     "AXIS_NAMES",
     "AxisHistogram",
+    "GRID_BINS",
+    "GridPlan",
     "SlabPlan",
     "TILING_RULE_VERSION",
     "TilingError",
@@ -507,6 +731,7 @@ __all__ = [
     "choose_axis",
     "compare_tile_boxes",
     "exact_slab_counts",
+    "grid_split",
     "histogram_from_las",
     "histogram_from_points",
     "quantile_cuts",

@@ -354,6 +354,37 @@ class CaptureLoadTests(CaptureFixture):
         self.assertEqual(bundle.adapter, "pinhole_folder")
         self.assertTrue(all(image.sha256 is None for image in bundle.images))
 
+    def test_a_split_capture_reaches_the_adapter_with_its_run_dir(self) -> None:
+        # house0614 keeps the images apart from the poses and the cloud; the dry run and the
+        # preflight used to drop --run-dir and could not cost it at all.
+        from types import SimpleNamespace
+        from unittest import mock
+
+        seen = {}
+
+        def load(root, *, hash_images=True, run_dir=None):
+            seen.update(root=root, hash_images=hash_images, run_dir=run_dir)
+            return "bundle"
+
+        fake = SimpleNamespace(NAME="split_fake", load=load)
+        with mock.patch("cloudstudio3dgs_sdk.discover.adapter_by_name", return_value=fake):
+            self.assertEqual(load_capture(self.dataset, adapter="split_fake", run_dir=self.root / "run"), "bundle")
+        self.assertEqual(seen, {"root": self.dataset, "hash_images": False, "run_dir": self.root / "run"})
+
+    def test_a_run_dir_the_adapter_cannot_read_is_refused(self) -> None:
+        with self.assertRaises(DiscoveryError) as caught:
+            load_capture(self.dataset, run_dir=self.root / "run")
+        self.assertIn("run directory", str(caught.exception))
+
+    def test_the_project_estimate_passes_the_adapter_and_run_dir_on(self) -> None:
+        from unittest import mock
+
+        with mock.patch("cloudstudio3dgs_sdk.project.estimate_dataset_summary", return_value="estimate") as called:
+            project = self.project(adapter="pinhole_folder", run_dir=self.root / "run")
+            self.assertEqual(project.dataset_estimate(), "estimate")
+        self.assertEqual(called.call_args.kwargs["adapter"], "pinhole_folder")
+        self.assertEqual(called.call_args.kwargs["run_dir"], self.root / "run")
+
 
 # --------------------------------------------------------------------------
 # The plan says which numbers it guessed

@@ -321,7 +321,8 @@ class Project:
         """
         if self._estimate is None:
             self._estimate = estimate_dataset_summary(
-                self.dataset_root, self.profile, scene_tag=self.scene_tag
+                self.dataset_root, self.profile, scene_tag=self.scene_tag,
+                adapter=self.adapter, run_dir=self.run_dir, vram_gib=self.vram_gib,
             )
         return self._estimate
 
@@ -654,6 +655,7 @@ class Project:
                 adapter=self.adapter,
                 run_dir=self.run_dir,
                 pipeline_gate=self.pipeline_gate,
+                vram_gib=self.vram_gib,
                 log=self.say,
             )
         except GpuStepRequired as error:

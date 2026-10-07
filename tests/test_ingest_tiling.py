@@ -275,6 +275,84 @@ class SlabPlanSchemaTest(unittest.TestCase):
         )
 
 
+def _square_cloud(seed: int = 3, count: int = 40_000) -> np.ndarray:
+    """A near-square footprint with one dense corner, like a house plus its garden."""
+
+    rng = np.random.default_rng(seed)
+    dense = rng.normal([-20.0, 15.0, 1.0], [4.0, 4.0, 1.0], size=(count // 3, 3))
+    spread = rng.uniform([-50.0, -50.0, -1.0], [50.0, 50.0, 6.0], size=(count - count // 3, 3))
+    return np.concatenate([dense, spread], axis=0)
+
+
+class GridRuleTest(unittest.TestCase):
+    """Many tiles on a near-square scene: slabs then strips, not thin full-length strips."""
+
+    def setUp(self) -> None:
+        self.points = _square_cloud()
+        self.rule = TilingRule(tile_count=9, layout="grid")
+        self.grid = slab_split(histogram_from_points(self.points), self.rule)
+
+    def test_exactly_the_requested_cells_partition_the_root(self) -> None:
+        self.assertIsInstance(self.grid, tiling.GridPlan)
+        self.assertEqual(len(self.grid.core_boxes), 9)
+        counts = exact_slab_counts(self.points, self.grid.core_boxes)
+        self.assertEqual(sum(counts), len(self.points))
+        volume = lambda box: float(np.prod(box.maximum - box.minimum))  # noqa: E731
+        self.assertAlmostEqual(sum(volume(b) for b in self.grid.core_boxes), volume(self.grid.root_box), places=3)
+
+    def test_cells_hold_near_equal_points_despite_the_dense_corner(self) -> None:
+        counts = exact_slab_counts(self.points, self.grid.core_boxes)
+        self.assertLess(max(counts) / min(counts), 1.25)
+
+    def test_cells_are_not_strips(self) -> None:
+        # nine one-axis slabs of this cloud would be ~10x longer than wide
+        for box in self.grid.core_boxes:
+            extent = box.maximum[:2] - box.minimum[:2]
+            self.assertLess(max(extent) / min(extent), 6.0)
+
+    def test_an_uneven_count_still_gives_that_many_cells(self) -> None:
+        grid = slab_split(histogram_from_points(self.points), TilingRule(tile_count=7, layout="grid"))
+        self.assertEqual(len(grid.core_boxes), 7)
+        self.assertEqual(sum(len(row) + 1 for row in grid.strip_cuts), 7)
+
+    def test_the_plan_passes_the_trainer_validator_and_the_ownership_partition(self) -> None:
+        plan = build_slab_tile_plan(self.grid, point_cloud_sha256="c" * 64)
+        self.assertEqual(verify_adaptive_tile_plan(plan), plan["tile_plan_manifest_sha256"])
+        self.assertEqual(plan["leaf_count"], 9)
+        self.assertEqual(plan["config"]["layout"], "grid")
+        self.assertEqual(len(plan["input"]["strip_cuts_m"]), len(self.grid.cuts) + 1)
+        _ordered_boxes([{"tile_id": t["tile_id"], "core_box": t["core_box"]} for t in plan["tiles"]])
+
+        def leaves(node):
+            return [node] if "children" not in node else [leaf for child in node["children"] for leaf in leaves(child)]
+
+        self.assertEqual([leaf["core_box"] for leaf in leaves(plan["tree"])], [t["core_box"] for t in plan["tiles"]])
+
+    def test_slab_plans_do_not_record_a_layout(self) -> None:
+        # every slab plan written before the grid existed keeps its digest
+        self.assertNotIn("layout", TilingRule(tile_count=4).to_dict())
+
+    def test_a_las_histogram_carries_the_grid_occupancy(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = _write_las(Path(tmp) / "cloud.las", self.points)
+            histogram = histogram_from_las(path, chunk_size=7_000)
+        self.assertEqual(int(histogram.xy_counts.sum()), len(self.points))
+        grid = slab_split(histogram, self.rule)
+        self.assertEqual(len(grid.core_boxes), 9)
+
+    def test_the_cache_graph_asks_for_the_grid_only_when_it_is_used(self) -> None:
+        from tests.test_ingest_caches import _bundle, _profile
+        from cloudstudio3dgs_sdk.ingest.caches import CachePlan
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            slab = list(CachePlan(_bundle(root), _profile(root)).spec("tile_plan").command)
+            grid = list(CachePlan(_bundle(root), _profile(root, tile_count=19, tile_layout="grid")).spec("tile_plan").command)
+        self.assertNotIn("--layout", slab)
+        self.assertEqual(grid[grid.index("--layout") + 1], "grid")
+        self.assertEqual(grid[grid.index("--tile-count") + 1], "19")
+
+
 class TileInputsEndToEndTest(unittest.TestCase):
     def test_materialized_tile_inputs_pass_the_trainer_validator(self) -> None:
         points = _skewed_cloud(count=6_000)

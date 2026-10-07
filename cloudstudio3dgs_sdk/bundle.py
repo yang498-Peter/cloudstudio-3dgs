@@ -293,6 +293,22 @@ def _build_cpu_half(
     return pending_gpu
 
 
+def _tile_count(profile: Any, cloud: Path, *, vram_gib: float | None) -> int | None:
+    """The profile's tile count for this cloud, from the LAS header alone; None without one."""
+    if not hasattr(profile, "tiling") or not hasattr(profile, "tile_rules"):
+        return None
+    try:
+        import laspy
+
+        with laspy.open(str(cloud)) as reader:
+            points = int(reader.header.point_count)
+    except Exception:  # noqa: BLE001 - an unreadable header leaves the reference count in force
+        return None
+    from cloudstudio3dgs_sdk.plan import tile_count_for
+
+    return tile_count_for(profile, points, vram_gib=vram_gib)
+
+
 def load_dataset_bundle(
     dataset_root: Path,
     profile: Any,
@@ -305,6 +321,7 @@ def load_dataset_bundle(
     run_dir: Path | str | None = None,
     runner: Callable[[Sequence[str]], int] | None = None,
     log: Callable[[str], None] | None = None,
+    vram_gib: float | None = None,
 ) -> PreparedScene:
     """Ingest a capture and build every CPU cache it needs into ``work_root``.
 
@@ -368,6 +385,14 @@ def load_dataset_bundle(
         # The profile's sky-label refinement, if any; the cache layer does not know Profile.
         sky_mask_refinement=(getattr(profile, "dataset_contract", None) or {}).get("sky_mask_refinement"),
     )
+    # As many tiles as the cloud needs for the profile's cap rule (never fewer than its reference
+    # count): a 100M-point capture cut four ways starts every tile above its cap.
+    tiles = _tile_count(profile, Path(bundle.point_cloud.path), vram_gib=vram_gib)
+    if tiles is not None:
+        roots["tile_count"] = tiles
+        if tiles > int(profile.tiling["reference_tile_count"]):
+            roots["tile_layout"] = "grid"
+        say(f"[prepare] tiling: {tiles} tile(s) for this cloud under profile {getattr(profile, 'name', '?')}")
     plan = plan_caches(bundle, profile, **roots)
 
     # Run the CPU half in dependency order. A GPU cache is not an error until something that

@@ -195,6 +195,50 @@ def default_asset_locator(asset: Mapping[str, Any]) -> tuple[bool, str]:  # prag
     return False, f"{folder} not found under {', '.join(str(r) for r in roots if r)}"
 
 
+#: Steps whose disk grows with the number of views: the ingest caches, the sky masks, the
+#: ownership masks and every rendered background. Tile runs, the coarse prior, the merge and
+#: the export are sized by the caps and the tile count instead.
+VIEW_SCALED_STEP_PREFIXES = ("ingest_dataset", "sky_masks", "ownership_", "backdrop_", "global_view_backgrounds")
+
+
+def _subset_hint(plan: Plan, profile: Profile, *, free: int, needed: int, factor: float) -> str:
+    """How many images of this capture would fit, for a capture nobody has prepared.
+
+    A subset of ``s`` of the capture's ``I`` images is costed as: the view-scaled steps
+    shrink by ``s / I``; the per-tile rest (tile runs, merge, export) shrinks with the tile
+    count, which follows the point count down to the profile's reference count and no
+    further. Both are linear guesses that hold the per-tile part at its full-scene size per
+    tile, so the count errs small.
+    """
+    from cloudstudio3dgs_sdk.plan import step_is_skippable
+
+    faces = plan.dataset.train_view_count
+    images = faces / 4
+    scaling = sum(
+        step.estimate.disk_bytes
+        for step in plan.steps
+        if step.name.startswith(VIEW_SCALED_STEP_PREFIXES) and not step_is_skippable(step)
+    ) * factor
+    if scaling <= 0 or faces <= 0:
+        return ""
+    fixed = needed - scaling
+    floor_share = min(1.0, int(profile.tiling["reference_tile_count"]) / max(plan.dataset.tile_count, 1))
+    floor = fixed * floor_share
+    if free <= floor:
+        return (
+            f"; even a small subset does not fit: at the reference {profile.tiling['reference_tile_count']} "
+            f"tiles the tile runs and the delivery alone need {floor/GIB:.1f} GB"
+        )
+    # share s/I of the capture: cost = scaling*share + fixed*max(share, floor_share)
+    share = min(1.0, free / needed)
+    if share < floor_share:
+        share = min(floor_share, (free - floor) / scaling)
+    return (
+        f"; or prepare a subset: about {int(share * images)} of its {int(images)} images fit "
+        f"({needed/GIB/images*1024:.0f} MB per image at this scale, x {factor})"
+    )
+
+
 # --------------------------------------------------------------------------
 # preflight
 # --------------------------------------------------------------------------
@@ -333,6 +377,51 @@ def preflight(
             )
         )
 
+    # -- every tile can hold its initialisation ---------------------------
+    # The trainer refuses a tile whose initialisation reaches its cap, at startup - which on a
+    # fresh capture is after the whole prepare stage. A cap under the profile's ratio is legal
+    # but throttles growth the recipe was measured with.
+    ratio = float(profile.tile_rules["cap_ratio_of_initialisation"])
+    half_step = int(profile.tile_rules["cap_round_to"]) / 2  # rounding alone is not throttling
+    over = [t for t in plan.dataset.tiles if t.init_point_count >= plan.tile_caps.get(t.tile_id, 0)]
+    tight = [
+        t for t in plan.dataset.tiles
+        if t not in over and plan.tile_caps.get(t.tile_id, 0) + half_step < t.init_point_count * ratio
+    ]
+    rows = ", ".join(
+        f"{t.name} init {t.init_point_count/1e6:.2f}M cap {plan.tile_caps.get(t.tile_id, 0)/1e6:.2f}M"
+        for t in (over or tight)
+    )
+    if over:
+        from cloudstudio3dgs_sdk.plan import tile_count_for
+
+        card = probes.gpu.total_vram_gib if probes.gpu.available else None
+        wanted = tile_count_for(profile, plan.dataset.lidar_point_count, vram_gib=card)
+        checks.append(
+            Check(
+                "tile_capacity",
+                FAIL,
+                f"initialisation at or over the cap, the trainer refuses these: {rows}",
+                remedy=(
+                    f"cut the cloud into more tiles ({wanted} for {plan.dataset.lidar_point_count/1e6:.1f}M "
+                    f"points under this profile) - a fresh prepare does this itself"
+                    if wanted > plan.dataset.tile_count
+                    else "cut the cloud into more tiles"
+                ),
+            )
+        )
+    elif tight:
+        checks.append(
+            Check(
+                "tile_capacity",
+                WARN,
+                f"cap below {ratio}x the initialisation (growth throttled): {rows}",
+                required=False,
+            )
+        )
+    else:
+        checks.append(Check("tile_capacity", PASS, f"every tile's cap is at least {ratio}x its initialisation"))
+
     # -- disk -----------------------------------------------------------
     # Only the steps a run would still execute count: a resumed run has already paid
     # for the outputs that exist, and asking for the whole plan's disk again refused
@@ -350,12 +439,15 @@ def preflight(
             f"the steps still to run need {needed/GIB:.1f} GB"
             + (f" (whole plan {whole/GIB:.1f} GB)" if whole != needed else "")
         )
+        remedy = "" if enough else "free space or point --work at a larger volume"
+        if not enough and plan.dataset.estimated:
+            remedy += _subset_hint(plan, profile, free=free, needed=needed, factor=factor)
         checks.append(
             Check(
                 "disk_headroom",
                 PASS if enough else FAIL,
                 f"{free/GIB:.1f} GB free at {plan.work_root}, {scope} (estimate x {factor})",
-                remedy="" if enough else "free space or point --work at a larger volume",
+                remedy=remedy,
             )
         )
 

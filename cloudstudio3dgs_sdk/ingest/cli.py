@@ -118,6 +118,7 @@ def _tile(args: argparse.Namespace) -> int:
         halo_fraction_per_side=args.halo_fraction_per_side,
         overlap_margin_m=args.overlap_margin_m,
         histogram_bins=args.histogram_bins,
+        layout=args.layout,
     )
     output = Path(args.output)
     histogram = histogram_from_las(Path(args.point_cloud), bins=rule.histogram_bins)
@@ -202,6 +203,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                       help="a Face4 manifest and its root; repeat for train and val")
     tile.add_argument("--samples-per-raw-view", type=int, default=5_000)
     tile.add_argument("--tile-count", type=int, default=4)
+    tile.add_argument("--layout", default="slab", choices=("slab", "grid"),
+                      help="slab: one axis (house0305); grid: slabs then strips, for many tiles")
     tile.add_argument("--axis", default="auto", choices=("auto", "x", "y"))
     tile.add_argument("--scene-padding-fraction", type=float, default=0.2)
     tile.add_argument("--halo-fraction-per-side", type=float, default=0.002)

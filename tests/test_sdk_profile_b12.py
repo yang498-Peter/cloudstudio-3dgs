@@ -191,6 +191,30 @@ class CapRuleTest(unittest.TestCase):
         self.assertIn("floor 6389532", config["lineage"]["cap_rule"])
 
 
+class ViewsPerTileTest(unittest.TestCase):
+    def test_house0305_is_inside_the_measured_range(self) -> None:
+        self.assertFalse([w for w in _plan(PROFILE_B12OP05D3).warnings if "views-per-tile" in w])
+
+    def test_a_crowded_tile_is_named_with_its_visit_count(self) -> None:
+        dataset = DatasetSummary(
+            scene_tag="big",
+            tiles=(TileSummary(0, "Tile_0", 7202, 5_000_000), TileSummary(1, "Tile_1", 2000, 5_000_000)),
+            train_view_count=24344,
+            global_init_point_count=1_000_000,
+        )
+        root = Path("D:/sdk-test")
+        plan = build_plan(PROFILE_B12OP05D3, dataset, dataset_root=root / "d", work_root=root / "w",
+                          repo_root=root / "r", python=Path("python.exe"),
+                          prior_tile_checkpoints={0: "a.pt", 1: "b.pt"})
+        crowded = [w for w in plan.warnings if "views-per-tile" in w]
+        self.assertEqual(len(crowded), 1)
+        self.assertIn("1 tile(s)", crowded[0])
+        self.assertIn("~4.2 times", crowded[0])
+
+    def test_profiles_without_a_measured_range_say_nothing(self) -> None:
+        self.assertNotIn("measured_views_per_tile", PROFILE_B6RESET.tiling)
+
+
 class RefinedSkyLabelPlanTest(unittest.TestCase):
     def test_a_fresh_plan_builds_the_raw_label_then_refines_it_into_the_trainer_mask(self) -> None:
         plan = _plan(PROFILE_B12OP05D3)

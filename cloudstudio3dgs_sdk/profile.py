@@ -1247,6 +1247,11 @@ def _derive_b12op05d3() -> Profile:
         "seconds_per_face": 0.064,
     }
 
+    tiling = thaw(base.tiling)
+    # The per-tile view counts the 30k stop was tuned on (house0305 v9 tiles): ~13-18 visits
+    # per view. A tile far above this is trained less per view than anything measured.
+    tiling["measured_views_per_tile"] = [1684, 2317]
+
     tile_rules = thaw(base.tile_rules)
     tile_rules["cap_multiplier"] = 1.5
     tile_rules["cap_ceiling"] = 15000000
@@ -1344,6 +1349,13 @@ def _derive_b12op05d3() -> Profile:
         f"{_LADDER_DOC} sections 20-24",
         MEASURED,
     )
+    provenance["tiling.measured_views_per_tile"] = Provenance(
+        "The four house0305 v9 tiles carry 2132 / 1829 / 1684 / 2317 training views; every "
+        "schedule knob of this recipe (30k stop, 21k refine window, reset 3000) was measured on "
+        "them and on nothing larger.",
+        "house0305_sop/tile_inputs_v9/tile_inputs_manifest.json",
+        MEASURED,
+    )
     provenance["cost_model.sky_mask_seconds_per_face"] = Provenance(
         "The house0305 v9 SegFormer pass ran 21:46:06 -> 00:34:40 for 3536 faces on CPU with 6 "
         "threads: 2.85 s per face, almost five times the inherited guess.",
@@ -1381,6 +1393,17 @@ def _derive_b12op05d3() -> Profile:
                 "status": "open; user visual judgement",
             },
             {
+                "id": "views-per-tile",
+                "what": (
+                    "Larger captures put 2-4x more views on a tile than house0305 (house0614 at "
+                    "19 tiles: 4.6k-7.2k), so the fixed 30k stop visits each view 4-7 times "
+                    "instead of 13-18. Whether to add tiles, lengthen the stop or accept it is "
+                    "unmeasured; the plan warns when it happens."
+                ),
+                "expressed_as": "tiling.measured_views_per_tile; trainer_base.controlled_stop_after_steps",
+                "status": "open; needs a measured run on a larger capture",
+            },
+            {
                 "id": "canopy-veil",
                 "what": (
                     "A milky veil over dense crowns against the sky survives every alpha change. "
@@ -1403,7 +1426,7 @@ def _derive_b12op05d3() -> Profile:
         ),
         runtime=runtime,
         dataset_contract=dataset_contract,
-        tiling=thaw(base.tiling),
+        tiling=tiling,
         trainer_base=trainer_base,
         tile_rules=tile_rules,
         coarse_prior=thaw(base.coarse_prior),

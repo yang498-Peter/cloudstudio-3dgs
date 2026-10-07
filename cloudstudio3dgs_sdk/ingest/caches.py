@@ -86,6 +86,76 @@ class CacheSpec:
             raise CachePlanError(f"{self.name}: device must be 'cpu' or 'gpu'")
 
 
+# Every cost below was measured (or estimated, see each spec's cost_basis) on house0305 v9:
+# 886 images, 3536 train faces, 4 tiles. A scene of another size scales from here by the
+# basis named next to each cache, so a capture seven times larger is costed seven times
+# larger before anything is built instead of at house0305's size.
+REFERENCE_IMAGES = 886
+REFERENCE_TRAIN_FACES = 3536
+REFERENCE_TILES = 4
+FACES_PER_IMAGE = {"mipmap_face4": 4}
+#: The default rig-frame split holds out about a tenth of the images (house0305 v8: 90 of
+#: 886); the validation graph is costed at that share of the faces.
+VALIDATION_FRACTION = 0.10
+
+# name: (minutes, GiB, basis). "images": every posed image; "faces": this split's faces;
+# "faces_per_tile": one tile's share of the faces (per-tile caches); "fixed": size-free.
+REFERENCE_COSTS: Mapping[str, tuple[float, float, str]] = {
+    "dataset_manifest": (2.0, 0.002, "images"),
+    "mask_manifest": (1.0, 0.02, "images"),
+    "person_mask_manifest": (25.0, 0.9, "images"),
+    "depth_cache": (95.0, 9.8, "images"),
+    "split_manifest": (0.5, 0.001, "fixed"),
+    "face_cache": (31.0, 25.0, "faces"),
+    "renderer_mask": (6.0, 0.002, "faces"),
+    "face_lidar_geometry": (72.0, 7.6, "faces"),
+    "mono_depth": (53.0, 1.6, "faces"),
+    "sky_masks": (168.0, 0.06, "faces"),
+    "sky_masks_refined": (3.75, 0.19, "faces"),
+    "tile_plan": (1.0, 0.01, "fixed"),
+    "tile_inputs": (3.0, 0.28, "images"),
+    "tile_geometry": (40.0, 0.96, "images"),
+    "tile_ownership": (6.0, 0.19, "faces_per_tile"),
+    "view_backgrounds": (12.0, 2.5, "faces_per_tile"),
+}
+
+
+@dataclass(frozen=True)
+class SceneScale:
+    """How much bigger than house0305 one split of a scene is, per cost basis."""
+
+    images: int
+    faces: int
+    tiles: int
+
+    @staticmethod
+    def of(bundle: Any, profile: "CacheProfile") -> "SceneScale":
+        images = len(bundle.images)
+        faces = images * FACES_PER_IMAGE.get(profile.face_plan, 4)
+        if profile.split != "train":
+            faces = max(1, int(round(faces * VALIDATION_FRACTION)))
+        return SceneScale(images=images, faces=faces, tiles=max(1, len(profile.tile_ids)))
+
+    def factor(self, basis: str) -> float:
+        if basis == "images":
+            return self.images / REFERENCE_IMAGES
+        if basis == "faces":
+            return self.faces / REFERENCE_TRAIN_FACES
+        if basis == "faces_per_tile":
+            return (self.faces / REFERENCE_TRAIN_FACES) * (REFERENCE_TILES / self.tiles)
+        if basis == "fixed":
+            return 1.0
+        raise CachePlanError(f"unknown cost basis {basis!r}")
+
+    def minutes(self, name: str) -> float:
+        minutes, _, basis = REFERENCE_COSTS[name]
+        return minutes * self.factor(basis)
+
+    def gib(self, name: str) -> float:
+        _, gib, basis = REFERENCE_COSTS[name]
+        return gib * self.factor(basis)
+
+
 @dataclass
 class CacheProfile:
     """Where caches live and which optional ones this profile wants.
@@ -102,6 +172,8 @@ class CacheProfile:
     source_run_dir: Path
     split: str = "train"
     tile_count: int = 4
+    # "grid" once a scene needs more tiles than one axis can hold (see ingest.tiling)
+    tile_layout: str = "slab"
     tile_ids: tuple[int, ...] = ()
     person_masks: bool = True
     mono_depth: bool = True
@@ -189,6 +261,7 @@ def _dotted(payload: Mapping[str, Any], key: str) -> Any:
 def build_cache_specs(bundle: DatasetBundle, profile: CacheProfile) -> list[CacheSpec]:
     """The full inventory for one split of one dataset."""
 
+    scale = SceneScale.of(bundle, profile)
     dataset = profile.dataset_root
     cache = profile.cache_root
     run = profile.run_root
@@ -243,9 +316,9 @@ def build_cache_specs(bundle: DatasetBundle, profile: CacheProfile) -> list[Cach
             manifest=dataset_manifest,
             root=dataset,
             sha_key="manifest_sha256",
-            estimated_minutes=2.0,
+            estimated_minutes=scale.minutes("dataset_manifest"),
             cost_basis="estimated (SHA256 runs at ~1 GB/s here; 3.4 GB images + 0.7 GB LAS)",
-            output_gib=0.002,
+            output_gib=scale.gib("dataset_manifest"),
         ),
         CacheSpec(
             name="mask_manifest",
@@ -265,9 +338,9 @@ def build_cache_specs(bundle: DatasetBundle, profile: CacheProfile) -> list[Cach
             sha_key="mask_manifest_sha256",
             depends_on=("dataset_manifest",),
             bindings=(Binding("dataset_manifest_sha256", "dataset_manifest"),),
-            estimated_minutes=1.0,
+            estimated_minutes=scale.minutes("mask_manifest"),
             cost_basis="measured (v8 artifact span: manifest 18:18 -> masks 18:19)",
-            output_gib=0.02,
+            output_gib=scale.gib("mask_manifest"),
         ),
         CacheSpec(
             name="person_mask_manifest",
@@ -298,9 +371,9 @@ def build_cache_specs(bundle: DatasetBundle, profile: CacheProfile) -> list[Cach
                 Binding("dataset_manifest_sha256", "dataset_manifest"),
                 Binding("base_mask_manifest_sha256", "mask_manifest"),
             ),
-            estimated_minutes=25.0,
+            estimated_minutes=scale.minutes("person_mask_manifest"),
             cost_basis="estimated (886 images through maskrcnn_resnet50_fpn_v2 at 800 px)",
-            output_gib=0.9,
+            output_gib=scale.gib("person_mask_manifest"),
             note="Manual review pass (tools/finalize_person_mask_review.py) is not in this plan.",
         ),
         CacheSpec(
@@ -331,9 +404,9 @@ def build_cache_specs(bundle: DatasetBundle, profile: CacheProfile) -> list[Cach
                 Binding("mask_manifest_sha256", "mask_manifest"),
             ),
             requires_capabilities=(CAPABILITY_LIDAR,),
-            estimated_minutes=95.0,
+            estimated_minutes=scale.minutes("depth_cache"),
             cost_basis="estimated (v8 artifact span masks 18:19 -> depth 20:16 is an upper bound)",
-            output_gib=9.8,
+            output_gib=scale.gib("depth_cache"),
         ),
         CacheSpec(
             name="split_manifest",
@@ -359,9 +432,9 @@ def build_cache_specs(bundle: DatasetBundle, profile: CacheProfile) -> list[Cach
             depends_on=("dataset_manifest",),
             bindings=(Binding("dataset_manifest_sha256", "dataset_manifest"),),
             requires_capabilities=(CAPABILITY_TIMESTAMPS,),
-            estimated_minutes=0.5,
+            estimated_minutes=scale.minutes("split_manifest"),
             cost_basis="measured (v9 artifact span, under a minute)",
-            output_gib=0.001,
+            output_gib=scale.gib("split_manifest"),
         ),
         CacheSpec(
             name="face_cache",
@@ -420,9 +493,9 @@ def build_cache_specs(bundle: DatasetBundle, profile: CacheProfile) -> list[Cach
                 Binding("source_identity.split_manifest_sha256", "split_manifest"),
             ),
             requires_capabilities=(CAPABILITY_FISHEYE,),
-            estimated_minutes=31.0,
+            estimated_minutes=scale.minutes("face_cache"),
             cost_basis="measured (v9: 02:14 -> 02:45 for 884 images -> 3536 faces)",
-            output_gib=25.0,
+            output_gib=scale.gib("face_cache"),
         ),
         CacheSpec(
             name="renderer_mask",
@@ -444,9 +517,9 @@ def build_cache_specs(bundle: DatasetBundle, profile: CacheProfile) -> list[Cach
             sha_key="renderer_mask_manifest_sha256",
             depends_on=("face_cache",),
             bindings=(Binding("source_face_manifest_sha256", "face_cache"),),
-            estimated_minutes=6.0,
+            estimated_minutes=scale.minutes("renderer_mask"),
             cost_basis="measured (v9: 02:46 -> 02:52, train + val, dominated by artifact SHA checks)",
-            output_gib=0.002,
+            output_gib=scale.gib("renderer_mask"),
         ),
         CacheSpec(
             name="face_lidar_geometry",
@@ -483,12 +556,12 @@ def build_cache_specs(bundle: DatasetBundle, profile: CacheProfile) -> list[Cach
                 Binding("dataset_manifest_sha256", "dataset_manifest"),
             ),
             requires_capabilities=(CAPABILITY_LIDAR,),
-            estimated_minutes=72.0,
+            estimated_minutes=scale.minutes("face_lidar_geometry"),
             cost_basis=(
                 "measured (v9: 03:11 -> 04:23 with visibility_cell_px=6; the same "
                 "builder without hidden-point removal took 19 min)"
             ),
-            output_gib=7.6,
+            output_gib=scale.gib("face_lidar_geometry"),
         ),
         CacheSpec(
             name="mono_depth",
@@ -527,9 +600,9 @@ def build_cache_specs(bundle: DatasetBundle, profile: CacheProfile) -> list[Cach
                 Binding("dataset_manifest_sha256", "dataset_manifest"),
             ),
             requires_capabilities=(CAPABILITY_LIDAR,),
-            estimated_minutes=53.0,
+            estimated_minutes=scale.minutes("mono_depth"),
             cost_basis="measured (v9 shard logs: 0.9 s/face; 5 shards finished in ~11 min wall)",
-            output_gib=1.6,
+            output_gib=scale.gib("mono_depth"),
             note="Shardable: five concurrent shards then one assembling pass for the manifest.",
         ),
         CacheSpec(
@@ -554,9 +627,9 @@ def build_cache_specs(bundle: DatasetBundle, profile: CacheProfile) -> list[Cach
             sha_key="sky_mask_manifest_sha256",
             depends_on=("face_cache",),
             bindings=(Binding("source_face_manifest_sha256", "face_cache"),),
-            estimated_minutes=168.0,
+            estimated_minutes=scale.minutes("sky_masks"),
             cost_basis="measured (v9 log: 21:46:06 -> 00:34:40 on CPU with 6 threads)",
-            output_gib=0.06,
+            output_gib=scale.gib("sky_masks"),
             note="--allow-cuda turns this into a GPU step; the default is CPU on purpose.",
         ),
     ]
@@ -598,9 +671,9 @@ def build_cache_specs(bundle: DatasetBundle, profile: CacheProfile) -> list[Cach
                     Binding("rule.refinement.source_sky_mask_manifest_sha256", "sky_masks"),
                     Binding("source_face_manifest_sha256", "face_cache"),
                 ),
-                estimated_minutes=3.75,
+                estimated_minutes=scale.minutes("sky_masks_refined"),
                 cost_basis="measured (house0305 refine_stats.json: 225 s for 3536 faces, 4 workers)",
-                output_gib=0.19,
+                output_gib=scale.gib("sky_masks_refined"),
                 note="A subset of the raw label; every trainer guard (erosion, LiDAR proximity) still applies.",
             )
         )
@@ -619,6 +692,7 @@ def build_cache_specs(bundle: DatasetBundle, profile: CacheProfile) -> list[Cach
                 str(bundle.point_cloud.path if bundle.point_cloud else "<point_cloud>"),
                 "--tile-count",
                 str(profile.tile_count),
+                *(("--layout", profile.tile_layout) if profile.tile_layout != "slab" else ()),
                 "--output",
                 str(tile_plan_manifest),
                 # Bind the views: without them the plan is boxes only and every tile
@@ -639,9 +713,9 @@ def build_cache_specs(bundle: DatasetBundle, profile: CacheProfile) -> list[Cach
             depends_on=("face_lidar_geometry",),
             bindings=(),
             requires_capabilities=(CAPABILITY_LIDAR,),
-            estimated_minutes=1.0,
+            estimated_minutes=scale.minutes("tile_plan"),
             cost_basis="measured (one streaming LAS pass: 2.7 s for 18.76 M points)",
-            output_gib=0.01,
+            output_gib=scale.gib("tile_plan"),
             note=(
                 "Boxes only need the cloud; the view rectangles come from the LiDAR depth "
                 "projected into the Face4 views, which is why this sits after the face and "
@@ -675,9 +749,9 @@ def build_cache_specs(bundle: DatasetBundle, profile: CacheProfile) -> list[Cach
             depends_on=("tile_plan",),
             bindings=(Binding("tile_plan_manifest_sha256", "tile_plan"),),
             requires_capabilities=(CAPABILITY_LIDAR,),
-            estimated_minutes=3.0,
+            estimated_minutes=scale.minutes("tile_inputs"),
             cost_basis="measured (one LAS pass, 6.2 s for 4 boxes, plus 280 MB of PLY writes and SHA)",
-            output_gib=0.28,
+            output_gib=scale.gib("tile_inputs"),
         ),
         CacheSpec(
             name="tile_geometry",
@@ -700,9 +774,9 @@ def build_cache_specs(bundle: DatasetBundle, profile: CacheProfile) -> list[Cach
             depends_on=("tile_inputs",),
             bindings=(Binding("tile_inputs_manifest_sha256", "tile_inputs"),),
             requires_capabilities=(CAPABILITY_LIDAR,),
-            estimated_minutes=40.0,
+            estimated_minutes=scale.minutes("tile_geometry"),
             cost_basis="estimated (K=30 PCA over 19.4 M halo-inclusive points, 964 MB of npz)",
-            output_gib=0.96,
+            output_gib=scale.gib("tile_geometry"),
         ),
     ]
 
@@ -742,9 +816,9 @@ def build_cache_specs(bundle: DatasetBundle, profile: CacheProfile) -> list[Cach
                     Binding("tile_inputs_manifest_sha256", "tile_inputs"),
                 ),
                 requires_capabilities=(CAPABILITY_LIDAR,),
-                estimated_minutes=6.0,
+                estimated_minutes=scale.minutes("tile_ownership"),
                 cost_basis="measured (v9: 4-8 min per tile with 10 workers)",
-                output_gib=0.19,
+                output_gib=scale.gib("tile_ownership"),
                 tile_id=tile_id,
             )
         )
@@ -779,9 +853,9 @@ def build_cache_specs(bundle: DatasetBundle, profile: CacheProfile) -> list[Cach
                 bindings=(
                     Binding("source_tile_inputs_manifest_sha256", "tile_inputs"),
                 ),
-                estimated_minutes=12.0,
+                estimated_minutes=scale.minutes("view_backgrounds"),
                 cost_basis="measured (v9 log: 1829 views rendered in 1.5 min, plus stand-in assembly)",
-                output_gib=2.5,
+                output_gib=scale.gib("view_backgrounds"),
                 tile_id=tile_id,
                 note=(
                     "Needs trained neighbour-tile checkpoints for the stand-in; on a "
@@ -802,6 +876,40 @@ def build_cache_specs(bundle: DatasetBundle, profile: CacheProfile) -> list[Cach
     if not profile.view_backgrounds:
         disabled.update(s.name for s in specs if s.name.startswith("view_backgrounds_"))
     return [spec for spec in specs if spec.name not in disabled]
+
+
+#: Caches the SDK plan budgets as steps of its own (sky masks, tile ownership, backgrounds);
+#: the ingest estimate leaves them out so the preflight never counts them twice.
+PLAN_BUDGETED_CACHES = ("sky_masks", "sky_masks_refined", "tile_ownership", "view_backgrounds")
+
+
+def estimate_ingest(
+    train_faces: int,
+    tile_count: int,
+    *,
+    validation_caches: Sequence[str],
+    face_plan: str = "mipmap_face4",
+) -> tuple[float, float]:
+    """(minutes, GiB) the ingest graph needs for a scene of this size, before it exists.
+
+    The train split is costed at ``train_faces`` and the caches in ``validation_caches`` again
+    at the validation share. This is what a dry run and the disk preflight read for a capture
+    nobody has prepared: house0614 (6086 images) comes out near 300 GiB, not house0305's 45.
+    """
+    images = max(1, int(round(train_faces / FACES_PER_IMAGE.get(face_plan, 4))))
+    tiles = max(1, int(tile_count))
+    train = SceneScale(images=images, faces=max(1, int(train_faces)), tiles=tiles)
+    val = SceneScale(images=images, faces=max(1, int(round(train_faces * VALIDATION_FRACTION))), tiles=tiles)
+    minutes = gib = 0.0
+    for name in REFERENCE_COSTS:
+        if name in PLAN_BUDGETED_CACHES:
+            continue
+        minutes += train.minutes(name)
+        gib += train.gib(name)
+        if name in validation_caches:
+            minutes += val.minutes(name)
+            gib += val.gib(name)
+    return minutes, gib
 
 
 def _topological(specs: Sequence[CacheSpec]) -> list[CacheSpec]:
@@ -1107,6 +1215,10 @@ __all__ = [
     "CacheProfile",
     "CacheSpec",
     "CacheStatus",
+    "PLAN_BUDGETED_CACHES",
+    "REFERENCE_COSTS",
+    "SceneScale",
     "build_cache_specs",
+    "estimate_ingest",
     "plan_caches",
 ]

@@ -475,6 +475,37 @@ def tile_cap(profile: Profile, tile: TileSummary, *, vram_gib: float | None = No
     return max(cap, step)
 
 
+#: Halo points a slab tile carries beyond its share (house0305: 19.4M tile points over an 18.76M
+#: cloud cut four ways), so a tile count sized on the bare share does not land over the cap.
+TILE_HALO_ALLOWANCE = 1.05
+
+
+def tile_count_for(profile: Profile, lidar_point_count: int, *, vram_gib: float | None = None) -> int:
+    """How many tiles a cloud of this size needs so the cap rule does not throttle any tile.
+
+    A tile's cap is its initialisation times the profile's ratio (and multiplier); the ceiling
+    (the profile's measured one, else the card's) bounds it. Cutting the cloud into the
+    profile's reference count regardless of size handed house0614 (100M points) four tiles of
+    25M initialisation points against 15M caps, which the trainer refuses at startup - after
+    a day and a half of prepare. Never fewer tiles than the reference count.
+    """
+    reference = int(profile.tiling["reference_tile_count"])
+    rules = profile.tile_rules
+    ceilings = []
+    if rules.get("cap_ceiling") is not None:
+        ceilings.append(int(rules["cap_ceiling"]))
+    if vram_gib is not None:
+        runtime = profile.runtime
+        ceilings.append(
+            int(int(runtime["max_gaussians_per_gib_vram"]) * vram_gib * float(runtime["vram_safety_factor"]))
+        )
+    if not ceilings or lidar_point_count <= 0:
+        return reference
+    per_point = float(rules["cap_ratio_of_initialisation"]) * float(rules.get("cap_multiplier") or 1.0)
+    wanted = lidar_point_count * TILE_HALO_ALLOWANCE * per_point
+    return max(reference, int(math.ceil(wanted / min(ceilings))))
+
+
 def tile_max_steps(profile: Profile, view_count: int) -> int:
     return int(profile.tiling["epochs_for_max_steps"]) * int(view_count)
 
@@ -793,6 +824,20 @@ def build_plan(
                 f"raised the cap to {cap/1e6:.2f}M"
             )
 
+    measured_views = profile.tiling.get("measured_views_per_tile")
+    if measured_views:
+        stop = int(profile.trainer_base["controlled_stop_after_steps"])
+        busiest = max(measured_views)
+        crowded = [tile for tile in dataset.tiles if tile.view_count > busiest * 1.25]
+        if crowded:
+            most = max(tile.view_count for tile in crowded)
+            warnings.append(
+                f"{len(crowded)} tile(s) carry more views than this recipe was measured at "
+                f"(up to {most} against {min(measured_views)}-{busiest}): the {stop}-step stop visits "
+                f"each view ~{stop / most:.1f} times against {stop / busiest:.1f}+ when it was tuned. "
+                "Quality there is unmeasured (profile open question 'views-per-tile')"
+            )
+
     if dataset.estimated:
         warnings.append(
             "the dataset summary is ESTIMATED (derived from the capture, not from a prepare "
@@ -833,12 +878,29 @@ def build_plan(
     # capture bundle with real dependency bindings; see the profile's
     # "prepare-step-source" open question.
     if "prepare" in stages:
+        ingest_estimate = Estimate(0.0, 0, "owned by the ingestion task", UNMEASURED)
+        if dataset.estimated:
+            # A capture nobody has prepared: the cache graph is most of the disk the run will
+            # take (house0614: ~300 GiB), so the preflight has to see it before prepare starts.
+            from cloudstudio3dgs_sdk.bundle import VALIDATION_CACHES
+            from cloudstudio3dgs_sdk.ingest.caches import estimate_ingest
+
+            minutes, gib = estimate_ingest(
+                dataset.train_view_count, dataset.tile_count, validation_caches=VALIDATION_CACHES
+            )
+            ingest_estimate = Estimate(
+                minutes * 60.0,
+                int(gib * GIB),
+                f"the ingest cache graph scaled from house0305 v9 to {dataset.train_view_count} faces "
+                f"({gib:.0f} GiB; sky masks, ownership and backgrounds are budgeted below)",
+                EXTRAPOLATED,
+            )
         steps.append(
             PlannedStep(
                 name="ingest_dataset",
                 stage="prepare",
                 resource="external",
-                estimate=Estimate(0.0, 0, "owned by the ingestion task", UNMEASURED),
+                estimate=ingest_estimate,
                 outputs=(str(layout.prepare_manifest),),
                 note=(
                     "adapters, the signed cache graph and the automatic tiling rule live in "
