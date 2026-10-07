@@ -106,6 +106,9 @@ class CacheProfile:
     person_masks: bool = True
     mono_depth: bool = True
     sky_masks: bool = True
+    # Photometric refinement of the SegFormer sky label (tools/refine_sky_masks.py parameters:
+    # dark_ratio, edge_ratio, dilate_px). When set, the trainer reads the refined cache.
+    sky_mask_refinement: Mapping[str, Any] | None = None
     tile_ownership: bool = True
     view_backgrounds: bool = True
     fov_deg: float = 190.0
@@ -197,6 +200,7 @@ def build_cache_specs(bundle: DatasetBundle, profile: CacheProfile) -> list[Cach
     face_lidar_root = cache / f"face4_lidar_{split}_vis{profile.visibility_cell_px}"
     da2_root = cache / f"da2_{split}"
     sky_root = cache / f"sky_mask_{split}"
+    sky_refined_root = cache / f"sky_mask_{split}_refined"
     tile_plan_root = run / "tile_plan"
     tile_inputs_root = run / "tile_inputs"
     tile_geometry_root = run / "tile_geometry"
@@ -213,6 +217,7 @@ def build_cache_specs(bundle: DatasetBundle, profile: CacheProfile) -> list[Cach
     face_lidar_manifest = face_lidar_root / "face_lidar_geometry_manifest.json"
     da2_manifest = da2_root / "mono_depth_manifest.json"
     sky_manifest = sky_root / f"sky_mask_{split}.json"
+    sky_refined_manifest = sky_refined_root / f"sky_mask_{split}.json"
     tile_plan_manifest = tile_plan_root / "adaptive_tile_plan.json"
     tile_inputs_manifest = tile_inputs_root / "tile_inputs_manifest.json"
     tile_geometry_manifest = tile_geometry_root / "tile_geometry_manifest.json"
@@ -554,6 +559,52 @@ def build_cache_specs(bundle: DatasetBundle, profile: CacheProfile) -> list[Cach
             output_gib=0.06,
             note="--allow-cuda turns this into a GPU step; the default is CPU on purpose.",
         ),
+    ]
+    refinement = profile.sky_mask_refinement
+    if refinement:
+        specs.append(
+            CacheSpec(
+                name="sky_masks_refined",
+                title="Sky label refined against the photo (bright, smooth pixels stay sky)",
+                device=CPU,
+                builder="tools/refine_sky_masks.py",
+                command=(
+                    python,
+                    profile.tool("refine_sky_masks.py"),
+                    "--source-manifest",
+                    str(sky_manifest),
+                    "--source-root",
+                    str(sky_root),
+                    "--face-cache-manifest",
+                    str(face_manifest),
+                    "--face-cache-root",
+                    str(face_root),
+                    "--output-root",
+                    str(sky_refined_root),
+                    "--dark-ratio",
+                    str(refinement["dark_ratio"]),
+                    "--edge-ratio",
+                    str(refinement["edge_ratio"]),
+                    "--dilate-px",
+                    str(refinement["dilate_px"]),
+                    "--workers",
+                    str(profile.threads),
+                ),
+                manifest=sky_refined_manifest,
+                root=sky_refined_root,
+                sha_key="sky_mask_manifest_sha256",
+                depends_on=("sky_masks", "face_cache"),
+                bindings=(
+                    Binding("rule.refinement.source_sky_mask_manifest_sha256", "sky_masks"),
+                    Binding("source_face_manifest_sha256", "face_cache"),
+                ),
+                estimated_minutes=3.75,
+                cost_basis="measured (house0305 refine_stats.json: 225 s for 3536 faces, 4 workers)",
+                output_gib=0.19,
+                note="A subset of the raw label; every trainer guard (erosion, LiDAR proximity) still applies.",
+            )
+        )
+    specs += [
         CacheSpec(
             name="tile_plan",
             title="Tile boxes (SDK slab rule, or the projected-pixel kd planner)",
@@ -745,7 +796,7 @@ def build_cache_specs(bundle: DatasetBundle, profile: CacheProfile) -> list[Cach
     if not profile.mono_depth:
         disabled.add("mono_depth")
     if not profile.sky_masks:
-        disabled.add("sky_masks")
+        disabled.update(("sky_masks", "sky_masks_refined"))
     if not profile.tile_ownership:
         disabled.update(s.name for s in specs if s.name.startswith("tile_ownership_"))
     if not profile.view_backgrounds:

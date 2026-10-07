@@ -28,7 +28,7 @@ import cloudstudio3dgs_sdk.bundle as bundle_module
 from cloudstudio3dgs_sdk.bundle import PreparedScene, load_dataset_bundle
 from cloudstudio3dgs_sdk.ingest.caches import CPU, GPU, STATUS_MISSING, STATUS_PRESENT
 from cloudstudio3dgs_sdk.ingest.errors import DatasetIncompleteError, GpuStepRequired
-from cloudstudio3dgs_sdk.profile import PROFILE_B5SKY
+from cloudstudio3dgs_sdk.profile import PROFILE_B5SKY, PROFILE_B12OP05D3
 
 
 class FakeSpec:
@@ -280,6 +280,33 @@ class LoadDatasetBundleTest(unittest.TestCase):
         self.assertEqual(init_calls[0][init_calls[0].index("--voxel-size") + 1],
                          str(float(PROFILE_B5SKY.coarse_prior["init_decimation_m"])))
         self.assertEqual(scene.global_init_ply, self.work / "caches" / "global_init" / "sparse_pc.ply")
+
+    def test_a_refining_profile_trains_against_the_refined_label(self):
+        caches = self.work / "caches"
+        specs = _graph(self.work) + [
+            FakeSpec("sky_masks_refined", CPU, caches / "sky_mask_train_refined",
+                     caches / "sky_mask_train_refined" / "sky_mask_train.json",
+                     depends_on=("sky_masks", "face_cache")),
+        ]
+        plan = FakePlan(specs, present=[s.name for s in specs])
+
+        def fake_load(path, *, adapter=None, **kwargs):
+            return _bundle(self.root)
+
+        with mock.patch("cloudstudio3dgs_sdk.ingest.load_dataset", fake_load), \
+             mock.patch("cloudstudio3dgs_sdk.ingest.plan_caches", return_value=plan) as planned, \
+             mock.patch("cloudstudio_3dgs.pipeline.mipmap_gate.load_and_verify_gate", return_value=({}, "sha")):
+            scene = load_dataset_bundle(
+                self.root / "capture", PROFILE_B12OP05D3, self.work,
+                python="python", repo_root=self.root / "repo", pipeline_gate=self.root / "gate.json",
+                runner=self._runner,
+            )
+        self.assertEqual(scene.caches.sky_mask_manifest, specs[-1].manifest)
+        self.assertEqual(scene.caches.sky_mask_root, specs[-1].root)
+        # the cache layer is told the profile's refinement; it does not read Profile itself
+        for call in planned.call_args_list:
+            self.assertEqual(call.kwargs["sky_mask_refinement"],
+                             PROFILE_B12OP05D3.dataset_contract["sky_mask_refinement"])
 
     def test_an_existing_global_init_is_not_rebuilt(self):
         specs = _graph(self.work)

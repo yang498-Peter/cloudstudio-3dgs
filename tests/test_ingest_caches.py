@@ -511,6 +511,60 @@ class CacheBuildTest(unittest.TestCase):
             self.assertTrue(all("command" in row for row in payload["caches"]))
 
 
+class RefinedSkyLabelTest(unittest.TestCase):
+    """The b12 recipe supervises against a photometrically refined sky label."""
+
+    REFINEMENT = {"dark_ratio": 0.75, "edge_ratio": 0.10, "dilate_px": 1}
+
+    def _plan(self, root: Path, **overrides) -> CachePlan:
+        return CachePlan(_bundle(root), _profile(root, sky_mask_refinement=self.REFINEMENT, **overrides))
+
+    def test_without_refinement_there_is_no_refined_cache(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            names = {s.name for s in build_cache_specs(_bundle(root), _profile(root))}
+            self.assertNotIn("sky_masks_refined", names)
+
+    def test_refinement_reads_the_raw_label_and_writes_its_own_cache(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            plan = self._plan(Path(tmp))
+            raw, refined = plan.spec("sky_masks"), plan.spec("sky_masks_refined")
+            self.assertEqual(set(refined.depends_on), {"sky_masks", "face_cache"})
+            self.assertNotEqual(refined.root, raw.root)
+            command = list(refined.command)
+            self.assertEqual(command[command.index("--source-manifest") + 1], str(raw.manifest))
+            self.assertEqual(command[command.index("--output-root") + 1], str(refined.root))
+            self.assertEqual(command[command.index("--dark-ratio") + 1], "0.75")
+            self.assertEqual(refined.device, CPU)
+
+    def test_switching_sky_masks_off_drops_the_refinement_too(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            names = {s.name for s in self._plan(Path(tmp), sky_masks=False)}
+            self.assertNotIn("sky_masks", names)
+            self.assertNotIn("sky_masks_refined", names)
+
+    def test_a_new_raw_label_makes_the_refined_cache_stale(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            plan = self._plan(Path(tmp))
+            face = _write(plan.spec("face_cache").manifest, {"kind": "fisheye_face_cache"}, "face_manifest_sha256")
+            raw = _write(plan.spec("sky_masks").manifest, {"source_face_manifest_sha256": face, "v": 1},
+                         "sky_mask_manifest_sha256")
+            _write(
+                plan.spec("sky_masks_refined").manifest,
+                {"source_face_manifest_sha256": face,
+                 "rule": {"refinement": {"source_sky_mask_manifest_sha256": raw}}},
+                "sky_mask_manifest_sha256",
+            )
+            plan.invalidate()
+            self.assertEqual(plan.status_of(plan.spec("sky_masks_refined")).status, STATUS_PRESENT)
+            _write(plan.spec("sky_masks").manifest, {"source_face_manifest_sha256": face, "v": 2},
+                   "sky_mask_manifest_sha256")
+            plan.invalidate()
+            status = plan.status_of(plan.spec("sky_masks_refined"))
+            self.assertEqual(status.status, STATUS_STALE)
+            self.assertIn("source_sky_mask_manifest_sha256", status.reason)
+
+
 class IngestCliTest(unittest.TestCase):
     def test_plan_subcommand_prints_without_touching_the_builders(self) -> None:
         import contextlib

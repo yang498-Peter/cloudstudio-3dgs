@@ -365,6 +365,8 @@ def load_dataset_bundle(
         source_run_dir=source_run_dir,
         repo_root=repo,
         python=interpreter,
+        # The profile's sky-label refinement, if any; the cache layer does not know Profile.
+        sky_mask_refinement=(getattr(profile, "dataset_contract", None) or {}).get("sky_mask_refinement"),
     )
     plan = plan_caches(bundle, profile, **roots)
 
@@ -451,7 +453,8 @@ def load_dataset_bundle(
         for spec in specs.values()
         if spec.name.startswith("tile_ownership_") and spec.tile_id is not None
     }
-    sky = specs["sky_masks"]
+    # With refinement on, the trainer supervises against the refined label.
+    sky = specs.get("sky_masks_refined") or specs["sky_masks"]
     caches = DerivedCaches(
         sky_mask_manifest=sky.manifest,
         sky_mask_root=sky.root,

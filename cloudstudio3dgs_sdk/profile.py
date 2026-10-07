@@ -1185,10 +1185,287 @@ def _derive_b6reset() -> Profile:
 
 PROFILE_B6RESET = _derive_b6reset()
 
+
+_LADDER_DOC = "research/quality_recovery_v2/20_deep_analysis_2026-09-28.zh-CN.md"
+
+
+def _derive_b12op05d3() -> Profile:
+    """The b6reset -> b12op05d3 delivery ladder, written down as one profile.
+
+    Every step was one change on Tile_0 or Tile_1 first and a four-tile delivery second:
+
+    * b7: cap x1.5, DC-only colour, 30k steps with refinement to 21k, antialiased
+      rasterisation (door-leaf ROI 0.59 -> 1.19x the competitor);
+    * b8: the refined SegFormer sky label plus a 24 px erosion, so twigs against the sky keep
+      their photometric terms (battery p10 15.61 -> 16.43);
+    * b9sc: strict-visibility LiDAR alpha support and the 0.04 cull (crown opacity demand
+      92.5% -> ~10% of crown pixels);
+    * b10sk: the alpha support stops at the sky label;
+    * b11op05: per-gaussian opacity ceiling 0.5 - the "rough, over-done" look the user judged
+      was bursts of thin, fairly opaque needles, and 0.5 is the ceiling that removes them;
+    * b12op05d3: alpha dilation 6 -> 3 px.
+
+    Derived configs reproduce the as-run house0305 tile configs key for key, paths aside
+    (tools/diff_profile_vs_asrun.py; tests/test_sdk_profile_b12.py). Acceptance stays
+    b5sky's: the export of this recipe is 34.6M gaussians against the 20M product gate, and
+    raising that gate is a product decision, not a recipe change.
+    """
+    base = PROFILE_B6RESET
+    runtime = thaw(base.runtime)
+    # DC-only colour carries 3 colour floats per gaussian instead of SH1's 12 (with their Adam
+    # moments), which is why this recipe holds 15M on the card where SH1 died at 12.48M.
+    runtime["max_gaussians_per_gib_vram"] = 1100000
+
+    trainer_base = thaw(base.trainer_base)
+    trainer_base["controlled_stop_after_steps"] = 30000
+    trainer_base["sh_degree"] = 0
+    trainer_base["pinhole_rasterize_mode"] = "antialiased"
+    trainer_base["mcmc_refine_stop_iter"] = 21000
+    trainer_base["lidar_alpha_dilation_radius_px"] = 3
+    trainer_base["lidar_alpha_support_mode"] = "strict_visibility"
+    trainer_base["lidar_alpha_exclude_sky_label"] = True
+    strategy = dict(trainer_base["default_strategy"])
+    strategy["refine_stop_iter"] = 21000
+    strategy["refine_scale2d_stop_iter"] = 21000
+    strategy["prune_opa"] = 0.04
+    strategy["prune_opa_late"] = 0.04
+    strategy["vendor_cull_warmup_profile"] = "calibrated_uniform_0p04"
+    trainer_base["default_strategy"] = strategy
+    geometry = dict(trainer_base["geometry_regularization"])
+    geometry["max_opacity"] = 0.5
+    trainer_base["geometry_regularization"] = geometry
+    sky = dict(trainer_base["sky_supervision"])
+    sky["mask_erosion_px"] = 24
+    trainer_base["sky_supervision"] = sky
+
+    dataset_contract = thaw(base.dataset_contract)
+    dataset_contract["sky_mask_refinement"] = {
+        "tool": "tools/refine_sky_masks.py",
+        "dark_ratio": 0.75,
+        "edge_ratio": 0.10,
+        "dilate_px": 1,
+        "seconds_per_face": 0.064,
+    }
+
+    tile_rules = thaw(base.tile_rules)
+    tile_rules["cap_multiplier"] = 1.5
+    tile_rules["cap_ceiling"] = 15000000
+
+    cost_model = thaw(base.cost_model)
+    # 168 min for 3536 faces on 6 CPU threads; the inherited 0.60 was never timed.
+    cost_model["sky_mask_seconds_per_face"] = 2.85
+    cost_model["tile_train_seconds_per_step"] = {
+        "intercept": 0.1123,
+        "per_million_cap": 0.02154,
+        "observations": [[9.0, 0.317], [10.2, 0.319], [14.85, 0.4195], [15.0, 0.4505]],
+    }
+
+    provenance = dict(base.provenance)
+    provenance["runtime.max_gaussians_per_gib_vram"] = Provenance(
+        "This recipe ran Tile_0 at cap 15M (peak 14.68M) and Tile_3 at 14.85M (peak 14.57M) to "
+        "30k on the 16303 MiB card, twice each (b12, b13); peak VRAM was measured at 0.876 "
+        "GiB per million on G9d (10.75M -> 9.42 GiB). 1.1M/GiB rounds that down; on smaller "
+        "cards the value is extrapolated, not measured.",
+        "3dgs-runs/house0305_sop/tile{0_L41a_op05_dil3,3_b12op05d3,3_b13op05d0}_30k/monitor/"
+        "progress.jsonl; memory note gsplat-rerun-noise-and-inert-cap",
+        EXTRAPOLATED,
+    )
+    provenance["trainer_base.controlled_stop_after_steps"] = Provenance(
+        "Tile_1 L33c: DC-only + cap 9M + stop 30k / refine 21k lifted the door-leaf ROI to "
+        "0.888 with battery +0.07/+0.16 dB; sh0 + cap 9M at 20k (L33a) reached 0.696 with "
+        "battery -0.83 dB, so the longer schedule is paired with DC-only colour.",
+        "research/quality_recovery_v2/18_ladder28_detail_gap.zh-CN.md section 6 (L33a, L33c)",
+        MEASURED,
+    )
+    for knob in (
+        "trainer_base.sh_degree",
+        "trainer_base.mcmc_refine_stop_iter",
+        "trainer_base.default_strategy.refine_stop_iter",
+        "trainer_base.default_strategy.refine_scale2d_stop_iter",
+    ):
+        provenance[knob] = provenance["trainer_base.controlled_stop_after_steps"]
+    provenance["trainer_base.pinhole_rasterize_mode"] = Provenance(
+        "Tile_1 L34b: antialiased rasterisation alone matched the competitor's door-leaf ROI "
+        "under classic rendering (0.508 vs 0.508, +75% on L31a, 43 of 44 views).",
+        "research/quality_recovery_v2/18_ladder28_detail_gap.zh-CN.md section 6 (L34b)",
+        MEASURED,
+    )
+    provenance["tile_rules.cap_multiplier"] = Provenance(
+        "Tile_1 L32f cap 6M -> 7.5M lifted the door-leaf ROI 0.592 -> 0.656 and the b7 delivery "
+        "took every b6reset cap x1.5; 15M is the largest cap the recipe completed at (Tile_0, "
+        "b7 through b13).",
+        "research/quality_recovery_v2/18_ladder28_detail_gap.zh-CN.md section 6; "
+        "3dgs-runs/house0305_sop/tile*_b12op05d3_30k.json cap_max",
+        MEASURED,
+    )
+    provenance["tile_rules.cap_ceiling"] = provenance["tile_rules.cap_multiplier"]
+    provenance["dataset_contract.sky_mask_refinement"] = Provenance(
+        "The raw ADE20K sky label swallowed 44% of thin-branch pixels; the photometric "
+        "refinement (bright and smooth stays sky) with a 24 px erosion lifted the b8 delivery "
+        "battery to 18.95 / p10 16.43 from b7's 18.43 / 15.61. 225 s for 3536 faces on CPU.",
+        "tools/refine_sky_masks.py; 3dgs-datasets/house0305_sop_v9/sky_mask_train_pr/"
+        "refine_stats.json; memory note capacity-and-antialiasing-close-the-door-gap",
+        MEASURED,
+    )
+    provenance["trainer_base.sky_supervision.mask_erosion_px"] = provenance["dataset_contract.sky_mask_refinement"]
+    provenance["trainer_base.lidar_alpha_support_mode"] = Provenance(
+        "Strict visibility gives LiDAR alpha support only where the window's return depths agree: "
+        "crown demand 92.5% -> ~10%, gravel unchanged. Alone (L38a) it stripped fine branches; "
+        "with the 0.04 cull (L38b) it passed the pre-registered crown gate and became b9sc.",
+        "research/quality_recovery_v2/19_retrospective_2026-09-24.zh-CN.md sections 1, 3 and the "
+        "L38a/L38b readouts",
+        MEASURED,
+    )
+    for knob in (
+        "trainer_base.default_strategy.prune_opa",
+        "trainer_base.default_strategy.prune_opa_late",
+        "trainer_base.default_strategy.vendor_cull_warmup_profile",
+    ):
+        provenance[knob] = provenance["trainer_base.lidar_alpha_support_mode"]
+    provenance["trainer_base.lidar_alpha_exclude_sky_label"] = Provenance(
+        "The alpha-coverage floor stops at the sky label (b10sk = b9sc + this; Tile_0 = L38f): the "
+        "milky haze over the trees thinned but did not go.",
+        f"{_LADDER_DOC} sections 7-10",
+        MEASURED,
+    )
+    provenance["trainer_base.geometry_regularization.max_opacity"] = Provenance(
+        "Tile_0 L40c (L38f + ceiling 0.5): needle bursts gone at pixel level, exported opacity "
+        "0.5-0.9 share 23.1% -> 4.4% (competitor 14.0%), opaque gaussians 2-5 cm off the LiDAR "
+        "surface 59K -> 5.3K; ceiling 0.8 (L40a) only trimmed the top and looked the same.",
+        f"{_LADDER_DOC} sections 15-17",
+        MEASURED,
+    )
+    provenance["trainer_base.lidar_alpha_dilation_radius_px"] = Provenance(
+        "Tile_0 dose ladder L40c/L41a/L41b/L41c (6/3/1/0 px): off-trajectory PSNR 16.01/16.47/"
+        "16.32/16.62, crown-vs-photo PSNR -/17.63/18.13/18.16 (competitor 17.07). As four-tile "
+        "deliveries 3 px (b12) and 0 px (b13) trade: b12 battery 18.54/16.18 vs 18.37/16.05 and "
+        "fewer novel-view holes; b13 crown morphology closer to the competitor. 3 px is the "
+        "safer default until the user judges them side by side.",
+        f"{_LADDER_DOC} sections 20-24",
+        MEASURED,
+    )
+    provenance["cost_model.sky_mask_seconds_per_face"] = Provenance(
+        "The house0305 v9 SegFormer pass ran 21:46:06 -> 00:34:40 for 3536 faces on CPU with 6 "
+        "threads: 2.85 s per face, almost five times the inherited guess.",
+        "cloudstudio3dgs_sdk/ingest/caches.py sky_masks cost_basis (v9 build log)",
+        MEASURED,
+    )
+    provenance["cost_model.tile_train_seconds_per_step"] = Provenance(
+        "Least squares over the four b12op05d3 tile runs (30k steps, DC-only, antialiased, "
+        "prefetch on): wall clock from 'start train' to 'done train', residuals within 0.015 s.",
+        "3dgs-runs/house0305_sop/tile{0_L41a_op05_dil3,1_b12op05d3,2_b12op05d3,3_b12op05d3}_30k"
+        ".pipeline_status.txt",
+        MEASURED,
+    )
+
+    open_questions = [dict(item) for item in base.open_questions]
+    open_questions.extend(
+        [
+            {
+                "id": "export-count-gate",
+                "what": (
+                    "The delivered export is 34.6M gaussians (b12) against the 20M "
+                    "export_gaussian_count_max gate inherited from b5sky, so the report fails "
+                    "that gate. Raising it, or cutting the export, is a product decision."
+                ),
+                "expressed_as": "acceptance.export_gaussian_count_max",
+                "status": "open; product decision",
+            },
+            {
+                "id": "dilation-default",
+                "what": (
+                    "3 px (this profile) against 0 px (b13op05d0): inside the metric noise of each "
+                    "other; the user picks by eye in the viewer."
+                ),
+                "expressed_as": "trainer_base.lidar_alpha_dilation_radius_px",
+                "status": "open; user visual judgement",
+            },
+            {
+                "id": "canopy-veil",
+                "what": (
+                    "A milky veil over dense crowns against the sky survives every alpha change. "
+                    "Hypothesis: a faithful fit of the photos' haloed twig texture, so it needs "
+                    "target-side handling, not more alpha work. Untested."
+                ),
+                "expressed_as": "nothing in this profile",
+                "status": "open; hypothesis",
+            },
+        ]
+    )
+    return make_profile(
+        name="b12op05d3",
+        version="2026.10.07",
+        summary=(
+            "house0305 b12 delivery: b6reset with cap x1.5 (15M ceiling), DC-only colour at 30k "
+            "steps, antialiased rasterisation, refined sky label with 24 px erosion, strict-"
+            "visibility LiDAR alpha stopped at the sky label, 0.04 cull, opacity ceiling 0.5 and "
+            "3 px alpha dilation. Exports 34.6M gaussians (over the 20M gate)."
+        ),
+        runtime=runtime,
+        dataset_contract=dataset_contract,
+        tiling=thaw(base.tiling),
+        trainer_base=trainer_base,
+        tile_rules=tile_rules,
+        coarse_prior=thaw(base.coarse_prior),
+        backdrop=thaw(base.backdrop),
+        merge=thaw(base.merge),
+        export=thaw(base.export),
+        battery=thaw(base.battery),
+        acceptance=thaw(base.acceptance),
+        cost_model=cost_model,
+        external_assets=thaw(base.external_assets),
+        open_questions=tuple(open_questions),
+        provenance=provenance,
+    )
+
+
+PROFILE_B12OP05D3 = _derive_b12op05d3()
+
+
+def _derive_b13op05d0() -> Profile:
+    """b12op05d3 with no LiDAR alpha dilation (the b13 delivery)."""
+    base = PROFILE_B12OP05D3
+    trainer_base = thaw(base.trainer_base)
+    trainer_base["lidar_alpha_dilation_radius_px"] = 0
+    return make_profile(
+        name="b13op05d0",
+        version="2026.10.07",
+        summary=(
+            "b12op05d3 with 0 px LiDAR alpha dilation: crown morphology closest to the competitor "
+            "(short axis 0.43 mm, axis ratio 59), battery 18.37/16.05 against b12's 18.54/16.18 "
+            "and more novel-view holes."
+        ),
+        runtime=thaw(base.runtime),
+        dataset_contract=thaw(base.dataset_contract),
+        tiling=thaw(base.tiling),
+        trainer_base=trainer_base,
+        tile_rules=thaw(base.tile_rules),
+        coarse_prior=thaw(base.coarse_prior),
+        backdrop=thaw(base.backdrop),
+        merge=thaw(base.merge),
+        export=thaw(base.export),
+        battery=thaw(base.battery),
+        acceptance=thaw(base.acceptance),
+        cost_model=thaw(base.cost_model),
+        external_assets=thaw(base.external_assets),
+        open_questions=thaw(base.open_questions),
+        provenance=dict(base.provenance),
+    )
+
+
+PROFILE_B13OP05D0 = _derive_b13op05d0()
+
 # The recommended recipe comes first; b5fill2 stays so the campaign's own deliveries reproduce;
-# b6reset is the candidate under delivery-scale validation.
+# b6reset is the candidate under delivery-scale validation; b12op05d3 / b13op05d0 are the
+# current-best recipes, kept off the default while their export fails the 20M product gate.
 PROFILES: Mapping[str, Profile] = MappingProxyType(
-    {PROFILE_B5SKY.name: PROFILE_B5SKY, PROFILE_B6RESET.name: PROFILE_B6RESET, PROFILE_B5FILL2.name: PROFILE_B5FILL2}
+    {
+        PROFILE_B5SKY.name: PROFILE_B5SKY,
+        PROFILE_B6RESET.name: PROFILE_B6RESET,
+        PROFILE_B12OP05D3.name: PROFILE_B12OP05D3,
+        PROFILE_B13OP05D0.name: PROFILE_B13OP05D0,
+        PROFILE_B5FILL2.name: PROFILE_B5FILL2,
+    }
 )
 DEFAULT_PROFILE = PROFILE_B5SKY.name
 

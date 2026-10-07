@@ -458,6 +458,16 @@ def tile_cap(profile: Profile, tile: TileSummary, *, vram_gib: float | None = No
         raw = float(previous) * float(rules.get("cap_floor_headroom", 1.0))
     step = int(rules["cap_round_to"])
     cap = int(math.floor(raw / step + 0.5)) * step
+    # A capacity multiplier scales the rounded cap and is not rounded again: the b7+ deliveries
+    # trained at b6reset's caps x1.5 (9.9M -> 14.85M), so re-rounding would not reproduce them.
+    multiplier = rules.get("cap_multiplier")
+    if multiplier is not None:
+        cap = int(round(cap * float(multiplier)))
+    # The largest cap the recipe was actually measured at; the VRAM ceiling below can only
+    # lower it further on a smaller card.
+    absolute = rules.get("cap_ceiling")
+    if absolute is not None:
+        cap = min(cap, int(absolute))
     if vram_gib is not None:
         ceiling_step = int(runtime["max_gaussians_per_gib_vram"]) * vram_gib * float(runtime["vram_safety_factor"])
         ceiling = int(math.floor(ceiling_step / step)) * step
@@ -550,6 +560,16 @@ class WorkLayout:
     def sky_mask_manifest(self) -> Path:
         return self.sky_mask_root / "sky_mask_train.json"
 
+    # A profile that refines the SegFormer label keeps the raw label here; ``sky_masks`` then
+    # holds the refined cache, so "sky_mask_manifest" always means the mask the trainer reads.
+    @property
+    def sky_mask_raw_root(self) -> Path:
+        return self.caches / "sky_masks_raw"
+
+    @property
+    def sky_mask_raw_manifest(self) -> Path:
+        return self.sky_mask_raw_root / "sky_mask_train.json"
+
     @property
     def sky_dome_checkpoint(self) -> Path:
         return self.caches / "sky_dome.pt"
@@ -635,6 +655,8 @@ def resolve_cache_paths(
     defaults: dict[str, str] = {
         "sky_mask_manifest": str(layout.sky_mask_manifest),
         "sky_mask_root": str(layout.sky_mask_root),
+        "sky_mask_raw_manifest": str(layout.sky_mask_raw_manifest),
+        "sky_mask_raw_root": str(layout.sky_mask_raw_root),
         "sky_dome_checkpoint": str(layout.sky_dome_checkpoint),
         "sky_dome_ply": str(layout.sky_dome_ply),
         "global_view_backgrounds_manifest": str(layout.view_backgrounds_manifest),
@@ -752,7 +774,19 @@ def build_plan(
                 f"{tile.name}: cap clamped {unclamped/1e6:.2f}M -> {cap/1e6:.2f}M by the "
                 f"{vram_gib:.0f} GiB VRAM ceiling"
             )
-        elif tile.previous_final_population is not None and unclamped > tile.init_point_count * ratio:
+        elif (
+            profile.tile_rules.get("cap_ceiling") is not None
+            and unclamped == int(profile.tile_rules["cap_ceiling"])
+        ):
+            warnings.append(
+                f"{tile.name}: cap held at the profile's measured ceiling "
+                f"{unclamped/1e6:.2f}M (the ratio rule asks for more)"
+            )
+        elif tile.previous_final_population is not None and (
+            tile.init_point_count * ratio < tile.previous_final_population
+            if profile.tile_rules.get("cap_multiplier") is not None
+            else unclamped > tile.init_point_count * ratio
+        ):
             warnings.append(
                 f"{tile.name}: the {ratio}x rule gives {tile.init_point_count * ratio/1e6:.2f}M, below its "
                 f"previous final population {tile.previous_final_population/1e6:.2f}M; the floor rule "
@@ -844,32 +878,68 @@ def build_plan(
             )
         )
         sky_faces = dataset.train_view_count
-        steps.append(
-            PlannedStep(
-                name="sky_masks",
-                stage="prepare",
-                resource="cpu",
-                estimate=Estimate(
-                    sky_faces * float(cost["sky_mask_seconds_per_face"]),
-                    int(sky_faces * int(cost["sky_mask_bytes_per_face"])),
-                    f"{sky_faces} faces x {cost['sky_mask_seconds_per_face']}s (never timed)",
-                    UNMEASURED,
-                ),
-                command=(
-                    str(python),
-                    _tool(repo_root, "build_sky_masks.py"),
-                    "--face-manifest", path_of("face_cache_manifest"),
-                    "--face-cache-root", path_of("face_cache_root"),
-                    "--output-root", cache["sky_mask_root"],
-                    "--device", "cpu",
-                ),
-                outputs=(cache["sky_mask_manifest"],),
-                note=(
-                    "SegFormer b4 ADE20k, NVIDIA non-commercial licence: supervision masks only, "
-                    "nothing derived from it ships"
-                ),
+        refinement = profile.dataset_contract.get("sky_mask_refinement")
+        raw_sky = "sky_mask_raw" if refinement else "sky_mask"
+        # With refinement the trainer reads the refined cache; when prepare already supplies it
+        # (adopted or ingested), the raw label is not needed and is not rebuilt.
+        if not (refinement and "sky_mask_manifest" in paths):
+            steps.append(
+                PlannedStep(
+                    name="sky_masks",
+                    stage="prepare",
+                    resource="cpu",
+                    estimate=Estimate(
+                        sky_faces * float(cost["sky_mask_seconds_per_face"]),
+                        int(sky_faces * int(cost["sky_mask_bytes_per_face"])),
+                        f"{sky_faces} faces x {cost['sky_mask_seconds_per_face']}s (never timed)",
+                        UNMEASURED,
+                    ),
+                    command=(
+                        str(python),
+                        _tool(repo_root, "build_sky_masks.py"),
+                        "--face-manifest", path_of("face_cache_manifest"),
+                        "--face-cache-root", path_of("face_cache_root"),
+                        "--output-root", cache[f"{raw_sky}_root"],
+                        "--device", "cpu",
+                    ),
+                    outputs=(cache[f"{raw_sky}_manifest"],),
+                    note=(
+                        "SegFormer b4 ADE20k, NVIDIA non-commercial licence: supervision masks only, "
+                        "nothing derived from it ships"
+                    ),
+                )
             )
-        )
+        if refinement:
+            steps.append(
+                PlannedStep(
+                    name="sky_masks_refined",
+                    stage="prepare",
+                    resource="cpu",
+                    estimate=Estimate(
+                        sky_faces * float(refinement["seconds_per_face"]),
+                        int(sky_faces * int(cost["sky_mask_bytes_per_face"])),
+                        f"{sky_faces} faces x {refinement['seconds_per_face']}s (house0305: 225 s / 3536 faces)",
+                        MEASURED,
+                    ),
+                    command=(
+                        str(python),
+                        _tool(repo_root, "refine_sky_masks.py"),
+                        "--source-manifest", cache["sky_mask_raw_manifest"],
+                        "--source-root", cache["sky_mask_raw_root"],
+                        "--face-cache-manifest", path_of("face_cache_manifest"),
+                        "--face-cache-root", path_of("face_cache_root"),
+                        "--output-root", cache["sky_mask_root"],
+                        "--dark-ratio", str(refinement["dark_ratio"]),
+                        "--edge-ratio", str(refinement["edge_ratio"]),
+                        "--dilate-px", str(refinement["dilate_px"]),
+                    ),
+                    outputs=(cache["sky_mask_manifest"],),
+                    note=(
+                        "drops dark or high-gradient pixels from the SegFormer sky label so twigs "
+                        "against the sky keep their photometric terms; a subset of the raw label"
+                    ),
+                )
+            )
         steps.append(
             PlannedStep(
                 name="sky_dome",
@@ -1493,6 +1563,13 @@ def tile_config(
             f"initialisation points -> {cap_max}"
         ),
     }
+    if profile.tile_rules.get("cap_multiplier") is not None:
+        config["lineage"]["cap_rule"] = (
+            f"round({profile.tile_rules['cap_ratio_of_initialisation']}x of {tile.init_point_count} "
+            f"initialisation points, floor {tile.previous_final_population}) "
+            f"x{profile.tile_rules['cap_multiplier']}, ceiling {profile.tile_rules.get('cap_ceiling')} "
+            f"-> {cap_max}"
+        )
     return config
 
 
