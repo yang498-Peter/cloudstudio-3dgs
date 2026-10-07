@@ -322,6 +322,7 @@ def load_dataset_bundle(
     runner: Callable[[Sequence[str]], int] | None = None,
     log: Callable[[str], None] | None = None,
     vram_gib: float | None = None,
+    assets: Mapping[str, Path | str | None] | None = None,
 ) -> PreparedScene:
     """Ingest a capture and build every CPU cache it needs into ``work_root``.
 
@@ -384,7 +385,17 @@ def load_dataset_bundle(
         python=interpreter,
         # The profile's sky-label refinement, if any; the cache layer does not know Profile.
         sky_mask_refinement=(getattr(profile, "dataset_contract", None) or {}).get("sky_mask_refinement"),
+        # Ownership masks and per-view backgrounds are the SDK plan's own steps: ownership needs
+        # the written arm config (the ingest spec only had a <trainer_config> placeholder) and
+        # the backgrounds need trained neighbour tiles. Built here they could only fail.
+        tile_ownership=False,
+        view_backgrounds=False,
     )
+    # Weights the GPU caches load (person masks, DA2): machine paths, never profile data.
+    for key in ("person_weights", "da2_model_source", "da2_checkpoint"):
+        value = (assets or {}).get(key)
+        if value:
+            roots[key] = Path(value)
     # As many tiles as the cloud needs for the profile's cap rule (never fewer than its reference
     # count): a 100M-point capture cut four ways starts every tile above its cap.
     tiles = _tile_count(profile, Path(bundle.point_cloud.path), vram_gib=vram_gib)
@@ -411,7 +422,9 @@ def load_dataset_bundle(
         name, command = pending_gpu
         raise GpuStepRequired(
             f"{name} needs the GPU; run it under the SDK's GPU lease, then call prepare again:\n  "
-            + " ".join(command)
+            + " ".join(command),
+            cache=name,
+            command=tuple(command),
         )
 
     # The coarse prior's whole-scene initialisation. Not part of the cache graph, needed by

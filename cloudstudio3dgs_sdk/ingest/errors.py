@@ -25,7 +25,16 @@ class BundleSignatureError(IngestError):
 
 
 class GpuStepRequired(IngestError):
-    """A cache in the plan needs CUDA and must not be started from here."""
+    """A cache in the plan needs CUDA and must not be started from here.
+
+    ``cache`` and ``command`` name what is due, so a caller holding the GPU lease can run it
+    and call back in instead of handing the command to a person.
+    """
+
+    def __init__(self, message: str, *, cache: str | None = None, command: tuple[str, ...] | None = None) -> None:
+        super().__init__(message)
+        self.cache = cache
+        self.command = command
 
 
 __all__ = [

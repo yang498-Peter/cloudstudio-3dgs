@@ -37,6 +37,7 @@ from cloudstudio3dgs_sdk.ingest.errors import GpuStepRequired, IngestError
 from cloudstudio3dgs_sdk.plan import (
     step_is_skippable,
     STAGES,
+    ZERO_ESTIMATE,
     DatasetSummary,
     Plan,
     PlannedStep,
@@ -68,6 +69,13 @@ STAGE_DEPENDS_ON: Mapping[str, str | None] = {
 
 # Stages that cost GPU time and therefore run the preflight first.
 GPU_STAGES = ("train", "deliver")
+#: CacheProfile field -> environment variable naming where this host keeps the weights the
+#: GPU caches of a fresh capture load.
+GPU_CACHE_ASSET_ENV = {
+    "person_weights": "CS3DGS_PERSON_WEIGHTS",
+    "da2_model_source": "CS3DGS_DA2_SOURCE",
+    "da2_checkpoint": "CS3DGS_DA2_CHECKPOINT",
+}
 
 
 class StageRefused(RuntimeError):
@@ -253,6 +261,8 @@ class Project:
         adapter: str | None = None,
         run_dir: Path | str | None = None,
         pipeline_gate: Path | str | None = None,
+        assets: Mapping[str, Path | str | None] | None = None,
+        env_script: Path | str | None = None,
     ) -> None:
         self.dataset_root = Path(dataset_root)
         self.work_root = Path(work_root)
@@ -266,6 +276,11 @@ class Project:
         self.adapter = adapter
         self.run_dir = Path(run_dir) if run_dir else None
         self.pipeline_gate = Path(pipeline_gate) if pipeline_gate else None
+        self._assets = dict(assets or {})
+        # The host's CUDA/compiler env script (vcvars, CUDA_HOME, JIT paths). The SDK process
+        # loads it at start-up (__main__); here it is recorded so tools/pipeline.py loads it for
+        # every training step too, however the SDK itself was launched.
+        self.env_script = Path(env_script) if env_script else None
         self.runner = runner or SubprocessRunner(repo_root=self.repo_root)
         self.probes = probes
         self.vram_gib = vram_gib
@@ -420,12 +435,16 @@ class Project:
         )
 
     def preflight(self, *, require_gpu: bool = True, allow_estimate: bool = False) -> PreflightReport:
+        # A capture with no prepare manifest is built by prepare, so its GPU-cache weights are
+        # owed now; a prepared or adopted scene has its caches already.
+        fresh = not self.layout.prepare_manifest.is_file()
         return preflight(
             self.plan(allow_estimate=allow_estimate),
             self.profile,
             repo_root=self.repo_root,
             probes=self.probes,
             require_gpu=require_gpu,
+            gpu_cache_assets=self.gpu_cache_assets() if fresh else None,
         )
 
     # -- the fail-closed chain -------------------------------------------
@@ -637,6 +656,57 @@ class Project:
             return
         self.ingest_fresh()
 
+    def gpu_cache_assets(self) -> dict[str, Path]:
+        """Weights the GPU caches of a fresh capture load, by CacheProfile field name.
+
+        An explicit path wins, then the environment (``GPU_CACHE_ASSET_ENV``). These are
+        machine facts - where this host keeps Mask R-CNN and Depth Anything V2 - so they are
+        never profile data; the profile only pins what the files must hash to.
+        """
+        resolved: dict[str, Path] = {}
+        for key, variable in GPU_CACHE_ASSET_ENV.items():
+            value = self._assets.get(key) or os.environ.get(variable)
+            if value:
+                resolved[key] = Path(value)
+        return resolved
+
+    def _gpu_available(self) -> bool:
+        probes = self.probes or Probes.detect()
+        return bool(probes.gpu.available)
+
+    def _run_gpu_cache(self, cache: str, command: Sequence[str]) -> None:
+        """Run one GPU cache of the ingest graph under this work root's GPU lease."""
+        from tools.pipeline import GpuLeaseBusy, acquire_gpu_lease
+
+        unresolved = [part for part in command if str(part).startswith("<") and str(part).endswith(">")]
+        if unresolved:
+            flags = ", ".join(
+                f"--{key.replace('_', '-')} / {variable}"
+                for key, variable in GPU_CACHE_ASSET_ENV.items()
+                if f"<{key}>" in unresolved
+            )
+            raise StageRefused(
+                f"[prepare] {cache} needs {', '.join(unresolved)} on this host; pass {flags or 'the missing input'}"
+            )
+        try:
+            lease = acquire_gpu_lease(
+                self.layout.runs / "gpu.lock", command=list(command), device="cuda:0", owner=f"sdk prepare {cache}"
+            )
+        except GpuLeaseBusy as error:
+            raise StageRefused(f"[prepare] {cache} needs the GPU and another job holds it: {error}") from error
+        log = self.layout.root / "logs" / f"prepare_{cache}.log"
+        self.say(f"[prepare] {cache}: running on the GPU (log {log})")
+        try:
+            step = PlannedStep(
+                name=f"gpu_cache_{cache}", stage="prepare", resource="gpu", estimate=ZERO_ESTIMATE,
+                command=tuple(str(part) for part in command),
+            )
+            code = self.runner(step, log=log)
+        finally:
+            lease.release()
+        if code != 0:
+            raise StageFailed(f"[prepare] {cache} exited {code}; see {log}")
+
     def ingest_fresh(self) -> DatasetSummary:
         """Ingest a capture nobody prepared yet and record what it produced.
 
@@ -645,32 +715,45 @@ class Project:
         measured from the built caches - tile inputs, face cache, global initialisation,
         LiDAR header - never estimated, which is what lets train and deliver run from it.
         """
-        try:
-            scene = load_dataset_bundle(
-                self.dataset_root,
-                self.profile,
-                self.work_root,
-                python=self.python,
-                repo_root=self.repo_root,
-                adapter=self.adapter,
-                run_dir=self.run_dir,
-                pipeline_gate=self.pipeline_gate,
-                vram_gib=self.vram_gib,
-                log=self.say,
-            )
-        except GpuStepRequired as error:
-            # prepare is the CPU stage. A cache that needs CUDA is not built
-            # here; the operator gets the exact command, never a silent skip.
-            command = getattr(error, "command", None)
-            detail = f"[prepare] a cache in this dataset's plan needs a GPU: {error}"
-            if command:
-                argv = command if isinstance(command, str) else " ".join(str(part) for part in command)
-                detail += f"\n  run on a CUDA host, then re-run prepare: {argv}"
-            raise StageRefused(detail) from error
-        except IngestError as error:
-            # A capture ingestion cannot read (missing calibration, no poses, no cloud) is a
-            # refusal with ingestion's own reason - never a fallback to an estimated summary.
-            raise StageRefused(f"[prepare] ingestion refused {self.dataset_root}: {error}") from error
+        ran_on_gpu: list[str] = []
+        while True:
+            try:
+                scene = load_dataset_bundle(
+                    self.dataset_root,
+                    self.profile,
+                    self.work_root,
+                    python=self.python,
+                    repo_root=self.repo_root,
+                    adapter=self.adapter,
+                    run_dir=self.run_dir,
+                    pipeline_gate=self.pipeline_gate,
+                    vram_gib=self.vram_gib,
+                    assets=self.gpu_cache_assets(),
+                    log=self.say,
+                )
+                break
+            except GpuStepRequired as error:
+                # Ingestion builds the CPU half and stops at the first due GPU cache. On a
+                # CUDA host the SDK runs it under its GPU lease and calls back in; without
+                # one, or with a cache that ran and is still due, the operator gets the
+                # exact command - never a silent skip.
+                command = getattr(error, "command", None)
+                cache = getattr(error, "cache", None)
+                if command and cache and cache not in ran_on_gpu and self._gpu_available():
+                    self._run_gpu_cache(cache, command)
+                    ran_on_gpu.append(cache)
+                    continue
+                detail = f"[prepare] a cache in this dataset's plan needs a GPU: {error}"
+                if cache in ran_on_gpu:
+                    detail += f"\n  {cache} ran but its output still does not verify; see its log"
+                elif command:
+                    argv = command if isinstance(command, str) else " ".join(str(part) for part in command)
+                    detail += f"\n  run on a CUDA host, then re-run prepare: {argv}"
+                raise StageRefused(detail) from error
+            except IngestError as error:
+                # A capture ingestion cannot read (missing calibration, no poses, no cloud) is a
+                # refusal with ingestion's own reason - never a fallback to an estimated summary.
+                raise StageRefused(f"[prepare] ingestion refused {self.dataset_root}: {error}") from error
         # An injected summary (dataset=..., the planning hatch) wins, as in dataset_summary().
         dataset = self._dataset if self._dataset is not None else summarize_prepared_scene(scene)
         self.write_prepare_manifest(scene, dataset)
@@ -901,6 +984,8 @@ class Project:
             "gpu_device": "cuda:0",
             "env": {"PYTHONIOENCODING": "utf-8"},
         }
+        if self.env_script is not None:
+            payload["env_script"] = str(self.env_script)
         _write_json_atomic(self.layout.pipeline_config, payload)
         return self.layout.pipeline_config
 

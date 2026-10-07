@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from pathlib import Path
 from typing import Sequence
@@ -134,6 +135,8 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="signed mipmap readiness gate produced by the gate tool chain against this work root's caches",
     )
+    _add_asset_flags(fresh)
+    _add_env_flag(run)
 
     pre = sub.add_parser("preflight", help="host report only; runs nothing")
     pre.add_argument("--dataset", required=True, type=Path)
@@ -145,6 +148,8 @@ def build_parser() -> argparse.ArgumentParser:
     pre.add_argument("--python", type=Path, default=None)
     pre.add_argument("--no-gpu", action="store_true", help="do not require a CUDA device (prepare-only host)")
     pre.add_argument("--adapter", default=None, help="ingest adapter name; default: detect from the dataset")
+    _add_asset_flags(pre)
+    _add_env_flag(pre)
     pre.add_argument(
         "--run-dir",
         type=Path,
@@ -230,6 +235,41 @@ def parse_prior_checkpoints(values: Sequence[str]) -> dict[int, str]:
     return out
 
 
+ENV_SCRIPT_VARIABLE = "CS3DGS_ENV_SCRIPT"
+
+
+def _env_script(args: argparse.Namespace) -> Path | None:
+    value = getattr(args, "env_script", None) or os.environ.get(ENV_SCRIPT_VARIABLE)
+    return Path(value) if value else None
+
+
+def _load_env_script(script: Path) -> None:
+    """Bring the host's CUDA env into this process before anything imports gsplat.
+
+    The preflight imports the compiled gsplat extension in-process, and the GPU caches and
+    training steps inherit this environment; started from a plain shell, all three failed
+    with 'No CUDA toolkit found' although the host had everything.
+    """
+    from tools.pipeline import load_env_script
+
+    os.environ.update(load_env_script(script))
+
+
+def _add_env_flag(parser) -> None:
+    parser.add_argument("--env-script", type=Path, default=None,
+                        help=f"cmd script that sets up CUDA/compilers for gsplat (env {ENV_SCRIPT_VARIABLE})")
+
+
+def _add_asset_flags(parser) -> None:
+    """Where this host keeps the weights a fresh capture's GPU caches load."""
+    parser.add_argument("--person-weights", type=Path, default=None,
+                        help="Mask R-CNN ResNet50-FPN v2 COCO weights (env CS3DGS_PERSON_WEIGHTS)")
+    parser.add_argument("--da2-source", type=Path, default=None,
+                        help="Depth Anything V2 source checkout (env CS3DGS_DA2_SOURCE)")
+    parser.add_argument("--da2-checkpoint", type=Path, default=None,
+                        help="Depth Anything V2 Small checkpoint (env CS3DGS_DA2_CHECKPOINT)")
+
+
 def _project(args: argparse.Namespace, stream) -> Project:
     summary = None
     if getattr(args, "summary", None):
@@ -249,6 +289,12 @@ def _project(args: argparse.Namespace, stream) -> Project:
         adapter=getattr(args, "adapter", None),
         run_dir=getattr(args, "run_dir", None),
         pipeline_gate=getattr(args, "pipeline_gate", None),
+        env_script=_env_script(args),
+        assets={
+            "person_weights": getattr(args, "person_weights", None),
+            "da2_model_source": getattr(args, "da2_source", None),
+            "da2_checkpoint": getattr(args, "da2_checkpoint", None),
+        },
     )
 
 
@@ -309,6 +355,9 @@ def main(argv: Sequence[str] | None = None, *, stream=None) -> int:
             pass
     parser = build_parser()
     args = parser.parse_args(argv)
+    script = _env_script(args) if args.command in ("run", "preflight") else None
+    if script is not None:
+        _load_env_script(script)
 
     if args.command == "profile":
         names = [args.name] if args.name else sorted(PROFILES)

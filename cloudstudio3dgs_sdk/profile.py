@@ -1256,6 +1256,31 @@ def _derive_b12op05d3() -> Profile:
     tile_rules["cap_multiplier"] = 1.5
     tile_rules["cap_ceiling"] = 15000000
 
+    # The weights a fresh capture's GPU caches load, pinned to the files house0305's caches
+    # recorded. Paths are the host's (--person-weights / --da2-checkpoint or the environment);
+    # the profile only says what they must hash to.
+    external_assets = [dict(asset) for asset in thaw(base.external_assets)]
+    external_assets += [
+        {
+            "id": "person_masks_maskrcnn",
+            "cache_field": "person_weights",
+            "title": "Mask R-CNN ResNet50-FPN v2, COCO (torchvision MaskRCNN_ResNet50_FPN_V2_Weights.COCO_V1)",
+            "sha256": "73cbd0190fcbe3ba339921fbce2c3a0b6bb9126c9a133c85e43a2a8e060a109e",
+            "license": "torchvision weights, BSD-3-Clause code licence",
+            "license_note": "Derives person masks for training only; nothing from it ships in a delivery.",
+            "ships_in_delivery": False,
+        },
+        {
+            "id": "mono_depth_da2_small",
+            "cache_field": "da2_checkpoint",
+            "title": "Depth Anything V2 Small (vits)",
+            "sha256": "715fade13be8f229f8a70cc02066f656f2423a59effd0579197bbf57860e1378",
+            "license": "Apache-2.0",
+            "license_note": "Derives relative depth for the da2 term during training; nothing from it ships.",
+            "ships_in_delivery": False,
+        },
+    ]
+
     cost_model = thaw(base.cost_model)
     # 168 min for 3536 faces on 6 CPU threads; the inherited 0.60 was never timed.
     cost_model["sky_mask_seconds_per_face"] = 2.85
@@ -1349,6 +1374,14 @@ def _derive_b12op05d3() -> Profile:
         f"{_LADDER_DOC} sections 20-24",
         MEASURED,
     )
+    provenance["external_assets.gpu_cache_weights"] = Provenance(
+        "The house0305 person-mask manifest records MaskRCNN_ResNet50_FPN_V2_Weights.COCO_V1 with "
+        "weights_sha256 73cbd019...; its mono-depth manifest records Depth Anything V2 Small with "
+        "checkpoint_sha256 715fade1.... The files on the campaign machine hash to both.",
+        "3dgs-datasets/house0305_sop_v8/person_mask_manifest.json model_identity; "
+        "house0305_sop_v9/da2_train/mono_depth_manifest.json model",
+        MEASURED,
+    )
     provenance["tiling.measured_views_per_tile"] = Provenance(
         "The four house0305 v9 tiles carry 2132 / 1829 / 1684 / 2317 training views; every "
         "schedule knob of this recipe (30k stop, 21k refine window, reset 3000) was measured on "
@@ -1436,7 +1469,7 @@ def _derive_b12op05d3() -> Profile:
         battery=thaw(base.battery),
         acceptance=thaw(base.acceptance),
         cost_model=cost_model,
-        external_assets=thaw(base.external_assets),
+        external_assets=external_assets,
         open_questions=tuple(open_questions),
         provenance=provenance,
     )

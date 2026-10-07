@@ -239,6 +239,58 @@ def _subset_hint(plan: Plan, profile: Profile, *, free: int, needed: int, factor
     )
 
 
+#: CacheProfile field -> the flag that names it on the command line.
+GPU_CACHE_ASSET_FLAGS = {
+    "person_weights": "--person-weights",
+    "da2_model_source": "--da2-source",
+    "da2_checkpoint": "--da2-checkpoint",
+}
+
+
+def _gpu_cache_asset_checks(profile: Profile, assets: Mapping[str, Path]) -> list[Check]:
+    """Each weight a fresh capture's GPU caches load: named, present, and the pinned file.
+
+    The profile may pin a sha256 per field (``external_assets`` entries with ``cache_field``);
+    a file that hashes differently is a different model and fails, the same as a missing one.
+    """
+    pinned = {
+        str(asset["cache_field"]): asset for asset in profile.external_assets if asset.get("cache_field")
+    }
+    rows: list[Check] = []
+    for field, flag in GPU_CACHE_ASSET_FLAGS.items():
+        path = assets.get(field)
+        name = f"gpu_cache_asset_{field}"
+        if path is None:
+            rows.append(Check(name, FAIL, "not named on this host",
+                              remedy=f"pass {flag} or set its environment variable"))
+            continue
+        path = Path(path)
+        if not path.exists():
+            rows.append(Check(name, FAIL, f"{path} does not exist", remedy=f"point {flag} at the file"))
+            continue
+        asset = pinned.get(field)
+        want = (asset or {}).get("sha256")
+        if want and path.is_file():
+            got = _sha256_file(path)
+            if got != want:
+                rows.append(Check(name, FAIL, f"{path} hashes {got[:12]}, the profile pins {want[:12]}",
+                                  remedy=f"use the pinned {asset.get('title', field)}"))
+                continue
+        detail = str(path) + (f" ({asset['title']}, {asset['license']})" if asset else "")
+        rows.append(Check(name, PASS, detail))
+    return rows
+
+
+def _sha256_file(path: Path) -> str:
+    import hashlib
+
+    digest = hashlib.sha256()
+    with Path(path).open("rb") as stream:
+        for chunk in iter(lambda: stream.read(1 << 20), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
 # --------------------------------------------------------------------------
 # preflight
 # --------------------------------------------------------------------------
@@ -251,6 +303,7 @@ def preflight(
     repo_root: Path,
     probes: Probes | None = None,
     require_gpu: bool = True,
+    gpu_cache_assets: Mapping[str, Path] | None = None,
 ) -> PreflightReport:
     probes = probes or Probes.detect()
     runtime = profile.runtime
@@ -475,6 +528,11 @@ def preflight(
                 remedy="" if found else f"fetch {asset['model_id']} revision {asset.get('revision', '?')} onto this host",
             )
         )
+
+    # -- weights the GPU caches of a fresh capture load ----------------------
+    # Only owed when prepare will build the caches: a prepared or adopted scene has them.
+    if gpu_cache_assets is not None:
+        checks.extend(_gpu_cache_asset_checks(profile, gpu_cache_assets))
 
     # -- this checkout can produce what the profile describes -------------
     blocking = plan.blocking_steps()

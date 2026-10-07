@@ -195,7 +195,7 @@ class PrepareTests(ProjectFixture):
         scene = fake_scene(self.dataset_root)
 
         def fake_load(dataset_root, profile, work_root, *, python, repo_root, adapter, run_dir, pipeline_gate,
-                      vram_gib, log):
+                      vram_gib, assets, log):
             seen.update(
                 dataset_root=dataset_root, profile=profile, work_root=work_root, python=python,
                 repo_root=repo_root, adapter=adapter, run_dir=run_dir, pipeline_gate=pipeline_gate,
