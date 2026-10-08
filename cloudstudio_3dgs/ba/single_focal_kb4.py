@@ -8,6 +8,40 @@ import numpy as np
 from scipy.optimize import least_squares
 
 
+#: An intrinsic solve must not make the fit worse. The solver minimises the Huber cost, so that is
+#: the quantity that may not rise; the plain RMSE is not its objective and can tick up by float
+#: noise at a fixed point. Requiring it to stay within 1e-9 px refused a converged solve on the UK
+#: capture (2026-10-08, "Both ftol and xtol termination conditions are satisfied; RMSE 0.913865 ->
+#: 0.913865 px") after 112 minutes of outer iterations. 1e-5 px is far below any pixel-level change.
+RMSE_RISE_TOLERANCE_PX = 1e-5
+
+
+def _huber_cost(residuals: np.ndarray, scale: float) -> float:
+    """scipy.optimize.least_squares' cost for loss="huber" with f_scale=scale."""
+    z = np.square(np.asarray(residuals, dtype=np.float64) / float(scale))
+    rho = np.where(z <= 1.0, z, 2.0 * np.sqrt(z) - 1.0)
+    return float(0.5 * float(scale) ** 2 * np.sum(rho))
+
+
+def intrinsic_solve_accepted(
+    success: bool,
+    parameters: np.ndarray,
+    initial_residuals: np.ndarray,
+    final_residuals: np.ndarray,
+    huber_scale_px: float,
+) -> bool:
+    """Accept a KB4 intrinsic solve only if it converged and did not make the fit worse."""
+    if not success or not np.all(np.isfinite(parameters)):
+        return False
+    initial_cost = _huber_cost(initial_residuals, huber_scale_px)
+    final_cost = _huber_cost(final_residuals, huber_scale_px)
+    if final_cost > initial_cost * (1.0 + 1e-12) + 1e-12:
+        return False
+    initial_rmse = float(np.sqrt(np.mean(np.square(initial_residuals))))
+    final_rmse = float(np.sqrt(np.mean(np.square(final_residuals))))
+    return final_rmse <= initial_rmse + RMSE_RISE_TOLERANCE_PX
+
+
 def _selected_image_ids(reconstruction: Any, image_ids: set[int] | None) -> list[int]:
     selected = sorted(
         reconstruction.reg_image_ids() if image_ids is None else image_ids
@@ -195,10 +229,8 @@ def refine_shared_single_focal_kb4_intrinsics(
         final_residuals = residuals(result.x)
         initial_rmse = float(np.sqrt(np.mean(initial_residuals**2)))
         final_rmse = float(np.sqrt(np.mean(final_residuals**2)))
-        if (
-            not result.success
-            or not np.all(np.isfinite(result.x))
-            or final_rmse > initial_rmse + 1e-9
+        if not intrinsic_solve_accepted(
+            bool(result.success), result.x, initial_residuals, final_residuals, float(huber_scale_px)
         ):
             raise RuntimeError(
                 f"camera {camera_id} single-focal KB4 solve failed: {result.message}; "
