@@ -94,6 +94,8 @@ class AtRouteGraphTest(unittest.TestCase):
         self.assertEqual(command[command.index("--manifest") + 1], str(self.root / "dataset_raw" / "dataset_manifest.json"))
         self.assertEqual(command[command.index("--split-manifest") + 1], str(self.root / "dataset_raw" / "split_manifest.json"))
         self.assertEqual(spec.manifest, self.root / "dataset" / "dataset_manifest.json")
+        # build_ba_training_manifest.py takes a directory and writes dataset_manifest.json inside it
+        self.assertEqual(command[command.index("--output") + 1], str(self.root / "dataset"))
 
     def test_the_solver_runs_with_the_settings_house0305_needed(self) -> None:
         command = list(self.plan.spec("at_solve").command)
@@ -167,7 +169,12 @@ class AtRouteGraphTest(unittest.TestCase):
     def test_the_estimate_adds_the_at_route_only_when_asked(self) -> None:
         _, raw = estimate_ingest(3536, 4, validation_caches=("face_cache",))
         _, at = estimate_ingest(3536, 4, validation_caches=("face_cache",), pose_route=AT)
-        self.assertGreater(at - raw, 4.0)  # features, triangulation, AT, raw tier
+        from cloudstudio3dgs_sdk.ingest.caches import AT_ROUTE_CACHES, REFERENCE_COSTS
+
+        # exactly the AT route's own caches at the reference size (884 of 886 images here)
+        expected = sum(REFERENCE_COSTS[name][1] * (884 / 886 if REFERENCE_COSTS[name][2] == "images" else 1.0)
+                       for name in AT_ROUTE_CACHES)
+        self.assertAlmostEqual(at - raw, expected, places=6)
 
 
 class AtStepsTest(unittest.TestCase):
@@ -198,11 +205,17 @@ class AtStepsTest(unittest.TestCase):
         raw = self.root / "raw.json"
         raw.write_text(json.dumps({"manifest_sha256": "a" * 64}), encoding="utf-8")
         model = self.root / "model.json"
+        model_config = self.root / "c.json"
+        model_config.write_text(json.dumps({"cap_max": 1000}), encoding="utf-8")  # colour left to defaults
         model.write_text(json.dumps(at_steps.sign_step_manifest(
-            {"dataset_manifest_sha256": "a" * 64, "config": "c.json", "checkpoint": "m.pt"})), encoding="utf-8")
+            {"dataset_manifest_sha256": "a" * 64, "config": str(model_config), "checkpoint": "m.pt"})),
+            encoding="utf-8")
         output = self.root / "timesync"
 
         def fake_run(command):
+            config = json.loads(Path(command[command.index("--config") + 1]).read_text(encoding="utf-8"))
+            # the audit's loader defaults to "sh"; the trainer to rgb_sigmoid - it must be stated
+            self.assertEqual(config["color_model"], at_steps.TRAINER_DEFAULT_COLOR_MODEL)
             report = Path(command[command.index("--output") + 1])
             report.write_text(json.dumps({"base_dataset_manifest_sha256": "a" * 64, "best_offset_ms": best}),
                               encoding="utf-8")
@@ -214,6 +227,12 @@ class AtStepsTest(unittest.TestCase):
             code = at_steps.timesync_audit(args)
         step = json.loads((output / at_steps.TIMESYNC_STEP_MANIFEST).read_text(encoding="utf-8"))
         return code, step
+
+    def test_the_colour_default_is_the_trainers(self) -> None:
+        from cloudstudio_3dgs.training.trainer import TrainerConfig
+
+        self.assertEqual(TrainerConfig.__dataclass_fields__["color_model"].default, at_steps.TRAINER_DEFAULT_COLOR_MODEL)
+        self.assertEqual(at_steps.TIMESYNC_MODEL_RECIPE["color_model"], at_steps.TRAINER_DEFAULT_COLOR_MODEL)
 
     def test_a_zero_offset_passes_and_is_signed(self) -> None:
         code, step = self._audit(0.0)

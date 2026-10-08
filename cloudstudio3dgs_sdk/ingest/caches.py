@@ -122,21 +122,21 @@ REFERENCE_COSTS: Mapping[str, tuple[float, float, str]] = {
     "tile_geometry": (40.0, 0.96, "images"),
     "tile_ownership": (6.0, 0.19, "faces_per_tile"),
     "view_backgrounds": (12.0, 2.5, "faces_per_tile"),
-    # The independent-AT pose route (house0305_at_v2 re-run of 2026-09-22 unless noted).
+    # The independent-AT pose route, measured on the UK capture (2026-10-08: 1044 images, 6962
+    # pairs, first run from raw S1 poses) and scaled to the 886-image reference.
     "raw_dataset_manifest": (2.0, 0.002, "images"),
     "raw_mask_manifest": (1.0, 0.02, "images"),
-    "raw_person_mask_manifest": (25.0, 0.9, "images"),
+    "raw_person_mask_manifest": (11.5, 0.45, "images"),
     "raw_split_manifest": (0.5, 0.001, "fixed"),
     "at_pairs": (0.5, 0.001, "images"),
-    "at_features_raw": (11.5, 1.3, "images"),
-    "at_features": (13.0, 1.3, "images"),
-    "at_triangulation": (5.0, 0.6, "images"),
-    # UK capture 2026-10-08: 112 min for 80 outer iterations at 1044 images (1.4 min each), still
-    # short of the 1e-6 / 1e-5 tolerances and closing ~1% per iteration; ~150 iterations expected.
-    "at_solve": (180.0, 0.3, "images"),
-    # runbook A1/A2 scale (3000 steps at factor 4, then a 6-offset sweep): estimates.
-    "timesync_model": (15.0, 0.3, "images"),
-    "timesync": (20.0, 0.01, "images"),
+    "at_features_raw": (11.2, 1.11, "images"),
+    "at_features": (10.0, 1.09, "images"),
+    "at_triangulation": (4.6, 0.27, "images"),
+    # 92 outer iterations, 158.5 min at 1044 images (house0305's accepted run needed 55)
+    "at_solve": (134.5, 0.25, "images"),
+    # 3000 steps at factor 4 (12.4 min), then 6 offsets over 82 frames at factor 4 (7.1 min)
+    "timesync_model": (10.5, 0.39, "images"),
+    "timesync": (6.0, 0.01, "images"),
 }
 
 POSE_ROUTE_RAW = "raw_capture_poses"
@@ -1109,7 +1109,7 @@ def _independent_at_specs(
             sha_key="runtime_manifest_sha256",
             depends_on=("at_pairs",),
             estimated_minutes=scale.minutes("at_features_raw"),
-            cost_basis="measured (house0305_at_v2: 886 images extracted in 3 m 18 s, 4695 pairs matched in ~8 m)",
+            cost_basis="measured (UK, 1044 images / 6962 pairs: 13.2 min)",
             output_gib=scale.gib("at_features_raw"),
             note="the masked pass reuses this pass's keypoints; it cannot run without them",
         ),
@@ -1142,7 +1142,7 @@ def _independent_at_specs(
                 Binding("feature_filter.person_mask_manifest_sha256", "raw_person_mask_manifest"),
             ),
             estimated_minutes=scale.minutes("at_features"),
-            cost_basis="measured (house0305_at_v2: ~8 min re-match + ~5 min mask filter)",
+            cost_basis="measured (UK, 1044 images / 6962 pairs: 11.8 min)",
             output_gib=scale.gib("at_features"),
         ),
         CacheSpec(
@@ -1170,7 +1170,7 @@ def _independent_at_specs(
                 Binding("inputs.dataset_manifest_sha256", "raw_dataset_manifest"),
             ),
             estimated_minutes=scale.minutes("at_triangulation"),
-            cost_basis="measured (house0305_at_v2: 14:33:42 -> 14:38:47)",
+            cost_basis="measured (UK, 1044 images: 5.4 min, 487,726 points)",
             output_gib=scale.gib("at_triangulation"),
         ),
         CacheSpec(
@@ -1199,7 +1199,7 @@ def _independent_at_specs(
                 Binding("triangulation_identity.triangulation_manifest_sha256", "at_triangulation"),
             ),
             estimated_minutes=scale.minutes("at_solve"),
-            cost_basis="measured rate (UK: 112 min / 80 outer iterations, 1044 images); iteration count estimated",
+            cost_basis="measured (UK, 1044 images: converged at outer iteration 92 in 158.5 min)",
             output_gib=scale.gib("at_solve"),
             note="exit 2 when not converged: prepare refuses rather than train on an unconverged AT",
             requires=(("solver_converged", True), ("intrinsic_outer_converged", True)),
@@ -1228,7 +1228,7 @@ def _independent_at_specs(
             depends_on=("raw_dataset_manifest", "raw_mask_manifest", "raw_person_mask_manifest", "raw_split_manifest"),
             bindings=(Binding("dataset_manifest_sha256", "raw_dataset_manifest"),),
             estimated_minutes=scale.minutes("timesync_model"),
-            cost_basis="estimated (house0614 runbook A1: 3000 steps, factor 4, cap 1M)",
+            cost_basis="measured (UK, 1044 images: 12.4 min)",
             output_gib=scale.gib("timesync_model"),
         ),
         CacheSpec(
@@ -1248,7 +1248,7 @@ def _independent_at_specs(
             depends_on=("timesync_model",),
             bindings=(Binding("base_dataset_manifest_sha256", "raw_dataset_manifest"),),
             estimated_minutes=scale.minutes("timesync"),
-            cost_basis="estimated (house0305 first pass at factor 2, 40 frames: ~19 min)",
+            cost_basis="measured (UK, 1044 images: 82 frames x 6 offsets at factor 4 in 7.1 min)",
             output_gib=scale.gib("timesync"),
             note="a non-zero best offset refuses: the frontend gate only admits 0 ms",
             requires=(("accepted", True),),
@@ -1265,7 +1265,8 @@ def _independent_at_specs(
             "--split-manifest", str(raw_split),
             "--independent-at-report", str(solve / "at_report.json"),
             "--candidate-model", str(solve / "candidate_model"),
-            "--output", str(dataset_manifest),
+            # a directory: the tool writes dataset_manifest.json inside it
+            "--output", str(dataset),
             "--force",
         ),
         manifest=dataset_manifest,

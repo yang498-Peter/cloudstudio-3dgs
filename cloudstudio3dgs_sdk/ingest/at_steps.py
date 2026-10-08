@@ -45,6 +45,8 @@ TIMESYNC_STEP_MANIFEST = "time_sync_step.json"
 TIMESYNC_REPORT = "time_sync_report.json"
 SMOKE_STEP_MANIFEST = "pipeline_smoke.json"
 TIMESYNC_OFFSETS_MS = (-10.0, -5.0, 0.0, 5.0, 10.0, 20.0)
+#: TrainerConfig.color_model's default (cloudstudio_3dgs/training/trainer.py).
+TRAINER_DEFAULT_COLOR_MODEL = "rgb_sigmoid"
 
 # The time-sync model: house0614 runbook A1 (C:/Peter/3dgs-runs/house0614_smoke_f4_config.json),
 # with the depth keys dropped and the range term off, as that runbook says - a raw capture has
@@ -57,6 +59,9 @@ TIMESYNC_MODEL_RECIPE: Mapping[str, Any] = {
     "checkpoint_every": 3000,
     "cap_max": 1_000_000,
     "init_scale_m": 0.05,
+    # Stated, not left to defaults: the trainer defaults to rgb_sigmoid while the audit's model
+    # loader (tools/sharpness_metrics._load_backend) defaults to "sh" and looked for sh0/shN.
+    "color_model": TRAINER_DEFAULT_COLOR_MODEL,
     "lidar_range_weight": 0.0,
     "rgb_l1_weight": 0.8,
     "rgb_ssim_weight": 0.2,
@@ -272,9 +277,15 @@ def timesync_audit(args: argparse.Namespace) -> int:
     output: Path = args.output
     output.mkdir(parents=True, exist_ok=True)
     report_path = output / TIMESYNC_REPORT
+    # The audit renders through a loader whose colour default differs from the trainer's; a model
+    # config that left colour to the trainer default is made explicit before the audit reads it.
+    audit_config = json.loads(Path(model["config"]).read_text(encoding="utf-8"))
+    audit_config.setdefault("color_model", TRAINER_DEFAULT_COLOR_MODEL)
+    audit_config_path = output / "timesync_audit_config.json"
+    _write_json(audit_config_path, audit_config)
     command = [
         sys.executable, str(REPO_ROOT / "tools" / "audit_camera_time_sync.py"),
-        "--config", str(model["config"]),
+        "--config", str(audit_config_path),
         "--checkpoint", str(model["checkpoint"]),
         "--base-dataset-manifest", str(args.dataset_manifest),
         "--offset-ms", *[str(value) for value in args.offset_ms],
