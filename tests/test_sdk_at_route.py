@@ -97,7 +97,7 @@ class AtRouteGraphTest(unittest.TestCase):
 
     def test_the_solver_runs_with_the_settings_house0305_needed(self) -> None:
         command = list(self.plan.spec("at_solve").command)
-        self.assertEqual(command[command.index("--intrinsic-outer-iterations") + 1], "80")
+        self.assertEqual(command[command.index("--intrinsic-outer-iterations") + 1], "200")
         self.assertEqual(command[command.index("--intrinsic-convergence-tol") + 1], "1e-6")
         self.assertIn("--triangulation-runtime-manifest", command)  # the gate checks triangulation_identity
 
@@ -138,6 +138,31 @@ class AtRouteGraphTest(unittest.TestCase):
         status = self.plan.status_of(self.plan.spec("dataset_manifest"))
         self.assertEqual(status.status, STATUS_STALE)
         self.assertIn("independent_at_report_sha256", status.reason)
+
+    def test_an_unconverged_at_report_is_not_a_built_cache(self) -> None:
+        # the UK capture's first full solve: signed, usable, 80 iterations, not converged
+        write = _caches_tests._write
+        raw = write(self.plan.spec("raw_dataset_manifest").manifest, {"images": []}, "manifest_sha256")
+        tri = write(self.plan.spec("at_triangulation").manifest, {"inputs": {}}, "triangulation_manifest_sha256")
+        body = {"dataset_manifest_sha256": raw, "triangulation_identity": {"triangulation_manifest_sha256": tri},
+                "solver_usable": True, "solver_converged": False, "intrinsic_outer_converged": False}
+        write(self.plan.spec("at_solve").manifest, body, "report_sha256")
+        self.plan.invalidate()
+        status = self.plan.status_of(self.plan.spec("at_solve"))
+        self.assertEqual(status.status, STATUS_STALE)
+        self.assertIn("solver_converged", status.reason)
+        body.update(solver_converged=True, intrinsic_outer_converged=True)
+        write(self.plan.spec("at_solve").manifest, body, "report_sha256")
+        self.plan.invalidate()
+        self.assertEqual(self.plan.status_of(self.plan.spec("at_solve")).status, STATUS_PRESENT)
+
+    def test_a_refused_time_sync_is_not_a_built_cache(self) -> None:
+        write = _caches_tests._write
+        raw = write(self.plan.spec("raw_dataset_manifest").manifest, {"images": []}, "manifest_sha256")
+        write(self.plan.spec("timesync").manifest, {"base_dataset_manifest_sha256": raw, "accepted": False},
+              "sdk_step_manifest_sha256")
+        self.plan.invalidate()
+        self.assertEqual(self.plan.status_of(self.plan.spec("timesync")).status, STATUS_STALE)
 
     def test_the_estimate_adds_the_at_route_only_when_asked(self) -> None:
         _, raw = estimate_ingest(3536, 4, validation_caches=("face_cache",))

@@ -81,6 +81,10 @@ class CacheSpec:
     output_gib: float = 0.0
     tile_id: int | None = None
     note: str = ""
+    # (dotted manifest key, value) pairs the manifest must carry to count as present. A signed
+    # result can still be a refusal: an AT report that did not converge, a time-sync audit
+    # that found an offset. Without this the graph would call them built and never re-run them.
+    requires: tuple[tuple[str, Any], ...] = ()
 
     def __post_init__(self) -> None:
         if self.device not in (CPU, GPU):
@@ -127,8 +131,9 @@ REFERENCE_COSTS: Mapping[str, tuple[float, float, str]] = {
     "at_features_raw": (11.5, 1.3, "images"),
     "at_features": (13.0, 1.3, "images"),
     "at_triangulation": (5.0, 0.6, "images"),
-    # at_v7c converged at outer iteration 55 of 80; its wall time was not recorded (estimate).
-    "at_solve": (60.0, 0.3, "images"),
+    # UK capture 2026-10-08: 112 min for 80 outer iterations at 1044 images (1.4 min each), still
+    # short of the 1e-6 / 1e-5 tolerances and closing ~1% per iteration; ~150 iterations expected.
+    "at_solve": (180.0, 0.3, "images"),
     # runbook A1/A2 scale (3000 steps at factor 4, then a 6-offset sweep): estimates.
     "timesync_model": (15.0, 0.3, "images"),
     "timesync": (20.0, 0.01, "images"),
@@ -1180,7 +1185,9 @@ def _independent_at_specs(
                 "--manifest", str(raw_dataset_manifest),
                 "--output", str(solve),
                 "--triangulation-runtime-manifest", str(triangulation / "triangulation_runtime_manifest.json"),
-                "--intrinsic-outer-iterations", "80",
+                # house0305's accepted run used 80 and converged at 55; the UK capture was still
+                # 1.85x the step tolerance at 80, closing ~1% per iteration. The tolerances stay.
+                "--intrinsic-outer-iterations", "200",
                 "--intrinsic-convergence-tol", "1e-6",
             ),
             manifest=solve / "at_report.json",
@@ -1192,9 +1199,10 @@ def _independent_at_specs(
                 Binding("triangulation_identity.triangulation_manifest_sha256", "at_triangulation"),
             ),
             estimated_minutes=scale.minutes("at_solve"),
-            cost_basis="estimated (at_v7c converged at outer iteration 55 of 80; wall time not recorded)",
+            cost_basis="measured rate (UK: 112 min / 80 outer iterations, 1044 images); iteration count estimated",
             output_gib=scale.gib("at_solve"),
             note="exit 2 when not converged: prepare refuses rather than train on an unconverged AT",
+            requires=(("solver_converged", True), ("intrinsic_outer_converged", True)),
         ),
         CacheSpec(
             name="timesync_model",
@@ -1243,6 +1251,7 @@ def _independent_at_specs(
             cost_basis="estimated (house0305 first pass at factor 2, 40 frames: ~19 min)",
             output_gib=scale.gib("timesync"),
             note="a non-zero best offset refuses: the frontend gate only admits 0 ms",
+            requires=(("accepted", True),),
         ),
     ]
     training_manifest = CacheSpec(
@@ -1436,6 +1445,12 @@ class CachePlan:
                         f"'{binding.depends_on}' is {upstream[:12]}.."
                     ),
                     str(own_sha),
+                )
+        for key, expected in spec.requires:
+            value = _dotted(payload, key)
+            if value != expected:
+                return CacheStatus(
+                    spec, STATUS_STALE, f"{key} is {value!r}, the cache needs {expected!r}", str(own_sha)
                 )
         return CacheStatus(spec, STATUS_PRESENT, "bindings match", str(own_sha))
 
