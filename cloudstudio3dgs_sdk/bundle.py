@@ -309,6 +309,21 @@ def _tile_count(profile: Any, cloud: Path, *, vram_gib: float | None) -> int | N
     return tile_count_for(profile, points, vram_gib=vram_gib)
 
 
+def _smoke_cap(profile: Any, tile_inputs: Path, *, vram_gib: float | None) -> int:
+    """Tile_0's cap under the profile's own rule: what the full-resolution smoke measures VRAM at."""
+    import json
+
+    manifest = json.loads(Path(tile_inputs).read_text(encoding="utf-8"))
+    tile = next(entry for entry in manifest["tiles"] if int(entry["tile_id"]) == 0)
+    points = int(tile["initialization"]["point_count"])
+    if not hasattr(profile, "tile_rules"):
+        return max(2 * points, points + 1)
+    from cloudstudio3dgs_sdk.plan import TileSummary, tile_cap
+
+    summary = TileSummary(0, "Tile_0", int(tile.get("view_count", 0) or 0), points)
+    return max(tile_cap(profile, summary, vram_gib=vram_gib), points + 1)
+
+
 def load_dataset_bundle(
     dataset_root: Path,
     profile: Any,
@@ -323,6 +338,7 @@ def load_dataset_bundle(
     log: Callable[[str], None] | None = None,
     vram_gib: float | None = None,
     assets: Mapping[str, Path | str | None] | None = None,
+    pose_route: str = POSE_ROUTE_RAW,
 ) -> PreparedScene:
     """Ingest a capture and build every CPU cache it needs into ``work_root``.
 
@@ -338,10 +354,10 @@ def load_dataset_bundle(
       :class:`GpuStepRequired` with the exact command; the SDK's stage runner, which holds the
       GPU lease, runs it and calls back in. Caches that do not depend on the GPU one are
       built first, so one call does as much as it can.
-    * build the mipmap pipeline gate. The gate is a thirteen-stage signed readiness contract
-      the trainer refuses to start without on fisheye data, and its chain lives in the gate
-      tools, not in ingestion. Pass ``pipeline_gate`` to a gate that chain produced; without
-      one this raises :class:`DatasetIncompleteError` naming the tools.
+    * forge a readiness gate. On the independent-AT route (``pose_route="independent_at"``)
+      ingestion runs the AT chain and then the gate chain (``ingest.gates``) with the repo's
+      gate tools, so the gate is evidence, not a stub. A manifest with AT lineage on any other
+      route needs ``pipeline_gate``, or this raises :class:`DatasetIncompleteError`.
 
     The whole-scene initialisation the coarse prior starts from is built here too
     (``tools/build_lidar_init.py`` at the profile's decimation), because nothing in the cache
@@ -390,6 +406,8 @@ def load_dataset_bundle(
         # the backgrounds need trained neighbour tiles. Built here they could only fail.
         tile_ownership=False,
         view_backgrounds=False,
+        # independent_at: raw tier -> AT -> training manifest, then the signed gate chain
+        pose_route=pose_route,
     )
     # Weights the GPU caches load (person masks, DA2): machine paths, never profile data.
     for key in ("person_weights", "da2_model_source", "da2_checkpoint"):
@@ -415,7 +433,9 @@ def load_dataset_bundle(
     # cloudstudio_3dgs/training/validation_paths.py). The same graph at split="val" names
     # exactly those; everything they depend on is shared and already present.
     val_plan = plan_caches(bundle, profile, split="val", **roots)
-    val_pending = _build_cpu_half(val_plan, run=run, say=say, only=VALIDATION_CACHES, tag="val ")
+    # The training gate binds DA2 for both splits, so the AT route builds the val DA2 too.
+    validation = VALIDATION_CACHES + (("mono_depth",) if pose_route == POSE_ROUTE_AT else ())
+    val_pending = _build_cpu_half(val_plan, run=run, say=say, only=validation, tag="val ")
     pending_gpu = pending_gpu or val_pending
 
     if pending_gpu is not None:
@@ -453,6 +473,26 @@ def load_dataset_bundle(
 
     specs = {status.spec.name: status.spec for status in plan.statuses()}
 
+    if pose_route == POSE_ROUTE_AT and pipeline_gate is None:
+        # The AT route publishes its own readiness gate: the chain house0305 v9 was trained
+        # under, run against this work root's caches (cloudstudio3dgs_sdk.ingest.gates).
+        from cloudstudio3dgs_sdk.ingest.gates import build_gate_chain, gate_inputs_from_specs
+
+        val_specs = {status.spec.name: status.spec for status in val_plan.statuses()}
+        inputs = gate_inputs_from_specs(
+            specs, val_specs, recording_root=Path(bundle.source_root),
+            gsplat_lock=repo / "upstream" / "gsplat.lock.json",
+        )
+        pipeline_gate = build_gate_chain(
+            inputs,
+            work / "runs" / "gates",
+            python=interpreter,
+            repo_root=repo,
+            cap_max=_smoke_cap(profile, inputs.tile_inputs, vram_gib=vram_gib),
+            run=run,
+            say=say,
+        )
+
     # The readiness gate. Outside ingestion by design; refuse rather than forge one. It is
     # owed exactly when the trainer will ask for it: on independent-AT data. A manifest that
     # cannot be read counts as AT data, so an unknown lineage still needs a gate.
@@ -461,23 +501,31 @@ def load_dataset_bundle(
         if at_lineage is not False:
             raise DatasetIncompleteError(
                 "no mipmap pipeline gate. The trainer refuses independent-AT fisheye data without "
-                "the signed thirteen-stage readiness gate, and its chain is not part of ingestion. "
-                "Produce it with " + " then ".join(GATE_TOOLS) + " against this work root's "
-                "caches, then pass --pipeline-gate PATH."
+                "its signed readiness gate. Re-run with --pose-route independent_at so the SDK "
+                "builds the AT and gate chains itself, or produce it with "
+                + " then ".join(GATE_TOOLS) + " against this work root's caches and pass "
+                "--pipeline-gate PATH."
             )
         gate_path = None
         pose_route = POSE_ROUTE_RAW
         say(
             "[prepare] the dataset manifest carries no independent AT lineage: training on the "
             "capture's own poses with no readiness gate (the trainer asks for one only on AT "
-            "data). Quality is bounded by those poses; run the AT chain for a delivery."
+            "data). Quality is bounded by those poses; --pose-route independent_at runs the AT "
+            "chain for a delivery."
         )
     else:
         gate_path = Path(pipeline_gate)
         from cloudstudio_3dgs.pipeline.mipmap_gate import load_and_verify_gate
 
         load_and_verify_gate(gate_path)  # raises on a bad signature
-        pose_route = POSE_ROUTE_AT if at_lineage else POSE_ROUTE_RAW
+        if pose_route == POSE_ROUTE_AT and at_lineage is False:
+            # The AT route's training manifest is published by build_ba_training_manifest.py
+            # with that lineage; one without it is not the manifest the gate was built for.
+            raise DatasetIncompleteError(
+                f"{specs['dataset_manifest'].manifest} carries no independent-AT lineage on the AT route"
+            )
+        pose_route = POSE_ROUTE_AT if (at_lineage or pose_route == POSE_ROUTE_AT) else POSE_ROUTE_RAW
 
     # Project the built graph onto the trainer's path contract.
     fields: dict[str, Any] = {}

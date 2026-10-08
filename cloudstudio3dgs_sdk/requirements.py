@@ -239,6 +239,53 @@ def _subset_hint(plan: Plan, profile: Profile, *, free: int, needed: int, factor
     )
 
 
+#: Weights the AT route's feature step loads through torch.hub (unpinned by the tools).
+AT_FEATURE_WEIGHTS = ("aliked-n16.pth", "aliked_lightglue_v0-1_arxiv.pth")
+
+
+def _torch_hub_checkpoints() -> Path:
+    import os
+
+    home = os.environ.get("TORCH_HOME")
+    base = Path(home) if home else Path.home() / ".cache" / "torch"
+    return base / "hub" / "checkpoints"
+
+
+def _at_runtime_evidence(lock_path: Path) -> str:
+    """Raises when hloc / LightGlue / pycolmap differ from upstream/rig_ba.lock.json."""
+    from cloudstudio_3dgs.ba.runtime_lock import collect_runtime_evidence, load_runtime_lock
+
+    evidence = collect_runtime_evidence(load_runtime_lock(lock_path))
+    return ", ".join(f"{name} {row['installed_version']}" for name, row in sorted(evidence.items()))
+
+
+def _at_route_checks(repo_root: Path) -> list[Check]:
+    """What the AT route needs before prepare spends an hour on person masks to find out.
+
+    The feature and triangulation tools refuse a runtime that differs from the lock (a wrong
+    commit always fails), and the feature step fetches its weights from GitHub when the hub
+    cache lacks them, which an offline host cannot.
+    """
+    rows: list[Check] = []
+    lock = repo_root / "upstream" / "rig_ba.lock.json"
+    try:
+        detail = _at_runtime_evidence(lock)
+        rows.append(Check("at_runtime_lock", PASS, f"{detail} match {lock.name}"))
+    except (OSError, RuntimeError, ValueError, KeyError) as error:
+        rows.append(Check("at_runtime_lock", FAIL, str(error),
+                          remedy=f"install hloc / lightglue / pycolmap at the versions and commits in {lock}"))
+    hub = _torch_hub_checkpoints()
+    missing = [name for name in AT_FEATURE_WEIGHTS if not (hub / name).is_file()]
+    rows.append(
+        Check("at_feature_weights", PASS if not missing else WARN,
+              f"{hub}: " + ("present" if not missing else "missing " + ", ".join(missing)),
+              required=False,
+              remedy="" if not missing else "the feature step downloads them from GitHub on first use; "
+                                            "an offline host needs them copied in")
+    )
+    return rows
+
+
 #: CacheProfile field -> the flag that names it on the command line.
 GPU_CACHE_ASSET_FLAGS = {
     "person_weights": "--person-weights",
@@ -304,6 +351,7 @@ def preflight(
     probes: Probes | None = None,
     require_gpu: bool = True,
     gpu_cache_assets: Mapping[str, Path] | None = None,
+    pose_route: str | None = None,
 ) -> PreflightReport:
     probes = probes or Probes.detect()
     runtime = profile.runtime
@@ -533,6 +581,8 @@ def preflight(
     # Only owed when prepare will build the caches: a prepared or adopted scene has them.
     if gpu_cache_assets is not None:
         checks.extend(_gpu_cache_asset_checks(profile, gpu_cache_assets))
+    if pose_route == "independent_at":
+        checks.extend(_at_route_checks(Path(repo_root)))
 
     # -- this checkout can produce what the profile describes -------------
     blocking = plan.blocking_steps()

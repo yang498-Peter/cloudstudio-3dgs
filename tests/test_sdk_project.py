@@ -195,11 +195,11 @@ class PrepareTests(ProjectFixture):
         scene = fake_scene(self.dataset_root)
 
         def fake_load(dataset_root, profile, work_root, *, python, repo_root, adapter, run_dir, pipeline_gate,
-                      vram_gib, assets, log):
+                      vram_gib, assets, pose_route, log):
             seen.update(
                 dataset_root=dataset_root, profile=profile, work_root=work_root, python=python,
                 repo_root=repo_root, adapter=adapter, run_dir=run_dir, pipeline_gate=pipeline_gate,
-                vram_gib=vram_gib,
+                vram_gib=vram_gib, pose_route=pose_route,
             )
             log("[prepare] fake adapter says hello")
             return scene
@@ -220,6 +220,8 @@ class PrepareTests(ProjectFixture):
         self.assertIsNone(seen["pipeline_gate"])
         # the card size reaches the tile-count rule
         self.assertEqual(seen["vram_gib"], project.vram_gib)
+        # the library default stays the capture's own poses; the CLI defaults to the AT route
+        self.assertEqual(seen["pose_route"], "raw_capture_poses")
         payload = json.loads((self.work / "prepare" / "prepare_manifest.json").read_text(encoding="utf-8"))
         self.assertEqual(payload["trainer_paths"], scene.trainer_paths())
         self.assertIn("derived_paths", payload)

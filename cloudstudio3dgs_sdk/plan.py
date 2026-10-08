@@ -772,6 +772,7 @@ def build_plan(
     vram_gib: float | None = None,
     delivery_tag: str | None = None,
     stages: Sequence[str] = STAGES,
+    pose_route: str = "raw_capture_poses",
 ) -> Plan:
     """The concrete step list for one (profile, dataset) pair.
 
@@ -885,14 +886,20 @@ def build_plan(
             from cloudstudio3dgs_sdk.bundle import VALIDATION_CACHES
             from cloudstudio3dgs_sdk.ingest.caches import estimate_ingest
 
+            at_route = pose_route == "independent_at"
             minutes, gib = estimate_ingest(
-                dataset.train_view_count, dataset.tile_count, validation_caches=VALIDATION_CACHES
+                dataset.train_view_count,
+                dataset.tile_count,
+                validation_caches=VALIDATION_CACHES + (("mono_depth",) if at_route else ()),
+                pose_route=pose_route,
             )
             ingest_estimate = Estimate(
                 minutes * 60.0,
                 int(gib * GIB),
                 f"the ingest cache graph scaled from house0305 v9 to {dataset.train_view_count} faces "
-                f"({gib:.0f} GiB; sky masks, ownership and backgrounds are budgeted below)",
+                f"({gib:.0f} GiB; sky masks, ownership and backgrounds are budgeted below"
+                + ("; includes the raw tier, features, triangulation, AT and time sync" if at_route else "")
+                + ")",
                 EXTRAPOLATED,
             )
         steps.append(

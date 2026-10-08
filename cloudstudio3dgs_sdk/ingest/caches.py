@@ -24,9 +24,10 @@ logs, or estimated.
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Callable, Iterable, Mapping, Sequence
 
@@ -117,7 +118,38 @@ REFERENCE_COSTS: Mapping[str, tuple[float, float, str]] = {
     "tile_geometry": (40.0, 0.96, "images"),
     "tile_ownership": (6.0, 0.19, "faces_per_tile"),
     "view_backgrounds": (12.0, 2.5, "faces_per_tile"),
+    # The independent-AT pose route (house0305_at_v2 re-run of 2026-09-22 unless noted).
+    "raw_dataset_manifest": (2.0, 0.002, "images"),
+    "raw_mask_manifest": (1.0, 0.02, "images"),
+    "raw_person_mask_manifest": (25.0, 0.9, "images"),
+    "raw_split_manifest": (0.5, 0.001, "fixed"),
+    "at_pairs": (0.5, 0.001, "images"),
+    "at_features_raw": (11.5, 1.3, "images"),
+    "at_features": (13.0, 1.3, "images"),
+    "at_triangulation": (5.0, 0.6, "images"),
+    # at_v7c converged at outer iteration 55 of 80; its wall time was not recorded (estimate).
+    "at_solve": (60.0, 0.3, "images"),
+    # runbook A1/A2 scale (3000 steps at factor 4, then a 6-offset sweep): estimates.
+    "timesync_model": (15.0, 0.3, "images"),
+    "timesync": (20.0, 0.01, "images"),
 }
+
+POSE_ROUTE_RAW = "raw_capture_poses"
+POSE_ROUTE_AT = "independent_at"
+#: Caches only the independent-AT route builds; the raw route's estimate leaves them out.
+AT_ROUTE_CACHES = (
+    "raw_dataset_manifest",
+    "raw_mask_manifest",
+    "raw_person_mask_manifest",
+    "raw_split_manifest",
+    "at_pairs",
+    "at_features_raw",
+    "at_features",
+    "at_triangulation",
+    "at_solve",
+    "timesync_model",
+    "timesync",
+)
 
 
 @dataclass(frozen=True)
@@ -172,6 +204,10 @@ class CacheProfile:
     source_run_dir: Path
     split: str = "train"
     tile_count: int = 4
+    # raw_capture_poses: train on the capture's own poses (no gate owed). independent_at: raw
+    # tier -> features -> triangulation -> independent AT -> training manifest, then the
+    # signed gate chain (cloudstudio3dgs_sdk.ingest.gates).
+    pose_route: str = POSE_ROUTE_RAW
     # "grid" once a scene needs more tiles than one axis can hold (see ingest.tiling)
     tile_layout: str = "slab"
     tile_ids: tuple[int, ...] = ()
@@ -282,7 +318,8 @@ def build_cache_specs(bundle: DatasetBundle, profile: CacheProfile) -> list[Cach
 
     dataset_manifest = dataset / "dataset_manifest.json"
     mask_manifest = masks_root / "mask_manifest.json"
-    person_manifest = dataset / "person_mask_manifest.json"
+    # build_person_masks.py / rebind_person_mask_base.py publish it inside --output
+    person_manifest = person_root / "person_mask_manifest.json"
     depth_manifest = depth_root / "depth_manifest.json"
     split_manifest = cache / "split_manifest.json"
     face_manifest = face_root / "face_manifest.json"
@@ -864,6 +901,23 @@ def build_cache_specs(bundle: DatasetBundle, profile: CacheProfile) -> list[Cach
             )
         )
 
+    if profile.pose_route == POSE_ROUTE_AT:
+        specs = _independent_at_specs(
+            specs,
+            bundle=bundle,
+            profile=profile,
+            scale=scale,
+            dataset=dataset,
+            cache=cache,
+            dataset_manifest=dataset_manifest,
+            mask_manifest=mask_manifest,
+            masks_root=masks_root,
+            person_manifest=person_manifest,
+            person_root=person_root,
+        )
+    elif profile.pose_route != POSE_ROUTE_RAW:
+        raise CachePlanError(f"unknown pose route {profile.pose_route!r}")
+
     disabled = set()
     if not profile.person_masks:
         disabled.add("person_mask_manifest")
@@ -889,6 +943,7 @@ def estimate_ingest(
     *,
     validation_caches: Sequence[str],
     face_plan: str = "mipmap_face4",
+    pose_route: str = POSE_ROUTE_RAW,
 ) -> tuple[float, float]:
     """(minutes, GiB) the ingest graph needs for a scene of this size, before it exists.
 
@@ -904,12 +959,345 @@ def estimate_ingest(
     for name in REFERENCE_COSTS:
         if name in PLAN_BUDGETED_CACHES:
             continue
+        if name in AT_ROUTE_CACHES and pose_route != POSE_ROUTE_AT:
+            continue
         minutes += train.minutes(name)
         gib += train.gib(name)
         if name in validation_caches:
             minutes += val.minutes(name)
             gib += val.gib(name)
     return minutes, gib
+
+
+def _independent_at_specs(
+    specs: list[CacheSpec],
+    *,
+    bundle: DatasetBundle,
+    profile: CacheProfile,
+    scale: SceneScale,
+    dataset: Path,
+    cache: Path,
+    dataset_manifest: Path,
+    mask_manifest: Path,
+    masks_root: Path,
+    person_manifest: Path,
+    person_root: Path,
+) -> list[CacheSpec]:
+    """The raw-pose route's graph, rewired to train on independent-AT poses.
+
+    The capture's own manifest, circle masks, person masks and split move to a raw tier
+    (``<work>/dataset_raw``): the AT reads them, and the frontend gate demands them as raw
+    evidence. ``dataset_manifest`` becomes the AT-published training manifest, so every
+    downstream cache (masks, depth, split, faces, ...) binds to the corrected poses without
+    changing. Person masks of the training tier are a rebind of the raw ones, not a second
+    Mask R-CNN pass. Steps follow house0305 (docs/2026-09-11_house0305_v9...): pairs ->
+    ALIKED/LightGlue unmasked, then masked -> known-pose triangulation -> independent AT
+    (80 outer iterations at 1e-6: the defaults did not converge on house0305) -> training
+    manifest; plus the time-sync audit the frontend gate requires.
+    """
+    python = profile.python
+    raw = dataset.parent / f"{dataset.name}_raw"
+    work_root = dataset.parent
+    at = cache / "at"
+    camera_dir = Path(profile.recording_root) / "camera"
+    gsplat_lock = Path(profile.repo_root) / "upstream" / "gsplat.lock.json"
+    by_name = {spec.name: spec for spec in specs}
+
+    raw_dataset_manifest = raw / "dataset_manifest.json"
+    raw_masks_root = raw / "masks"
+    raw_mask_manifest = raw_masks_root / "mask_manifest.json"
+    raw_person_root = raw / "person_masks"
+    raw_person_manifest = raw_person_root / "person_mask_manifest.json"
+    raw_split = raw / "split_manifest.json"
+    features_raw = at / "features_raw"
+    features = at / "features"
+    triangulation = at / "triangulation"
+    solve = at / "solve"
+    pairs = at / "pairs.txt"
+
+    def retarget(part: str) -> str:
+        """A path under the training tier, moved to the raw tier."""
+        for source, target in (
+            (str(dataset_manifest), str(raw_dataset_manifest)),
+            (str(mask_manifest), str(raw_mask_manifest)),
+            (str(person_root), str(raw_person_root)),
+            (str(masks_root), str(raw_masks_root)),
+            (str(dataset), str(raw)),
+        ):
+            if part == source or part.startswith(source + os.sep):
+                return target + part[len(source):]
+        return part
+
+    def raw_copy(name: str, **changes: object) -> CacheSpec:
+        spec = by_name[name]
+        fields_: dict[str, object] = {
+            "name": f"raw_{name}",
+            "title": f"{spec.title} (raw poses, AT input)",
+            "command": tuple(retarget(part) for part in spec.command),
+            "manifest": Path(retarget(str(spec.manifest))),
+            "root": None if spec.root is None else Path(retarget(str(spec.root))),
+            "depends_on": tuple(f"raw_{dep}" for dep in spec.depends_on),
+            "bindings": tuple(
+                replace(binding, depends_on=f"raw_{binding.depends_on}") for binding in spec.bindings
+            ),
+            "estimated_minutes": scale.minutes(f"raw_{name}"),
+            "output_gib": scale.gib(f"raw_{name}"),
+        }
+        fields_.update(changes)
+        return replace(spec, **fields_)
+
+    def fresh(output: Path, *command: str) -> tuple[str, ...]:
+        return (
+            python, "-m", "cloudstudio3dgs_sdk.ingest.at_steps", "fresh",
+            "--output", str(output), "--work-root", str(work_root), "--", *command,
+        )
+
+    split_spec = by_name["split_manifest"]
+    raw_tier = [
+        raw_copy("dataset_manifest"),
+        raw_copy("mask_manifest"),
+        raw_copy("person_mask_manifest"),
+        raw_copy(
+            "split_manifest",
+            command=tuple(
+                str(raw_split) if part == str(split_spec.manifest) else retarget(part) for part in split_spec.command
+            ),
+            manifest=raw_split,
+            root=raw,
+        ),
+    ]
+    at_steps = [
+        CacheSpec(
+            name="at_pairs",
+            title="AT image pairs: stereo, temporal and loop neighbours",
+            device=CPU,
+            builder="tools/build_independent_at_pairs.py",
+            command=(
+                python, profile.tool("build_independent_at_pairs.py"),
+                "--manifest", str(raw_dataset_manifest),
+                "--output", str(at / "pairs_report.json"),
+                "--pairs", str(pairs),
+            ),
+            manifest=at / "pairs_report.json",
+            root=at,
+            sha_key="manifest_sha256",
+            depends_on=("raw_dataset_manifest",),
+            bindings=(Binding("dataset_manifest_sha256", "raw_dataset_manifest"),),
+            estimated_minutes=scale.minutes("at_pairs"),
+            cost_basis="measured (house0305: 443 rig frames -> 4695 pairs in seconds)",
+            output_gib=scale.gib("at_pairs"),
+        ),
+        CacheSpec(
+            name="at_features_raw",
+            title="ALIKED features + LightGlue matches, unmasked pass",
+            device=GPU,
+            builder="tools/run_hloc_aliked_lightglue.py",
+            command=(
+                python, profile.tool("run_hloc_aliked_lightglue.py"),
+                "--image-dir", str(camera_dir),
+                "--pairs", str(pairs),
+                "--output", str(features_raw),
+                "--require-cuda", "--overwrite",
+            ),
+            manifest=features_raw / "feature_runtime_manifest.json",
+            root=features_raw,
+            sha_key="runtime_manifest_sha256",
+            depends_on=("at_pairs",),
+            estimated_minutes=scale.minutes("at_features_raw"),
+            cost_basis="measured (house0305_at_v2: 886 images extracted in 3 m 18 s, 4695 pairs matched in ~8 m)",
+            output_gib=scale.gib("at_features_raw"),
+            note="the masked pass reuses this pass's keypoints; it cannot run without them",
+        ),
+        CacheSpec(
+            name="at_features",
+            title="ALIKED + LightGlue, keypoints outside circle-valid & ~person dropped, re-matched",
+            device=GPU,
+            builder="tools/run_hloc_aliked_lightglue.py",
+            command=(
+                python, profile.tool("run_hloc_aliked_lightglue.py"),
+                "--image-dir", str(camera_dir),
+                "--pairs", str(pairs),
+                "--output", str(features),
+                "--require-cuda", "--overwrite",
+                "--base-features", str(features_raw / "features-aliked-n16.h5"),
+                "--base-feature-runtime-manifest", str(features_raw / "feature_runtime_manifest.json"),
+                "--dataset-manifest", str(raw_dataset_manifest),
+                "--mask-manifest", str(raw_mask_manifest),
+                "--mask-root", str(raw_masks_root),
+                "--person-mask-manifest", str(raw_person_manifest),
+                "--person-mask-root", str(raw_person_root),
+            ),
+            manifest=features / "feature_runtime_manifest.json",
+            root=features,
+            sha_key="runtime_manifest_sha256",
+            depends_on=("at_features_raw", "raw_dataset_manifest", "raw_mask_manifest", "raw_person_mask_manifest"),
+            bindings=(
+                Binding("feature_filter.dataset_manifest_sha256", "raw_dataset_manifest"),
+                Binding("feature_filter.mask_manifest_sha256", "raw_mask_manifest"),
+                Binding("feature_filter.person_mask_manifest_sha256", "raw_person_mask_manifest"),
+            ),
+            estimated_minutes=scale.minutes("at_features"),
+            cost_basis="measured (house0305_at_v2: ~8 min re-match + ~5 min mask filter)",
+            output_gib=scale.gib("at_features"),
+        ),
+        CacheSpec(
+            name="at_triangulation",
+            title="Known-pose triangulation (pycolmap)",
+            device=CPU,
+            builder="tools/run_hloc_triangulation.py",
+            command=fresh(
+                triangulation,
+                python, profile.tool("run_hloc_triangulation.py"),
+                "--image-dir", str(camera_dir),
+                "--pairs", str(pairs),
+                "--features", str(features / "features-aliked-n16.h5"),
+                "--matches", str(features / "matches-aliked-lightglue.h5"),
+                "--feature-runtime-manifest", str(features / "feature_runtime_manifest.json"),
+                "--dataset-manifest", str(raw_dataset_manifest),
+                "--output", str(triangulation),
+            ),
+            manifest=triangulation / "triangulation_runtime_manifest.json",
+            root=triangulation,
+            sha_key="triangulation_manifest_sha256",
+            depends_on=("at_features",),
+            bindings=(
+                Binding("inputs.feature_runtime_manifest_sha256", "at_features"),
+                Binding("inputs.dataset_manifest_sha256", "raw_dataset_manifest"),
+            ),
+            estimated_minutes=scale.minutes("at_triangulation"),
+            cost_basis="measured (house0305_at_v2: 14:33:42 -> 14:38:47)",
+            output_gib=scale.gib("at_triangulation"),
+        ),
+        CacheSpec(
+            name="at_solve",
+            title="Independent AT: POS-prior BA with one shared KB4 focal per camera",
+            device=CPU,
+            builder="tools/run_independent_at.py",
+            command=fresh(
+                solve,
+                python, profile.tool("run_independent_at.py"),
+                "--model", str(triangulation / "sfm"),
+                "--manifest", str(raw_dataset_manifest),
+                "--output", str(solve),
+                "--triangulation-runtime-manifest", str(triangulation / "triangulation_runtime_manifest.json"),
+                "--intrinsic-outer-iterations", "80",
+                "--intrinsic-convergence-tol", "1e-6",
+            ),
+            manifest=solve / "at_report.json",
+            root=solve,
+            sha_key="report_sha256",
+            depends_on=("at_triangulation", "raw_dataset_manifest"),
+            bindings=(
+                Binding("dataset_manifest_sha256", "raw_dataset_manifest"),
+                Binding("triangulation_identity.triangulation_manifest_sha256", "at_triangulation"),
+            ),
+            estimated_minutes=scale.minutes("at_solve"),
+            cost_basis="estimated (at_v7c converged at outer iteration 55 of 80; wall time not recorded)",
+            output_gib=scale.gib("at_solve"),
+            note="exit 2 when not converged: prepare refuses rather than train on an unconverged AT",
+        ),
+        CacheSpec(
+            name="timesync_model",
+            title="Time-sync model: short raw-pose whole-scene run (3000 steps, factor 4)",
+            device=GPU,
+            builder="cloudstudio3dgs_sdk.ingest.at_steps timesync-model",
+            command=(
+                python, "-m", "cloudstudio3dgs_sdk.ingest.at_steps", "timesync-model",
+                "--dataset-manifest", str(raw_dataset_manifest),
+                "--split-manifest", str(raw_split),
+                "--mask-manifest", str(raw_mask_manifest),
+                "--mask-root", str(raw_masks_root),
+                "--person-mask-manifest", str(raw_person_manifest),
+                "--person-mask-root", str(raw_person_root),
+                "--recording-root", str(profile.recording_root),
+                "--run-dir", str(profile.source_run_dir),
+                "--gsplat-lock", str(gsplat_lock),
+                "--output", str(at / "timesync_model"),
+            ),
+            manifest=at / "timesync_model" / "timesync_model.json",
+            root=at / "timesync_model",
+            sha_key="sdk_step_manifest_sha256",
+            depends_on=("raw_dataset_manifest", "raw_mask_manifest", "raw_person_mask_manifest", "raw_split_manifest"),
+            bindings=(Binding("dataset_manifest_sha256", "raw_dataset_manifest"),),
+            estimated_minutes=scale.minutes("timesync_model"),
+            cost_basis="estimated (house0614 runbook A1: 3000 steps, factor 4, cap 1M)",
+            output_gib=scale.gib("timesync_model"),
+        ),
+        CacheSpec(
+            name="timesync",
+            title="Camera-time sync audit (render sweep -10..+20 ms)",
+            device=GPU,
+            builder="cloudstudio3dgs_sdk.ingest.at_steps timesync-audit",
+            command=(
+                python, "-m", "cloudstudio3dgs_sdk.ingest.at_steps", "timesync-audit",
+                "--model-manifest", str(at / "timesync_model" / "timesync_model.json"),
+                "--dataset-manifest", str(raw_dataset_manifest),
+                "--output", str(at / "timesync"),
+            ),
+            manifest=at / "timesync" / "time_sync_step.json",
+            root=at / "timesync",
+            sha_key="sdk_step_manifest_sha256",
+            depends_on=("timesync_model",),
+            bindings=(Binding("base_dataset_manifest_sha256", "raw_dataset_manifest"),),
+            estimated_minutes=scale.minutes("timesync"),
+            cost_basis="estimated (house0305 first pass at factor 2, 40 frames: ~19 min)",
+            output_gib=scale.gib("timesync"),
+            note="a non-zero best offset refuses: the frontend gate only admits 0 ms",
+        ),
+    ]
+    training_manifest = CacheSpec(
+        name="dataset_manifest",
+        title="Training manifest: the capture with AT poses (and refined KB4) and its lineage",
+        device=CPU,
+        builder="tools/build_ba_training_manifest.py",
+        command=(
+            python, profile.tool("build_ba_training_manifest.py"),
+            "--manifest", str(raw_dataset_manifest),
+            "--split-manifest", str(raw_split),
+            "--independent-at-report", str(solve / "at_report.json"),
+            "--candidate-model", str(solve / "candidate_model"),
+            "--output", str(dataset_manifest),
+            "--force",
+        ),
+        manifest=dataset_manifest,
+        root=dataset,
+        sha_key="manifest_sha256",
+        depends_on=("at_solve", "raw_split_manifest", "timesync"),
+        bindings=(
+            Binding("training_lineage.base_dataset_manifest_sha256", "raw_dataset_manifest"),
+            Binding("training_lineage.independent_at_report_sha256", "at_solve"),
+            Binding("training_lineage.split_manifest_sha256", "raw_split_manifest"),
+        ),
+        estimated_minutes=0.5,
+        cost_basis="measured (seconds)",
+        output_gib=0.002,
+    )
+    person_rebind = replace(
+        by_name["person_mask_manifest"],
+        title="Person masks rebound to the training manifest (no second Mask R-CNN pass)",
+        device=CPU,
+        builder="tools/rebind_person_mask_base.py",
+        command=fresh(
+            person_root,
+            python, profile.tool("rebind_person_mask_base.py"),
+            "--person-mask-manifest", str(raw_person_manifest),
+            "--base-mask-manifest", str(mask_manifest),
+            "--dataset-manifest", str(dataset_manifest),
+            "--output", str(person_root),
+        ),
+        depends_on=("dataset_manifest", "mask_manifest", "raw_person_mask_manifest"),
+        estimated_minutes=1.0,
+        cost_basis="estimated (re-signs the raw person masks against the training tier)",
+    )
+    rewired: list[CacheSpec] = [*raw_tier, *at_steps]
+    for spec in specs:
+        if spec.name == "dataset_manifest":
+            rewired.append(training_manifest)
+        elif spec.name == "person_mask_manifest":
+            rewired.append(person_rebind)
+        else:
+            rewired.append(spec)
+    return rewired
 
 
 def _topological(specs: Sequence[CacheSpec]) -> list[CacheSpec]:
@@ -1215,7 +1603,10 @@ __all__ = [
     "CacheProfile",
     "CacheSpec",
     "CacheStatus",
+    "AT_ROUTE_CACHES",
     "PLAN_BUDGETED_CACHES",
+    "POSE_ROUTE_AT",
+    "POSE_ROUTE_RAW",
     "REFERENCE_COSTS",
     "SceneScale",
     "build_cache_specs",

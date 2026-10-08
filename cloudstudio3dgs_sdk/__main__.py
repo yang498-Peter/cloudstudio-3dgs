@@ -136,6 +136,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="signed mipmap readiness gate produced by the gate tool chain against this work root's caches",
     )
     _add_asset_flags(fresh)
+    _add_pose_route_flag(fresh)
     _add_env_flag(run)
 
     pre = sub.add_parser("preflight", help="host report only; runs nothing")
@@ -149,6 +150,7 @@ def build_parser() -> argparse.ArgumentParser:
     pre.add_argument("--no-gpu", action="store_true", help="do not require a CUDA device (prepare-only host)")
     pre.add_argument("--adapter", default=None, help="ingest adapter name; default: detect from the dataset")
     _add_asset_flags(pre)
+    _add_pose_route_flag(pre)
     _add_env_flag(pre)
     pre.add_argument(
         "--run-dir",
@@ -255,6 +257,19 @@ def _load_env_script(script: Path) -> None:
     os.environ.update(load_env_script(script))
 
 
+def _add_pose_route_flag(parser) -> None:
+    parser.add_argument(
+        "--pose-route",
+        choices=("independent_at", "raw_capture_poses"),
+        default="independent_at",
+        help=(
+            "independent_at (default): features -> triangulation -> independent AT -> signed gate "
+            "chain, the route house0305's deliveries trained on; raw_capture_poses: train on the "
+            "capture's own poses (faster, quality bounded by them)"
+        ),
+    )
+
+
 def _add_env_flag(parser) -> None:
     parser.add_argument("--env-script", type=Path, default=None,
                         help=f"cmd script that sets up CUDA/compilers for gsplat (env {ENV_SCRIPT_VARIABLE})")
@@ -290,6 +305,7 @@ def _project(args: argparse.Namespace, stream) -> Project:
         run_dir=getattr(args, "run_dir", None),
         pipeline_gate=getattr(args, "pipeline_gate", None),
         env_script=_env_script(args),
+        pose_route=getattr(args, "pose_route", None),
         assets={
             "person_weights": getattr(args, "person_weights", None),
             "da2_model_source": getattr(args, "da2_source", None),

@@ -106,6 +106,11 @@ def _observations(args: argparse.Namespace, output: Path):
         "dataset_manifest_sha256": str(manifest["dataset_manifest_sha256"]),
         "lidar_depth_manifest_sha256": str(manifest["lidar_depth_manifest_sha256"]),
         "face4_observation_manifest_sha256": str(manifest["face4_observation_manifest_sha256"]),
+        # The surface tile gate compares these two with its own bindings
+        # (cloudstudio_3dgs/pipeline/mipmap_gate.py advance_spatial_tile_gate_surface_only);
+        # without them an SDK plan cannot be gated, only trained on raw poses.
+        "training_dataset_manifest_sha256": str(manifest["dataset_manifest_sha256"]),
+        "face4_train_manifest_sha256": str((manifest.get("face_manifest_sha256_by_split") or {}).get("train", "")),
     }
     return train_table, list(manifest["train_view_ids"]), str(manifest["point_cloud_sha256"]), bindings
 

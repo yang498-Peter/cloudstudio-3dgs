@@ -31,7 +31,7 @@ from typing import Any, Callable, Mapping, Sequence
 
 from tools.pipeline import _timestamp, _write_json_atomic, file_sha256, read_ply_vertex_count
 
-from cloudstudio3dgs_sdk.bundle import PreparedScene, load_dataset_bundle
+from cloudstudio3dgs_sdk.bundle import POSE_ROUTE_RAW, PreparedScene, load_dataset_bundle
 from cloudstudio3dgs_sdk.discover import DatasetEstimate, estimate_dataset_summary
 from cloudstudio3dgs_sdk.ingest.errors import GpuStepRequired, IngestError
 from cloudstudio3dgs_sdk.plan import (
@@ -263,6 +263,7 @@ class Project:
         pipeline_gate: Path | str | None = None,
         assets: Mapping[str, Path | str | None] | None = None,
         env_script: Path | str | None = None,
+        pose_route: str | None = None,
     ) -> None:
         self.dataset_root = Path(dataset_root)
         self.work_root = Path(work_root)
@@ -281,6 +282,9 @@ class Project:
         # loads it at start-up (__main__); here it is recorded so tools/pipeline.py loads it for
         # every training step too, however the SDK itself was launched.
         self.env_script = Path(env_script) if env_script else None
+        # How a fresh capture gets its poses: independent_at (raw tier -> AT -> training
+        # manifest -> signed gate chain) or raw_capture_poses (the capture's own, no gate).
+        self.pose_route = pose_route or POSE_ROUTE_RAW
         self.runner = runner or SubprocessRunner(repo_root=self.repo_root)
         self.probes = probes
         self.vram_gib = vram_gib
@@ -432,6 +436,7 @@ class Project:
             vram_gib=self.vram_gib,
             delivery_tag=self.delivery_tag,
             stages=stages,
+            pose_route=self.pose_route,
         )
 
     def preflight(self, *, require_gpu: bool = True, allow_estimate: bool = False) -> PreflightReport:
@@ -445,6 +450,7 @@ class Project:
             probes=self.probes,
             require_gpu=require_gpu,
             gpu_cache_assets=self.gpu_cache_assets() if fresh else None,
+            pose_route=self.pose_route if fresh else None,
         )
 
     # -- the fail-closed chain -------------------------------------------
@@ -729,6 +735,7 @@ class Project:
                     pipeline_gate=self.pipeline_gate,
                     vram_gib=self.vram_gib,
                     assets=self.gpu_cache_assets(),
+                    pose_route=self.pose_route,
                     log=self.say,
                 )
                 break

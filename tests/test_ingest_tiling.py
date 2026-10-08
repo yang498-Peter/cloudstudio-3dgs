@@ -469,6 +469,7 @@ class TileCliViewBindingTest(unittest.TestCase):
             "dataset_manifest_sha256": "d" * 64,
             "lidar_depth_manifest_sha256": "e" * 64,
             "face4_observation_manifest_sha256": "f" * 64,
+            "face_manifest_sha256_by_split": {"train": "9" * 64},
             "point_cloud_sha256": "c" * 64,
             "train_view_ids": self.view_ids,
         }
@@ -503,6 +504,36 @@ class TileCliViewBindingTest(unittest.TestCase):
             self.assertGreater(tile["valid_view_count"], 0)
             self.assertTrue({view["sample_id"] for view in tile["views"]} <= set(self.view_ids))
         self.assertEqual(verify_adaptive_tile_plan(plan), plan["tile_plan_manifest_sha256"])
+
+    def test_the_plan_passes_the_real_surface_tile_gate(self) -> None:
+        # advance_spatial_tile_gate_surface_only compares training dataset, face4 train and LiDAR
+        # depth bindings with the gate's; an SDK plan without them could not be gated at all.
+        from cloudstudio_3dgs.pipeline import mipmap_gate
+
+        code, _ = self._run(_observation_table(self.points, images=4), *self._binding_args())
+        self.assertEqual(code, 0)
+        plan = json.loads(self.output.read_text(encoding="utf-8"))
+        gate = mipmap_gate.sign_gate({
+            "schema_version": mipmap_gate.GATE_SCHEMA_VERSION,
+            "profile": mipmap_gate.GATE_PROFILE,
+            "status": mipmap_gate.LIDAR_DEPTH_READY_STATUS,
+            "training_allowed": False,
+            "completed_stages": list(mipmap_gate.ORDERED_STAGES[:12]),
+            "bindings": {
+                "training_dataset_manifest_sha256": "d" * 64,
+                "face4_train_manifest_sha256": "9" * 64,
+                "lidar_depth_manifest_sha256": "e" * 64,
+            },
+        })
+        advanced = mipmap_gate.advance_spatial_tile_gate_surface_only(
+            gate, plan, deferral_reason="surface route test"
+        )
+        self.assertEqual(advanced["bindings"]["spatial_tile_plan_manifest_sha256"], plan["tile_plan_manifest_sha256"])
+        gate["bindings"]["face4_train_manifest_sha256"] = "8" * 64
+        with self.assertRaises(ValueError):
+            mipmap_gate.advance_spatial_tile_gate_surface_only(
+                mipmap_gate.sign_gate(gate), plan, deferral_reason="surface route test"
+            )
 
     def test_partial_binding_inputs_are_refused(self) -> None:
         with self.assertRaises(SystemExit) as caught:
