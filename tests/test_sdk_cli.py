@@ -20,6 +20,7 @@ from cloudstudio3dgs_sdk.__main__ import (
     EXIT_OK,
     EXIT_REFUSED,
     _project,
+    apply_invocation,
     build_parser,
     main,
     parse_prior_checkpoints,
@@ -75,7 +76,10 @@ class ParserTests(unittest.TestCase):
         self.parser = build_parser()
 
     def test_run_requires_dataset_and_work(self) -> None:
-        args = self.parser.parse_args(["run", "--dataset", "d", "--work", "w"])
+        with tempfile.TemporaryDirectory() as work:
+            args = self.parser.parse_args(["run", "--dataset", "d", "--work", work])
+            # Resolved after parsing, so a work root's recorded profile wins; none recorded here.
+            apply_invocation(args, io.StringIO())
         self.assertEqual(args.command, "run")
         # The default is the recommended recipe (profile.DEFAULT_PROFILE): b5sky since the
         # 2026-09-15 finding that the fill layer answered a measurement defect. b5fill2 stays

@@ -54,6 +54,70 @@ def _sky_layer_from_report(path: Path, payload: dict, gaussian_count: int) -> di
     return report
 
 
+def _keep_mask(payload: dict, opacity_logits, *, layer: str, sky_layer_report: Path | None, min_opacity: float):
+    """The rows an export writes: the layer partition, then the opacity threshold."""
+    import numpy as np
+
+    rows = len(opacity_logits)
+    if layer not in {"all", "surface", "sky"}:
+        raise ValueError("layer must be one of: all, surface, sky")
+    keep = np.ones(rows, dtype=bool)
+    if layer != "all":
+        sky_layer = payload.get("sky_layer")
+        if not isinstance(sky_layer, dict) and sky_layer_report is not None:
+            sky_layer = _sky_layer_from_report(sky_layer_report, payload, rows)
+        if not isinstance(sky_layer, dict):
+            raise ValueError(
+                "surface/sky export requires checkpoint sky_layer metadata "
+                "or a signed sky layer report"
+            )
+        sky_start = int(sky_layer.get("sky_gaussian_start", -1))
+        sky_count = int(sky_layer.get("sky_gaussian_count", -1))
+        if sky_start < 0 or sky_count <= 0 or sky_start + sky_count != rows:
+            raise ValueError("checkpoint sky_layer boundary is inconsistent with params")
+        if layer == "surface":
+            keep[sky_start:] = False
+        else:
+            keep[:sky_start] = False
+    if min_opacity > 0.0:
+        keep &= 1.0 / (1.0 + np.exp(-opacity_logits)) >= min_opacity
+    return keep
+
+
+def _load_params(checkpoint_path: Path) -> tuple[dict, dict]:
+    import torch
+
+    payload = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
+    params = payload.get("params") or payload.get("splats")
+    if params is None:
+        raise ValueError("checkpoint has no params/splats dictionary")
+    return payload, params
+
+
+def count_checkpoint_rows(
+    checkpoint_path: Path,
+    min_opacities: list[float],
+    *,
+    layer: str = "all",
+    sky_layer_report: Path | None = None,
+) -> dict:
+    """How many rows an export at each threshold would write, without writing any.
+
+    Same row selection as :func:`export_checkpoint_ply` (the shared ``_keep_mask``), from one
+    load of the checkpoint. A delivery's threshold control only ever read the vertex counts of
+    its control PLYs; at 30M+ gaussians those PLYs were ~4 GB each.
+    """
+    payload, params = _load_params(checkpoint_path)
+    opacity_logits = params["opacities"].detach().float().numpy().reshape(-1)
+    counts = []
+    for threshold in min_opacities:
+        keep = _keep_mask(
+            payload, opacity_logits, layer=layer, sky_layer_report=sky_layer_report, min_opacity=float(threshold)
+        )
+        counts.append({"min_opacity": float(threshold), "gaussians_written": int(keep.sum())})
+    return {"gaussians_total": int(len(opacity_logits)), "layer": layer, "counts": counts}
+
+
 def export_checkpoint_ply(
     checkpoint_path: Path,
     output_path: Path,
@@ -67,10 +131,7 @@ def export_checkpoint_ply(
     import numpy as np
     import torch
 
-    payload = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
-    params = payload.get("params") or payload.get("splats")
-    if params is None:
-        raise ValueError("checkpoint has no params/splats dictionary")
+    payload, params = _load_params(checkpoint_path)
 
     means = params["means"].detach().float().numpy()
     scales_log = params["scales"].detach().float().numpy()
@@ -101,28 +162,9 @@ def export_checkpoint_ply(
         f_dc = (rgb - 0.5) / SH_C0
         sh_rest = np.zeros((len(means), 0, 3), dtype=np.float32)
 
-    keep = np.ones(len(means), dtype=bool)
-    if layer != "all":
-        sky_layer = payload.get("sky_layer")
-        if not isinstance(sky_layer, dict) and sky_layer_report is not None:
-            sky_layer = _sky_layer_from_report(
-                sky_layer_report, payload, len(means)
-            )
-        if not isinstance(sky_layer, dict):
-            raise ValueError(
-                "surface/sky export requires checkpoint sky_layer metadata "
-                "or a signed sky layer report"
-            )
-        sky_start = int(sky_layer.get("sky_gaussian_start", -1))
-        sky_count = int(sky_layer.get("sky_gaussian_count", -1))
-        if sky_start < 0 or sky_count <= 0 or sky_start + sky_count != len(means):
-            raise ValueError("checkpoint sky_layer boundary is inconsistent with params")
-        if layer == "surface":
-            keep[sky_start:] = False
-        else:
-            keep[:sky_start] = False
-    if min_opacity > 0.0:
-        keep &= 1.0 / (1.0 + np.exp(-opacity_logits)) >= min_opacity
+    keep = _keep_mask(
+        payload, opacity_logits, layer=layer, sky_layer_report=sky_layer_report, min_opacity=min_opacity
+    )
     count = int(keep.sum())
     if count == 0:
         raise ValueError("opacity filter removed every gaussian")
@@ -192,7 +234,31 @@ def main() -> int:
         type=Path,
         help="signed augmentation report when a trained warm-start omitted layer metadata",
     )
+    parser.add_argument(
+        "--count-thresholds",
+        type=float,
+        nargs="+",
+        metavar="MIN_OPACITY",
+        help="write no PLY: record in --output (JSON) how many gaussians an export at each "
+        "threshold would keep",
+    )
     args = parser.parse_args()
+    if args.count_thresholds:
+        if args.surface_gaussian_count is not None or args.max_surface_scale_m is not None:
+            parser.error("--count-thresholds counts rows; the surface scale cap does not change them")
+        counted = count_checkpoint_rows(
+            args.checkpoint, args.count_thresholds, layer=args.layer, sky_layer_report=args.sky_layer_report
+        )
+        args.output.parent.mkdir(parents=True, exist_ok=True)
+        temporary = args.output.with_name(args.output.name + ".tmp")
+        temporary.write_text(json.dumps(counted, indent=2) + "\n", encoding="utf-8")
+        temporary.replace(args.output)
+        print(
+            "counted "
+            + ", ".join(f"{row['gaussians_written']} at {row['min_opacity']:g}" for row in counted["counts"])
+            + f" of {counted['gaussians_total']} gaussians -> {args.output}"
+        )
+        return 0
     report = export_checkpoint_ply(
         args.checkpoint,
         args.output,

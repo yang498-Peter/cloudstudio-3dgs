@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import tempfile
 import unittest
+from unittest import mock
 import hashlib
 import json
 import math
+import sys
 from pathlib import Path
 
 import torch
@@ -144,6 +146,63 @@ class ExportGaussianPlyLayerTests(unittest.TestCase):
             self.assertAlmostEqual(float(records["scale_0"][0]), math.log(0.08), places=6)
             self.assertEqual(float(records["scale_0"][3]), 0.0)
 
+
+
+class CountOnlyTests(unittest.TestCase):
+    """--count-thresholds must count exactly the rows an export at that threshold writes."""
+
+    def make_checkpoint(self, path: Path) -> None:
+        count = 9
+        # Opacities straddling the control thresholds, including values on a threshold.
+        probabilities = torch.tensor([0.001, 0.009, 0.01, 0.02, 0.049, 0.05, 0.3, 0.9, 0.999])
+        payload = {
+            "identity": {"dataset_manifest_sha256": "dataset-sha"},
+            "sky_layer": {"sky_gaussian_start": 6, "sky_gaussian_count": 3},
+            "params": {
+                "means": torch.arange(count * 3, dtype=torch.float32).reshape(count, 3),
+                "scales": torch.zeros((count, 3)),
+                "quats": torch.tensor([[1.0, 0.0, 0.0, 0.0]]).repeat(count, 1),
+                "opacities": torch.logit(probabilities),
+                "sh0": torch.zeros((count, 1, 3)),
+                "shN": torch.zeros((count, 0, 3)),
+            },
+        }
+        torch.save(payload, path)
+
+    def test_counts_equal_the_vertex_counts_of_real_exports(self) -> None:
+        from tools.export_gaussian_ply import count_checkpoint_rows
+
+        thresholds = [0.0, 0.01, 0.05]
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            checkpoint = root / "model.pt"
+            self.make_checkpoint(checkpoint)
+            for layer in ("all", "surface", "sky"):
+                counted = count_checkpoint_rows(checkpoint, thresholds, layer=layer)
+                self.assertEqual(counted["gaussians_total"], 9)
+                for threshold, row in zip(thresholds, counted["counts"]):
+                    output = root / f"{layer}_{threshold:g}.ply"
+                    report = export_checkpoint_ply(checkpoint, output, layer=layer, min_opacity=threshold)
+                    self.assertEqual(row["min_opacity"], threshold)
+                    self.assertEqual(row["gaussians_written"], report["gaussians_written"], (layer, threshold))
+                    self.assertEqual(row["gaussians_written"], _vertex_count(output), (layer, threshold))
+
+    def test_the_cli_writes_counts_and_no_ply(self) -> None:
+        from tools import export_gaussian_ply
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            checkpoint = root / "model.pt"
+            self.make_checkpoint(checkpoint)
+            output = root / "counts" / "threshold_counts.json"
+            argv = ["export_gaussian_ply.py", "--checkpoint", str(checkpoint), "--output", str(output),
+                    "--count-thresholds", "0", "0.01", "0.05"]
+            with mock.patch.object(sys, "argv", argv), mock.patch("builtins.print"):
+                self.assertEqual(export_gaussian_ply.main(), 0)
+            counted = json.loads(output.read_text(encoding="utf-8"))
+            self.assertEqual([row["min_opacity"] for row in counted["counts"]], [0.0, 0.01, 0.05])
+            self.assertEqual(counted["counts"][0]["gaussians_written"], 9)
+            self.assertEqual(list(root.rglob("*.ply")), [])
 
 if __name__ == "__main__":
     unittest.main()

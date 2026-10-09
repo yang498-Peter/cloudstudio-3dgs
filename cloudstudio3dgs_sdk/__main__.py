@@ -15,6 +15,18 @@ they commit a machine for a day: ``preflight`` prints the host report, and
 that derivation. A real ``run`` does not: it still refuses without a prepare
 manifest, and refuses an estimated summary even if one is handed to it.
 
+A run records what it was started with (``<work>/sdk_state/invocation.json``),
+so after an interruption - a reboot, a killed shell - the same work root
+continues with nothing but its path; a training killed mid-run resumes from
+its own last checkpoint:
+
+    python -m cloudstudio3dgs_sdk run --work <path>
+    python -m cloudstudio3dgs_sdk status --work <path> [--json]
+
+``status`` reads, never runs: stage and step progress judged as a run would
+judge it, the training in flight (step, rate, ETA), the GPU lease, the newest
+log, and the time and disk still needed.
+
 ``adopt`` writes that prepare manifest for a scene that was prepared before
 the SDK existed, from its as-run trainer configs:
 
@@ -73,13 +85,18 @@ def build_parser() -> argparse.ArgumentParser:
     sub = parser.add_subparsers(dest="command", required=True)
 
     run = sub.add_parser("run", help="plan, preflight and execute the stages for one dataset")
-    run.add_argument("--dataset", required=True, type=Path, help="customer dataset root")
+    run.add_argument(
+        "--dataset",
+        type=Path,
+        default=None,
+        help="customer dataset root (default: the one this work root's last run recorded)",
+    )
     run.add_argument("--work", required=True, type=Path, help="work root; all SDK output lands here")
     run.add_argument(
         "--profile",
-        default=DEFAULT_PROFILE,
+        default=None,
         choices=sorted(PROFILES),
-        help="frozen recipe to run (default: %(default)s)",
+        help=f"frozen recipe to run (default: the recorded one, else {DEFAULT_PROFILE})",
     )
     run.add_argument("--dry-run", action="store_true", help="print the execution plan and exit")
     run.add_argument(
@@ -136,8 +153,17 @@ def build_parser() -> argparse.ArgumentParser:
         help="signed mipmap readiness gate produced by the gate tool chain against this work root's caches",
     )
     _add_asset_flags(fresh)
-    _add_pose_route_flag(fresh)
+    _add_pose_route_flag(fresh, default=None)
     _add_env_flag(run)
+
+    status = sub.add_parser(
+        "status",
+        help="where a work root stands: stages, steps, the training in flight, time and disk left",
+    )
+    status.add_argument("--work", required=True, type=Path)
+    status.add_argument("--dataset", type=Path, default=None, help="default: the recorded one")
+    status.add_argument("--profile", default=None, choices=sorted(PROFILES), help="default: the recorded one")
+    status.add_argument("--json", action="store_true", help="print the status as JSON")
 
     pre = sub.add_parser("preflight", help="host report only; runs nothing")
     pre.add_argument("--dataset", required=True, type=Path)
@@ -257,17 +283,108 @@ def _load_env_script(script: Path) -> None:
     os.environ.update(load_env_script(script))
 
 
-def _add_pose_route_flag(parser) -> None:
+DEFAULT_POSE_ROUTE = "independent_at"
+
+
+def _add_pose_route_flag(parser, *, default: str | None = DEFAULT_POSE_ROUTE) -> None:
     parser.add_argument(
         "--pose-route",
         choices=("independent_at", "raw_capture_poses"),
-        default="independent_at",
+        default=default,
         help=(
             "independent_at (default): features -> triangulation -> independent AT -> signed gate "
             "chain, the route house0305's deliveries trained on; raw_capture_poses: train on the "
             "capture's own poses (faster, quality bounded by them)"
         ),
     )
+
+
+# -- the recorded invocation ---------------------------------------------------
+#
+# A delivery runs for ~40 hours and the way to continue one after a reboot is to run the same
+# command again. ``run`` records what it was started with in <work>/sdk_state/invocation.json,
+# and a later ``run`` or ``status`` on that work root fills every flag it was not given from
+# there, so ``run --work W`` alone continues where the last run stopped.
+
+INVOCATION_NAME = "invocation.json"
+#: Flags a later run inherits, and whether each holds a path.
+RECORDED_FLAGS = {
+    "dataset": True,
+    "profile": False,
+    "pose_route": False,
+    "adapter": False,
+    "run_dir": True,
+    "pipeline_gate": True,
+    "env_script": True,
+    "vram_gib": False,
+    "python": True,
+    "repo_root": True,
+    "scene_tag": False,
+    "delivery_tag": False,
+    "person_weights": True,
+    "da2_source": True,
+    "da2_checkpoint": True,
+    "prior_checkpoint": False,
+}
+#: The asset flags' environment fallbacks (project.GPU_CACHE_ASSET_ENV, by flag name).
+ASSET_FLAG_ENV = {
+    "person_weights": "CS3DGS_PERSON_WEIGHTS",
+    "da2_source": "CS3DGS_DA2_SOURCE",
+    "da2_checkpoint": "CS3DGS_DA2_CHECKPOINT",
+}
+
+
+def invocation_path(work: Path) -> Path:
+    return Path(work) / "sdk_state" / INVOCATION_NAME
+
+
+def read_invocation(work: Path) -> dict | None:
+    try:
+        payload = json.loads(invocation_path(work).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    return payload if isinstance(payload, dict) else None
+
+
+def apply_invocation(args: argparse.Namespace, stream) -> list[str]:
+    """Fill the flags this command was not given from the work root's recorded invocation."""
+    recorded = read_invocation(args.work) or {}
+    filled: list[str] = []
+    for flag, is_path in RECORDED_FLAGS.items():
+        if not hasattr(args, flag) or getattr(args, flag) not in (None, []):
+            continue
+        value = recorded.get(flag)
+        if value in (None, "", []):
+            continue
+        setattr(args, flag, Path(value) if is_path else value)
+        filled.append(flag)
+    if filled:
+        print(f"using the invocation recorded in {invocation_path(args.work)} for: {', '.join(filled)}", file=stream)
+    if getattr(args, "profile", None) is None:
+        args.profile = DEFAULT_PROFILE
+    if hasattr(args, "pose_route") and args.pose_route is None:
+        args.pose_route = DEFAULT_POSE_ROUTE
+    return filled
+
+
+def record_invocation(args: argparse.Namespace) -> Path:
+    """What this run was started with, resolved (environment fallbacks included)."""
+    from tools.pipeline import _timestamp, _write_json_atomic
+
+    payload: dict = {"schema_version": 1, "recorded_at": _timestamp()}
+    for flag, is_path in RECORDED_FLAGS.items():
+        value = getattr(args, flag, None)
+        if value in (None, []) and flag in ASSET_FLAG_ENV:
+            value = os.environ.get(ASSET_FLAG_ENV[flag]) or None
+        if flag == "env_script":
+            value = _env_script(args)
+        if isinstance(value, Path):
+            value = str(value.resolve()) if is_path else str(value)
+        payload[flag] = value
+    path = invocation_path(args.work)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    _write_json_atomic(path, payload)
+    return path
 
 
 def _add_env_flag(parser) -> None:
@@ -289,10 +406,13 @@ def _project(args: argparse.Namespace, stream) -> Project:
     summary = None
     if getattr(args, "summary", None):
         summary = DatasetSummary.from_json(json.loads(Path(args.summary).read_text(encoding="utf-8")))
+    # run resolves these from the recorded invocation first (apply_invocation); the fallbacks
+    # keep any other caller on the CLI's defaults, never on the library's raw-pose default.
+    pose_route = getattr(args, "pose_route", None) or DEFAULT_POSE_ROUTE
     return Project(
         args.dataset,
         args.work,
-        get_profile(args.profile),
+        get_profile(args.profile or DEFAULT_PROFILE),
         repo_root=getattr(args, "repo_root", None),
         python=getattr(args, "python", None),
         scene_tag=getattr(args, "scene_tag", None),
@@ -305,13 +425,27 @@ def _project(args: argparse.Namespace, stream) -> Project:
         run_dir=getattr(args, "run_dir", None),
         pipeline_gate=getattr(args, "pipeline_gate", None),
         env_script=_env_script(args),
-        pose_route=getattr(args, "pose_route", None),
+        pose_route=pose_route,
         assets={
             "person_weights": getattr(args, "person_weights", None),
             "da2_model_source": getattr(args, "da2_source", None),
             "da2_checkpoint": getattr(args, "da2_checkpoint", None),
         },
     )
+
+
+def _status(args: argparse.Namespace, stream) -> int:
+    from cloudstudio3dgs_sdk.status import collect_status, render_status
+
+    # The dataset root only matters to a plan not yet prepared; a prepared work root plans from
+    # its prepare manifest, so the work root stands in when nothing was recorded.
+    project = Project(args.dataset or args.work, args.work, get_profile(args.profile), stream=stream)
+    status = collect_status(project, invocation=read_invocation(args.work))
+    if args.json:
+        print(json.dumps(status, indent=1, ensure_ascii=False, default=str), file=stream)
+    else:
+        print(render_status(status), file=stream)
+    return EXIT_OK
 
 
 def _adopt(args: argparse.Namespace, stream) -> int:
@@ -371,6 +505,10 @@ def main(argv: Sequence[str] | None = None, *, stream=None) -> int:
             pass
     parser = build_parser()
     args = parser.parse_args(argv)
+    if args.command in ("run", "status"):
+        apply_invocation(args, stream)
+        if args.command == "run" and args.dataset is None:
+            parser.error(f"run needs --dataset: {invocation_path(args.work)} records no earlier run")
     script = _env_script(args) if args.command in ("run", "preflight") else None
     if script is not None:
         _load_env_script(script)
@@ -398,6 +536,8 @@ def main(argv: Sequence[str] | None = None, *, stream=None) -> int:
     try:
         if args.command == "adopt":
             return _adopt(args, stream)
+        if args.command == "status":
+            return _status(args, stream)
         project = _project(args, stream)
         if args.command == "preflight":
             # Both of these answer questions asked *before* ingestion, so both
@@ -417,6 +557,7 @@ def main(argv: Sequence[str] | None = None, *, stream=None) -> int:
                     )
                     print(f"plan written to {args.plan_json}", file=stream)
                 return EXIT_OK
+            record_invocation(args)
             results = project.run_all(stages=args.stages, force=args.force)
             for result in results:
                 print(f"{result.stage}: {result.action} {result.reason}".rstrip(), file=stream)

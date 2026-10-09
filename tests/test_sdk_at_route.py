@@ -410,7 +410,12 @@ class CliPoseRouteTest(unittest.TestCase):
     def test_the_cli_defaults_to_the_at_route(self) -> None:
         from cloudstudio3dgs_sdk import __main__ as cli
 
-        args = cli.build_parser().parse_args(["run", "--dataset", "d", "--work", "w"])
+        sink = open(os.devnull, "w", encoding="utf-8")
+        self.addCleanup(sink.close)
+        with tempfile.TemporaryDirectory() as work:
+            # Resolved after parsing, so a work root's recorded route can win; none here.
+            args = cli.build_parser().parse_args(["run", "--dataset", "d", "--work", work])
+            cli.apply_invocation(args, sink)
         self.assertEqual(args.pose_route, AT)
         args = cli.build_parser().parse_args(["run", "--dataset", "d", "--work", "w", "--pose-route", "raw_capture_poses"])
         with mock.patch.object(cli, "Project") as project:

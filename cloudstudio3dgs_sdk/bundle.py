@@ -235,10 +235,57 @@ class FreshBuildBlocked(Exception):
         super().__init__(f"{cache}: {reason}\n  " + " ".join(command))
 
 
-def _subprocess_runner(command: Sequence[str]) -> int:
-    import subprocess
+class CommandLogRunner:
+    """The default runner of a fresh ingest: one log per cache, run from the checkout.
 
-    return subprocess.run(list(command)).returncode
+    Each command's output goes to ``<log_dir>/prepare_<label>.log`` (appended, under a ``$``
+    line naming the command), the way the GPU caches and the plan's steps already log. The
+    command runs from ``repo_root`` with it on PYTHONPATH: several caches are ``python -m``
+    modules, which otherwise resolve only when the SDK happens to start in the checkout.
+    """
+
+    def __init__(self, log_dir: Path, *, repo_root: Path) -> None:
+        self.log_dir = Path(log_dir)
+        self.repo_root = Path(repo_root)
+
+    def log_path(self, label: str) -> Path:
+        safe = "".join(character if character.isalnum() or character in "-_." else "_" for character in label)
+        return self.log_dir / f"prepare_{safe or 'ingest'}.log"
+
+    def labelled(self, label: str) -> Callable[[Sequence[str]], int]:
+        return lambda command: self.run(command, label)
+
+    def __call__(self, command: Sequence[str]) -> int:
+        return self.run(command, "ingest")
+
+    def run(self, command: Sequence[str], label: str) -> int:
+        import os
+        import subprocess
+
+        log = self.log_path(label)
+        log.parent.mkdir(parents=True, exist_ok=True)
+        environment = dict(os.environ)
+        environment.setdefault("PYTHONIOENCODING", "utf-8")
+        environment["PYTHONPATH"] = os.pathsep.join(
+            part for part in (str(self.repo_root), environment.get("PYTHONPATH", "")) if part
+        )
+        with log.open("ab") as handle:
+            handle.write(f"\n$ {' '.join(str(part) for part in command)}\n".encode("utf-8"))
+            handle.flush()
+            return subprocess.run(
+                [str(part) for part in command],
+                cwd=str(self.repo_root),
+                env=environment,
+                stdout=handle,
+                stderr=subprocess.STDOUT,
+                check=False,
+            ).returncode
+
+
+def labelled(run: Callable[[Sequence[str]], int], label: str) -> Callable[[Sequence[str]], int]:
+    """``run`` with the name of what it builds, when it keeps per-step logs; else ``run`` itself."""
+    named = getattr(run, "labelled", None)
+    return named(label) if callable(named) else run
 
 
 #: The split-specific caches the held-out battery reads (validation_paths.FACE_KEYS and
@@ -288,7 +335,7 @@ def _build_cpu_half(
             say(f"[prepare] {tag}{spec.name}: needs the GPU")
             continue
         say(f"[prepare] {tag}{spec.name}: building")
-        plan.build(dry_run=False, only=[spec.name], runner=run)
+        plan.build(dry_run=False, only=[spec.name], runner=labelled(run, f"{tag.strip()}_{spec.name}".lstrip("_")))
         built.add(spec.name)
     return pending_gpu
 
@@ -370,10 +417,10 @@ def load_dataset_bundle(
     from cloudstudio3dgs_sdk.ingest.errors import DatasetIncompleteError, GpuStepRequired
 
     say = log or (lambda line: None)
-    run = runner or _subprocess_runner
     dataset_root = Path(dataset_root)
     work = Path(work_root)
     repo = Path(repo_root) if repo_root else Path(__file__).resolve().parents[1]
+    run = runner or CommandLogRunner(work / "logs", repo_root=repo)
     interpreter = str(python) if python else sys.executable
 
     load_kwargs: dict[str, Any] = {}
@@ -465,7 +512,7 @@ def load_dataset_bundle(
             "--with-pca",
             "--seed", "42",
         )
-        code = run(command)
+        code = labelled(run, "global_init")(command)
         if code != 0 or not (global_init_ply.is_file() and global_init_geometry.is_file()):
             raise FreshBuildBlocked("global_init", command, f"build_lidar_init.py exited {code}")
     else:

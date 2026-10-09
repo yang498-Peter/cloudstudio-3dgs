@@ -17,8 +17,15 @@ from cloudstudio_3dgs.training.trainer import train_from_json
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--config", required=True, type=Path)
+    parser.add_argument(
+        "--resume-checkpoint",
+        type=Path,
+        help="continue an interrupted run of this config from its own checkpoint, in its output directory",
+    )
     args = parser.parse_args()
-    manifest = train_from_json(args.config)
+    if args.resume_checkpoint is not None:
+        print(f"resuming from {args.resume_checkpoint}", flush=True)
+    manifest = train_from_json(args.config, resume_checkpoint=args.resume_checkpoint)
     print(
         f"training complete: run={manifest['run_id']}, "
         f"steps={manifest['training']['completed_steps']}, "

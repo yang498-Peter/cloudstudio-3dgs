@@ -49,6 +49,23 @@ class RecordingRunner:
         self.calls.append(step.name)
         if step.name in self.fail_on:
             return 3
+        if "--count-thresholds" in step.command:
+            # export_gaussian_ply.py's count-only mode: a JSON of rows per threshold, no PLY.
+            start = step.command.index("--count-thresholds") + 1
+            thresholds = [float(token) for token in step.command[start:] if not token.startswith("--")]
+            output = Path(step.command[step.command.index("--output") + 1])
+            output.parent.mkdir(parents=True, exist_ok=True)
+            output.write_text(
+                json.dumps(
+                    {
+                        "gaussians_total": 7,
+                        "layer": "all",
+                        "counts": [{"min_opacity": value, "gaussians_written": 7} for value in thresholds],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            return 0
         for index, token in enumerate(step.command):
             if token in ("--output", "--output-checkpoint", "--output-report", "--output-root"):
                 self._make(Path(step.command[index + 1]))
@@ -110,6 +127,10 @@ class ProjectFixture(unittest.TestCase):
         self.runner = RecordingRunner()
         self.dataset = two_tile_dataset()
 
+    def verified_by_stub_pipeline(self, arm: str) -> bool:
+        """The stub runner stands in for tools/pipeline.py, which verifies what it trained."""
+        return (self.work / "runs" / arm / "checkpoints" / "latest.pt").is_file()
+
     def project(self, **overrides) -> Project:
         kwargs = {
             "repo_root": self.repo,
@@ -118,6 +139,7 @@ class ProjectFixture(unittest.TestCase):
             "probes": good_probes(),
             "dataset": self.dataset,
             "stream": open(os.devnull, "w", encoding="utf-8"),
+            "training_verifier": self.verified_by_stub_pipeline,
         }
         kwargs.update(overrides)
         stream = kwargs["stream"]

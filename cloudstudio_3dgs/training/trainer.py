@@ -8,7 +8,7 @@ import math
 import os
 import tempfile
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
 
@@ -5952,7 +5952,13 @@ def train(
     return run_manifest
 
 
-def train_from_json(path: Path) -> dict[str, Any]:
+def train_from_json(path: Path, *, resume_checkpoint: Path | None = None) -> dict[str, Any]:
+    """Train from a JSON config; ``resume_checkpoint`` continues an interrupted run in place.
+
+    The resume is a launch argument rather than a config edit so a frozen arm config keeps its
+    bytes. It is the same field a config can carry, so a config that already names a different
+    checkpoint is refused rather than silently overridden.
+    """
     value = json.loads(Path(path).read_text(encoding="utf-8"))
     expected = value.get("config_manifest_sha256")
     if expected is not None:
@@ -5963,4 +5969,14 @@ def train_from_json(path: Path) -> dict[str, Any]:
         actual = hashlib.sha256(canonical_json_bytes(unsigned)).hexdigest()
         if actual != expected:
             raise ValueError("trainer config manifest signature mismatch")
-    return train(TrainerConfig.from_dict(value))
+    config = TrainerConfig.from_dict(value)
+    if resume_checkpoint is not None:
+        resume_checkpoint = Path(resume_checkpoint)
+        if config.resume_checkpoint is not None and Path(config.resume_checkpoint) != resume_checkpoint:
+            raise ValueError(
+                f"config already resumes from {config.resume_checkpoint}; refusing a second resume source"
+            )
+        # train() validates the config it is given, so every resume rule (smoke runs, warm
+        # start) applies to this one too.
+        config = replace(config, resume_checkpoint=resume_checkpoint)
+    return train(config)

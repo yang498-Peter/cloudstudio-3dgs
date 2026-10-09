@@ -20,6 +20,7 @@ import textwrap
 import time
 import types
 import unittest
+from unittest import mock
 import zipfile
 from pathlib import Path
 
@@ -147,6 +148,11 @@ class CheckpointInspectionTests(unittest.TestCase):
     def setUp(self) -> None:
         self._temporary = tempfile.TemporaryDirectory()
         self.dir = Path(self._temporary.name)
+        # loader=None below means "no torch on this host" (the zip-layout checks). On a
+        # training host torch is importable and would be detected instead, so pin its absence.
+        absent = mock.patch("tools.pipeline._torch_checkpoint_loader", return_value=None)
+        absent.start()
+        self.addCleanup(absent.stop)
 
     def tearDown(self) -> None:
         self._temporary.cleanup()
@@ -406,8 +412,10 @@ class ArmCompletionTests(PipelineFixture):
         old = time.time() - 3600
         os.utime(checkpoint, (old, old))
         before = checkpoint.read_bytes()
-        # A previous pipeline attempt died mid-training: RUNNING with a dead pid.
-        self.ctx.arm_job("armA").set(STATE_RUNNING, "previous attempt", pid=0, started_at=old)
+        # A previous pipeline attempt died mid-training: RUNNING with a dead pid. The checkpoint
+        # predates that attempt too, so it is not the attempt's own finished training (that
+        # case is verified instead of retrained: test_training_resume.OrphanedCompletionTests).
+        self.ctx.arm_job("armA").set(STATE_RUNNING, "previous attempt", pid=0, started_at=old + 600)
         self.runner.train_outcome = "oom"
         self.assertEqual(run_arm(self.ctx, "armA"), 1)
         job = self.ctx.arm_job("armA")

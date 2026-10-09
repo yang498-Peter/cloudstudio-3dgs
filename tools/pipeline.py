@@ -1239,6 +1239,74 @@ def verify_training(
     )
 
 
+#: Job states a previous attempt can have left behind with a usable partial checkpoint.
+#: RUNNING / CHECKPOINTED with a dead pid is a host crash or a killed pipeline (the 2026-09-25
+#: TDR bugcheck left RUNNING); FAILED is a trainer that died, or a fresh launch that met the
+#: leftover checkpoint and refused the non-empty output directory.
+RESUMABLE_JOB_STATES = (STATE_RUNNING, STATE_CHECKPOINTED, STATE_FAILED)
+
+
+@dataclass(frozen=True)
+class ResumePoint:
+    """Where an unfinished training continues from: its own last periodic checkpoint."""
+
+    checkpoint: Path
+    step: int
+    target: int
+    previous_state: str
+
+    def describe(self) -> str:
+        return f"resumed at step {self.step} of {self.target} after a {self.previous_state} attempt"
+
+    def record(self) -> dict[str, Any]:
+        return {
+            "checkpoint": str(self.checkpoint),
+            "step": self.step,
+            "target": self.target,
+            "previous_state": self.previous_state,
+        }
+
+
+def training_resume_point(
+    job: "JobState",
+    *,
+    checkpoint: Path,
+    arm_config: Path,
+    frozen: Path,
+    inspector: Callable[[Path], CheckpointInfo] = inspect_checkpoint,
+) -> ResumePoint | None:
+    """The checkpoint an unfinished training of this exact config may continue from, or None.
+
+    Resuming is the trainer's own ``resume_checkpoint`` (optimizer, sampler, strategy and
+    telemetry state come back with the parameters; the checkpoint identity is checked against
+    the config). It needs: a previous attempt that is no longer alive, launched from the same
+    frozen config; a loadable checkpoint short of the declared target; and a failure a rerun
+    can fix - an OOM stops at the same population again, so it is never resumed.
+    """
+    if not job.exists() or job.state not in RESUMABLE_JOB_STATES:
+        return None
+    holder = job.get("pid")
+    if job.state != STATE_FAILED and isinstance(holder, int) and holder != os.getpid() and _pid_alive(holder):
+        return None
+    recorded = job.get("config_sha256")
+    if not recorded or not frozen.is_file() or recorded != file_sha256(frozen):
+        return None
+    training = job.get("training") or {}
+    if (training.get("exit") or {}).get("kind") == EXIT_OOM:
+        return None
+    target = declared_target_steps(arm_config)
+    info = inspector(Path(checkpoint))
+    if target is None or not info.loadable or info.step is None or not 0 < info.step < target:
+        return None
+    return ResumePoint(Path(checkpoint), int(info.step), int(target), str(job.state))
+
+
+def _set_aside_log(path: Path, suffix: str) -> None:
+    """Keep a failed attempt's log for diagnosis without letting its tail judge the next one."""
+    if path.is_file():
+        os.replace(path, path.with_name(f"{path.name}.{suffix}"))
+
+
 # --------------------------------------------------------------------------
 # Config immutability (P0-2)
 # --------------------------------------------------------------------------
@@ -1637,20 +1705,50 @@ def arm_steps(ctx: PipelineContext, arm: str) -> list[Step]:
         holder = job.get("pid")
         if job.state == STATE_RUNNING and isinstance(holder, int) and holder != os.getpid() and _pid_alive(holder):
             raise StepFailed(f"arm {arm} is already being trained by pid {holder}")
+        if job.state in (STATE_RUNNING, STATE_CHECKPOINTED):
+            # The pipeline that launched this training died (killed shell, closed session) but
+            # its trainer may have run to the end on its own. Judge what it left before training
+            # again: a fresh launch would only meet the full output directory and fail. Scan for
+            # live trainers first: one may still be writing this checkpoint, and an open reader
+            # makes its os.replace fail and kills it.
+            ctx.ensure_gpu_free()
+            started = job.get("started_at")
+            orphan = ctx.verify_arm_training(
+                arm, exit_code=None, job_started_at=float(started) if isinstance(started, (int, float)) else None
+            )
+            if orphan.complete:
+                job.set(orphan.state, f"verified after its pipeline exited: {orphan.reason}", training=orphan.record())
+                _append_text(scores_file, f"[{arm}] train verified after its pipeline exited {_timestamp()} ({orphan.reason})\n")
+                return
+        resume = training_resume_point(
+            job, checkpoint=checkpoint, arm_config=arm_config, frozen=frozen, inspector=ctx.checkpoint_inspector
+        )
         argv = ctx.python_tool("train_gsplat.py", "--config", arm_config)
+        if resume is not None:
+            # The frozen config is untouched: the resume is a launch argument, recorded in the
+            # job state and the ledger, so the arm's identity and config_as_run stay the same.
+            argv = ctx.python_tool("train_gsplat.py", "--config", arm_config, "--resume-checkpoint", checkpoint)
         with ctx.gpu_lease(f"train {arm}", argv, scan_trainers=True):
+            if resume is not None:
+                stamp = time.strftime("%Y%m%d-%H%M%S")
+                _set_aside_log(train_log, f"before_resume_{stamp}")
+                _set_aside_log(train_err, f"before_resume_{stamp}")
             started_at = time.time()
             job.set(
                 STATE_RUNNING,
-                "trainer launched",
+                "trainer launched" if resume is None else f"trainer launched, {resume.describe()}",
                 started_at=started_at,
                 started_at_text=_timestamp(),
                 pid=os.getpid(),
                 config_sha256=file_sha256(frozen),
                 config_frozen=str(frozen),
                 training=None,
+                resumed_from=None if resume is None else resume.record(),
             )
-            _append_text(scores_file, f"[{arm}] train start {_timestamp()}\n")
+            if resume is None:
+                _append_text(scores_file, f"[{arm}] train start {_timestamp()}\n")
+            else:
+                _append_text(scores_file, f"[{arm}] train resume {_timestamp()} ({resume.describe()})\n")
             code = ctx.run(argv, log=train_log, stderr_log=train_err)
         _append_text(train_log, f"EXIT {code}\n")
         verdict = ctx.verify_arm_training(arm, exit_code=code, job_started_at=started_at)

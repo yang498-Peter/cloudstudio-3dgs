@@ -248,7 +248,8 @@ def build_gate_chain(
                 command=smoke_command(inputs, gates_dir, python=python, cap_max=cap_max),
             )
         say(f"[prepare] gate chain: building {output}")
-        code = run(command)
+        named = getattr(run, "labelled", None)
+        code = (named(Path(output).stem) if callable(named) else run)(command)
         if code != 0 or not target.is_file():
             raise DatasetIncompleteError(
                 f"gate chain: {output} refused (exit {code}). Command: " + " ".join(command)

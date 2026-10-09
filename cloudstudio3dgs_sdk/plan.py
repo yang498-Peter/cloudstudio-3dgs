@@ -226,6 +226,11 @@ class PlannedStep:
     # manifest did - a resumed run once scored against an evaluator config the
     # manifest no longer described.
     refresh: bool = False
+    # The tools/pipeline.py arm this step trains. Its checkpoint is rewritten every
+    # checkpoint_every steps, so "the output exists" says nothing about completion: the step
+    # is done only when the pipeline has verified the training. Not part of as_json: the arm
+    # is the command's last argument, which the plan sha already covers.
+    pipeline_arm: str = ""
 
     def as_json(self) -> dict[str, Any]:
         payload: dict[str, Any] = {
@@ -1132,6 +1137,7 @@ def build_plan(
                 ),
                 outputs=(str(layout.arm_checkpoint(coarse_arm)),),
                 note="tile-free whole-scene prior; feeds both the backdrop and the merge fill layer",
+                pipeline_arm=coarse_arm,
             )
         )
 
@@ -1218,6 +1224,7 @@ def build_plan(
                             if generation == "seed"
                             else ""
                         ),
+                        pipeline_arm=arm,
                     )
                 )
 
@@ -1306,13 +1313,16 @@ def build_plan(
                 stage="deliver",
                 resource="cpu",
                 estimate=Estimate(
-                    float(cost["export_seconds"]) * len(thresholds),
-                    exported * int(cost["ply_bytes_per_gaussian"]) * len(thresholds),
-                    f"{len(thresholds)} control exports at {', '.join(str(v) for v in thresholds)}",
+                    float(cost["export_seconds"]),
+                    0,
+                    f"row counts at {', '.join(str(v) for v in thresholds)} from one load of the merge",
                     EXTRAPOLATED,
                 ),
                 outputs=(str(delivery_dir / "threshold_control" / "threshold_control.json"),),
-                note="records how many gaussians the delivery threshold removed",
+                note=(
+                    "records how many gaussians the delivery threshold removed; counted with the "
+                    "exporter's own row selection, no control PLYs written"
+                ),
             )
         )
         steps.append(

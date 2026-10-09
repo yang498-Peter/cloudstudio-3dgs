@@ -264,6 +264,7 @@ class Project:
         assets: Mapping[str, Path | str | None] | None = None,
         env_script: Path | str | None = None,
         pose_route: str | None = None,
+        training_verifier: Callable[[str], bool] | None = None,
     ) -> None:
         self.dataset_root = Path(dataset_root)
         self.work_root = Path(work_root)
@@ -286,6 +287,9 @@ class Project:
         # manifest -> signed gate chain) or raw_capture_poses (the capture's own, no gate).
         self.pose_route = pose_route or POSE_ROUTE_RAW
         self.runner = runner or SubprocessRunner(repo_root=self.repo_root)
+        # Is a pipeline arm's training verified complete? Default: ask tools/pipeline.py, which
+        # judges checkpoint, exit, mtime and step count together (see training_verified).
+        self._training_verifier = training_verifier
         self.probes = probes
         self.vram_gib = vram_gib
         self._prior_override = dict(prior_tile_checkpoints or {})
@@ -581,22 +585,15 @@ class Project:
             if step.blocking:
                 state.set(FAILED, f"{step.name}: {step.blocking}")
                 raise StageRefused(f"[{stage}] {step.name} cannot run: {step.blocking}")
-            if step.outputs and all(os.path.normcase(output) in adopted for output in step.outputs):
-                # Adopted artefacts are inputs, never outputs: --force re-runs
-                # what this work root built, not what it was handed.
-                self.say(f"[{stage}] skip {step.name} (adopted artefact; never rebuilt in place)")
+            done, why = self.step_done(step, adopted=adopted, force=force)
+            if done:
+                self.say(f"[{stage}] skip {step.name} ({why})")
                 skipped.append(step.name)
                 continue
-            if (
-                not force
-                and not step.refresh
-                and step.outputs
-                and all(Path(output).exists() for output in step.outputs)
-            ):
-                self.say(f"[{stage}] skip {step.name} (outputs present)")
-                skipped.append(step.name)
-                continue
-            self.say(f"[{stage}] run {step.name}")
+            if why:
+                self.say(f"[{stage}] run {step.name} ({why})")
+            else:
+                self.say(f"[{stage}] run {step.name}")
             try:
                 self._execute(step, plan)
             except Exception as error:
@@ -607,6 +604,40 @@ class Project:
         if ran:
             self._reopen_downstream(stage)
         return StageResult(stage, "ran", "", tuple(ran), tuple(skipped), report)
+
+    def step_done(self, step: PlannedStep, *, adopted: set[str] | None = None, force: bool = False) -> tuple[bool, str]:
+        """(done, why) for one planned step, exactly as the stage driver decides it.
+
+        ``why`` explains a skip, or why a step whose outputs exist still runs.
+        """
+        adopted = self.adopted_paths() if adopted is None else adopted
+        if step.outputs and all(os.path.normcase(output) in adopted for output in step.outputs):
+            # Adopted artefacts are inputs, never outputs: --force re-runs what this work root
+            # built, not what it was handed.
+            return True, "adopted artefact; never rebuilt in place"
+        if force or step.refresh or not step.outputs:
+            return False, ""
+        if step.pipeline_arm:
+            # A trainer killed mid-run (driver timeout, host crash) leaves its last periodic
+            # checkpoint at the output path; only the pipeline's verdict says it finished.
+            if self.training_verified(step.pipeline_arm):
+                return True, "training verified complete"
+            if all(Path(output).exists() for output in step.outputs):
+                return False, "checkpoint present but training not verified complete; the pipeline resumes it"
+            return False, "no checkpoint; trains from the start"
+        if all(Path(output).exists() for output in step.outputs):
+            return True, "outputs present"
+        return False, ""
+
+    def training_verified(self, arm: str) -> bool:
+        """tools/pipeline.py's verified TRAINING_COMPLETE for one arm of this work root."""
+        if self._training_verifier is not None:
+            return bool(self._training_verifier(arm))
+        if not self.layout.pipeline_config.is_file():
+            return False
+        from tools.pipeline import PipelineContext, load_pipeline_config
+
+        return PipelineContext(load_pipeline_config(self.layout.pipeline_config)).arm_training_complete(arm)
 
     def _reopen_downstream(self, stage: str) -> None:
         """A stage that ran a step owes its consumers a re-run.
@@ -778,31 +809,41 @@ class Project:
         self.write_delivery_eval_config(plan)
 
     def _native_threshold_control(self, step: PlannedStep, plan: Plan) -> None:
-        """Export the same merge at each control opacity and record the counts."""
-        from tools.pipeline import read_ply_vertex_count
+        """Record how many rows the merge keeps at each control opacity.
 
+        Counted by the exporter's own row selection (``--count-thresholds``) from one load of
+        the merge; the control PLYs it used to write were read only for their vertex counts,
+        and at a b12-sized merge they were three ~4 GB files.
+        """
         delivery = self.layout.delivery_dir(plan.delivery_tag)
         out = delivery / "threshold_control"
         out.mkdir(parents=True, exist_ok=True)
-        variants: list[dict[str, Any]] = []
-        for threshold in self.profile.export["threshold_control"]:
-            variant = out / f"body_min_opacity_{threshold:g}.ply"
-            command = (
-                str(self.python),
-                str(self.repo_root / "tools" / "export_gaussian_ply.py"),
-                "--checkpoint", str(delivery / "merged.pt"),
-                "--output", str(variant),
-                "--min-opacity", str(threshold),
-            )
-            code = self.runner(
-                PlannedStep(f"threshold_{threshold:g}", "deliver", "cpu", step.estimate, command=command),
-                log=self.layout.root / "logs" / "deliver_threshold_control.log",
-            )
-            if code != 0:
-                raise StageFailed(f"threshold export at {threshold:g} exited {code}")
-            variants.append(
-                {"min_opacity": threshold, "path": str(variant), "vertex_count": read_ply_vertex_count(variant)}
-            )
+        thresholds = [float(value) for value in self.profile.export["threshold_control"]]
+        counts_path = out / "threshold_counts.json"
+        command = (
+            str(self.python),
+            str(self.repo_root / "tools" / "export_gaussian_ply.py"),
+            "--checkpoint", str(delivery / "merged.pt"),
+            "--output", str(counts_path),
+            "--count-thresholds", *(f"{value:g}" for value in thresholds),
+        )
+        code = self.runner(
+            PlannedStep("threshold_counts", "deliver", "cpu", step.estimate, command=command, outputs=(str(counts_path),)),
+            log=self.layout.root / "logs" / "deliver_threshold_control.log",
+        )
+        if code != 0:
+            raise StageFailed(f"threshold counts exited {code}")
+        try:
+            counted = json.loads(counts_path.read_text(encoding="utf-8"))
+            rows = {float(row["min_opacity"]): int(row["gaussians_written"]) for row in counted["counts"]}
+        except (OSError, ValueError, KeyError, TypeError) as error:
+            raise StageFailed(f"threshold counts unreadable at {counts_path}: {error}") from error
+        missing = [value for value in thresholds if value not in rows]
+        if missing:
+            raise StageFailed(f"threshold counts lack {', '.join(f'{value:g}' for value in missing)}")
+        variants: list[dict[str, Any]] = [
+            {"min_opacity": value, "vertex_count": rows[value], "counted_without_export": True} for value in thresholds
+        ]
         baseline = variants[0]["vertex_count"]
         for record in variants:
             record["removed_vs_zero"] = baseline - record["vertex_count"]
