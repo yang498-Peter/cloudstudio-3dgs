@@ -215,3 +215,88 @@ class PrefetchConfigContractTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class LookaheadPrefetchTest(unittest.TestCase):
+    """Several workers, several steps ahead; the hand-back order is still the step order."""
+
+    def _schedule(self, order):
+        return lambda step: order[step]
+
+    def test_samples_come_back_in_step_order_whatever_finishes_first(self):
+        from cloudstudio_3dgs.training.sample_prefetch import LookaheadPrefetcher
+
+        order = [5, 2, 9, 2, 0, 7, 3, 3, 8, 1]
+        delays = {5: 0.03, 2: 0.0, 9: 0.02, 0: 0.01, 7: 0.0, 3: 0.015, 8: 0.0, 1: 0.005}
+
+        def fetch(index):
+            time.sleep(delays[index])
+            return ("sample", index)
+
+        got = []
+        with LookaheadPrefetcher(fetch, self._schedule(order), last_step=len(order) - 1, workers=4) as pf:
+            pf.prime(0)
+            for step in range(len(order)):
+                got.append(pf.get(step))
+        self.assertEqual(got, [("sample", i) for i in order])
+
+    def test_each_step_is_fetched_once_and_never_past_the_last_step(self):
+        from cloudstudio_3dgs.training.sample_prefetch import LookaheadPrefetcher
+
+        order = list(range(20))
+        rec = Recorder(delay=0.001)
+        with LookaheadPrefetcher(rec, self._schedule(order), last_step=11, workers=3) as pf:
+            pf.prime(4)  # a resumed run starts in the middle
+            for step in range(4, 12):
+                pf.get(step)
+        self.assertEqual(sorted(rec.calls), list(range(4, 12)))
+        self.assertGreater(len(rec.threads), 1)
+        self.assertNotIn(threading.current_thread().name, rec.threads)
+
+    def test_a_failing_fetch_raises_on_its_own_step_only(self):
+        from cloudstudio_3dgs.training.sample_prefetch import LookaheadPrefetcher
+
+        order = [0, 1, 2, 3, 4, 5]
+        rec = Recorder(fail_on={3})
+        with LookaheadPrefetcher(rec, self._schedule(order), last_step=5, workers=4) as pf:
+            pf.prime(0)
+            self.assertEqual(pf.get(0), ("sample", 0))
+            self.assertEqual(pf.get(1), ("sample", 1))
+            self.assertEqual(pf.get(2), ("sample", 2))  # step 3 has already failed in a worker
+            with self.assertRaises(ValueError):
+                pf.get(3)
+
+    def test_a_run_that_stops_first_never_sees_a_later_failure(self):
+        from cloudstudio_3dgs.training.sample_prefetch import LookaheadPrefetcher
+
+        rec = Recorder(fail_on={2})
+        with LookaheadPrefetcher(rec, self._schedule([0, 1, 2, 3]), last_step=3, workers=2) as pf:
+            pf.prime(0)
+            self.assertEqual(pf.get(0), ("sample", 0))
+
+    def test_close_blocks_further_use_and_is_idempotent(self):
+        from cloudstudio_3dgs.training.sample_prefetch import LookaheadPrefetcher
+
+        pf = LookaheadPrefetcher(Recorder(), self._schedule([0, 1]), last_step=1, workers=2)
+        pf.close()
+        pf.close()
+        with self.assertRaises(RuntimeError):
+            pf.get(0)
+
+
+@unittest.skipUnless(AS_RUN.is_file(), "needs the recorded tile1_B5_cap6_20k run directory")
+class PrefetchWorkersContractTest(PrefetchConfigContractTest):
+    def test_workers_default_leaves_the_prefetch_contract_as_it_was(self):
+        one = self._config(prefetch_training_samples=True).contract_dict()
+        explicit = self._config(prefetch_training_samples=True, prefetch_workers=1).contract_dict()
+        self.assertEqual(one, explicit)
+        self.assertNotIn("prefetch_workers", one["view_sampling"])
+
+    def test_several_workers_are_recorded(self):
+        config = self._config(prefetch_training_samples=True, prefetch_workers=4)
+        config.validate()
+        self.assertEqual(config.contract_dict()["view_sampling"]["prefetch_workers"], 4)
+
+    def test_workers_without_prefetch_are_refused(self):
+        with self.assertRaises(ValueError):
+            self._config(prefetch_workers=4).validate()

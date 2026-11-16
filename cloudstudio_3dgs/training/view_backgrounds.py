@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import threading
 from collections import OrderedDict
 from pathlib import Path
 from typing import Any
@@ -65,9 +66,41 @@ class ViewBackgroundLibrary:
         self.cache_budget_bytes = int(cache_budget_bytes)
         self._cache: "OrderedDict[str, Any]" = OrderedDict()
         self._cache_bytes = 0
+        # preload() runs on prefetch threads while background_for() runs on the
+        # training thread; the lock covers the cache bookkeeping, never a decode.
+        self._cache_lock = threading.Lock()
 
     def __len__(self) -> int:
         return len(self.views)
+
+    def _decoded(self, image_id: str, entry: dict) -> Any:
+        """The decoded backdrop for one view, through the bounded LRU cache."""
+        with self._cache_lock:
+            cached = self._cache.get(image_id)
+            if cached is not None:
+                self._cache.move_to_end(image_id)
+                return cached
+        cached = _decode_rgb(self._np, self.root / entry["file"])
+        if self.cache_budget_bytes > 0:
+            with self._cache_lock:
+                if image_id not in self._cache:
+                    self._cache[image_id] = cached
+                    self._cache_bytes += cached.nbytes
+                    while self._cache_bytes > self.cache_budget_bytes and len(self._cache) > 1:
+                        _, evicted = self._cache.popitem(last=False)
+                        self._cache_bytes -= evicted.nbytes
+        return cached
+
+    def preload(self, image_id: str) -> None:
+        """Decode a view's backdrop ahead of the step that composites it.
+
+        Called from prefetch threads. A view without a stored backdrop is left for
+        ``background_for`` to refuse on its own step, so the fail-closed error still
+        surfaces where it always did.
+        """
+        entry = self.views.get(image_id)
+        if entry is not None and self.cache_budget_bytes > 0:
+            self._decoded(image_id, entry)
 
     def background_for(self, image_id: str, *, height: int, width: int, torch: Any):
         """Return the (height, width, 3) float background for one view."""
@@ -77,31 +110,32 @@ class ViewBackgroundLibrary:
                 f"view {image_id!r} has no prerendered background; the "
                 "library is fail-closed by design"
             )
-        cached = self._cache.get(image_id)
-        if cached is None:
-            from PIL import Image
-
-            with Image.open(self.root / entry["file"]) as image:
-                cached = self._np.asarray(image.convert("RGB"), dtype=self._np.uint8)
-            if self.cache_budget_bytes > 0:
-                self._cache[image_id] = cached
-                self._cache_bytes += cached.nbytes
-                while self._cache_bytes > self.cache_budget_bytes and len(self._cache) > 1:
-                    _, evicted = self._cache.popitem(last=False)
-                    self._cache_bytes -= evicted.nbytes
-        else:
-            self._cache.move_to_end(image_id)
+        cached = self._decoded(image_id, entry)
+        # uint8 crosses to the device and is widened there: same values, a quarter of
+        # the bytes. The cached array stays read-only, hence the explicit copy.
         tensor = (
-            torch.as_tensor(cached, device=self.device, dtype=torch.float32) / 255.0
+            torch.from_numpy(self._np.array(cached, copy=True)).to(self.device).to(torch.float32)
+            / 255.0
         )
         if tensor.shape[0] != height or tensor.shape[1] != width:
+            # A view supervised below its stored size gets an area-filtered backdrop,
+            # like its photo; plain bilinear would alias the stored image into it.
+            shrinking = tensor.shape[0] > height and tensor.shape[1] > width
             tensor = torch.nn.functional.interpolate(
                 tensor.permute(2, 0, 1).unsqueeze(0),
                 size=(height, width),
                 mode="bilinear",
                 align_corners=False,
+                antialias=shrinking,
             ).squeeze(0).permute(1, 2, 0)
         return tensor
+
+
+def _decode_rgb(np: Any, path: Path) -> Any:
+    from PIL import Image
+
+    with Image.open(path) as image:
+        return np.asarray(image.convert("RGB"), dtype=np.uint8)
 
 
 def write_view_background_manifest(

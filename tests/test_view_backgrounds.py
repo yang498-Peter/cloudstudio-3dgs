@@ -55,6 +55,55 @@ class ViewBackgroundTests(unittest.TestCase):
                 ViewBackgroundLibrary(manifest, root, device="cpu")
 
 
+    def test_a_preloaded_backdrop_is_the_backdrop_decoded_on_demand(self) -> None:
+        """Prefetch threads decode ahead; the tensor the loss gets must not change."""
+        from concurrent.futures import ThreadPoolExecutor
+
+        from PIL import Image
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            rng = np.random.default_rng(7)
+            views = {}
+            for name in ("a", "b", "c", "d"):
+                Image.fromarray(rng.integers(0, 256, (12, 10, 3), dtype=np.uint8)).save(root / f"{name}.png")
+                views[f"view::{name}"] = {"file": f"{name}.png", "height": 12, "width": 10}
+            manifest = root / "manifest.json"
+            write_view_background_manifest(manifest, views=views, metadata={"split": "train"})
+
+            direct = ViewBackgroundLibrary(manifest, root, device="cpu")
+            ahead = ViewBackgroundLibrary(manifest, root, device="cpu")
+            with ThreadPoolExecutor(max_workers=4) as pool:
+                list(pool.map(ahead.preload, list(views) * 3))
+            ahead.preload("view::missing")  # left for background_for to refuse on its own step
+            for view in views:
+                expected = direct.background_for(view, height=12, width=10, torch=torch)
+                got = ahead.background_for(view, height=12, width=10, torch=torch)
+                self.assertTrue(torch.equal(expected, got))
+                self.assertEqual(got.dtype, torch.float32)
+                stored = np.asarray(Image.open(root / views[view]["file"]).convert("RGB"), dtype=np.float32) / 255.0
+                self.assertTrue(np.array_equal(got.numpy(), stored))
+            with self.assertRaises(ValueError):
+                ahead.background_for("view::missing", height=12, width=10, torch=torch)
+
+    def test_the_cache_budget_still_bounds_preloaded_backdrops(self) -> None:
+        from PIL import Image
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            views = {}
+            for index in range(6):
+                Image.fromarray(np.full((10, 10, 3), index, dtype=np.uint8)).save(root / f"{index}.png")
+                views[f"v{index}"] = {"file": f"{index}.png", "height": 10, "width": 10}
+            manifest = root / "manifest.json"
+            write_view_background_manifest(manifest, views=views, metadata={"split": "train"})
+            library = ViewBackgroundLibrary(manifest, root, device="cpu", cache_budget_bytes=2 * 300)
+            for view in views:
+                library.preload(view)
+            self.assertLessEqual(library._cache_bytes, 2 * 300)
+            self.assertEqual(float(library.background_for("v0", height=10, width=10, torch=torch)[0, 0, 0]), 0.0)
+
+
 if __name__ == "__main__":
     unittest.main()
 

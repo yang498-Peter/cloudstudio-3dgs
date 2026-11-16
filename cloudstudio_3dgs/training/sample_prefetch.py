@@ -179,3 +179,95 @@ class EpochOrderCache:
 
     def index_for_step(self, step: int) -> int:
         return self.order(step // self._length)[step % self._length]
+
+
+class LookaheadPrefetcher:
+    """Fetch the samples of the next ``depth`` steps on ``workers`` threads.
+
+    ``SamplePrefetcher`` hides one decode behind one render. Once the render is cheaper
+    than the decode - or the decode grows a seventh artifact - one worker is the
+    bottleneck again. The step -> index schedule is a pure function, so several steps
+    can be decoded at once and handed back strictly in step order.
+
+    Unlike the one-deep prefetcher the fetch function IS called from several threads.
+    That is safe for ``FaceCacheDataset.__getitem__`` because its memo caches are
+    write-once and keyed (two threads computing the same entry store the same value,
+    and each store is a single dict/set operation under the GIL), and every decode
+    works on its own arrays.
+
+    Exceptions keep the one-deep rule: a fetch that raises is re-raised from ``get`` for
+    its own step, never earlier, and never if the run stops before that step.
+    """
+
+    def __init__(
+        self,
+        fetch: Callable[[int], Any],
+        index_for_step: Callable[[int], int],
+        *,
+        last_step: int,
+        workers: int,
+        depth: Optional[int] = None,
+        name: str = "sample-lookahead",
+    ) -> None:
+        from concurrent.futures import ThreadPoolExecutor
+
+        if workers < 1:
+            raise ValueError("lookahead prefetch needs at least one worker")
+        self._fetch = fetch
+        self._index_for_step = index_for_step
+        self._last_step = int(last_step)
+        self._depth = int(depth) if depth is not None else 2 * int(workers)
+        if self._depth < 1:
+            raise ValueError("lookahead depth must be positive")
+        self._pool = ThreadPoolExecutor(max_workers=int(workers), thread_name_prefix=name)
+        self._pending: dict[int, Any] = {}
+        self._closed = False
+        self.hits = 0
+        self.misses = 0
+
+    def _submit_through(self, step: int) -> None:
+        for ahead in range(step, min(step + self._depth, self._last_step) + 1):
+            if ahead not in self._pending:
+                self._pending[ahead] = self._pool.submit(self._fetch, self._index_for_step(ahead))
+
+    def prime(self, step: int) -> None:
+        """Start decoding ``step`` and the steps after it; a no-op past ``last_step``."""
+        if self._closed or step > self._last_step:
+            return
+        self._submit_through(step)
+
+    def get(self, step: int) -> Any:
+        """Return the sample for ``step``; later steps keep decoding meanwhile."""
+        if self._closed:
+            raise RuntimeError("prefetcher is closed")
+        for stale in [key for key in self._pending if key < step]:
+            self._pending.pop(stale).cancel()
+        future = self._pending.pop(step, None)
+        if future is None:
+            self.misses += 1
+            future = self._pool.submit(self._fetch, self._index_for_step(step))
+        elif future.done():
+            self.hits += 1
+        else:
+            self.misses += 1
+        if step < self._last_step:
+            self._submit_through(step + 1)
+        return future.result()
+
+    def close(self) -> None:
+        if self._closed:
+            return
+        self._closed = True
+        for future in self._pending.values():
+            future.cancel()
+        self._pending.clear()
+        self._pool.shutdown(wait=True)
+
+    def stats(self) -> dict[str, int]:
+        return {"hits": self.hits, "misses": self.misses}
+
+    def __enter__(self) -> "LookaheadPrefetcher":
+        return self
+
+    def __exit__(self, *exc_info: object) -> None:
+        self.close()

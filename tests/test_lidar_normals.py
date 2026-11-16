@@ -392,5 +392,68 @@ class LidarNormalAnchorsTest(unittest.TestCase):
         )
 
 
+    def test_visible_scope_evaluates_only_the_rows_the_view_rasterized(self) -> None:
+        # Row 0 is a clean surfel; row 1 is tilted 45 degrees and thick.
+        params = _params(
+            [[0.0, 0.0, 0.01], [0.2, 0.1, 0.01]],
+            [[-3.0, -3.0, -5.0], [-3.0, -3.0, -3.2]],
+            [[1.0, 0.0, 0.0, 0.0], _quat_about_x(math.pi / 4.0)],
+        )
+        anchors = self._anchors(NormalAlignmentConfig(enabled=True, scope="visible_current_view"))
+        anchors.refresh(params["means"])
+        everything = anchors.loss(params)
+        only_clean = anchors.loss(params, visibility_mask=torch.tensor([True, False]))
+        only_tilted = anchors.loss(params, visibility_mask=torch.tensor([False, True]))
+        self.assertEqual(everything["anchored_count"], 2)
+        self.assertEqual(only_clean["anchored_count"], 1)
+        self.assertLess(float(only_clean["align_raw"]), 1e-6)
+        self.assertAlmostEqual(float(only_tilted["align_raw"]), 0.5, places=3)
+        # The weighted mean is over the rows evaluated: the tilted row alone weighs twice
+        # what it weighs averaged with the clean one.
+        self.assertAlmostEqual(
+            float(only_tilted["align_raw"]), 2.0 * float(everything["align_raw"]), places=3
+        )
+
+    def test_visible_scope_sends_no_gradient_to_hidden_rows(self) -> None:
+        params = _params(
+            [[0.0, 0.0, 0.01], [0.2, 0.1, 0.01]],
+            [[-3.0, -3.0, -3.2], [-3.0, -3.0, -3.2]],
+            [_quat_about_x(math.pi / 4.0), _quat_about_x(math.pi / 4.0)],
+            quats_grad=True,
+        )
+        params["scales"].requires_grad_(True)
+        anchors = self._anchors(NormalAlignmentConfig(enabled=True, scope="visible_current_view"))
+        anchors.refresh(params["means"])
+        anchors.loss(params, visibility_mask=torch.tensor([True, False]))["total"].backward()
+        self.assertGreater(float(params["quats"].grad[0].abs().sum()), 0.0)
+        self.assertEqual(float(params["quats"].grad[1].abs().sum()), 0.0)
+        self.assertEqual(float(params["scales"].grad[1].abs().sum()), 0.0)
+
+    def test_no_visible_anchor_is_a_plain_zero(self) -> None:
+        params = _params([[0.0, 0.0, 0.01]], [[-3.0, -3.0, -5.0]], [[1.0, 0.0, 0.0, 0.0]])
+        anchors = self._anchors()
+        anchors.refresh(params["means"])
+        result = anchors.loss(params, visibility_mask=torch.tensor([False]))
+        self.assertEqual(result["anchored_count"], 0)
+        self.assertEqual(float(result["total"]), 0.0)
+        self.assertFalse(result["stale"])
+
+    def test_a_mask_of_the_wrong_length_is_refused(self) -> None:
+        params = _params([[0.0, 0.0, 0.01]], [[-3.0, -3.0, -5.0]], [[1.0, 0.0, 0.0, 0.0]])
+        anchors = self._anchors()
+        anchors.refresh(params["means"])
+        with self.assertRaises(ValueError):
+            anchors.loss(params, visibility_mask=torch.tensor([True, False]))
+
+    def test_scope_is_validated_and_absent_from_the_contract_by_default(self) -> None:
+        self.assertNotIn("scope", NormalAlignmentConfig(enabled=True).to_dict())
+        self.assertEqual(
+            NormalAlignmentConfig(enabled=True, scope="visible_current_view").to_dict()["scope"],
+            "visible_current_view",
+        )
+        with self.assertRaises(ValueError):
+            NormalAlignmentConfig(scope="some").validate()
+
+
 if __name__ == "__main__":
     unittest.main()

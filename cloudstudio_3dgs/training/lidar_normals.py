@@ -217,6 +217,15 @@ class NormalAlignmentConfig:
     # p99. Penalising toward 1 would force us rounder than the reference; the
     # hinge lets the blade shapes through and catches only pathological needles.
     tangent_isotropy_max_ratio: float = 1.0
+    # "all" evaluates the penalties on every anchored Gaussian every step. Measured on a
+    # 14.5M-Gaussian tile that is 77 ms forward, ~96 ms backward and 3.9 GiB of the
+    # 10.2 GiB peak - 60% of a step spent on rows the step's view cannot see.
+    # "visible_current_view" evaluates them on the Gaussians the current view rasterized,
+    # so the regulariser arrives with the photometric gradient it is meant to balance
+    # and its cost follows the view, not the population. The weighted mean is taken over
+    # the rows evaluated, so a visible row's pull grows by total/visible while it is
+    # applied visible/total as often: the same pull per step on average.
+    scope: str = "all"
 
     def validate(self) -> None:
         if (
@@ -242,10 +251,15 @@ class NormalAlignmentConfig:
             raise ValueError("tangent_isotropy_max_ratio must be at least 1")
         if self.point_to_plane_huber_delta_m <= 0.0:
             raise ValueError("point_to_plane_huber_delta_m must be positive")
+        if self.scope not in {"all", "visible_current_view"}:
+            raise ValueError("lidar normal alignment scope must be all or visible_current_view")
 
     def to_dict(self) -> dict[str, Any]:
         self.validate()
         return {
+            # Present only when it departs from the historical scope, so every existing
+            # contract signs to the same bytes.
+            **({} if self.scope == "all" else {"scope": self.scope}),
             "enabled": self.enabled,
             "weight_align": self.weight_align,
             "weight_flatten": self.weight_flatten,
@@ -362,8 +376,11 @@ class LidarNormalAnchors:
             self._device_cache[device] = cached
         return cached
 
-    def loss(self, params: Any) -> dict[str, Any]:
+    def loss(self, params: Any, visibility_mask: Any | None = None) -> dict[str, Any]:
         """Weighted align / flatten penalties for the current parameters.
+
+        ``visibility_mask`` (bool ``[N]``) restricts the penalties to those rows; None
+        evaluates every anchored Gaussian.
 
         Returns ``align`` and ``flatten`` already multiplied by their weights
         (``total = align + flatten``); the unweighted planarity-weighted
@@ -409,6 +426,10 @@ class LidarNormalAnchors:
             return result
         device = scales_log.device
         normal, anchor_position, planarity, valid = self._anchors_on(device)
+        if visibility_mask is not None:
+            if visibility_mask.shape[0] != valid.shape[0]:
+                raise ValueError("visibility mask does not match the Gaussian count")
+            valid = valid & visibility_mask.to(device=device, dtype=torch.bool)
         count = int(valid.sum())
         result["anchored_count"] = count
         if count == 0:

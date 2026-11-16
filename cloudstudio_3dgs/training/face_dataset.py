@@ -37,6 +37,7 @@ import numpy as np
 from PIL import Image
 
 from cloudstudio_3dgs.data.depth_cache import load_sparse_depth
+from cloudstudio_3dgs.training.sample_resolution import reduce_sample, reduction_for_focal
 from cloudstudio_3dgs.data.manifest import canonical_json_bytes
 from cloudstudio_3dgs.data.mono_depth import (
     resize_to_source_grid,
@@ -221,7 +222,15 @@ class FaceCacheDataset:
         tile_ownership_cache_root: Path | None = None,
         sky_mask_manifest_path: Path | None = None,
         sky_mask_root: Path | None = None,
+        training_focal_px: float | None = None,
     ) -> None:
+        # Supervise every face at one focal length (sample_resolution.py). None keeps
+        # each face as stored.
+        if training_focal_px is not None and float(training_focal_px) <= 0.0:
+            raise ValueError("training_focal_px must be positive when set")
+        self.training_focal_px = (
+            None if training_focal_px is None else float(training_focal_px)
+        )
         # Tile crops are pixel rectangles around in-Tile LiDAR returns, so a
         # crop also contains pixels whose true surface lies in a neighbouring
         # Tile where this Tile has no gaussians. Those targets cannot be met
@@ -801,6 +810,11 @@ class FaceCacheDataset:
                 if self.sky_mask_manifest_sha256 is not None
                 else {}
             ),
+            **(
+                {"training_focal_px": self.training_focal_px}
+                if self.training_focal_px is not None
+                else {}
+            ),
         }
 
     @property
@@ -1183,7 +1197,7 @@ class FaceCacheDataset:
         if not np.any(rgb_mask):
             raise ValueError(f"cropped face {base_image_id}/{face_id} has an empty mask")
 
-        return TrainingSample(
+        sample = TrainingSample(
             image_id=f"{base_image_id}{SAMPLE_ID_SEPARATOR}{face_id}",
             rig_frame_id=str(image_record["rig_frame_id"]),
             camera_id=camera_id,
@@ -1215,6 +1229,14 @@ class FaceCacheDataset:
             mesh_depth_mask=mesh_depth_mask,
             mesh_geometry_cache_path=mesh_geometry_cache_path,
             sky_mask=sky_mask,
+        )
+        if self.training_focal_px is None:
+            return sample
+        # Every mask above was built on the stored face (ownership, crop, depth); the
+        # reduction is the last step so it sees exactly what full-size training sees.
+        return reduce_sample(
+            sample,
+            reduction_for_focal(float(face.K_face[0, 0]), self.training_focal_px),
         )
 
     def camera_sample(self, index: int) -> Any:

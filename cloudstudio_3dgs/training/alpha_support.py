@@ -99,8 +99,12 @@ def lidar_alpha_support(
     range_m: Any | None,
     mode: str,
     dilation_radius_px: int,
+    edge_erosion_px: int | None = None,
 ) -> AlphaSupport:
     """Torch construction of the alpha-coverage support for one view.
+
+    ``edge_erosion_px`` overrides the strict-mode edge erosion for a view supervised
+    below its stored size; None is the signed full-size radius.
 
     ``mode == "dilated"`` reproduces the historical inline trainer code
     operation for operation (valid = depth_mask & finite & > 0, zero-fill,
@@ -133,7 +137,9 @@ def lidar_alpha_support(
         farthest <= nearest * (1.0 + STRICT_VISIBILITY_TOLERANCE) + STRICT_VISIBILITY_MARGIN_M
     )
     discontinuity = has_return & ~agrees
-    erosion = STRICT_VISIBILITY_EDGE_EROSION_PX
+    erosion = (
+        STRICT_VISIBILITY_EDGE_EROSION_PX if edge_erosion_px is None else int(edge_erosion_px)
+    )
     if erosion > 0:
         near_edge = _max_pool(torch, discontinuity.to(dtype=confidence.dtype), erosion) > 0.0
     else:

@@ -93,6 +93,10 @@ class TrainingSample:
     # signed sky mask cache; the trainer derives the effective sky mask from
     # it (sky_supervision.py). None unless sky supervision is configured.
     sky_mask: np.ndarray | None = None
+    # How much this sample was area-reduced from its stored face (sample_resolution.py).
+    # Pixel radii in the trainer config are defined on the stored face and are mapped
+    # through this so they keep covering the same angle. 1.0 = as stored.
+    resolution_reduction: float = 1.0
 
 
 class S1TrainingDataset:

@@ -28,6 +28,7 @@ from cloudstudio_3dgs.geometry.lidar_projection import SparseDepthMap
 from cloudstudio_3dgs.evaluation.quality_report import sign_run_manifest
 from cloudstudio_3dgs.training.alpha_support import (
     ALPHA_SUPPORT_MODES,
+    STRICT_VISIBILITY_EDGE_EROSION_PX,
     lidar_alpha_support,
     strict_visibility_contract,
 )
@@ -59,7 +60,12 @@ from cloudstudio_3dgs.training.losses import (
 from cloudstudio_3dgs.training.mipmap_loss_schedule import (
     competitor_high_type2_loss_weights,
 )
-from cloudstudio_3dgs.training.sample_prefetch import EpochOrderCache, SamplePrefetcher
+from cloudstudio_3dgs.training.sample_resolution import pixels as reduced_pixels
+from cloudstudio_3dgs.training.sample_prefetch import (
+    EpochOrderCache,
+    LookaheadPrefetcher,
+    SamplePrefetcher,
+)
 from cloudstudio_3dgs.training.presets import (
     assert_trainer_preset_matches,
     expand_trainer_preset,
@@ -274,6 +280,16 @@ class TrainerConfig:
     # and every tensor stay identical - but a run that enables it is still a different
     # run under the frozen-config rule and must carry its own arm name.
     prefetch_training_samples: bool = False
+    # 1 keeps the one-deep single-thread prefetcher. Above 1 the next 2 x workers
+    # steps are decoded on that many threads, and each view's backdrop image is
+    # decoded there too instead of on the training thread. Wall clock only, like
+    # the flag above, and recorded in the contract the same way.
+    prefetch_workers: int = 1
+    # Supervise every Face4 face at this focal length (px) by area-reducing the stored
+    # face (sample_resolution.py). The stored pitch faces are the sensor image warped
+    # to 2.93x its own angular resolution; the natural value is the fisheye's on-axis
+    # focal length. None trains each face as stored.
+    training_focal_px: float | None = None
     max_steps: int = 3_000
     checkpoint_every: int = 500
     checkpoint_keep_every: int = 0
@@ -603,6 +619,8 @@ class TrainerConfig:
                 "seed",
                 "view_sampling_mode",
                 "prefetch_training_samples",
+                "prefetch_workers",
+                "training_focal_px",
                 "max_steps",
                 "checkpoint_every",
                 "checkpoint_keep_every",
@@ -813,6 +831,19 @@ class TrainerConfig:
                 "prefetch_training_samples requires "
                 "fisher_yates_without_replacement_per_epoch sampling"
             )
+        if self.training_focal_px is not None:
+            if float(self.training_focal_px) <= 0.0:
+                raise ValueError("training_focal_px must be positive when set")
+            if self.face_cache_manifest is None:
+                raise ValueError("training_focal_px applies to Face4 face caches only")
+            if self.mesh_depth_weight > 0.0 or self.mesh_normal_weight > 0.0:
+                raise ValueError(
+                    "training_focal_px does not carry mesh geometry supervision"
+                )
+        if not 1 <= int(self.prefetch_workers) <= 16:
+            raise ValueError("prefetch_workers must be within [1, 16]")
+        if self.prefetch_workers > 1 and not self.prefetch_training_samples:
+            raise ValueError("prefetch_workers above 1 requires prefetch_training_samples")
         if self.cuda_empty_cache_interval_steps < 0:
             raise ValueError("cuda_empty_cache_interval_steps must be non-negative")
         if self.resume_checkpoint is not None and self.warm_start_checkpoint is not None:
@@ -2265,6 +2296,8 @@ class TrainerConfig:
             # Recorded so an as-run contract says which runs decoded ahead, and left out
             # entirely when off so every existing contract signs to the same bytes.
             view_sampling_contract["prefetch_training_samples"] = True
+            if self.prefetch_workers > 1:
+                view_sampling_contract["prefetch_workers"] = int(self.prefetch_workers)
         if self.lidar_rgb_l1_weight > 0.0:
             loss_weights["lidar_rgb_l1"] = self.lidar_rgb_l1_weight
         if uses_rgb_gradient:
@@ -2613,6 +2646,14 @@ class TrainerConfig:
                     dilation_radius_px=self.rgb_supervision_dilation_radius_px,
                 )
             )
+        if self.training_focal_px is not None:
+            # Key present only when set, so every existing contract signs as before.
+            contract["loss_contract"]["supervision_resolution"] = {
+                "training_focal_px": float(self.training_focal_px),
+                "reduction": "area_average_to_focal_never_enlarges",
+                "pixel_radii": "defined_on_stored_face_scaled_by_reduction",
+                "sparse_lidar": "nearest_return_per_reduced_pixel",
+            }
         if self.sky_supervision.enabled:
             # Key present only when enabled; the manifest is bound by its
             # signature, as the renderer mask is.
@@ -3109,36 +3150,41 @@ def appearance_learning_rates(
     return effective
 
 
+def _device_array(torch: Any, array: Any, device: str) -> Any:
+    """Move a decoded array to the device in the dtype it was decoded in.
+
+    The old path copied every array on the CPU first and widened uint8 images to float32
+    there, so a 4 MP face crossed the bus as 51 MB instead of 13. Read-only arrays (memo
+    caches, memory maps) are copied once because torch refuses to alias them silently.
+    """
+    array = np.asarray(array)
+    if not array.flags.writeable or not array.flags.c_contiguous:
+        array = np.array(array, copy=True, order="C")
+    return torch.from_numpy(array).to(device)
+
+
 def _tensor_sample(sample: TrainingSample, torch: Any, device: str) -> dict[str, Any]:
     result = {
-        "rgb": torch.as_tensor(np.array(sample.image, copy=True), dtype=torch.float32, device=device) / 255.0,
-        "rgb_mask": torch.as_tensor(np.array(sample.rgb_mask, copy=True), dtype=torch.bool, device=device),
+        # uint8 crosses to the device and is widened there: uint8 -> float32 is exact on
+        # either side, and the division already ran on the device.
+        "rgb": _device_array(torch, sample.image, device).to(torch.float32) / 255.0,
+        "rgb_mask": _device_array(torch, sample.rgb_mask, device).to(torch.bool),
     }
     if sample.depth_range_m is not None:
         result.update(
             {
-                "range_m": torch.as_tensor(np.array(sample.depth_range_m, copy=True), dtype=torch.float32, device=device),
-                "confidence": torch.as_tensor(np.array(sample.depth_confidence, copy=True), dtype=torch.float32, device=device),
-                "depth_mask": torch.as_tensor(np.array(sample.depth_mask, copy=True), dtype=torch.bool, device=device),
+                "range_m": _device_array(torch, sample.depth_range_m, device).to(torch.float32),
+                "confidence": _device_array(torch, sample.depth_confidence, device).to(torch.float32),
+                "depth_mask": _device_array(torch, sample.depth_mask, device).to(torch.bool),
             }
         )
     if getattr(sample, "sky_mask", None) is not None:
-        result["sky_mask"] = torch.as_tensor(
-            np.array(sample.sky_mask, copy=True), dtype=torch.bool, device=device
-        )
+        result["sky_mask"] = _device_array(torch, sample.sky_mask, device).to(torch.bool)
     if sample.mono_depth_range_m is not None:
         result.update(
             {
-                "da2_range_m": torch.as_tensor(
-                    np.array(sample.mono_depth_range_m, copy=True),
-                    dtype=torch.float32,
-                    device=device,
-                ),
-                "da2_mask": torch.as_tensor(
-                    np.array(sample.mono_depth_mask, copy=True),
-                    dtype=torch.bool,
-                    device=device,
-                ),
+                "da2_range_m": _device_array(torch, sample.mono_depth_range_m, device).to(torch.float32),
+                "da2_mask": _device_array(torch, sample.mono_depth_mask, device).to(torch.bool),
             }
         )
     if sample.mesh_depth_range_m is not None:
@@ -3330,6 +3376,9 @@ def _render_supervision_loss(
     # Sky supervision (sky_supervision.py): the effective sky mask of the view
     # is built once here and shared by the alpha term, the exclusions and
     # (through info) the growth block. None when disabled.
+    # Pixel radii in the config are defined on the stored face; a sample supervised
+    # below that size covers the same angle with proportionally fewer pixels.
+    reduction = float(getattr(sample, "resolution_reduction", 1.0))
     sky = None
     sky_config = config.sky_supervision
     if sky_config.enabled:
@@ -3342,8 +3391,10 @@ def _render_supervision_loss(
             sky_mask=tensors["sky_mask"],
             rgb_mask=tensors["rgb_mask"],
             depth_mask=tensors.get("depth_mask"),
-            erosion_px=sky_config.mask_erosion_px,
-            lidar_window_px=sky_config.require_no_lidar_within_px,
+            erosion_px=reduced_pixels(sky_config.mask_erosion_px, reduction),
+            lidar_window_px=reduced_pixels(
+                sky_config.require_no_lidar_within_px, reduction
+            ),
         )
     sky_excludes_photometric = sky is not None and sky_config.exclude_photometric
     supervision = rgb_supervision_mask(
@@ -3352,7 +3403,9 @@ def _render_supervision_loss(
         depth_mask=tensors.get("depth_mask"),
         confidence=tensors.get("confidence"),
         mode=config.rgb_supervision_mask,
-        dilation_radius_px=config.rgb_supervision_dilation_radius_px,
+        dilation_radius_px=reduced_pixels(
+            config.rgb_supervision_dilation_radius_px, reduction
+        ),
         exclude=sky.mask if sky_excludes_photometric else None,
     )
     rgb_mask = supervision.mask
@@ -3400,7 +3453,7 @@ def _render_supervision_loss(
             raise ValueError("LiDAR-supported RGB loss requires depth supervision")
         lidar_rgb_mask = tensors["depth_mask"]
         if config.lidar_rgb_dilation_radius_px > 0:
-            radius = config.lidar_rgb_dilation_radius_px
+            radius = reduced_pixels(config.lidar_rgb_dilation_radius_px, reduction)
             lidar_rgb_mask = backend.torch.nn.functional.max_pool2d(
                 lidar_rgb_mask[None, None].to(dtype=rendered.dtype),
                 kernel_size=2 * radius + 1,
@@ -3457,7 +3510,14 @@ def _render_supervision_loss(
             confidence=tensors["confidence"],
             range_m=tensors.get("range_m"),
             mode=config.lidar_alpha_support_mode,
-            dilation_radius_px=config.lidar_alpha_dilation_radius_px,
+            dilation_radius_px=reduced_pixels(
+                config.lidar_alpha_dilation_radius_px, reduction
+            ),
+            edge_erosion_px=(
+                None
+                if reduction <= 1.0
+                else reduced_pixels(STRICT_VISIBILITY_EDGE_EROSION_PX, reduction)
+            ),
         )
         lidar_alpha_valid = alpha_support.support
         lidar_alpha_confidence = alpha_support.weights
@@ -4040,6 +4100,7 @@ def train(
                 if config.sky_supervision.enabled
                 else None
             ),
+            training_focal_px=config.training_focal_px,
         )
     else:
         trainset = S1TrainingDataset(
@@ -4712,16 +4773,33 @@ def train(
     epoch_orders = EpochOrderCache(
         fisher_yates_epoch_order, len(trainset), config.seed
     )
-    prefetcher = (
-        SamplePrefetcher(trainset.__getitem__, name="face-sample-prefetch")
-        if config.prefetch_training_samples
-        else None
-    )
     prefetch_last_step = config.max_steps - 1
     if controlled_stop_after_steps is not None:
         # ``completed`` is ``step + 1``; the run raises after that step, so the sample for
         # the step after it would be decoded and thrown away.
         prefetch_last_step = min(prefetch_last_step, controlled_stop_after_steps - 1)
+    lookahead = None
+    prefetcher = None
+    if config.prefetch_training_samples and config.prefetch_workers > 1:
+        prefetch_backgrounds = _view_background_library(config)
+
+        def fetch_sample_and_backdrop(index: int) -> Any:
+            fetched = trainset[index]
+            if prefetch_backgrounds is not None:
+                # Decode the view's backdrop here as well; the loss finds it cached.
+                prefetch_backgrounds.preload(fetched.image_id)
+            return fetched
+
+        lookahead = LookaheadPrefetcher(
+            fetch_sample_and_backdrop,
+            epoch_orders.index_for_step,
+            last_step=prefetch_last_step,
+            workers=config.prefetch_workers,
+            name="face-sample-lookahead",
+        )
+        lookahead.prime(completed_steps)
+    elif config.prefetch_training_samples:
+        prefetcher = SamplePrefetcher(trainset.__getitem__, name="face-sample-prefetch")
     if prefetcher is not None and completed_steps <= prefetch_last_step:
         prefetcher.prime(epoch_orders.index_for_step(completed_steps))
     for step in range(completed_steps, config.max_steps):
@@ -4790,7 +4868,9 @@ def train(
         if view_last_seen_step[index] >= 0:
             view_revisit_gaps.append(step - view_last_seen_step[index])
         view_last_seen_step[index] = step
-        if prefetcher is None:
+        if lookahead is not None:
+            sample = lookahead.get(step)
+        elif prefetcher is None:
             sample = trainset[index]
         else:
             sample = prefetcher.get(index)
@@ -4947,7 +5027,16 @@ def train(
                 or step % config.lidar_normal_alignment.refresh_every == 0
             ):
                 normal_anchors.refresh(params["means"])
-            normal_terms = normal_anchors.loss(params)
+            normal_terms = normal_anchors.loss(
+                params,
+                visibility_mask=(
+                    _current_view_visibility_mask(
+                        info.get("radii"), len(params["opacities"])
+                    )
+                    if config.lidar_normal_alignment.scope == "visible_current_view"
+                    else None
+                ),
+            )
             loss = loss + float(phase["normal_weight_scale"]) * normal_terms["total"]
             normal_loss_steps_total += 1
             # loss() re-flags itself stale when the cached table no longer
@@ -5697,6 +5786,8 @@ def train(
             torch.cuda.synchronize(config.device)
             if prefetcher is not None:
                 prefetcher.close()
+            if lookahead is not None:
+                lookahead.close()
             raise ControlledTrainingInterruption(
                 completed_steps=completed,
                 checkpoint_path=checkpoint_path,
@@ -5711,6 +5802,8 @@ def train(
 
     if prefetcher is not None:
         prefetcher.close()
+    if lookahead is not None:
+        lookahead.close()
     torch.cuda.synchronize(config.device)
     duration_seconds = time.perf_counter() - started
     peak_vram_bytes = int(torch.cuda.max_memory_allocated(config.device))
