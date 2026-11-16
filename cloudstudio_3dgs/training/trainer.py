@@ -146,6 +146,7 @@ from cloudstudio_3dgs.training.surface_anchor import (
     SurfaceAnchorPrune,
     SurfaceAnchorPruneConfig,
 )
+from cloudstudio_3dgs.training.view_colour import ViewColourAffine, ViewColourConfig
 from cloudstudio_3dgs.training.sky_supervision import (
     SKY_MASK_INFO_KEY,
     SkyGrowthBlock,
@@ -497,6 +498,9 @@ class TrainerConfig:
     sky_supervision: SkySupervisionConfig = field(
         default_factory=SkySupervisionConfig
     )
+    # Per-view, per-channel colour affine inside the photometric losses (view_colour.py):
+    # what the scalar per-image gain cannot express. Disabled by default.
+    view_colour: ViewColourConfig = field(default_factory=ViewColourConfig)
     learning_rates: dict[str, float] = field(
         default_factory=lambda: {
             "means": 1.6e-4,
@@ -599,6 +603,10 @@ class TrainerConfig:
             raise ValueError("surface_anchor_prune must be an object")
         surface_anchor_prune = SurfaceAnchorPruneConfig(**anchor_prune_value)
         sky_supervision = SkySupervisionConfig.from_value(value.get("sky_supervision"))
+        view_colour_value = value.get("view_colour", {})
+        if not isinstance(view_colour_value, dict):
+            raise ValueError("view_colour must be an object")
+        view_colour = ViewColourConfig(**view_colour_value)
         scale_value = value.get("metric_scale_calibration", {})
         if not isinstance(scale_value, dict):
             raise ValueError("metric_scale_calibration must be an object")
@@ -745,6 +753,7 @@ class TrainerConfig:
             tangent_proposal=tangent_proposal,
             surface_anchor_prune=surface_anchor_prune,
             sky_supervision=sky_supervision,
+            view_colour=view_colour,
             **paths,
             **options,
         )
@@ -1198,6 +1207,12 @@ class TrainerConfig:
                     "surface_anchor_prune.outside_box='prune' requires "
                     "tile_inputs_manifest and mipmap_tile_id"
                 )
+        self.view_colour.validate()
+        if self.view_colour.enabled:
+            if self.face_cache_manifest is None:
+                raise ValueError("view_colour applies to Face4 face caches only")
+            if self.ppisp.enabled:
+                raise ValueError("view_colour and ppisp both model per-view colour; enable one")
         self.sky_supervision.validate()
         if self.sky_supervision.enabled:
             if self.face_cache_manifest is None:
@@ -2699,6 +2714,9 @@ class TrainerConfig:
                     dilation_radius_px=self.rgb_supervision_dilation_radius_px,
                 )
             )
+        if self.view_colour.enabled:
+            # Key present only when enabled.
+            contract["loss_contract"]["view_colour"] = self.view_colour.to_dict()
         if self.training_focal_px is not None:
             # Key present only when set, so every existing contract signs as before.
             contract["loss_contract"]["supervision_resolution"] = {
@@ -3388,6 +3406,7 @@ def _render_supervision_loss(
     c2w_override: Any | None = None,
     rgb_gain: Any | None = None,
     ppisp: Any | None = None,
+    view_colour: Any | None = None,
     active_sh_degree: int | None = None,
     range_weight_scale: float = 1.0,
     da2_depth_weight_override: float | None = None,
@@ -3457,6 +3476,9 @@ def _render_supervision_loss(
         # frame's brightness for the photometric losses only. Geometry (range)
         # and validation renders stay at gain 1.0.
         rendered = rendered * rgb_gain
+    if view_colour is not None:
+        # Per-view colour affine, photometric losses only (view_colour.py).
+        rendered = view_colour.apply(rendered, sample.image_id)
     # Photometric ownership: in "all" mode this IS tensors["rgb_mask"] (same
     # object), so the default path below is unchanged. In "lidar_support"
     # the photo-derived terms see only the dilated LiDAR support; a view with
@@ -4612,6 +4634,16 @@ def train(
         exposure_optimizer = exposure.make_optimizer()
         auxiliary_params["exposure_log_gains"] = exposure.log_gains
         auxiliary_optimizers["exposure_log_gains"] = exposure_optimizer
+    view_colour = None
+    view_colour_optimizer = None
+    if config.view_colour.enabled:
+        view_colour = ViewColourAffine(
+            trainset.sample_ids(), config=config.view_colour, device=config.device
+        )
+        view_colour_optimizer = view_colour.make_optimizer()
+        auxiliary_params["view_colour_log_gains"] = view_colour.log_gains
+        auxiliary_params["view_colour_offsets"] = view_colour.offsets
+        auxiliary_optimizers["view_colour"] = view_colour_optimizer
     ppisp = None
     ppisp_optimizer = None
     if config.ppisp.enabled:
@@ -5090,6 +5122,7 @@ def train(
             if exposure is None
             else exposure.gain(sample.image_id.split("::")[0]),
             ppisp=ppisp,
+            view_colour=view_colour,
             active_sh_degree=active_sh_degree,
             range_weight_scale=float(phase["range_weight_scale"]),
             da2_depth_weight_override=(
@@ -5124,6 +5157,8 @@ def train(
             loss = loss + pose_prior
         if exposure is not None:
             loss = loss + exposure.prior_loss()
+        if view_colour is not None:
+            loss = loss + view_colour.prior_loss()
         if ppisp is not None:
             loss = loss + ppisp.regularization_loss()
         if config.sh_regularization_weight > 0.0 and "shN" in params:
@@ -5408,6 +5443,10 @@ def train(
             exposure_optimizer.step()
             exposure_optimizer.zero_grad(set_to_none=True)
             exposure.project_zero_mean()
+        if view_colour_optimizer is not None:
+            view_colour_optimizer.step()
+            view_colour_optimizer.zero_grad(set_to_none=True)
+            view_colour.project()
         if ppisp_optimizer is not None:
             ppisp_optimizer.step()
             ppisp_optimizer.zero_grad(set_to_none=True)
