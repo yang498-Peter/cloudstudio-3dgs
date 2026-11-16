@@ -1665,119 +1665,113 @@ def _derive_c1() -> Profile:
 
 #: Seconds per training step under c1, as intercept + slope x cap in millions.
 C1_SECONDS_PER_STEP = {
-    "intercept": 0.105,
-    "per_million_cap": 0.004,
-    "observations": [[9.0, 0.138], [15.0, 0.153]],
+    "intercept": 0.085,
+    "per_million_cap": 0.005,
+    "observations": [[9.0, 0.130], [15.0, 0.153]],
 }
 C1_SECONDS_PER_STEP_CLAIM = (
-    "Two readings, a line through them: ordinary steps of tile1_c1_30k inside the refine "
-    "window at 8.7M gaussians (0.138 s, cap 9M), and 60 synchronised steps of the tile-3 "
-    "checkpoint at 14.5M under the same switches (0.153 s, cap 15M). Refine events add "
-    "about 1.5 s each with the anchors carried (11 s each before). b12 measured 0.317 s and "
-    "0.45 s at the same caps."
+    "tile1_c1_30k (visible-row normal term, sensor-resolution faces, six decode threads, but "
+    "anchors still re-queried at every refine event): 30,000 steps in 100 minutes against "
+    "b12's 157, ordinary steps 0.138-0.155 s, each refine event 11 s. With the anchors "
+    "carried the same 9M population ran 0.130 s per step overall (tile1_c7_30k, 64.8 "
+    "minutes); 60 synchronised steps of the 14.5M tile-3 checkpoint took 0.153 s. On tile 1 "
+    "c1 scored 0.252 on the Laplacian ratio against b12's 0.148 at the same PSNR."
 )
 
 PROFILE_C1 = _derive_c1()
 
 
-def _derive_c2() -> Profile:
-    """c1 with the gaussian budget spent across the refine window, best candidates first."""
-    base = PROFILE_C1
-    tile_rules = thaw(base.tile_rules)
-    tile_rules["capacity_ramp_end_fraction_of_refine_stop"] = 2.0 / 3.0
-    provenance = dict(base.provenance)
-    provenance["tile_rules.capacity_ramp_end_fraction_of_refine_stop"] = Provenance(
-        C2_RAMP_CLAIM,
-        f"{_REVIEW_DOC} section 4; tests/test_default_strategy_adapter.py",
-        C2_RAMP_CONFIDENCE,
-    )
-    return make_profile(
-        name="c2",
-        version="2026.11.16",
-        summary=(
-            "c1 with a capacity ramp: the population may only reach "
-            "initial x (cap / initial) ^ progress at each refine event, the ramp ending at two "
-            "thirds of the refine window, and each event's headroom goes to its highest-"
-            "gradient candidates."
-        ),
-        runtime=thaw(base.runtime),
-        dataset_contract=thaw(base.dataset_contract),
-        tiling=thaw(base.tiling),
-        trainer_base=thaw(base.trainer_base),
-        tile_rules=tile_rules,
-        coarse_prior=thaw(base.coarse_prior),
-        backdrop=thaw(base.backdrop),
-        merge=thaw(base.merge),
-        export=thaw(base.export),
-        battery=thaw(base.battery),
-        acceptance=thaw(base.acceptance),
-        cost_model=thaw(base.cost_model),
-        external_assets=thaw(base.external_assets),
-        open_questions=thaw(base.open_questions),
-        provenance=provenance,
-    )
+def _derive_c7() -> Profile:
+    """c1 trained the way the customer's viewer renders, with refinement ending at half time.
 
-
-C2_RAMP_CLAIM = (
-    "Without a ramp every candidate over the gradient threshold is born at once: "
-    "tile3_b12op05d3_30k went 5.65M -> 13.5M in fifteen refine events and sat at its cap "
-    "for the remaining 28,000 steps, so the budget was placed by gradients measured before "
-    "any view had been seen twice. The reference's long axis runs to 55.8 mm at p95 against "
-    "our 26.5 mm. The ramp ends at two thirds of the refine window; a smoke run on tile 1 "
-    "confirmed each event admits exactly the scheduled headroom, highest gradients first. "
-    "Its effect on delivered quality is read from the c3 runs, not isolated."
-)
-C2_RAMP_CONFIDENCE = INFERRED
-
-PROFILE_C2 = _derive_c2()
-
-def _derive_c3() -> Profile:
-    """c2 trained the way the customer's viewer renders: classic rasterization with a
-    sampling-rate bound on every gaussian's extent, and no opacity ceiling.
-
-    The b7 ladder switched training to the antialiased rasterizer, which dims a gaussian
-    thinner than a pixel instead of forbidding it. The customer's viewer is a classic one: it
-    draws those gaussians at full weight, and they are the needles the 0.5 opacity ceiling
-    (b11) was then added to hide - at the price of the delivered sharpness (0.795 of the
-    photos' for b8, 0.396 for b12; the reference holds 0.574). Mip-Splatting's 3D bound removes
-    the cause instead: no axis may be smaller than 0.447 px of the closest view that rasterized
-    the gaussian, so what is trained is what a classic viewer shows.
+    * Classic rasterization and no opacity ceiling. The b7 ladder switched training to the
+      antialiased rasterizer, which dims a gaussian thinner than a pixel instead of forbidding
+      it, on faces supervised at 2.93x the sensor's resolution. The customer's viewer is a
+      classic one at roughly a third of that sampling rate: it draws those gaussians at full
+      weight and widened, and they are the needles the 0.5 opacity ceiling (b11) was added to
+      hide, at the price of every surface becoming a translucent stack. Trained classically
+      at sensor resolution, what is optimized is what that viewer shows, and the ceiling has
+      nothing left to hide.
+    * A 0.1 px lower bound on every axis at the closest view that rasterized the gaussian
+      (the reference's own thin tail starts there; Mip-Splatting's 0.447 px, tried on tile 1,
+      thickened the short axis from 0.29 mm to 1.98 mm and blurred novel views).
+    * Refinement ends at step 15000 instead of 21000: the training-view fit does not move
+      while refinement runs and jumps as soon as it stops.
+    * Decoded samples are cached for the run.
     """
-    base = PROFILE_C2
+    base = PROFILE_C1
     trainer_base = thaw(base.trainer_base)
     trainer_base["pinhole_rasterize_mode"] = "classic"
+    trainer_base["mcmc_refine_stop_iter"] = 15000
+    trainer_base["sample_cache_gib"] = 8.0
+    strategy = dict(trainer_base["default_strategy"])
+    strategy["refine_stop_iter"] = 15000
+    strategy["refine_scale2d_stop_iter"] = 15000
+    trainer_base["default_strategy"] = strategy
     geometry = dict(trainer_base["geometry_regularization"])
     geometry.pop("max_opacity", None)
-    geometry["min_extent_px"] = 0.447
+    geometry["min_extent_px"] = 0.1
     trainer_base["geometry_regularization"] = geometry
+
+    cost_model = thaw(base.cost_model)
+    cost_model["tile_train_seconds_per_step"] = {
+        "intercept": 0.085,
+        "per_million_cap": 0.005,
+        "observations": [[9.0, 0.130]],
+    }
+
     provenance = dict(base.provenance)
-    provenance["trainer_base.geometry_regularization.min_extent_px"] = Provenance(
-        C3_EXTENT_CLAIM,
-        f"{_REVIEW_DOC} sections 2.3 and 5; tests/test_min_extent.py",
-        C3_CONFIDENCE,
-    )
     provenance["trainer_base.pinhole_rasterize_mode"] = Provenance(
-        "Scoring and the customer's viewer both rasterize classically; an antialiased-trained "
-        "model read classically lost 0.4 dB of battery PSNR against the classic-trained b6 "
-        "(17.99 vs 18.37) and showed feathered needle clusters in crowns. With the extent "
-        "bound no gaussian is sub-pixel at the views that trained it, so classic training no "
-        "longer aliases.",
-        "research/quality_recovery_v2/18_ladder28_detail_gap.zh-CN.md section 7; " + _REVIEW_DOC,
-        INFERRED,
+        "tile1_c7_30k against tile1_c1_30k, same tile, same classic-mode scoring: the door "
+        "leaf is solid instead of see-through and the sign behind it is legible where c1 "
+        "smears it; PSNR against the reference 16.71 / 16.84 / 17.18 (full, 1/4, 1/8) against "
+        "16.55 / 16.84 / 17.07; training-view PSNR 20.1-20.4 against 19.95. The Laplacian "
+        "ratio reads 0.195 against c1's 0.252 - it counts aliased grain as sharpness.",
+        f"{_REVIEW_DOC} section 5; house0305_sop/arm_scores.txt tile1_c7_30k",
+        MEASURED,
     )
     provenance["trainer_base.geometry_regularization.max_opacity"] = Provenance(
-        "The 0.5 ceiling (b11) hid needles by making every surface a translucent stack; it "
-        "took tile 1's sharpness against the photos from 0.248 to 0.154. Removed here because "
-        "the extent bound addresses what it was hiding.",
-        f"{_REVIEW_DOC} section 5; house0305_sop/arm_scores.txt tile1_b10sk_30k / tile1_b11op05_30k",
-        C3_CONFIDENCE,
+        "Removed with the switch to classic training (same tile-1 comparison): 29% of the "
+        "gaussians now sit above 0.9 opacity, as before the ceiling, without the needle "
+        "clusters an antialiased-trained model shows in a classic renderer.",
+        f"{_REVIEW_DOC} sections 1 and 5",
+        MEASURED,
+    )
+    provenance["trainer_base.geometry_regularization.min_extent_px"] = Provenance(
+        "Short axis in sensor pixels at the nearest camera: ours 0.152 at the median with 40% "
+        "under 0.1 px, the reference 0.20-0.27 with 17-22% under 0.1 px. 0.447 px (tile1_c4_30k) "
+        "blurred novel views. Under classic training the bound rarely binds - the short axis "
+        "settles at 1.05 mm on its own - and stays as a guard.",
+        f"{_REVIEW_DOC} sections 2.3 and 5; tests/test_min_extent.py",
+        MEASURED,
+    )
+    provenance["trainer_base.mcmc_refine_stop_iter"] = Provenance(
+        "Training-view PSNR per 3k steps on tile 1 sits at ~19 from 3k to the end of "
+        "refinement in every arm and jumps 0.6-1.0 dB in the window after it (b12, c1, c4 at "
+        "21k; c6, c7 at 15k). Ending refinement at 15k reaches the final level by 21-24k.",
+        f"{_REVIEW_DOC} section 1; house0305_sop/tile1_c{{1,4,6,7}}_30k/monitor/progress.jsonl",
+        MEASURED,
+    )
+    provenance["trainer_base.sample_cache_gib"] = Provenance(
+        "48 real tile-1 samples compared equal field for field at 5.4 MB each and came back "
+        "in 21 ms on six threads against 147 ms. 8 GiB holds about four fifths of a tile's "
+        "views; the cache also stops growing when the volume has under 12 GiB free.",
+        f"{_REVIEW_DOC} section 3; tests/test_sample_cache.py",
+        MEASURED,
+    )
+    provenance["cost_model.tile_train_seconds_per_step"] = Provenance(
+        "tile1_c7_30k: 30,000 steps in 64.8 minutes at cap 9M (0.130 s per step; b12 0.317). "
+        "The slope is carried over from the 14.5M profile, not fitted.",
+        f"{_REVIEW_DOC} section 5",
+        EXTRAPOLATED,
     )
     return make_profile(
-        name="c3",
+        name="c7",
         version="2026.11.16",
         summary=(
-            "c2 for a classic viewer: classic rasterization, every gaussian axis at least "
-            "0.447 px of the closest view that rasterized it, no opacity ceiling."
+            "Trained for a classic viewer at sensor resolution: classic rasterization, no "
+            "opacity ceiling, 0.1 px extent bound, refinement to 15k of 30k, normal term on "
+            "visible rows, decoded samples cached. 2.4x faster than b12op05d3 on tile 1."
         ),
         runtime=thaw(base.runtime),
         dataset_contract=thaw(base.dataset_contract),
@@ -1790,22 +1784,93 @@ def _derive_c3() -> Profile:
         export=thaw(base.export),
         battery=thaw(base.battery),
         acceptance=thaw(base.acceptance),
-        cost_model=thaw(base.cost_model),
+        cost_model=cost_model,
         external_assets=thaw(base.external_assets),
         open_questions=thaw(base.open_questions),
         provenance=provenance,
     )
 
 
-C3_EXTENT_CLAIM = (
-    "Short axis in sensor pixels at the nearest camera: ours 0.152 at the median with 40% "
-    "under 0.1 px, the reference 0.20-0.27 with 17-22% under 0.1 px. 0.447 px is the "
-    "Mip-Splatting value (variance 0.2 px^2) at the true sampling rate, which the sensor-"
-    "resolution supervision of c1 makes the training rate; it is 0.57 mm at 1 m."
-)
-C3_CONFIDENCE = INFERRED
+PROFILE_C7 = _derive_c7()
 
-PROFILE_C3 = _derive_c3()
+
+def _derive_c6() -> Profile:
+    """A lean preview recipe: a third of the gaussians, about 45 minutes a tile.
+
+    The reference delivery holds 1.97M gaussians inside tile 1's box; b12 trained 8.75M there,
+    42% of them under 0.1 opacity. Starting from every third LiDAR point (scales grown by
+    sqrt(3) so the surface stays covered) under a cap of 0.88x the LiDAR count, with the budget
+    ramped in by gradient rank, the training-view fit is the best of any arm (20.0-20.5 dB).
+    Novel views are softer than c7's - thinning uniformly costs in-plane resolution and the
+    0.447 px bound thickens every disk - so this is a preview, not a delivery.
+    """
+    base = PROFILE_C7
+    trainer_base = thaw(base.trainer_base)
+    trainer_base["initialization_subsample_stride"] = 3
+    trainer_base["initialization_subsample_keeps_coverage"] = True
+    geometry = dict(trainer_base["geometry_regularization"])
+    geometry["min_extent_px"] = 0.447
+    trainer_base["geometry_regularization"] = geometry
+    tile_rules = thaw(base.tile_rules)
+    # 1.756 x the LiDAR count x 0.5 = 0.878 x the LiDAR count (b12 used x1.5).
+    tile_rules["cap_multiplier"] = 0.5
+    tile_rules["cap_ceiling"] = 8000000
+    tile_rules["cap_floor_policy"] = "none"
+    tile_rules["capacity_ramp_end_fraction_of_refine_stop"] = 2.0 / 3.0
+    cost_model = thaw(base.cost_model)
+    cost_model["tile_train_seconds_per_step"] = {
+        "intercept": 0.076,
+        "per_million_cap": 0.005,
+        "observations": [[3.0, 0.091]],
+    }
+    provenance = dict(base.provenance)
+    lean = Provenance(
+        "tile1_c6_30k: 2.97M gaussians, training-view PSNR 20.0-20.5 (b12 19.91 at 8.75M), "
+        "PSNR against the reference 16.80 / 16.95 / 17.20, 45.5 minutes. Novel-view crops are "
+        "visibly softer than tile1_c7_30k: short axis 2.19 mm, mid 4.8 mm against 1.05 / 2.3.",
+        f"{_REVIEW_DOC} section 5; house0305_sop/arm_scores.txt tile1_c6_30k",
+        MEASURED,
+    )
+    for knob in (
+        "trainer_base.initialization_subsample_stride",
+        "tile_rules.cap_multiplier",
+        "tile_rules.capacity_ramp_end_fraction_of_refine_stop",
+        "trainer_base.geometry_regularization.min_extent_px",
+    ):
+        provenance[knob] = lean
+    provenance["cost_model.tile_train_seconds_per_step"] = Provenance(
+        "tile1_c6_30k: 30,000 steps in 45.5 minutes at cap 3M (0.091 s per step), GPU at "
+        "about a quarter utilisation - the training thread, not the card, binds it.",
+        f"{_REVIEW_DOC} section 5",
+        EXTRAPOLATED,
+    )
+    return make_profile(
+        name="c6",
+        version="2026.11.16",
+        summary=(
+            "Lean preview of c7: every third LiDAR point as initialization, cap 0.88x the LiDAR "
+            "count ramped in by gradient rank, 0.447 px extent bound. A third of the gaussians "
+            "and 45 minutes a tile; softer novel views than c7."
+        ),
+        runtime=thaw(base.runtime),
+        dataset_contract=thaw(base.dataset_contract),
+        tiling=thaw(base.tiling),
+        trainer_base=trainer_base,
+        tile_rules=tile_rules,
+        coarse_prior=thaw(base.coarse_prior),
+        backdrop=thaw(base.backdrop),
+        merge=thaw(base.merge),
+        export=thaw(base.export),
+        battery=thaw(base.battery),
+        acceptance=thaw(base.acceptance),
+        cost_model=cost_model,
+        external_assets=thaw(base.external_assets),
+        open_questions=thaw(base.open_questions),
+        provenance=provenance,
+    )
+
+
+PROFILE_C6 = _derive_c6()
 
 # The recommended recipe comes first; b5fill2 stays so the campaign's own deliveries reproduce;
 # b6reset is the candidate under delivery-scale validation; b12op05d3 / b13op05d0 are the
@@ -1817,8 +1882,8 @@ PROFILES: Mapping[str, Profile] = MappingProxyType(
         PROFILE_B12OP05D3.name: PROFILE_B12OP05D3,
         PROFILE_B13OP05D0.name: PROFILE_B13OP05D0,
         PROFILE_C1.name: PROFILE_C1,
-        PROFILE_C2.name: PROFILE_C2,
-        PROFILE_C3.name: PROFILE_C3,
+        PROFILE_C7.name: PROFILE_C7,
+        PROFILE_C6.name: PROFILE_C6,
         PROFILE_B5FILL2.name: PROFILE_B5FILL2,
     }
 )

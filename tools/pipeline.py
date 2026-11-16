@@ -2552,8 +2552,24 @@ def wait_for_arm(
     """
     queue_file = ctx.config.queue_status_file()
     baseline = _count_success_lines(queue_file, arm)
+
+    def attempt() -> tuple[Any, bool]:
+        job = ctx.arm_job(arm)
+        return job.get("started_at"), job.training_verified()
+
+    # An arm started with `pipeline.py arm` never writes a queue line. Its job state does
+    # record the attempt, so a verified completion of an attempt other than the one that
+    # was already complete when the wait began releases the queue as well.
+    baseline_started, baseline_verified = attempt()
+
+    def released() -> bool:
+        if _count_success_lines(queue_file, arm) > baseline:
+            return True
+        started, verified = attempt()
+        return verified and (not baseline_verified or started != baseline_started)
+
     ctx.status(f"[queue] waiting for arm {arm} (successful exits so far: {baseline})")
-    while _count_success_lines(queue_file, arm) <= baseline:
+    while not released():
         sleep(poll_seconds)
     while ctx.trainer_processes():
         ctx.status("[queue] trainer still running; waiting for the GPU")

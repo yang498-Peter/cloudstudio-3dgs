@@ -184,6 +184,35 @@ class SampleCacheTest(unittest.TestCase):
         self.assertIsNone(cache.load(1))
         self.assertIsNotNone(cache.load(0))
 
+    def test_an_archive_that_cannot_be_read_is_a_miss_not_a_failure(self) -> None:
+        # Windows: a scanner can hold a freshly written file; the run must not die on it.
+        from unittest import mock
+
+        cache = SampleCache(self.root, identity={"run": "a"}, budget_bytes=1 << 30)
+        cache.fetch(3, make_sample)
+        calls: list[int] = []
+
+        def decode(index: int) -> TrainingSample:
+            calls.append(index)
+            return make_sample(index)
+
+        with mock.patch("cloudstudio_3dgs.training.sample_cache.np.load", side_effect=PermissionError(13, "held")):
+            assert_same_sample(self, cache.fetch(3, decode), make_sample(3))
+        self.assertEqual(calls, [3])
+        self.assertEqual(cache.stats()["read_errors"], 1)
+        assert_same_sample(self, cache.fetch(3, decode), make_sample(3))  # readable again: a hit
+        self.assertEqual(calls, [3])
+
+    def test_a_write_that_fails_stops_the_cache_not_the_run(self) -> None:
+        from unittest import mock
+
+        cache = SampleCache(self.root, identity={"run": "a"}, budget_bytes=1 << 30)
+        with mock.patch("cloudstudio_3dgs.training.sample_cache.np.savez", side_effect=OSError(28, "no space")):
+            assert_same_sample(self, cache.fetch(0, make_sample), make_sample(0))
+        self.assertEqual(cache.stats()["full"], 1)
+        self.assertEqual(cache.stats()["stored"], 0)
+        self.assertFalse(list(self.root.glob("*.npz")))
+
     def test_an_unsupported_sample_passes_through(self) -> None:
         cache = SampleCache(self.root, identity={"run": "a"}, budget_bytes=1 << 30)
         odd = replace(make_sample(), camera_model="fisheye")

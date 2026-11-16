@@ -31,6 +31,7 @@ import json
 import os
 import shutil
 import threading
+import time
 from dataclasses import fields
 from pathlib import Path
 from typing import Any
@@ -231,6 +232,7 @@ class SampleCache:
         self.hits = 0
         self.stored = 0
         self.skipped = 0
+        self.read_errors = 0
         marker = self.root / IDENTITY_NAME
         recorded = None
         if marker.is_file():
@@ -262,8 +264,22 @@ class SampleCache:
         path = self._path(index)
         if not path.is_file():
             return None
-        with np.load(path, allow_pickle=False) as arrays:
-            sample = decode_sample(arrays)
+        sample = None
+        for attempt in range(3):
+            try:
+                with np.load(path, allow_pickle=False) as arrays:
+                    sample = decode_sample(arrays)
+                break
+            except OSError:
+                # A scanner or indexer can hold a freshly written archive for a moment on
+                # Windows; give it two short chances to let go.
+                time.sleep(0.02 * (attempt + 1))
+        if sample is None:
+            # The cache is an optimisation: a read that keeps failing is a miss, and the
+            # sample is decoded as if it had never been stored.
+            with self._lock:
+                self.read_errors += 1
+            return None
         with self._lock:
             self.hits += 1
         return sample
@@ -280,8 +296,15 @@ class SampleCache:
             return False
         path = self._path(index)
         temporary = path.with_name(f"{path.stem}.{os.getpid()}.{threading.get_ident()}.tmp.npz")
-        np.savez(temporary, **arrays)
-        size = temporary.stat().st_size
+        try:
+            np.savez(temporary, **arrays)
+            size = temporary.stat().st_size
+        except OSError:
+            # Disk full or the file is held: stop writing, never fail the run.
+            temporary.unlink(missing_ok=True)
+            with self._lock:
+                self._full = True
+            return False
         with self._lock:
             if (
                 self._bytes + size > self.budget_bytes
@@ -294,9 +317,18 @@ class SampleCache:
                 self.stored += 1
                 keep = True
         if keep:
-            os.replace(temporary, path)
-        else:
-            temporary.unlink(missing_ok=True)
+            try:
+                os.replace(temporary, path)
+            except OSError:
+                keep = False
+                with self._lock:
+                    self._bytes -= size
+                    self.stored -= 1
+        if not keep:
+            try:
+                temporary.unlink(missing_ok=True)
+            except OSError:
+                pass
         return keep
 
     def fetch(self, index: int, decode: Any) -> TrainingSample:
@@ -314,6 +346,7 @@ class SampleCache:
                 "hits": self.hits,
                 "stored": self.stored,
                 "skipped": self.skipped,
+                "read_errors": self.read_errors,
                 "bytes": self._bytes,
                 "full": int(self._full),
             }

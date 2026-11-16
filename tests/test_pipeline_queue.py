@@ -16,6 +16,7 @@ from tools.pipeline import (
     _parse_process_listing,
     find_trainer_processes,
     run_queue,
+    run_arm,
     wait_for_arm,
 )
 
@@ -138,6 +139,36 @@ class QueueTests(PipelineFixture):
 
         wait_for_arm(self.ctx, "armA", poll_seconds=7, sleep=sleep)
         self.assertEqual(polls, [7, 7])
+
+    def test_wait_for_arm_sees_an_arm_that_was_not_run_by_a_queue(self) -> None:
+        # `pipeline.py arm X` writes no queue line; on 2026-11-16 two queues waited on such
+        # an arm after it had finished and scored.
+        self.config.queue_status_file().write_text("", encoding="utf-8")
+        self.write_arm_config("armA")
+        polls: list[float] = []
+
+        def sleep(seconds: float) -> None:
+            polls.append(seconds)
+            if len(polls) == 2:
+                self.assertEqual(run_arm(self.ctx, "armA"), 0)
+
+        wait_for_arm(self.ctx, "armA", poll_seconds=3, sleep=sleep)
+        self.assertEqual(polls, [3, 3])
+
+    def test_wait_for_arm_is_not_released_by_an_attempt_that_was_already_complete(self) -> None:
+        self.config.queue_status_file().write_text("", encoding="utf-8")
+        self.write_arm_config("armA")
+        self.assertEqual(run_arm(self.ctx, "armA"), 0)
+        polls: list[float] = []
+
+        def sleep(seconds: float) -> None:
+            polls.append(seconds)
+            if len(polls) == 3:
+                with self.config.queue_status_file().open("a", encoding="utf-8") as handle:
+                    handle.write("y arm armA exit 0 new\n")
+
+        wait_for_arm(self.ctx, "armA", poll_seconds=1, sleep=sleep)
+        self.assertEqual(len(polls), 3)
 
     def test_wait_for_arm_then_waits_for_gpu(self) -> None:
         queue_file = self.config.queue_status_file()

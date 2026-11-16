@@ -459,7 +459,10 @@ def tile_cap(profile: Profile, tile: TileSummary, *, vram_gib: float | None = No
     previous = tile.previous_final_population
     # The floor fires only when the ratio would run this tile tighter than it
     # already ran; then it takes that population back plus a little headroom.
-    if previous is not None and raw < float(previous):
+    # A recipe that deliberately trains a leaner population than its predecessors says
+    # cap_floor_policy "none": the previous population is then no floor.
+    floored = rules.get("cap_floor_policy") != "none"
+    if floored and previous is not None and raw < float(previous):
         raw = float(previous) * float(rules.get("cap_floor_headroom", 1.0))
     step = int(rules["cap_round_to"])
     cap = int(math.floor(raw / step + 0.5)) * step
@@ -906,6 +909,8 @@ def build_plan(
                 f"{tile.name}: cap held at the profile's measured ceiling "
                 f"{unclamped/1e6:.2f}M (the ratio rule asks for more)"
             )
+        elif profile.tile_rules.get("cap_floor_policy") == "none":
+            pass  # no floor to report
         elif tile.previous_final_population is not None and (
             tile.init_point_count * ratio < tile.previous_final_population
             if profile.tile_rules.get("cap_multiplier") is not None
