@@ -170,6 +170,20 @@ class SampleCacheTest(unittest.TestCase):
         self.assertLessEqual(stats["bytes"], 6000)
         self.assertFalse(list(self.root.glob("*.tmp.npz")))
 
+    def test_a_nearly_full_volume_stops_writes_too(self) -> None:
+        free = {"bytes": 50 * 1024**3}
+        cache = SampleCache(
+            self.root, identity={"run": "a"}, budget_bytes=1 << 30,
+            min_free_bytes=12 * 1024**3, free_bytes=lambda: free["bytes"],
+        )
+        cache.fetch(0, make_sample)
+        free["bytes"] = 11 * 1024**3
+        assert_same_sample(self, cache.fetch(1, make_sample), make_sample(1))
+        self.assertEqual(cache.stats()["stored"], 1)
+        self.assertEqual(cache.stats()["full"], 1)
+        self.assertIsNone(cache.load(1))
+        self.assertIsNotNone(cache.load(0))
+
     def test_an_unsupported_sample_passes_through(self) -> None:
         cache = SampleCache(self.root, identity={"run": "a"}, budget_bytes=1 << 30)
         odd = replace(make_sample(), camera_model="fisheye")

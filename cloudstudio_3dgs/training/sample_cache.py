@@ -41,6 +41,9 @@ from cloudstudio_3dgs.training.dataset import TrainingSample
 from cloudstudio_3dgs.training.sample_resolution import _range_scale
 
 SCHEMA_VERSION = 1
+#: The cache stops growing before the volume has less than this free: it is an
+#: optimisation, and a full system disk takes everything else on the machine with it.
+DEFAULT_MIN_FREE_BYTES = 12 * 1024**3
 IDENTITY_NAME = "identity.json"
 #: Fields the archive reproduces. A sample carrying anything else that is not None is not cached.
 _UNSUPPORTED = (
@@ -206,11 +209,21 @@ class SampleCache:
     renamed, so a reader sees a whole file or none.
     """
 
-    def __init__(self, root: Path, *, identity: Any, budget_bytes: int) -> None:
+    def __init__(
+        self,
+        root: Path,
+        *,
+        identity: Any,
+        budget_bytes: int,
+        min_free_bytes: int = DEFAULT_MIN_FREE_BYTES,
+        free_bytes: Any = None,
+    ) -> None:
         if budget_bytes <= 0:
             raise ValueError("sample cache budget must be positive")
         self.root = Path(root)
         self.budget_bytes = int(budget_bytes)
+        self.min_free_bytes = int(min_free_bytes)
+        self._free_bytes = free_bytes or (lambda: shutil.disk_usage(self.root).free)
         self.identity = identity_sha256({"schema": SCHEMA_VERSION, "identity": identity})
         self._lock = threading.Lock()
         self._bytes = 0
@@ -270,7 +283,10 @@ class SampleCache:
         np.savez(temporary, **arrays)
         size = temporary.stat().st_size
         with self._lock:
-            if self._bytes + size > self.budget_bytes:
+            if (
+                self._bytes + size > self.budget_bytes
+                or self._free_bytes() < self.min_free_bytes
+            ):
                 self._full = True
                 keep = False
             else:
