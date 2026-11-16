@@ -421,6 +421,13 @@ class TrainerConfig:
     # applied identically to the per-point geometry) so initial population
     # density can be varied without a new signed artifact. 1 = as signed.
     initialization_subsample_stride: int = 1
+    # Thinning by stride k leaves 1/k of the points at sqrt(k) times the spacing. With
+    # this on, each kept point's signed scales grow by sqrt(k) so the thinned set still
+    # covers the surface it was measured on (a strided subset of the house0305 cloud has
+    # 1.66x the neighbour spacing at k = 3, against sqrt(3) = 1.73 for a uniform one).
+    # The reference delivery holds 1.97M gaussians in tile 1's box, where the LiDAR
+    # initialization alone is 3.42M points and we trained 8.75M.
+    initialization_subsample_keeps_coverage: bool = False
     # Optional pre-baked far-shell sky layer (checkpoint-convention params)
     # concatenated into the trainable set at initialization, so sky pixels
     # have an owner and the white background stops pressing scene gaussians
@@ -694,6 +701,7 @@ class TrainerConfig:
                 "densification_gradient_source",
                 "init_opacity",
                 "initialization_subsample_stride",
+                "initialization_subsample_keeps_coverage",
                 "learning_rates",
                 "warm_start_min_opacity",
                 "warm_start_scale_multiplier",
@@ -1331,6 +1339,12 @@ class TrainerConfig:
             or int(self.initialization_subsample_stride) < 1
         ):
             raise ValueError("initialization_subsample_stride must be a positive integer")
+        if self.initialization_subsample_keeps_coverage and int(
+            self.initialization_subsample_stride
+        ) <= 1:
+            raise ValueError(
+                "initialization_subsample_keeps_coverage needs initialization_subsample_stride > 1"
+            )
         if self.sky_shell_checkpoint is not None:
             if not self.sky_shell_checkpoint.is_file():
                 raise FileNotFoundError(
@@ -2489,6 +2503,11 @@ class TrainerConfig:
                 **(
                     {"subsample_stride": int(self.initialization_subsample_stride)}
                     if int(self.initialization_subsample_stride) > 1
+                    else {}
+                ),
+                **(
+                    {"subsample_keeps_coverage": True}
+                    if self.initialization_subsample_keeps_coverage
                     else {}
                 ),
             },
@@ -4292,12 +4311,15 @@ def train(
         normal_anchors = LidarNormalAnchors(
             normal_field, config.lidar_normal_alignment
         )
-    if len(xyz) >= config.cap_max and config.warm_start_checkpoint is None:
+    # The budget binds the population that is actually initialized, which a strided
+    # initialization makes smaller than the signed PLY.
+    initialized_count = len(range(0, len(xyz), int(config.initialization_subsample_stride)))
+    if initialized_count >= config.cap_max and config.warm_start_checkpoint is None:
         # A warm start replaces the initialization population wholesale, so
         # the capacity budget binds the warm-started row count (validated
         # below once the checkpoint is applied), not the signed PLY's.
         raise ValueError(
-            f"initialization has {len(xyz)} Gaussians but cap_max is {config.cap_max}"
+            f"initialization has {initialized_count} Gaussians but cap_max is {config.cap_max}"
         )
     exact_geometry: tuple[np.ndarray, np.ndarray, dict[str, Any]] | None = None
     if (
@@ -4320,10 +4342,25 @@ def train(
         rgb = np.ascontiguousarray(rgb[::subsample_stride])
         if exact_geometry is not None:
             exact_scales, exact_quats, exact_geometry_report = exact_geometry
+            coverage_scale = (
+                math.sqrt(subsample_stride)
+                if config.initialization_subsample_keeps_coverage
+                else 1.0
+            )
             exact_geometry = (
-                np.ascontiguousarray(exact_scales[::subsample_stride]),
+                np.ascontiguousarray(
+                    exact_scales[::subsample_stride] * np.float32(coverage_scale)
+                ),
                 np.ascontiguousarray(exact_quats[::subsample_stride]),
-                {**exact_geometry_report, "subsample_stride": subsample_stride},
+                {
+                    **exact_geometry_report,
+                    "subsample_stride": subsample_stride,
+                    **(
+                        {"subsample_coverage_scale": coverage_scale}
+                        if config.initialization_subsample_keeps_coverage
+                        else {}
+                    ),
+                },
             )
         print(
             f"initialization thinned by stride {subsample_stride}: "
