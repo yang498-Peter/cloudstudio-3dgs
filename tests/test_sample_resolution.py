@@ -76,6 +76,34 @@ class ReductionRuleTests(unittest.TestCase):
         self.assertEqual(pixels(6, 1.0), 6)
 
 
+class SensorFocalTests(unittest.TestCase):
+    MANIFEST = {
+        "cameras": [
+            {"camera_id": "left", "intrinsic": {"fl_x": 787.64, "fl_y": 787.64}},
+            {"camera_id": "right", "intrinsic": {"fl_x": 789.10, "fl_y": 789.10}},
+        ]
+    }
+
+    def test_sensor_reads_the_largest_camera_focal_from_the_capture(self) -> None:
+        from cloudstudio_3dgs.training.sample_resolution import resolve_training_focal_px
+
+        self.assertEqual(resolve_training_focal_px("sensor", self.MANIFEST), 789.10)
+        self.assertEqual(resolve_training_focal_px(640.0, None), 640.0)
+        self.assertIsNone(resolve_training_focal_px(None, self.MANIFEST))
+
+    def test_sensor_without_calibration_is_refused(self) -> None:
+        from cloudstudio_3dgs.training.sample_resolution import resolve_training_focal_px
+
+        with self.assertRaises(ValueError):
+            resolve_training_focal_px("sensor", {"cameras": [{"camera_id": "left"}]})
+        with self.assertRaises(ValueError):
+            resolve_training_focal_px("sensor", None)
+        with self.assertRaises(ValueError):
+            resolve_training_focal_px("native", self.MANIFEST)
+        with self.assertRaises(ValueError):
+            resolve_training_focal_px(0.0, self.MANIFEST)
+
+
 class ReduceSampleTests(unittest.TestCase):
     def test_colour_is_the_block_mean_and_the_camera_stays_registered(self) -> None:
         sample = make_sample()

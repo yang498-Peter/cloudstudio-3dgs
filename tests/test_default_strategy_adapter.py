@@ -449,6 +449,112 @@ class DefaultStrategyAdapterTests(unittest.TestCase):
         self.assertEqual((clone_count, split_count), (2, 0))
         self.assertEqual(len(params["means"]), 5)
 
+    def _ramp_fixture(self, count, **overrides):
+        import torch
+
+        settings = dict(
+            scene_scale=10.0,
+            refine_start_iter=500,
+            refine_stop_iter=2500,
+            refine_every=100,
+            reset_every=300,
+            grow_grad2d=0.00015,
+            prune_opa=0.1,
+            split_scale_m=0.2,
+            prune_scale_m=0.2,
+            exact_mipmap_lifecycle=True,
+            prune_opa_late=0.05,
+            prune_switch_step=1000,
+            reset_opacity_cap=0.2,
+            capacity_cap=400,
+            capacity_ramp_end_step=1500,
+        )
+        settings.update(overrides)
+        adapter = DefaultStrategyAdapter(**settings)
+        params = torch.nn.ParameterDict(
+            {
+                "means": torch.nn.Parameter(torch.zeros(count, 3)),
+                "scales": torch.nn.Parameter(torch.full((count, 3), 0.05).log()),
+                "quats": torch.nn.Parameter(torch.tensor([[1.0, 0.0, 0.0, 0.0]] * count)),
+                "opacities": torch.nn.Parameter(torch.full((count,), 0.3).logit()),
+                "colors": torch.nn.Parameter(torch.zeros(count, 3)),
+            }
+        )
+        optimizers = {
+            name: torch.optim.Adam([parameter], lr=1e-3) for name, parameter in params.items()
+        }
+
+        def state_for(step, gradients):
+            return {
+                "grad2d": gradients,
+                "count": torch.ones(len(gradients)),
+                "radii": torch.zeros(len(gradients)),
+                "scene_scale": 10.0,
+                "_cloudstudio_current_step": step,
+            }
+
+        return adapter, params, optimizers, state_for
+
+    def test_capacity_ramp_admits_the_scheduled_population_best_first(self):
+        import torch
+
+        adapter, params, optimizers, state_for = self._ramp_fixture(100)
+        # Every row is a candidate; the ramp alone decides how many are born.
+        gradients = torch.linspace(0.001, 0.002, 100)
+        state = state_for(500, gradients)
+        self.assertEqual(adapter._grow_mipmap(params, optimizers, state), (0, 0))
+        self.assertEqual(state["_cloudstudio_capacity_ramp_initial_count"], 100)
+
+        state["_cloudstudio_current_step"] = 1000  # half way: 100 * 4 ** 0.5 = 200
+        clone_count, _ = adapter._grow_mipmap(params, optimizers, state)
+        self.assertEqual(clone_count, 100)
+        self.assertEqual(len(params["means"]), 200)
+
+    def test_capacity_ramp_births_go_to_the_highest_gradients(self):
+        import torch
+
+        adapter, params, optimizers, state_for = self._ramp_fixture(100)
+        gradients = torch.linspace(0.001, 0.002, 100)
+        state = state_for(500, gradients)
+        adapter._grow_mipmap(params, optimizers, state)
+        with torch.no_grad():
+            params["means"][:, 0] = torch.arange(100, dtype=torch.float32)
+        state["_cloudstudio_current_step"] = 600  # 100 * 4 ** 0.1 = 114.87 -> 114
+        clone_count, _ = adapter._grow_mipmap(params, optimizers, state)
+        self.assertEqual(clone_count, 14)
+        born_from = sorted(int(value) for value in params["means"][100:, 0].tolist())
+        self.assertEqual(born_from, list(range(86, 100)))
+
+    def test_capacity_ramp_ends_at_the_cap_and_never_exceeds_it(self):
+        import torch
+
+        adapter, params, optimizers, state_for = self._ramp_fixture(100)
+        state = state_for(500, torch.full((100,), 0.002))
+        adapter._grow_mipmap(params, optimizers, state)
+        self.assertEqual(adapter.capacity_ramp_target({**state, "_cloudstudio_current_step": 1500}, 100), 400)
+        self.assertEqual(adapter.capacity_ramp_target({**state, "_cloudstudio_current_step": 2400}, 100), 400)
+        self.assertEqual(adapter.capacity_ramp_target({**state, "_cloudstudio_current_step": 100}, 100), 100)
+
+    def test_capacity_ramp_from_a_population_already_at_the_cap_is_the_cap(self):
+        import torch
+
+        adapter, params, optimizers, state_for = self._ramp_fixture(100, capacity_cap=80)
+        state = state_for(900, torch.full((100,), 0.002))
+        self.assertEqual(adapter._grow_mipmap(params, optimizers, state), (0, 0))
+        self.assertEqual(len(params["means"]), 100)
+
+    def test_capacity_ramp_needs_a_cap_and_a_later_end(self):
+        with self.assertRaises(ValueError):
+            self._ramp_fixture(4, capacity_cap=None)
+        with self.assertRaises(ValueError):
+            self._ramp_fixture(4, capacity_ramp_end_step=500)
+
+    def test_capacity_ramp_is_recorded_only_when_set(self):
+        adapter, _, _, _ = self._ramp_fixture(4)
+        self.assertEqual(adapter.state_dict()["capacity_ramp_end_step"], 1500)
+        plain, _, _, _ = self._ramp_fixture(4, capacity_ramp_end_step=None)
+        self.assertNotIn("capacity_ramp_end_step", plain.state_dict())
+
     def test_lidar_birth_guard_blocks_unsupported_parent_and_projects_newborns(self):
         import numpy as np
         import torch

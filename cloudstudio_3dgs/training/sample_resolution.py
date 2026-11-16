@@ -30,7 +30,7 @@ one of them to the reduced grid so the same angle is covered.
 from __future__ import annotations
 
 from dataclasses import replace
-from typing import Any
+from typing import Any, Mapping
 
 import numpy as np
 
@@ -39,6 +39,40 @@ _MONO_MIN_VALID_FRACTION = 0.5
 # A reduced supervision pixel needs every source pixel; the tolerance absorbs float32 area
 # sums over blocks of a few dozen pixels.
 _FULL_COVERAGE = 1.0 - 1e-4
+
+
+SENSOR_FOCAL = "sensor"
+
+
+def resolve_training_focal_px(value: Any, dataset_manifest: Mapping[str, Any] | None) -> float | None:
+    """The supervision focal length in pixels for a config value.
+
+    A number is taken as given. ``"sensor"`` reads it from the capture: the largest
+    on-axis focal length among the dataset's cameras, so no camera is supervised below
+    what it resolved. That makes a profile portable - a 1456 px sensor trains its faces
+    at its own resolution without anyone editing a number measured on a 2912 px one.
+    """
+    if value is None:
+        return None
+    if isinstance(value, str):
+        if value != SENSOR_FOCAL:
+            raise ValueError('training_focal_px must be a positive number or "sensor"')
+        cameras = [] if dataset_manifest is None else dataset_manifest.get("cameras") or []
+        focals = []
+        for camera in cameras:
+            intrinsic = camera.get("intrinsic") or {}
+            focal = intrinsic.get("fl_x")
+            if focal is not None and float(focal) > 0.0:
+                focals.append(float(focal))
+        if not focals:
+            raise ValueError(
+                'training_focal_px="sensor" needs a dataset manifest whose cameras carry '
+                "intrinsic.fl_x"
+            )
+        return max(focals)
+    if isinstance(value, bool) or float(value) <= 0.0:
+        raise ValueError("training_focal_px must be positive when set")
+    return float(value)
 
 
 def reduction_for_focal(focal_px: float, target_focal_px: float | None) -> float:

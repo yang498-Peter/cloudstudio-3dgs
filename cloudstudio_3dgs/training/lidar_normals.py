@@ -75,20 +75,35 @@ class NormalField:
         return len(self.xyz)
 
     def query(
-        self, points: np.ndarray, k: int = 1
+        self, points: np.ndarray, k: int = 1, *, max_distance: float | None = None
     ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
         """Return (distance, normal, planarity, index) of nearest LiDAR points.
 
         ``points`` is ``[P, 3]``. For ``k == 1`` the outputs are ``[P]`` /
         ``[P, 3]`` / ``[P]`` / ``[P]``; for ``k > 1`` a k axis is inserted
         after the point axis.
+
+        ``max_distance`` stops the search there: a point with no neighbour within it
+        comes back with distance ``inf`` and the attributes of point 0, which the
+        caller must treat as no anchor. Far queries are the expensive ones - on an
+        8.75M-gaussian tile whose rows are 20% farther than 0.10 m from the cloud the
+        unbounded query took 11.4 s and the bounded one 1.7 s.
         """
         points = np.asarray(points, dtype=np.float64)
         if points.ndim != 2 or points.shape[1] != 3:
             raise ValueError("points must have shape [P, 3]")
         if k < 1:
             raise ValueError("k must be at least one")
-        distance, index = self.tree.query(points, k=k, workers=-1)
+        if max_distance is None:
+            distance, index = self.tree.query(points, k=k, workers=-1)
+        else:
+            if max_distance <= 0.0:
+                raise ValueError("max_distance must be positive")
+            distance, index = self.tree.query(
+                points, k=k, workers=-1, distance_upper_bound=float(max_distance)
+            )
+            # cKDTree marks a miss with index == n and distance inf.
+            index = np.where(np.asarray(index) >= len(self.xyz), 0, index)
         index = np.atleast_1d(index)
         return (
             np.asarray(distance, dtype=np.float64),
@@ -226,6 +241,13 @@ class NormalAlignmentConfig:
     # the rows evaluated, so a visible row's pull grows by total/visible while it is
     # applied visible/total as often: the same pull per step on average.
     scope: str = "all"
+    # Every refine event used to re-anchor the whole population with a CPU KD-tree
+    # query: 3-8 s per event on an 8.7M-gaussian tile, 205 events per run. With this on,
+    # the anchors ride through the event in the strategy state - gsplat's duplicate /
+    # split / remove apply one topology transform to every per-gaussian tensor there -
+    # so a child starts with its parent's anchor and survivors keep theirs. The cadence
+    # refresh (refresh_every) still re-queries everything and corrects the drift.
+    carry_through_refine: bool = False
 
     def validate(self) -> None:
         if (
@@ -260,6 +282,7 @@ class NormalAlignmentConfig:
             # Present only when it departs from the historical scope, so every existing
             # contract signs to the same bytes.
             **({} if self.scope == "all" else {"scope": self.scope}),
+            **({"carry_through_refine": True} if self.carry_through_refine else {}),
             "enabled": self.enabled,
             "weight_align": self.weight_align,
             "weight_flatten": self.weight_flatten,
@@ -343,7 +366,12 @@ class LidarNormalAnchors:
         points = means.detach().cpu().to(torch.float64).numpy()
         if points.ndim != 2 or points.shape[1] != 3:
             raise ValueError("means must have shape [N, 3]")
-        distance, normal, planarity, index = self.field.query(points, k=1)
+        # Rows farther than max_anchor_distance_m are invalid whatever their nearest point
+        # is, so the search stops just past it: the same valid mask, the same anchors on
+        # every valid row, a fraction of the time.
+        distance, normal, planarity, index = self.field.query(
+            points, k=1, max_distance=float(self.config.max_anchor_distance_m) * (1.0 + 1e-6) + 1e-9
+        )
         self.anchor_normal = torch.from_numpy(
             np.ascontiguousarray(normal, dtype=np.float32)
         )
@@ -364,7 +392,55 @@ class LidarNormalAnchors:
         self._device_cache.clear()
         return self.anchored_count
 
+    # -- riding through a refine event ---------------------------------------
+
+    CARRY_KEYS = ("normal", "position", "planarity", "valid")
+    _CARRY_PREFIX = "_cloudstudio_normal_anchor_"
+
+    def attach(self, state: dict[str, Any], count: int, device: Any) -> bool:
+        """Put the per-gaussian anchors into the strategy state for one refine event.
+
+        Returns whether they were attached; ``detach`` must follow. Nothing is attached
+        when the anchors are stale or do not match ``count`` - the event then ends the
+        old way, with a full refresh.
+        """
+        if (
+            not self.config.carry_through_refine
+            or self.stale
+            or self.anchor_normal is None
+            or int(self.anchor_normal.shape[0]) != int(count)
+        ):
+            return False
+        for key, tensor in zip(self.CARRY_KEYS, self._anchors_on(device)):
+            state[self._CARRY_PREFIX + key] = tensor
+        return True
+
+    def detach(self, state: dict[str, Any], count: int) -> bool:
+        """Take the anchors back out of the strategy state after the event.
+
+        Returns whether they followed the population. If the event changed the count
+        by a path that did not transform them, they are marked stale instead.
+        """
+        carried = [state.pop(self._CARRY_PREFIX + key, None) for key in self.CARRY_KEYS]
+        if any(tensor is None for tensor in carried) or any(
+            int(tensor.shape[0]) != int(count) for tensor in carried
+        ):
+            self.stale = True
+            self._device_cache.clear()
+            return False
+        normal, position, planarity, valid = carried
+        self.anchor_normal = normal
+        self.anchor_position = position
+        self.planarity = planarity
+        self.valid = valid
+        # The distances behind ``valid`` belong to the last full refresh.
+        self.distance = None
+        self.anchored_count = int(valid.sum())
+        self._device_cache = {normal.device: (normal, position, planarity, valid)}
+        return True
+
     def _anchors_on(self, device: Any) -> tuple[Any, Any, Any, Any]:
+        device = __import__("torch").device(device)
         cached = self._device_cache.get(device)
         if cached is None:
             cached = (

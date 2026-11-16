@@ -515,6 +515,93 @@ def tile_max_steps(profile: Profile, view_count: int) -> int:
     return int(profile.tiling["epochs_for_max_steps"]) * int(view_count)
 
 
+#: Trainer and lifecycle steps that move together when a tile's schedule is scaled.
+SCALED_TRAINER_STEPS = ("controlled_stop_after_steps", "mcmc_refine_stop_iter")
+SCALED_STRATEGY_STEPS = ("refine_stop_iter", "refine_scale2d_stop_iter")
+#: A scaled stop keeps this share of max_steps free, as the measured tiles did
+#: (30000 of 33680 on the smallest house0305 tile); the trainer refuses stop >= max_steps.
+SCHEDULE_STOP_CEILING_OF_MAX_STEPS = 0.9
+SCHEDULE_STEP_GRID = 100
+
+
+def tile_schedule_scale(profile: Profile, view_count: int) -> float:
+    """How far a tile's step schedule is stretched or shortened for its view count.
+
+    A recipe's stop and refine window are absolute steps tuned on tiles of some view
+    count. Each step trains one view, so a tile with three times the views gives every
+    view - and every gaussian - a third of the updates, and a tile with a fifth of the
+    views cannot even be configured (its stop lands past max_steps and the trainer
+    refuses, after prepare has run for hours). Inside the measured band, with the
+    profile's tolerance above it, the schedule is used as measured (scale 1.0), so the
+    tiles it was tuned on reproduce exactly. Outside it the schedule follows the view
+    count, bounded by min_scale / max_scale. A profile without the rule never scales.
+    """
+    rule = profile.tiling.get("schedule_scaling")
+    if not rule:
+        return 1.0
+    low, high = (int(value) for value in rule["measured_views"])
+    tolerance = float(rule.get("tolerance_above", 1.25))
+    views = int(view_count)
+    if views < low:
+        scale = views / low
+    elif views > high * tolerance:
+        scale = views / high
+    else:
+        scale = 1.0
+    return min(max(scale, float(rule["min_scale"])), float(rule["max_scale"]))
+
+
+def apply_tile_schedule(
+    profile: Profile,
+    config: dict[str, Any],
+    *,
+    view_count: int,
+    max_steps: int,
+    scale: float | None = None,
+) -> float:
+    """Scale ``config``'s step schedule in place for one arm; returns the scale used.
+
+    ``scale`` overrides the view-count rule (the coarse prior keeps its own schedule and
+    only needs the max_steps ceiling). Refuses an arm too small to hold any schedule
+    instead of emitting a config the trainer would reject.
+    """
+    if scale is None:
+        scale = tile_schedule_scale(profile, view_count)
+    strategy = config["default_strategy"]
+    stop = int(config["controlled_stop_after_steps"])
+    grid = SCHEDULE_STEP_GRID
+    if profile.tiling.get("schedule_scaling"):
+        ceiling = int(math.floor(max_steps * SCHEDULE_STOP_CEILING_OF_MAX_STEPS / grid)) * grid
+        scaled_stop = min(int(round(stop * scale / grid)) * grid, ceiling)
+        factor = scaled_stop / stop
+        refine_start = int(config.get("mcmc_refine_start_iter", 500))
+        if scaled_stop <= refine_start + 2 * grid:
+            raise ValueError(
+                f"a tile with {view_count} training views is too small to train: its schedule "
+                f"would stop at step {scaled_stop}, inside the {refine_start}-step warm-up. "
+                "Cut the scene into fewer tiles."
+            )
+        if factor != 1.0:
+            for key in SCALED_TRAINER_STEPS:
+                if config.get(key) is not None:
+                    config[key] = max(refine_start + grid, int(round(int(config[key]) * factor / grid)) * grid)
+            for key in SCALED_STRATEGY_STEPS:
+                if strategy.get(key) is not None:
+                    strategy[key] = max(refine_start + grid, int(round(int(strategy[key]) * factor / grid)) * grid)
+            config["controlled_stop_after_steps"] = scaled_stop
+        scale = factor
+    ramp = profile.tile_rules.get("capacity_ramp_end_fraction_of_refine_stop")
+    if ramp is not None:
+        # The gaussian budget is spent across the refine window, best candidates first
+        # (default_strategy_adapter.capacity_ramp_target); it follows the scaled window.
+        refine_stop = int(strategy["refine_stop_iter"])
+        refine_start = int(strategy.get("refine_start_iter", 500))
+        strategy["capacity_ramp_end_step"] = max(
+            refine_start + grid, int(round(refine_stop * float(ramp) / grid)) * grid
+        )
+    return scale
+
+
 def prune_switch_step(profile: Profile, max_steps: int) -> int:
     return int(round(max_steps * float(profile.tiling["prune_switch_fraction_of_max_steps"])))
 
@@ -835,6 +922,18 @@ def build_plan(
         stop = int(profile.trainer_base["controlled_stop_after_steps"])
         busiest = max(measured_views)
         crowded = [tile for tile in dataset.tiles if tile.view_count > busiest * 1.25]
+        if profile.tiling.get("schedule_scaling"):
+            # The schedule follows the view count; what is left to say is where it was capped.
+            limit = float(profile.tiling["schedule_scaling"]["max_scale"])
+            capped = [tile for tile in crowded if tile.view_count / busiest > limit]
+            if capped:
+                warnings.append(
+                    f"{len(capped)} tile(s) carry more than {limit:g}x the views this recipe was "
+                    f"measured at ({busiest}); their schedule is stretched {limit:g}x and no further, "
+                    "so each view is visited less often than on the measured tiles. More tiles "
+                    "would restore it."
+                )
+            crowded = []
         if crowded:
             most = max(tile.view_count for tile in crowded)
             warnings.append(
@@ -1618,6 +1717,9 @@ def tile_config(
     )
     config["default_strategy"] = dict(config["default_strategy"])
     config["default_strategy"]["prune_switch_step"] = prune_switch_step(profile, max_steps)
+    schedule_scale = apply_tile_schedule(
+        profile, config, view_count=tile.view_count, max_steps=max_steps
+    )
     if config.get("tile_ownership_masking"):
         config["tile_ownership_cache_manifest"] = cache[tile_key(tile.tile_id, "ownership_manifest")]
         config["tile_ownership_cache_root"] = cache[tile_key(tile.tile_id, "ownership_root")]
@@ -1642,6 +1744,11 @@ def tile_config(
             f"initialisation points -> {cap_max}"
         ),
     }
+    if profile.tiling.get("schedule_scaling"):
+        config["lineage"]["schedule_rule"] = (
+            f"{tile.view_count} training views -> schedule x{schedule_scale:.3f}, stop at "
+            f"{config['controlled_stop_after_steps']}"
+        )
     if profile.tile_rules.get("cap_multiplier") is not None:
         config["lineage"]["cap_rule"] = (
             f"round({profile.tile_rules['cap_ratio_of_initialisation']}x of {tile.init_point_count} "
@@ -1684,6 +1791,11 @@ def coarse_config(
     )
     config["default_strategy"] = dict(config["default_strategy"])
     config["default_strategy"]["prune_switch_step"] = prune_switch_step(profile, max_steps)
+    # The coarse prior keeps its own short schedule; on a capture with few views it still
+    # has to fit under max_steps.
+    apply_tile_schedule(
+        profile, config, view_count=dataset.train_view_count, max_steps=max_steps, scale=1.0
+    )
     config["lineage"] = {
         "profile": profile.name,
         "profile_version": profile.version,

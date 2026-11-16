@@ -31,6 +31,17 @@ class GeometryRegularizationConfig:
     # are stacks of 0.1-0.4 layers; opaque blades show their outlines, which is
     # what reads as "gaussian texture". None keeps every contract unchanged.
     max_opacity: float | None = None
+    # Lower bound on every axis of a gaussian, in pixels of the finest view that has
+    # rasterized it: sigma >= min_extent_px * depth / focal at that view. A training
+    # view cannot tell a 0.2 px thick disk from a 0.5 px one seen face-on, so nothing in
+    # the loss stops a disk thinning until, from an angle no photo covers, it is a
+    # needle; Mip-Splatting (Yu et al. 2024, sec. 5.1) bounds the 3D extent by the
+    # maximal sampling rate for that reason and uses variance 0.2 px^2, i.e. 0.447 px.
+    # house0305: our delivered short axis is 0.26-0.29 mm at the median against 0.43 mm
+    # in the reference, and 0.447 px of the 787.6 px/rad sensor is 0.57 mm at 1 m.
+    # Applied as an in-place clamp with the other clamps, so the parameters are what
+    # every downstream tool renders and nothing has to be baked at export. 0 = off.
+    min_extent_px: float = 0.0
 
     def validate(self) -> None:
         weights = (
@@ -60,6 +71,8 @@ class GeometryRegularizationConfig:
             raise ValueError("max_world_size_m must be positive")
         if self.max_opacity is not None and not 0.0 < float(self.max_opacity) < 1.0:
             raise ValueError("max_opacity must be within (0, 1)")
+        if not 0.0 <= float(self.min_extent_px) <= 4.0:
+            raise ValueError("min_extent_px must be within [0, 4]")
         if self.world_shrink_factor is not None:
             if not 0.0 < self.world_shrink_factor < 1.0:
                 raise ValueError("world_shrink_factor must be within (0, 1)")
@@ -93,6 +106,8 @@ class GeometryRegularizationConfig:
             result["scale_upper_tail_fraction"] = self.scale_upper_tail_fraction
         if self.max_opacity is not None:
             result["max_opacity"] = float(self.max_opacity)
+        if self.min_extent_px > 0.0:
+            result["min_extent_px"] = float(self.min_extent_px)
         return result
 
 
@@ -202,6 +217,80 @@ def geometry_regularization_terms(
         "anisotropy": anisotropy,
         "total": total,
     }
+
+
+#: Per-gaussian running maximum of focal / depth (pixels per metre) over the views that
+#: rasterized it. Lives in the strategy state, so duplicate / split / remove carry it and
+#: a checkpoint resumes it.
+SAMPLING_RATE_KEY = "_cloudstudio_max_sampling_rate"
+#: Depths nearer than this do not raise the sampling rate (a gaussian grazing the camera
+#: would otherwise earn a floor of micrometres and keep it).
+SAMPLING_RATE_MIN_DEPTH_M = 0.05
+
+
+def observe_sampling_rate(
+    state: dict[str, Any],
+    *,
+    radii: Any,
+    depths: Any,
+    focal_px: float,
+    gaussian_count: int,
+) -> Any:
+    """Fold one view into each visible gaussian's maximal sampling rate.
+
+    Must run while ``radii`` / ``depths`` still line up with the population, i.e.
+    before the step's lifecycle event. Returns the state tensor.
+    """
+    torch = __import__("torch")
+    if focal_px <= 0.0 or not math.isfinite(focal_px):
+        raise ValueError("focal_px must be finite and positive")
+    radius = torch.as_tensor(radii).detach()
+    if radius.ndim >= 2 and radius.shape[-1] == 2:
+        radius = radius.max(dim=-1).values
+    radius = radius.reshape(-1)
+    depth = torch.as_tensor(depths).detach().reshape(-1)
+    if radius.shape[0] != gaussian_count or depth.shape[0] != gaussian_count:
+        raise ValueError("radii / depths do not match the gaussian count")
+    rate = state.get(SAMPLING_RATE_KEY)
+    if rate is None or rate.shape[0] != gaussian_count:
+        rate = torch.zeros(gaussian_count, dtype=torch.float32, device=depth.device)
+        state[SAMPLING_RATE_KEY] = rate
+    with torch.no_grad():
+        visible = (radius > 0) & torch.isfinite(depth) & (depth > SAMPLING_RATE_MIN_DEPTH_M)
+        observed = torch.where(
+            visible, float(focal_px) / depth.clamp_min(SAMPLING_RATE_MIN_DEPTH_M).to(rate.dtype), rate
+        )
+        torch.maximum(rate, observed, out=rate)
+    return rate
+
+
+def apply_min_extent(
+    params: Any,
+    state: dict[str, Any],
+    *,
+    min_extent_px: float,
+) -> dict[str, Any]:
+    """Raise every axis below ``min_extent_px / max sampling rate`` to it, in place.
+
+    Gaussians no view has rasterized yet have no rate and are left alone.
+    """
+    torch = __import__("torch")
+    report = {"min_extent_raised_count": 0, "min_extent_observed_count": 0}
+    rate = state.get(SAMPLING_RATE_KEY)
+    if min_extent_px <= 0.0 or rate is None or rate.shape[0] != params["scales"].shape[0]:
+        return report
+    with torch.no_grad():
+        observed = rate > 0
+        floor = torch.where(
+            observed,
+            torch.log(float(min_extent_px) / rate.clamp_min(1e-12)),
+            torch.full_like(rate, float("-inf")),
+        ).to(params["scales"].dtype)
+        below = params["scales"] < floor[:, None]
+        report["min_extent_raised_count"] = int(below.any(dim=1).sum())
+        report["min_extent_observed_count"] = int(observed.sum())
+        torch.maximum(params["scales"], floor[:, None], out=params["scales"].data)
+    return report
 
 
 def clip_oversized_gaussians(

@@ -60,6 +60,10 @@ from cloudstudio_3dgs.training.losses import (
 from cloudstudio_3dgs.training.mipmap_loss_schedule import (
     competitor_high_type2_loss_weights,
 )
+from cloudstudio_3dgs.training.sample_resolution import (
+    SENSOR_FOCAL,
+    resolve_training_focal_px,
+)
 from cloudstudio_3dgs.training.sample_resolution import pixels as reduced_pixels
 from cloudstudio_3dgs.training.sample_prefetch import (
     EpochOrderCache,
@@ -150,8 +154,10 @@ from cloudstudio_3dgs.training.sky_supervision import (
 )
 from cloudstudio_3dgs.training.regularization import (
     GeometryRegularizationConfig,
+    apply_min_extent,
     clip_oversized_gaussians,
     geometry_regularization_terms,
+    observe_sampling_rate,
 )
 from cloudstudio_3dgs.training.runtime_evidence import (
     append_mcmc_telemetry,
@@ -288,8 +294,9 @@ class TrainerConfig:
     # Supervise every Face4 face at this focal length (px) by area-reducing the stored
     # face (sample_resolution.py). The stored pitch faces are the sensor image warped
     # to 2.93x its own angular resolution; the natural value is the fisheye's on-axis
-    # focal length. None trains each face as stored.
-    training_focal_px: float | None = None
+    # focal length, and "sensor" reads exactly that from the dataset manifest. None
+    # trains each face as stored.
+    training_focal_px: float | str | None = None
     max_steps: int = 3_000
     checkpoint_every: int = 500
     checkpoint_keep_every: int = 0
@@ -832,7 +839,12 @@ class TrainerConfig:
                 "fisher_yates_without_replacement_per_epoch sampling"
             )
         if self.training_focal_px is not None:
-            if float(self.training_focal_px) <= 0.0:
+            if isinstance(self.training_focal_px, str):
+                if self.training_focal_px != SENSOR_FOCAL:
+                    raise ValueError(
+                        'training_focal_px must be a positive number or "sensor"'
+                    )
+            elif isinstance(self.training_focal_px, bool) or float(self.training_focal_px) <= 0.0:
                 raise ValueError("training_focal_px must be positive when set")
             if self.face_cache_manifest is None:
                 raise ValueError("training_focal_px applies to Face4 face caches only")
@@ -1114,6 +1126,15 @@ class TrainerConfig:
         if self.contribution_every <= 0:
             raise ValueError("contribution_every must be positive")
         self.lidar_normal_alignment.validate()
+        if (
+            self.lidar_normal_alignment.carry_through_refine
+            and self.densification_strategy != "default_3dgs"
+        ):
+            # Only duplicate / split / remove carry a per-gaussian state tensor faithfully;
+            # the MCMC relocate and sample_add operators zero or zero-fill it.
+            raise ValueError(
+                "lidar_normal_alignment.carry_through_refine requires the default_3dgs strategy"
+            )
         self.lidar_admission.validate()
         if self.lidar_admission.enabled and not self.error_weighted_sampling.enabled:
             # Admission is a multiplier on the error-weighted sampling weights;
@@ -2649,7 +2670,11 @@ class TrainerConfig:
         if self.training_focal_px is not None:
             # Key present only when set, so every existing contract signs as before.
             contract["loss_contract"]["supervision_resolution"] = {
-                "training_focal_px": float(self.training_focal_px),
+                "training_focal_px": (
+                    self.training_focal_px
+                    if isinstance(self.training_focal_px, str)
+                    else float(self.training_focal_px)
+                ),
                 "reduction": "area_average_to_focal_never_enlarges",
                 "pixel_radii": "defined_on_stored_face_scaled_by_reduction",
                 "sparse_lidar": "nearest_return_per_reduced_pixel",
@@ -3287,6 +3312,38 @@ def _view_background_library(config: "TrainerConfig") -> Any | None:
         )
         _VIEW_BACKGROUND_LIBRARIES[key] = library
     return library
+
+
+def _strategy_post_step_carrying_anchors(
+    backend: GsplatBackend,
+    params: Any,
+    optimizers: dict[str, Any],
+    strategy_state: Any,
+    *,
+    step: int,
+    info: dict[str, Any],
+    normal_anchors: Any | None,
+) -> tuple[Any, bool]:
+    """Run the lifecycle step; let the LiDAR normal anchors ride through it.
+
+    Returns the lifecycle event and whether the anchors followed the population (so the
+    caller can skip the full re-anchor). The anchors never stay in the strategy state,
+    so checkpoints are unchanged.
+    """
+    attached = (
+        normal_anchors is not None
+        and isinstance(strategy_state, dict)
+        and normal_anchors.attach(strategy_state, len(params["means"]), params["means"].device)
+    )
+    try:
+        event = backend.strategy_post_step(
+            params, optimizers, strategy_state, step=step, info=info
+        )
+    finally:
+        followed = bool(
+            attached and normal_anchors.detach(strategy_state, len(params["means"]))
+        )
+    return event, followed
 
 
 def _render_supervision_loss(
@@ -4100,7 +4157,12 @@ def train(
                 if config.sky_supervision.enabled
                 else None
             ),
-            training_focal_px=config.training_focal_px,
+            training_focal_px=resolve_training_focal_px(
+                config.training_focal_px,
+                json.loads(Path(config.dataset_manifest).read_text(encoding="utf-8"))
+                if isinstance(config.training_focal_px, str)
+                else None,
+            ),
         )
     else:
         trainset = S1TrainingDataset(
@@ -4764,6 +4826,7 @@ def train(
             ),
         }
 
+    min_extent_raised_total = 0
     sampled_epoch = -1
     sampled_order: tuple[int, ...] = ()
     # Under the epoch permutation the index is a pure function of the step, the seed and
@@ -5195,18 +5258,45 @@ def train(
                 "post_optimizer_gsplat",
             )
         )
+        if config.geometry_regularization.min_extent_px > 0.0 and isinstance(
+            strategy_state, dict
+        ):
+            # Before any lifecycle event of this step: radii and depths still line up
+            # with the population, and the event then carries the rates through.
+            observe_sampling_rate(
+                strategy_state,
+                radii=info["radii"],
+                depths=info["depths"],
+                focal_px=float(sample.K[0, 0]),
+                gaussian_count=len(params["means"]),
+            )
         pre_optimizer_strategy_event = None
+        anchors_followed_refine = False
         if strategy_active and lifecycle_execution_order == "pre_optimizer_vendor":
-            pre_optimizer_strategy_event = backend.strategy_post_step(
+            (
+                pre_optimizer_strategy_event,
+                anchors_followed_refine,
+            ) = _strategy_post_step_carrying_anchors(
+                backend,
                 params,
                 optimizers,
                 strategy_state,
                 step=step,
                 info=info,
+                normal_anchors=normal_anchors,
             )
         for optimizer in optimizers.values():
             optimizer.step()
             optimizer.zero_grad(set_to_none=True)
+        if config.geometry_regularization.min_extent_px > 0.0 and isinstance(
+            strategy_state, dict
+        ):
+            min_extent_report = apply_min_extent(
+                params,
+                strategy_state,
+                min_extent_px=config.geometry_regularization.min_extent_px,
+            )
+            min_extent_raised_total += min_extent_report["min_extent_raised_count"]
         if audit_due:
             assert audit_before is not None
             assert audit_initial_means is not None and audit_initial_normals is not None
@@ -5348,12 +5438,14 @@ def train(
         elif pre_optimizer_strategy_event is not None:
             mcmc_event = pre_optimizer_strategy_event
         else:
-            mcmc_event = backend.strategy_post_step(
+            mcmc_event, anchors_followed_refine = _strategy_post_step_carrying_anchors(
+                backend,
                 params,
                 optimizers,
                 strategy_state,
                 step=step,
                 info=info,
+                normal_anchors=normal_anchors,
             )
         append_mcmc_telemetry(mcmc_telemetry, mcmc_event)
         topology_count_transition(
@@ -5362,9 +5454,14 @@ def train(
             after_count=int(len(params["means"])),
             prune_due=False,
         )
-        if mcmc_event["refine_triggered"] and normal_anchors is not None:
+        if (
+            mcmc_event["refine_triggered"]
+            and normal_anchors is not None
+            and not anchors_followed_refine
+        ):
             # Relocation/densification changed the gaussian set; re-anchor
-            # before the next normal-alignment loss uses stale indices.
+            # before the next normal-alignment loss uses stale indices. Skipped
+            # when the anchors rode through the event in the strategy state.
             normal_anchors.refresh(params["means"])
         if mcmc_event["refine_triggered"] and admission is not None:
             # The strategy now maintains the cache event by event (extend on
@@ -5988,6 +6085,12 @@ def train(
                 ),
                 "screen_clip_events": screen_clip_total,
                 "world_clamp_events": world_clamp_total,
+                # Present only with the bound, so earlier manifests keep their shape.
+                **(
+                    {"min_extent_raised_events": min_extent_raised_total}
+                    if config.geometry_regularization.min_extent_px > 0.0
+                    else {}
+                ),
                 # Anchor-liveness evidence for the LiDAR normal term: any
                 # nonzero stale count means Gaussians trained unconstrained
                 # right after a refine event, which biases densification arms.

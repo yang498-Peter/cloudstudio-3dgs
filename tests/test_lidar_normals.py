@@ -455,5 +455,132 @@ class LidarNormalAnchorsTest(unittest.TestCase):
             NormalAlignmentConfig(scope="some").validate()
 
 
+class BoundedAnchorQueryTest(unittest.TestCase):
+    """The re-anchor search stops at the distance beyond which a row is invalid anyway."""
+
+    def setUp(self) -> None:
+        self.field = build_normal_field(_plane_cloud(), knn=16)
+        rng = np.random.default_rng(5)
+        near = np.column_stack([rng.uniform(-0.9, 0.9, 400), rng.uniform(-0.9, 0.9, 400), rng.uniform(-0.08, 0.08, 400)])
+        far = np.column_stack([rng.uniform(-0.9, 0.9, 200), rng.uniform(-0.9, 0.9, 200), rng.uniform(0.15, 3.0, 200)])
+        self.points = np.vstack([near, far])
+
+    def test_valid_rows_get_the_same_anchor_as_the_unbounded_search(self) -> None:
+        distance, normal, planarity, index = self.field.query(self.points, k=1)
+        b_distance, b_normal, b_planarity, b_index = self.field.query(self.points, k=1, max_distance=0.10)
+        inside = distance <= 0.10
+        self.assertGreater(int(inside.sum()), 100)
+        self.assertGreater(int((~inside).sum()), 100)
+        np.testing.assert_array_equal(b_index[inside], index[inside])
+        np.testing.assert_array_equal(b_distance[inside], distance[inside])
+        np.testing.assert_array_equal(b_normal[inside], normal[inside])
+        np.testing.assert_array_equal(b_planarity[inside], planarity[inside])
+        self.assertTrue(np.all(np.isinf(b_distance[~inside])))
+        self.assertTrue(np.all(b_index[~inside] == 0))
+
+    def test_refresh_marks_exactly_the_rows_the_unbounded_search_would(self) -> None:
+        config = NormalAlignmentConfig(enabled=True, max_anchor_distance_m=0.10)
+        anchors = LidarNormalAnchors(self.field, config)
+        means = torch.tensor(self.points, dtype=torch.float32)
+        count = anchors.refresh(means)
+        distance, _, planarity, index = self.field.query(means.to(torch.float64).numpy(), k=1)
+        expected = (distance <= 0.10) & (planarity >= config.planarity_gate)
+        self.assertEqual(anchors.valid.tolist(), expected.tolist())
+        self.assertEqual(count, int(expected.sum()))
+        valid = torch.from_numpy(expected)
+        self.assertTrue(
+            torch.equal(
+                anchors.anchor_position[valid],
+                torch.from_numpy(self.field.xyz[index].astype(np.float32))[valid],
+            )
+        )
+
+    def test_a_non_positive_bound_is_refused(self) -> None:
+        with self.assertRaises(ValueError):
+            self.field.query(self.points, k=1, max_distance=0.0)
+
+
+class AnchorsThroughRefineTest(unittest.TestCase):
+    """The anchors ride a refine event in the strategy state instead of being re-queried."""
+
+    def setUp(self) -> None:
+        self.field = build_normal_field(_plane_cloud(), knn=16)
+        self.params = _params(
+            [[0.0, 0.0, 0.01], [0.2, 0.1, 0.01], [-0.3, 0.2, 0.9]],
+            [[-3.0, -3.0, -5.0]] * 3,
+            [[1.0, 0.0, 0.0, 0.0]] * 3,
+        )
+
+    def _anchors(self, carry: bool = True) -> LidarNormalAnchors:
+        anchors = LidarNormalAnchors(
+            self.field, NormalAlignmentConfig(enabled=True, carry_through_refine=carry)
+        )
+        anchors.refresh(self.params["means"])
+        return anchors
+
+    def test_duplicate_split_and_remove_keep_every_row_on_its_own_anchor(self) -> None:
+        anchors = self._anchors()
+        valid_before = anchors.valid.clone()
+        self.assertEqual(valid_before.tolist(), [True, True, False])  # row 2 is 0.9 m off the plane
+        state: dict = {"grad2d": torch.zeros(3)}
+        self.assertTrue(anchors.attach(state, 3, "cpu"))
+        # What gsplat's ops do to every per-gaussian tensor in the state:
+        for key, value in list(state.items()):
+            duplicated = torch.cat((value, value[torch.tensor([1])]))  # clone row 1 -> row 3
+            rest = torch.tensor([0, 2, 3])  # split row 1 away: survivors, then its two children
+            split = torch.cat((duplicated[rest], duplicated[torch.tensor([1])].repeat([2] + [1] * (value.dim() - 1))))
+            state[key] = split[torch.tensor([True, False, True, True, True])]  # remove the far row
+        self.assertTrue(anchors.detach(state, 4))
+        self.assertFalse(any(key.startswith("_cloudstudio_normal_anchor_") for key in state))
+        self.assertFalse(anchors.stale)
+        self.assertEqual(anchors.anchored_count, 4)
+        self.assertEqual(anchors.valid.tolist(), [True, True, True, True])
+        # Rows 1-3 all descend from the original row 1 and carry its anchor.
+        fresh = self._anchors(carry=False)
+        for row in (1, 2, 3):
+            self.assertTrue(torch.equal(anchors.anchor_normal[row], fresh.anchor_normal[1]))
+            self.assertTrue(torch.equal(anchors.anchor_position[row], fresh.anchor_position[1]))
+        # The loss runs on the carried anchors without a refresh.
+        grown = _params(
+            [[0.0, 0.0, 0.01], [0.2, 0.1, 0.01], [0.2, 0.1, 0.01], [0.2, 0.1, 0.01]],
+            [[-3.0, -3.0, -5.0]] * 4,
+            [[1.0, 0.0, 0.0, 0.0]] * 4,
+        )
+        result = anchors.loss(grown)
+        self.assertFalse(result["stale"])
+        self.assertEqual(result["anchored_count"], 4)
+
+    def test_an_event_that_does_not_transform_the_anchors_leaves_them_stale(self) -> None:
+        anchors = self._anchors()
+        state: dict = {}
+        self.assertTrue(anchors.attach(state, 3, "cpu"))
+        self.assertFalse(anchors.detach(state, 5))  # population changed, tensors did not
+        self.assertTrue(anchors.stale)
+        self.assertEqual(state, {})
+
+    def test_nothing_is_attached_when_off_stale_or_mismatched(self) -> None:
+        self.assertFalse(self._anchors(carry=False).attach({}, 3, "cpu"))
+        anchors = self._anchors()
+        self.assertFalse(anchors.attach({}, 4, "cpu"))
+        anchors.stale = True
+        self.assertFalse(anchors.attach({}, 3, "cpu"))
+
+    def test_a_cadence_refresh_replaces_carried_anchors(self) -> None:
+        anchors = self._anchors()
+        state: dict = {}
+        anchors.attach(state, 3, "cpu")
+        anchors.detach(state, 3)
+        self.assertIsNone(anchors.distance)
+        anchors.refresh(self.params["means"])
+        self.assertIsNotNone(anchors.distance)
+        self.assertEqual(anchors.anchored_count, 2)
+
+    def test_the_contract_records_it_only_when_on(self) -> None:
+        self.assertNotIn("carry_through_refine", NormalAlignmentConfig(enabled=True).to_dict())
+        self.assertTrue(
+            NormalAlignmentConfig(enabled=True, carry_through_refine=True).to_dict()["carry_through_refine"]
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

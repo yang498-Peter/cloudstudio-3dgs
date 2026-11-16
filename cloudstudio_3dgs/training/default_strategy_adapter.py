@@ -170,6 +170,7 @@ class DefaultStrategyAdapter:
         growth_metric: str = "count_mean",
         surface_anchor_prune: Any | None = None,
         sky_growth_block: Any | None = None,
+        capacity_ramp_end_step: int | None = None,
     ) -> None:
         from gsplat.strategy import DefaultStrategy
 
@@ -204,6 +205,24 @@ class DefaultStrategyAdapter:
         self.capacity_cap = None if capacity_cap is None else int(capacity_cap)
         if self.capacity_cap is not None and self.capacity_cap <= 4:
             raise ValueError("capacity_cap must be greater than four")
+        # Budget schedule. Without it every candidate above the gradient threshold is
+        # born at once: tile3_b12op05d3_30k went 5.65M -> 13.5M in its first fifteen
+        # refine events and sat at the cap for the remaining 28,000 steps, so the whole
+        # budget was placed by gradients measured before any view had been seen twice.
+        # With a ramp the population may only reach
+        #     initial * (cap / initial) ** progress
+        # at each event (progress runs 0 -> 1 from refine_start to this step), and the
+        # headroom of an event goes to its highest-gradient candidates. Geometric, so
+        # every event admits the same fraction of the population whatever the
+        # initialization-to-cap ratio of the scene. None keeps the historical rule.
+        self.capacity_ramp_end_step = (
+            None if capacity_ramp_end_step is None else int(capacity_ramp_end_step)
+        )
+        if self.capacity_ramp_end_step is not None:
+            if self.capacity_cap is None:
+                raise ValueError("capacity_ramp_end_step needs a capacity_cap to ramp to")
+            if self.capacity_ramp_end_step <= int(refine_start_iter):
+                raise ValueError("capacity_ramp_end_step must lie after refine_start_iter")
         self.surface_birth_proposal = surface_birth_proposal
         # Surface-anchor prune (surface_anchor.SurfaceAnchorPrune): rows far
         # from the initialization cloud die at cull events, unsupported rows
@@ -702,6 +721,27 @@ class DefaultStrategyAdapter:
             self.last_lifecycle_event["current_step_gradient_remapped"] = True
             self.last_lifecycle_event["gradient_row_count"] = int(len(provenance))
 
+    def capacity_ramp_target(self, state: dict[str, Any], current_count: int) -> int:
+        """Population the ramp admits at the step being refined.
+
+        The starting population is recorded at the first event and kept in the
+        strategy state, so a resumed run continues the same curve.
+        """
+        assert self.capacity_cap is not None and self.capacity_ramp_end_step is not None
+        initial = state.get("_cloudstudio_capacity_ramp_initial_count")
+        if initial is None:
+            initial = int(current_count)
+            state["_cloudstudio_capacity_ramp_initial_count"] = initial
+        initial = int(initial)
+        if initial >= self.capacity_cap:
+            return int(self.capacity_cap)
+        step = int(state.get("_cloudstudio_current_step", self.refine_start_iter))
+        start = int(self.refine_start_iter)
+        progress = (step - start) / float(self.capacity_ramp_end_step - start)
+        progress = min(1.0, max(0.0, progress))
+        target = initial * (self.capacity_cap / initial) ** progress
+        return int(min(self.capacity_cap, math.floor(target)))
+
     def _grow_mipmap(
         self,
         params: Any,
@@ -893,8 +933,16 @@ class DefaultStrategyAdapter:
             )
         supported_candidate_count = int(eligible.sum().item())
         capacity_rejected_count = 0
+        capacity_ramp_target = None
         if self.capacity_cap is not None:
             available = max(0, self.capacity_cap - len(params["means"]))
+            if self.capacity_ramp_end_step is not None:
+                capacity_ramp_target = self.capacity_ramp_target(
+                    state, len(params["means"])
+                )
+                available = min(
+                    available, max(0, capacity_ramp_target - len(params["means"]))
+                )
             if supported_candidate_count > available:
                 candidate_indices = torch.where(eligible)[0]
                 limited = torch.zeros_like(eligible)
@@ -1019,6 +1067,11 @@ class DefaultStrategyAdapter:
                 else max(0, self.capacity_cap - int(observed.numel()))
             ),
             "capacity_rejected_count": capacity_rejected_count,
+            **(
+                {}
+                if capacity_ramp_target is None
+                else {"capacity_ramp_target": capacity_ramp_target}
+            ),
             "surface_anchor_rejected_count": surface_anchor_rejected_count,
             # Keys present only with the block, so the default telemetry
             # record keeps its shape.
@@ -1838,6 +1891,11 @@ class DefaultStrategyAdapter:
             "refine_scale2d_stop_iter": int(self.inner.refine_scale2d_stop_iter),
             "post_refine_cull_every": self.post_refine_cull_every,
             "post_refine_cull_until": self.post_refine_cull_until,
+            **(
+                {}
+                if self.capacity_ramp_end_step is None
+                else {"capacity_ramp_end_step": self.capacity_ramp_end_step}
+            ),
             "prune_opa": float(self.inner.prune_opa),
             "absgrad": bool(self.inner.absgrad),
             "revised_opacity": bool(self.inner.revised_opacity),
