@@ -223,7 +223,12 @@ class FaceCacheDataset:
         sky_mask_manifest_path: Path | None = None,
         sky_mask_root: Path | None = None,
         training_focal_px: float | None = None,
+        carry_sensor_pixel_coords: bool = True,
     ) -> None:
+        # The [H, W, 2] sensor coordinates of every face pixel exist for the PPISP
+        # vignetting term and nothing else: 8 bytes per pixel built, cropped and reduced
+        # per sample. A caller that does not run PPISP turns them off.
+        self.carry_sensor_pixel_coords = bool(carry_sensor_pixel_coords)
         # Supervise every face at one focal length (sample_resolution.py). None keeps
         # each face as stored.
         if training_focal_px is not None and float(training_focal_px) <= 0.0:
@@ -1126,7 +1131,11 @@ class FaceCacheDataset:
 
         K = face.K_face.astype(np.float32).copy()
         range_scale = self._depth_to_range_scale(camera_id, face)
-        sensor_coords = self._sensor_pixel_coords(camera_id, face)
+        sensor_coords = (
+            self._sensor_pixel_coords(camera_id, face)
+            if self.carry_sensor_pixel_coords
+            else None
+        )
         if crop is not None:
             x = crop["x"]
             y = crop["y"]

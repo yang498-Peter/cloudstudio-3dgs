@@ -65,6 +65,7 @@ from cloudstudio_3dgs.training.sample_resolution import (
     resolve_training_focal_px,
 )
 from cloudstudio_3dgs.training.sample_resolution import pixels as reduced_pixels
+from cloudstudio_3dgs.training.sample_cache import SampleCache
 from cloudstudio_3dgs.training.sample_prefetch import (
     EpochOrderCache,
     LookaheadPrefetcher,
@@ -291,6 +292,10 @@ class TrainerConfig:
     # decoded there too instead of on the training thread. Wall clock only, like
     # the flag above, and recorded in the contract the same way.
     prefetch_workers: int = 1
+    # Byte budget (GiB) of the per-run decoded-sample cache under output_dir/sample_cache
+    # (sample_cache.py): each sample is decoded and reduced once and read back on later
+    # visits. Lossless, wall clock only; removed when the run completes. 0 = off.
+    sample_cache_gib: float = 0.0
     # Supervise every Face4 face at this focal length (px) by area-reducing the stored
     # face (sample_resolution.py). The stored pitch faces are the sensor image warped
     # to 2.93x its own angular resolution; the natural value is the fisheye's on-axis
@@ -634,6 +639,7 @@ class TrainerConfig:
                 "view_sampling_mode",
                 "prefetch_training_samples",
                 "prefetch_workers",
+                "sample_cache_gib",
                 "training_focal_px",
                 "max_steps",
                 "checkpoint_every",
@@ -860,6 +866,10 @@ class TrainerConfig:
                 raise ValueError(
                     "training_focal_px does not carry mesh geometry supervision"
                 )
+        if not 0.0 <= float(self.sample_cache_gib) <= 512.0:
+            raise ValueError("sample_cache_gib must be within [0, 512]")
+        if self.sample_cache_gib > 0.0 and self.face_cache_manifest is None:
+            raise ValueError("sample_cache_gib applies to Face4 face caches only")
         if not 1 <= int(self.prefetch_workers) <= 16:
             raise ValueError("prefetch_workers must be within [1, 16]")
         if self.prefetch_workers > 1 and not self.prefetch_training_samples:
@@ -2333,6 +2343,9 @@ class TrainerConfig:
             view_sampling_contract["prefetch_training_samples"] = True
             if self.prefetch_workers > 1:
                 view_sampling_contract["prefetch_workers"] = int(self.prefetch_workers)
+        if self.sample_cache_gib > 0.0:
+            # Wall clock only as well: a cached sample equals a freshly decoded one.
+            view_sampling_contract["sample_cache"] = "lossless_per_run"
         if self.lidar_rgb_l1_weight > 0.0:
             loss_weights["lidar_rgb_l1"] = self.lidar_rgb_l1_weight
         if uses_rgb_gradient:
@@ -4176,6 +4189,7 @@ def train(
                 if config.sky_supervision.enabled
                 else None
             ),
+            carry_sensor_pixel_coords=bool(config.ppisp.enabled),
             training_focal_px=resolve_training_focal_px(
                 config.training_focal_px,
                 json.loads(Path(config.dataset_manifest).read_text(encoding="utf-8"))
@@ -4878,13 +4892,27 @@ def train(
         # ``completed`` is ``step + 1``; the run raises after that step, so the sample for
         # the step after it would be decoded and thrown away.
         prefetch_last_step = min(prefetch_last_step, controlled_stop_after_steps - 1)
+    sample_cache = None
+    decode_sample_at = trainset.__getitem__
+    if config.sample_cache_gib > 0.0:
+        sample_cache = SampleCache(
+            output_dir / "sample_cache",
+            # Any change to the run's identity - dataset, masks, view list, supervision
+            # resolution, trainer contract - empties the cache instead of trusting it.
+            identity={"checkpoint_identity": checkpoint_identity, "samples": len(trainset)},
+            budget_bytes=int(float(config.sample_cache_gib) * 1024**3),
+        )
+
+        def decode_sample_at(index: int) -> Any:
+            return sample_cache.fetch(index, trainset.__getitem__)
+
     lookahead = None
     prefetcher = None
     if config.prefetch_training_samples and config.prefetch_workers > 1:
         prefetch_backgrounds = _view_background_library(config)
 
         def fetch_sample_and_backdrop(index: int) -> Any:
-            fetched = trainset[index]
+            fetched = decode_sample_at(index)
             if prefetch_backgrounds is not None:
                 # Decode the view's backdrop here as well; the loss finds it cached.
                 prefetch_backgrounds.preload(fetched.image_id)
@@ -4899,7 +4927,7 @@ def train(
         )
         lookahead.prime(completed_steps)
     elif config.prefetch_training_samples:
-        prefetcher = SamplePrefetcher(trainset.__getitem__, name="face-sample-prefetch")
+        prefetcher = SamplePrefetcher(decode_sample_at, name="face-sample-prefetch")
     if prefetcher is not None and completed_steps <= prefetch_last_step:
         prefetcher.prime(epoch_orders.index_for_step(completed_steps))
     for step in range(completed_steps, config.max_steps):
@@ -4971,7 +4999,7 @@ def train(
         if lookahead is not None:
             sample = lookahead.get(step)
         elif prefetcher is None:
-            sample = trainset[index]
+            sample = decode_sample_at(index)
         else:
             sample = prefetcher.get(index)
             if step < prefetch_last_step:
@@ -5922,6 +5950,9 @@ def train(
                 prefetcher.close()
             if lookahead is not None:
                 lookahead.close()
+            if sample_cache is not None:
+                # The run reached its stop: the decoded samples are of no further use.
+                sample_cache.remove()
             raise ControlledTrainingInterruption(
                 completed_steps=completed,
                 checkpoint_path=checkpoint_path,
@@ -5938,6 +5969,8 @@ def train(
         prefetcher.close()
     if lookahead is not None:
         lookahead.close()
+    if sample_cache is not None:
+        sample_cache.remove()
     torch.cuda.synchronize(config.device)
     duration_seconds = time.perf_counter() - started
     peak_vram_bytes = int(torch.cuda.max_memory_allocated(config.device))
